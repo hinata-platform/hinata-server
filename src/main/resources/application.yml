@@ -75,14 +75,15 @@ springdoc:
   api-docs:
     path: /v3/api-docs
     enabled: ${HIVORA_DOCS_ENABLED:true}
-  scalar-ui:
-    enabled: ${HIVORA_DOCS_ENABLED:true}
-    path: /docs
   swagger-ui:
     enabled: false
   show-actuator: false
   default-produces-media-type: application/json
   packages-to-scan: hn.asta.hivora
+
+scalar:
+  enabled: ${HIVORA_DOCS_ENABLED:true}
+  path: /docs
 
 logging:
   level:

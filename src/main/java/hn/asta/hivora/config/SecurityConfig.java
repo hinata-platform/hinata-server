@@ -73,7 +73,7 @@ public class SecurityConfig {
 	@Order(1)
 	public SecurityFilterChain docsFilterChain(HttpSecurity http) throws Exception {
 		http
-			.securityMatcher("/v3/api-docs/**", "/docs/**", "/webjars/**")
+			.securityMatcher("/v3/api-docs/**", "/docs/**", "/docs", "/scalar/**", "/webjars/**")
 			.csrf(csrf -> csrf.disable())
 			.headers(headers -> headers
 				.contentSecurityPolicy(csp -> csp.policyDirectives(
