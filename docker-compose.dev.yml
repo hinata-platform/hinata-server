@@ -1,0 +1,42 @@
+# Local development infrastructure only (run the server from your IDE):
+#   docker compose -f docker-compose.dev.yml up -d
+# Single-node replica set without auth, Mailpit and MinIO with default creds.
+name: hivora-dev
+
+services:
+  mongo:
+    image: mongo:8
+    command: mongod --replSet rs0 --bind_ip_all
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-dev-data:/data/db
+    healthcheck:
+      test: >-
+        mongosh --quiet --eval "try { rs.status().ok } catch (e) {
+          rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]}).ok }"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI: http://localhost:8025
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: hivora
+      MINIO_ROOT_PASSWORD: hivora-dev-secret
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Console: http://localhost:9001
+    volumes:
+      - minio-dev-data:/data
+
+volumes:
+  mongo-dev-data:
+  minio-dev-data:

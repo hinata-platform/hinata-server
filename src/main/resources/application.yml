@@ -1,0 +1,89 @@
+spring:
+  application:
+    name: hivora-server
+  data:
+    mongodb:
+      uri: ${HIVORA_MONGODB_URI:mongodb://localhost:27017/hivora}
+      auto-index-creation: true
+  mail:
+    host: ${HIVORA_SMTP_HOST:localhost}
+    port: ${HIVORA_SMTP_PORT:1025}
+    username: ${HIVORA_SMTP_USERNAME:}
+    password: ${HIVORA_SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${HIVORA_SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${HIVORA_SMTP_STARTTLS:false}
+  servlet:
+    multipart:
+      max-file-size: ${HIVORA_STORAGE_MAX_UPLOAD_MB:25}MB
+      max-request-size: ${HIVORA_STORAGE_MAX_UPLOAD_MB:25}MB
+
+server:
+  port: ${HIVORA_PORT:8080}
+  forward-headers-strategy: framework
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+hivora:
+  version: '@project.version@'
+  base-url: ${HIVORA_BASE_URL:http://localhost:8080}
+  jwt:
+    secret: ${HIVORA_JWT_SECRET:change-me-change-me-change-me-change-me-change-me-change-me-1234}
+    access-token-seconds: ${HIVORA_JWT_ACCESS_SECONDS:900}
+    refresh-token-seconds: ${HIVORA_JWT_REFRESH_SECONDS:1209600}
+  rate-limit:
+    enabled: ${HIVORA_RATE_LIMIT_ENABLED:true}
+    api-per-minute: ${HIVORA_RATE_LIMIT_API:300}
+    auth-per-minute: ${HIVORA_RATE_LIMIT_AUTH:10}
+    max-login-failures: ${HIVORA_MAX_LOGIN_FAILURES:5}
+    login-block-minutes: ${HIVORA_LOGIN_BLOCK_MINUTES:15}
+  cors:
+    allowed-origins: ${HIVORA_CORS_ALLOWED_ORIGINS:}
+  app:
+    min-version: ${HIVORA_APP_MIN_VERSION:1.0.0}
+    privacy-policy-url: ${HIVORA_PRIVACY_POLICY_URL:}
+    callback-scheme: ${HIVORA_APP_CALLBACK_SCHEME:hivora}
+  mail:
+    from: ${HIVORA_MAIL_FROM:hivora@localhost}
+  storage:
+    endpoint: ${HIVORA_S3_ENDPOINT:http://localhost:9000}
+    access-key: ${HIVORA_S3_ACCESS_KEY:}
+    secret-key: ${HIVORA_S3_SECRET_KEY:}
+    bucket: ${HIVORA_S3_BUCKET:hivora}
+    region: ${HIVORA_S3_REGION:us-east-1}
+    max-upload-mb: ${HIVORA_STORAGE_MAX_UPLOAD_MB:25}
+  setup:
+    auto-complete: ${HIVORA_SETUP_AUTO_COMPLETE:false}
+    organization-name: ${HIVORA_SETUP_ORGANIZATION_NAME:}
+    admin-email: ${HIVORA_SETUP_ADMIN_EMAIL:}
+    admin-username: ${HIVORA_SETUP_ADMIN_USERNAME:}
+    admin-password: ${HIVORA_SETUP_ADMIN_PASSWORD:}
+    admin-display-name: ${HIVORA_SETUP_ADMIN_DISPLAY_NAME:}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: ${HIVORA_DOCS_ENABLED:true}
+  scalar-ui:
+    enabled: ${HIVORA_DOCS_ENABLED:true}
+    path: /docs
+  swagger-ui:
+    enabled: false
+  show-actuator: false
+  default-produces-media-type: application/json
+  packages-to-scan: hn.asta.hivora
+
+logging:
+  level:
+    org.springframework.security: ${HIVORA_LOG_SECURITY:WARN}

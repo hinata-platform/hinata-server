@@ -1,0 +1,118 @@
+# Hivora production deployment: server + MongoDB replica set (2 data nodes
+# + 1 arbiter) + MinIO object storage. Copy .env.example to .env first and
+# run ./deploy/generate-secrets.sh to create the Mongo keyfile.
+name: hivora
+
+x-mongo-common: &mongo-common
+  image: mongo:8
+  restart: unless-stopped
+  command: >-
+    mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo/keyfile
+  volumes:
+    - ./deploy/mongo-keyfile:/etc/mongo/keyfile:ro
+  networks: [hivora]
+
+services:
+  mongo1:
+    <<: *mongo-common
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?set in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set in .env}
+    volumes:
+      - mongo1-data:/data/db
+      - ./deploy/mongo-keyfile:/etc/mongo/keyfile:ro
+    healthcheck:
+      # Initiates the replica set on first run, then reports member health.
+      test: >-
+        mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD"
+        --eval "try { rs.status().ok } catch (e) {
+          rs.initiate({_id: 'rs0', members: [
+            {_id: 0, host: 'mongo1:27017', priority: 2},
+            {_id: 1, host: 'mongo2:27017', priority: 1},
+            {_id: 2, host: 'mongo-arbiter:27017', arbiterOnly: true}
+          ]}).ok }"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  mongo2:
+    <<: *mongo-common
+    volumes:
+      - mongo2-data:/data/db
+      - ./deploy/mongo-keyfile:/etc/mongo/keyfile:ro
+
+  mongo-arbiter:
+    <<: *mongo-common
+    # Arbiter holds no data; it only votes in elections.
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+    volumes:
+      - minio-data:/data
+    networks: [hivora]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  hivora-server:
+    build: .
+    image: ghcr.io/${GITHUB_REPOSITORY:-asta-hn/hivora-server}:latest
+    restart: unless-stopped
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      HIVORA_BASE_URL: ${HIVORA_BASE_URL:?set in .env}
+      HIVORA_JWT_SECRET: ${HIVORA_JWT_SECRET:?set in .env}
+      HIVORA_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo1:27017,mongo2:27017/hivora?replicaSet=rs0&authSource=admin
+      HIVORA_SMTP_HOST: ${HIVORA_SMTP_HOST:-mailpit}
+      HIVORA_SMTP_PORT: ${HIVORA_SMTP_PORT:-1025}
+      HIVORA_SMTP_USERNAME: ${HIVORA_SMTP_USERNAME:-}
+      HIVORA_SMTP_PASSWORD: ${HIVORA_SMTP_PASSWORD:-}
+      HIVORA_SMTP_AUTH: ${HIVORA_SMTP_AUTH:-false}
+      HIVORA_SMTP_STARTTLS: ${HIVORA_SMTP_STARTTLS:-false}
+      HIVORA_MAIL_FROM: ${HIVORA_MAIL_FROM:-hivora@localhost}
+      HIVORA_S3_ENDPOINT: http://minio:9000
+      HIVORA_S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      HIVORA_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      HIVORA_S3_BUCKET: ${HIVORA_S3_BUCKET:-hivora}
+      HIVORA_PRIVACY_POLICY_URL: ${HIVORA_PRIVACY_POLICY_URL:-}
+      HIVORA_APP_MIN_VERSION: ${HIVORA_APP_MIN_VERSION:-1.0.0}
+      HIVORA_CORS_ALLOWED_ORIGINS: ${HIVORA_CORS_ALLOWED_ORIGINS:-}
+      HIVORA_SETUP_AUTO_COMPLETE: ${HIVORA_SETUP_AUTO_COMPLETE:-false}
+      HIVORA_SETUP_ORGANIZATION_NAME: ${HIVORA_SETUP_ORGANIZATION_NAME:-}
+      HIVORA_SETUP_ADMIN_EMAIL: ${HIVORA_SETUP_ADMIN_EMAIL:-}
+      HIVORA_SETUP_ADMIN_USERNAME: ${HIVORA_SETUP_ADMIN_USERNAME:-}
+      HIVORA_SETUP_ADMIN_PASSWORD: ${HIVORA_SETUP_ADMIN_PASSWORD:-}
+      HIVORA_SETUP_ADMIN_DISPLAY_NAME: ${HIVORA_SETUP_ADMIN_DISPLAY_NAME:-}
+    ports:
+      - "${HIVORA_PORT:-8080}:8080"
+    networks: [hivora]
+
+  # Local e-mail sink for development/staging. Replace HIVORA_SMTP_* with a
+  # real SMTP relay in production and remove this service.
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    networks: [hivora]
+    ports:
+      - "8025:8025" # Web UI
+
+volumes:
+  mongo1-data:
+  mongo2-data:
+  minio-data:
+
+networks:
+  hivora:
+    driver: bridge
