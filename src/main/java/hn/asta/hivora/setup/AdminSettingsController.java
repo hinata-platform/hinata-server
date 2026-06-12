@@ -51,6 +51,9 @@ public class AdminSettingsController {
 		if (isBlank(updated.getEmailIngest().getPassword())) {
 			updated.getEmailIngest().setPassword(current.getEmailIngest().getPassword());
 		}
+		if (isBlank(updated.getSmtp().getPassword())) {
+			updated.getSmtp().setPassword(current.getSmtp().getPassword());
+		}
 		if (isBlank(updated.getPush().getFcmServiceAccountJson())) {
 			updated.getPush().setFcmServiceAccountJson(current.getPush().getFcmServiceAccountJson());
 		}

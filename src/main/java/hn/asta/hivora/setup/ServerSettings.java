@@ -26,6 +26,9 @@ public class ServerSettings {
 
 	private String organizationName;
 
+	private General general = new General();
+	private Smtp smtp = new Smtp();
+	private Security security = new Security();
 	private Oidc oidc = new Oidc();
 	private OAuth2 oauth2 = new OAuth2();
 	private Saml saml = new Saml();
@@ -37,6 +40,39 @@ public class ServerSettings {
 
 	@LastModifiedDate
 	private Instant updatedAt;
+
+	/** General organization settings. */
+	@Data
+	public static class General {
+		private String logoUrl;
+		private String timezone = "Europe/Berlin";
+		private String defaultLocale = "de";
+	}
+
+	/** Outbound SMTP – used for all transactional e-mails. */
+	@Data
+	public static class Smtp {
+		private boolean enabled = false;
+		private String host;
+		private int port = 587;
+		private boolean ssl = false;
+		private boolean starttls = true;
+		private String username;
+		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+		private String password;
+		private String fromAddress = "hivora@localhost";
+		private String fromName = "Hivora";
+	}
+
+	/** Basic security hardening knobs configurable at runtime. */
+	@Data
+	public static class Security {
+		private int passwordMinLength = 10;
+		private int maxLoginAttempts = 5;
+		private int lockoutMinutes = 15;
+		private int sessionLifetimeHours = 168;
+		private boolean rateLimitEnabled = true;
+	}
 
 	/** OpenID Connect (e.g. Synology SSO, Keycloak, Authentik). */
 	@Data
