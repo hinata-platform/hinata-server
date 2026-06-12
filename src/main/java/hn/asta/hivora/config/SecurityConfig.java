@@ -139,7 +139,8 @@ public class SecurityConfig {
 				.requestMatchers(
 						"/api/v1/auth/login", "/api/v1/auth/refresh",
 						"/api/v1/auth/sso/providers", "/api/v1/auth/sso/start/**",
-						"/api/v1/meta", "/api/v1/setup/status", "/api/v1/setup",
+						"/api/v1/meta", "/api/v1/meta/logo",
+						"/api/v1/setup/status", "/api/v1/setup",
 						"/actuator/health", "/actuator/health/**",
 						"/login/**", "/oauth2/**", "/saml2/**", "/error")
 				.permitAll()

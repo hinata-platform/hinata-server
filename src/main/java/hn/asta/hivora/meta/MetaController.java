@@ -7,16 +7,32 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.Map;
 
 @Tag(name = "Public", description = "Unauthenticated server metadata")
 @RestController
 @RequiredArgsConstructor
+@Slf4j
 public class MetaController {
+
+	private static final HttpClient HTTP = HttpClient.newBuilder()
+			.connectTimeout(Duration.ofSeconds(5))
+			.followRedirects(HttpClient.Redirect.NORMAL)
+			.build();
 
 	private final HivoraProperties properties;
 	private final SettingsService settings;
@@ -42,5 +58,51 @@ public class MetaController {
 				current.isSetupCompleted(),
 				properties.getApp().getPrivacyPolicyUrl(),
 				properties.getApp().getFeatureFlags());
+	}
+
+	@Operation(summary = "Organization logo", description = "Proxies the configured logo URL so clients (incl. the web app and the PDF export) can load it same-origin without CORS restrictions.")
+	@SecurityRequirements
+	@GetMapping("/api/v1/meta/logo")
+	public ResponseEntity<byte[]> logo() {
+		String url = settings.get().getGeneral().getLogoUrl();
+		if (url == null || url.isBlank()) {
+			return ResponseEntity.notFound().build();
+		}
+		try {
+			HttpRequest request = HttpRequest.newBuilder(URI.create(url.trim()))
+					.timeout(Duration.ofSeconds(10))
+					.header("User-Agent", "Hivora-Server")
+					.GET()
+					.build();
+			HttpResponse<byte[]> response =
+					HTTP.send(request, HttpResponse.BodyHandlers.ofByteArray());
+			byte[] body = response.body();
+			if (response.statusCode() >= 300 || body == null || body.length == 0) {
+				return ResponseEntity.notFound().build();
+			}
+			MediaType contentType = response.headers().firstValue("content-type")
+					.map(MetaController::parseMediaType)
+					.orElse(MediaType.APPLICATION_OCTET_STREAM);
+			return ResponseEntity.ok()
+					.contentType(contentType)
+					.cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
+					.header(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+					.body(body);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			log.warn("Interrupted while proxying organization logo from {}", url);
+			return ResponseEntity.notFound().build();
+		} catch (Exception e) {
+			log.warn("Failed to proxy organization logo from {}: {}", url, e.toString());
+			return ResponseEntity.notFound().build();
+		}
+	}
+
+	private static MediaType parseMediaType(String raw) {
+		try {
+			return MediaType.parseMediaType(raw);
+		} catch (Exception ignored) {
+			return MediaType.APPLICATION_OCTET_STREAM;
+		}
 	}
 }
