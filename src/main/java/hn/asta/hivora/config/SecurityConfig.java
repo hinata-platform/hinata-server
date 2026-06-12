@@ -149,7 +149,11 @@ public class SecurityConfig {
 		CorsConfiguration config = new CorsConfiguration();
 		config.setAllowedOrigins(properties.getCors().getAllowedOrigins());
 		config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-		config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+		// "ngrok-skip-browser-warning" lets web/XHR clients bypass the ngrok
+		// free-tier interstitial; it must be allow-listed or the CORS preflight
+		// for that custom header fails in browsers (Flutter web).
+		config.setAllowedHeaders(
+				List.of("Authorization", "Content-Type", "Accept", "ngrok-skip-browser-warning"));
 		config.setMaxAge(3600L);
 		UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
 		source.registerCorsConfiguration("/**", config);
