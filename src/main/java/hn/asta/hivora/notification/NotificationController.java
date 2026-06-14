@@ -35,7 +35,7 @@ public class NotificationController {
 		String userId = currentUser.requireId();
 		Notification notification = notifications.findById(id)
 				.filter(n -> n.getUserId().equals(userId))
-				.orElseThrow(() -> hn.asta.hivora.common.ApiException.notFound("Notification"));
+				.orElseThrow(() -> hn.asta.hivora.common.ApiException.notFound("notification"));
 		notification.setRead(true);
 		return notifications.save(notification);
 	}

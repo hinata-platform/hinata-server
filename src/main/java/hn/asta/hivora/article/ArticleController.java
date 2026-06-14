@@ -41,7 +41,7 @@ public class ArticleController {
 	@GetMapping("/{id}")
 	public Article get(@PathVariable String id) {
 		currentUser.require();
-		return articles.findById(id).orElseThrow(() -> ApiException.notFound("Article"));
+		return articles.findById(id).orElseThrow(() -> ApiException.notFound("article"));
 	}
 
 	@PostMapping
@@ -62,7 +62,7 @@ public class ArticleController {
 	@PatchMapping("/{id}")
 	public Article update(@PathVariable String id, @RequestBody @Valid ArticleRequest request) {
 		currentUser.require();
-		Article article = articles.findById(id).orElseThrow(() -> ApiException.notFound("Article"));
+		Article article = articles.findById(id).orElseThrow(() -> ApiException.notFound("article"));
 		article.setTitle(request.title());
 		if (request.content() != null) article.setContent(request.content());
 		article.setParentId(request.parentId());
@@ -76,7 +76,7 @@ public class ArticleController {
 	public void delete(@PathVariable String id) {
 		currentUser.require();
 		if (!articles.findByParentId(id).isEmpty()) {
-			throw ApiException.conflict("Delete or move child articles first");
+			throw ApiException.conflict("error.article.hasChildren");
 		}
 		articles.deleteById(id);
 	}

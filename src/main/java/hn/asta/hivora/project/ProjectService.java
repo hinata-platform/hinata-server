@@ -21,7 +21,7 @@ public class ProjectService {
 	private final MongoTemplate mongo;
 
 	public Project get(String id) {
-		return projects.findById(id).orElseThrow(() -> ApiException.notFound("Project"));
+		return projects.findById(id).orElseThrow(() -> ApiException.notFound("project"));
 	}
 
 	public List<Project> visibleTo(User user) {
@@ -32,10 +32,10 @@ public class ProjectService {
 	public Project create(Project project, User creator) {
 		String key = project.getKey().toUpperCase(Locale.ROOT);
 		if (!key.matches("[A-Z][A-Z0-9]{1,9}")) {
-			throw ApiException.badRequest("Project key must be 2-10 characters, A-Z and digits");
+			throw ApiException.badRequest("error.project.invalidKey");
 		}
 		if (projects.existsByKeyIgnoreCase(key)) {
-			throw ApiException.conflict("Project key already exists");
+			throw ApiException.conflict("error.project.keyExists");
 		}
 		project.setKey(key);
 		if (project.getLeadId() == null) {
@@ -59,14 +59,14 @@ public class ProjectService {
 				FindAndModifyOptions.options().returnNew(true),
 				Project.class);
 		if (updated == null) {
-			throw ApiException.notFound("Project");
+			throw ApiException.notFound("project");
 		}
 		return updated.getIssueCounter();
 	}
 
 	public void assertMember(Project project, User user) {
 		if (!user.isAdmin() && !project.getMemberIds().contains(user.getId())) {
-			throw ApiException.forbidden("Not a member of this project");
+			throw ApiException.forbidden("error.project.notMember");
 		}
 	}
 }

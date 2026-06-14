@@ -36,10 +36,10 @@ public class AuthService {
 
 		User user = resolved.orElseThrow(() -> {
 			attempts.recordFailure(identifier, ip);
-			return ApiException.unauthorized("Invalid credentials");
+			return ApiException.unauthorized("error.auth.invalidCredentials");
 		});
 		if (!user.isActive()) {
-			throw ApiException.forbidden("Account is deactivated");
+			throw ApiException.forbidden("error.auth.accountDeactivated");
 		}
 		attempts.recordSuccess(identifier, ip);
 		return new LoginResult(user, tokens.issue(user));
@@ -60,7 +60,7 @@ public class AuthService {
 
 	public TokenService.TokenPair refresh(User user) {
 		if (!user.isActive()) {
-			throw ApiException.forbidden("Account is deactivated");
+			throw ApiException.forbidden("error.auth.accountDeactivated");
 		}
 		return tokens.issue(user);
 	}

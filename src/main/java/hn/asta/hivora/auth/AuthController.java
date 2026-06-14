@@ -83,13 +83,13 @@ public class AuthController {
 			jwt = jwtDecoder.decode(request.refreshToken());
 		}
 		catch (JwtException ex) {
-			throw ApiException.unauthorized("Invalid refresh token");
+			throw ApiException.unauthorized("error.auth.invalidRefreshToken");
 		}
 		if (!TokenService.isRefreshToken(jwt)) {
-			throw ApiException.unauthorized("Not a refresh token");
+			throw ApiException.unauthorized("error.auth.notRefreshToken");
 		}
 		User user = users.findById(jwt.getSubject())
-				.orElseThrow(() -> ApiException.unauthorized("Unknown user"));
+				.orElseThrow(() -> ApiException.unauthorized("error.auth.unknownUser"));
 		return toResponse(user, authService.refresh(user));
 	}
 

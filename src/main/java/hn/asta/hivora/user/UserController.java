@@ -105,16 +105,16 @@ public class UserController {
 	private void applyActive(User user, boolean active, boolean wasAdmin) {
 		if (!active) {
 			if (user.getId().equals(currentUser.requireId())) {
-				throw ApiException.badRequest("You cannot deactivate yourself");
+				throw ApiException.badRequest("error.user.cannotDeactivateSelf");
 			}
-			if (wasAdmin) requireAnotherActiveAdmin(user, "deactivate the last administrator");
+			if (wasAdmin) requireAnotherActiveAdmin(user, "error.user.cannotDeactivateLastAdmin");
 		}
 		user.setActive(active);
 	}
 
 	private void applyAdmin(User user, boolean admin, boolean wasAdmin) {
 		if (!admin && wasAdmin) {
-			requireAnotherActiveAdmin(user, "remove admin from the last administrator");
+			requireAnotherActiveAdmin(user, "error.user.cannotRemoveLastAdmin");
 		}
 		user.setRoles(admin ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER));
 	}
@@ -136,10 +136,10 @@ public class UserController {
 	public void delete(@PathVariable String id) {
 		User user = userService.get(id);
 		if (user.getId().equals(currentUser.requireId())) {
-			throw ApiException.badRequest("You cannot delete your own account");
+			throw ApiException.badRequest("error.user.cannotDeleteSelf");
 		}
 		if (user.isAdmin()) {
-			requireAnotherActiveAdmin(user, "delete the last administrator");
+			requireAnotherActiveAdmin(user, "error.user.cannotDeleteLastAdmin");
 		}
 		// E-mail the user before the account (and its data) are removed.
 		notifications.notifyAccountDeleted(user);
@@ -147,9 +147,9 @@ public class UserController {
 	}
 
 	/** Guards against locking the organization out by removing its last active admin. */
-	private void requireAnotherActiveAdmin(User user, String action) {
+	private void requireAnotherActiveAdmin(User user, String messageKey) {
 		if (users.countByRolesContainingAndActiveIsTrueAndIdNot(Role.ADMIN, user.getId()) == 0) {
-			throw ApiException.conflict("You cannot " + action);
+			throw ApiException.conflict(messageKey);
 		}
 	}
 }

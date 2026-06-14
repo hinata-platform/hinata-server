@@ -30,7 +30,7 @@ public class LoginAttemptService {
 		// for brute forcing a single account (OWASP A07).
 		if (isBlocked(accountKey(identifier)) || isBlocked(key(identifier, ip))) {
 			throw new ApiException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
-					"Too many failed attempts. Try again later.");
+					"error.auth.tooManyAttempts");
 		}
 	}
 

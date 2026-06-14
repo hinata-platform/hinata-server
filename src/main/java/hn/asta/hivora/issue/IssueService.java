@@ -36,7 +36,7 @@ public class IssueService {
 	public Issue get(String idOrReadableId) {
 		return issues.findById(idOrReadableId)
 				.or(() -> issues.findByReadableIdIgnoreCase(idOrReadableId))
-				.orElseThrow(() -> ApiException.notFound("Issue"));
+				.orElseThrow(() -> ApiException.notFound("issue"));
 	}
 
 	/** Lookup that enforces the caller is a member of the issue's project (A01). */
@@ -88,7 +88,7 @@ public class IssueService {
 
 		Project project = projects.get(issue.getProjectId());
 		if (!project.getWorkflowStates().contains(issue.getState())) {
-			throw ApiException.badRequest("Unknown workflow state: " + issue.getState());
+			throw ApiException.badRequest("error.issue.unknownState", issue.getState());
 		}
 		boolean nowResolved = project.getResolvedStates().contains(issue.getState());
 		issue.setResolvedAt(nowResolved

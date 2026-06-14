@@ -21,9 +21,9 @@ public class CurrentUser {
 		if (authentication instanceof JwtAuthenticationToken jwt) {
 			return users.findById(jwt.getToken().getSubject())
 					.filter(User::isActive)
-					.orElseThrow(() -> ApiException.unauthorized("Unknown user"));
+					.orElseThrow(() -> ApiException.unauthorized("error.auth.unknownUser"));
 		}
-		throw ApiException.unauthorized("Authentication required");
+		throw ApiException.unauthorized("error.auth.required");
 	}
 
 	public String requireId() {

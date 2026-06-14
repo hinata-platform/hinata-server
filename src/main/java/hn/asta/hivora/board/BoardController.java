@@ -77,7 +77,7 @@ public class BoardController {
 	@GetMapping("/{id}")
 	public BoardView view(@PathVariable String id, @RequestParam(required = false) String sprintId) {
 		currentUser.require();
-		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("Board"));
+		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		List<Sprint> boardSprints = sprints.findByBoardIdOrderByStartDateDesc(id);
 		String effectiveSprint = sprintId != null ? sprintId : board.getActiveSprintId();
 
@@ -107,7 +107,7 @@ public class BoardController {
 	@PatchMapping("/{id}")
 	public AgileBoard update(@PathVariable String id, @RequestBody AgileBoard updated) {
 		currentUser.require();
-		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("Board"));
+		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		if (updated.getName() != null) board.setName(updated.getName());
 		if (updated.getProjectIds() != null && !updated.getProjectIds().isEmpty()) {
 			board.setProjectIds(updated.getProjectIds());
@@ -130,7 +130,7 @@ public class BoardController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public Sprint createSprint(@PathVariable String id, @RequestBody @Valid SprintRequest request) {
 		currentUser.require();
-		boards.findById(id).orElseThrow(() -> ApiException.notFound("Board"));
+		boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		return sprints.save(Sprint.builder()
 				.boardId(id)
 				.name(request.name())

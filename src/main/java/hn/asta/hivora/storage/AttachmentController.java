@@ -51,7 +51,7 @@ public class AttachmentController {
 		Issue.Attachment attachment = issue.getAttachments().stream()
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
-				.orElseThrow(() -> ApiException.notFound("Attachment"));
+				.orElseThrow(() -> ApiException.notFound("attachment"));
 		return Map.of("url", storage.presignedDownloadUrl(
 				attachment.getObjectKey(), attachment.getFileName()));
 	}
@@ -63,7 +63,7 @@ public class AttachmentController {
 		Issue.Attachment attachment = issue.getAttachments().stream()
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
-				.orElseThrow(() -> ApiException.notFound("Attachment"));
+				.orElseThrow(() -> ApiException.notFound("attachment"));
 		issueService.update(issueId,
 				updated -> updated.getAttachments().removeIf(a -> a.getId().equals(attachmentId)),
 				currentUser.require());

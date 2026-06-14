@@ -38,7 +38,7 @@ public class SetupService {
 	public synchronized User complete(SetupRequest request) {
 		ServerSettings current = settings.get();
 		if (current.isSetupCompleted()) {
-			throw ApiException.conflict("Setup has already been completed");
+			throw ApiException.conflict("error.setup.alreadyCompleted");
 		}
 		User admin = userService.createLocal(request.adminEmail(), request.adminUsername(),
 				request.adminDisplayName(), request.adminPassword(), Set.of(Role.ADMIN, Role.MEMBER));

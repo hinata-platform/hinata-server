@@ -25,7 +25,7 @@ public class UserService {
 	private final MongoTemplate mongo;
 
 	public User get(String id) {
-		return users.findById(id).orElseThrow(() -> ApiException.notFound("User"));
+		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
 	}
 
 	/**
@@ -49,10 +49,10 @@ public class UserService {
 			Set<Role> roles) {
 		validatePassword(rawPassword);
 		if (users.existsByEmailIgnoreCase(email)) {
-			throw ApiException.conflict("E-mail already in use");
+			throw ApiException.conflict("error.user.emailInUse");
 		}
 		if (users.existsByUsernameIgnoreCase(username)) {
-			throw ApiException.conflict("Username already in use");
+			throw ApiException.conflict("error.user.usernameInUse");
 		}
 		return users.save(User.builder()
 				.email(email.toLowerCase(Locale.ROOT))
@@ -78,7 +78,7 @@ public class UserService {
 	public void changePassword(User user, String currentPassword, String newPassword) {
 		if (user.getPasswordHash() == null
 				|| !passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
-			throw ApiException.badRequest("Current password is incorrect");
+			throw ApiException.badRequest("error.user.currentPasswordIncorrect");
 		}
 		validatePassword(newPassword);
 		user.setPasswordHash(passwordEncoder.encode(newPassword));
@@ -88,7 +88,7 @@ public class UserService {
 	public void validatePassword(String rawPassword) {
 		if (rawPassword == null || rawPassword.length() < MIN_PASSWORD_LENGTH) {
 			throw ApiException.badRequest(
-					"Password must have at least " + MIN_PASSWORD_LENGTH + " characters");
+					"error.user.passwordTooShort", MIN_PASSWORD_LENGTH);
 		}
 	}
 

@@ -24,9 +24,9 @@ public class TimeTrackingService {
 	public WorkItem add(String issueId, WorkItem item) {
 		Issue issue = issues.findById(issueId)
 				.or(() -> issues.findByReadableIdIgnoreCase(issueId))
-				.orElseThrow(() -> ApiException.notFound("Issue"));
+				.orElseThrow(() -> ApiException.notFound("issue"));
 		if (item.getDurationMinutes() <= 0 || item.getDurationMinutes() > 24 * 60) {
-			throw ApiException.badRequest("Duration must be between 1 minute and 24 hours");
+			throw ApiException.badRequest("error.time.invalidDuration");
 		}
 		item.setIssueId(issue.getId());
 		item.setProjectId(issue.getProjectId());
@@ -40,9 +40,9 @@ public class TimeTrackingService {
 
 	public void delete(String workItemId, String requesterId, boolean isAdmin) {
 		WorkItem item = workItems.findById(workItemId)
-				.orElseThrow(() -> ApiException.notFound("Work item"));
+				.orElseThrow(() -> ApiException.notFound("workItem"));
 		if (!isAdmin && !item.getUserId().equals(requesterId)) {
-			throw ApiException.forbidden("You can only delete your own work items");
+			throw ApiException.forbidden("error.time.deleteOwnOnly");
 		}
 		workItems.delete(item);
 		issues.findById(item.getIssueId()).ifPresent(this::syncSpentTime);
@@ -62,7 +62,7 @@ public class TimeTrackingService {
 	/** Timesheet matrix: per user+project row, minutes per day in the range. */
 	public List<TimesheetRow> timesheet(LocalDate from, LocalDate to, String userId, String projectId) {
 		if (from.isAfter(to) || from.plusDays(92).isBefore(to)) {
-			throw ApiException.badRequest("Range must be ascending and at most 92 days");
+			throw ApiException.badRequest("error.time.invalidRange");
 		}
 		List<WorkItem> items;
 		if (userId != null) {

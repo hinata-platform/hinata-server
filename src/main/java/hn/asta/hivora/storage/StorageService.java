@@ -47,10 +47,10 @@ public class StorageService {
 		HivoraProperties.Storage storage = properties.getStorage();
 		String contentType = file.getContentType();
 		if (contentType == null || !storage.getAllowedContentTypes().contains(contentType)) {
-			throw ApiException.badRequest("File type not allowed");
+			throw ApiException.badRequest("error.storage.fileTypeNotAllowed");
 		}
 		if (file.getSize() > (long) storage.getMaxUploadMb() * 1024 * 1024) {
-			throw ApiException.badRequest("File exceeds " + storage.getMaxUploadMb() + " MB");
+			throw ApiException.badRequest("error.storage.fileTooLarge", storage.getMaxUploadMb());
 		}
 		// The client-declared content type is not trusted on its own: verify the
 		// magic bytes for binary types so a file cannot masquerade as e.g. an
@@ -69,7 +69,7 @@ public class StorageService {
 		}
 		catch (Exception ex) {
 			log.error("Upload failed: {}", ex.getMessage());
-			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "Storage unavailable");
+			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
 		}
 	}
 
@@ -86,7 +86,7 @@ public class StorageService {
 					.build());
 		}
 		catch (Exception ex) {
-			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "Storage unavailable");
+			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
 		}
 	}
 
@@ -114,7 +114,7 @@ public class StorageService {
 			read = stream.readNBytes(head, 0, head.length);
 		}
 		catch (Exception ex) {
-			throw ApiException.badRequest("Unreadable upload");
+			throw ApiException.badRequest("error.storage.unreadableUpload");
 		}
 		boolean ok = switch (contentType) {
 			case "image/png" -> startsWith(head, read, 0x89, 0x50, 0x4E, 0x47);
@@ -133,7 +133,7 @@ public class StorageService {
 			default -> true;
 		};
 		if (!ok) {
-			throw ApiException.badRequest("File content does not match its declared type");
+			throw ApiException.badRequest("error.storage.contentMismatch");
 		}
 	}
 
@@ -159,7 +159,7 @@ public class StorageService {
 	private void requireConfigured() {
 		if (client == null) {
 			throw new ApiException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-					"Object storage is not configured");
+					"error.storage.notConfigured");
 		}
 	}
 }

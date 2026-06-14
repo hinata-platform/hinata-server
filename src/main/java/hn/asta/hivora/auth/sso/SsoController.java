@@ -92,7 +92,8 @@ public class SsoController {
 			@RequestParam(name = "return", required = false) String returnOrigin,
 			HttpServletRequest request, HttpServletResponse response) throws IOException {
 		if (!KNOWN_IDS.contains(registrationId)) {
-			throw ApiException.notFound("Unknown SSO provider");
+			throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND,
+					"error.sso.unknownProvider");
 		}
 		if (returnOrigin != null && !returnOrigin.isBlank()) {
 			String origin = validatedOrigin(returnOrigin);
@@ -145,11 +146,11 @@ public class SsoController {
 			uri = URI.create(candidate.trim());
 		}
 		catch (IllegalArgumentException ex) {
-			throw ApiException.badRequest("Invalid return origin");
+			throw ApiException.badRequest("error.sso.invalidReturnOrigin");
 		}
 		String origin = uri.getScheme() + "://" + uri.getHost() + (uri.getPort() > 0 ? ":" + uri.getPort() : "");
 		if (!properties.getCors().getAllowedOrigins().contains(origin)) {
-			throw ApiException.badRequest("Return origin is not an allowed CORS origin");
+			throw ApiException.badRequest("error.sso.originNotAllowed");
 		}
 		return origin;
 	}
