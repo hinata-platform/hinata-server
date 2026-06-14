@@ -44,6 +44,18 @@ public class GlobalExceptionHandler {
 				.body(ApiError.of(HttpStatus.BAD_REQUEST, "Validation failed", fields));
 	}
 
+	/**
+	 * Malformed JSON, a wrong field type (e.g. an object where a string is
+	 * expected) or an unreadable body is a client error — return 400, not 500
+	 * (OWASP A04/A09). No parser detail is echoed back.
+	 */
+	@ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+	public ResponseEntity<ApiError> handleUnreadable(
+			org.springframework.http.converter.HttpMessageNotReadableException ex) {
+		return ResponseEntity.badRequest()
+				.body(ApiError.of(HttpStatus.BAD_REQUEST, "Malformed or unreadable request body", null));
+	}
+
 	@ExceptionHandler(MaxUploadSizeExceededException.class)
 	public ResponseEntity<ApiError> handleUploadSize(MaxUploadSizeExceededException ex) {
 		return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)

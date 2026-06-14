@@ -1,6 +1,9 @@
 spring:
   application:
     name: hivora-server
+  # Use the dev profile unless one is explicitly selected (SPRING_PROFILES_ACTIVE).
+  profiles:
+    default: dev
   # Spring Boot 4: connection settings live under spring.mongodb (not spring.data.mongodb)
   mongodb:
     uri: ${HIVORA_MONGODB_URI:mongodb://localhost:27017/hivora}
@@ -27,6 +30,13 @@ server:
   error:
     include-stacktrace: never
     include-message: never
+  servlet:
+    session:
+      cookie:
+        # Any session cookie issued by the SSO redirect flows is locked down
+        # (OWASP A05). 'secure' is enabled in the prod profile (HTTPS only).
+        http-only: true
+        same-site: strict
 
 management:
   endpoints:
@@ -58,6 +68,17 @@ hivora:
     login-block-minutes: ${HIVORA_LOGIN_BLOCK_MINUTES:15}
   cors:
     allowed-origins: ${HIVORA_CORS_ALLOWED_ORIGINS:}
+  security:
+    # CIDRs of reverse proxies allowed to set X-Forwarded-For. Empty = ignore
+    # the header and use the socket address (spoofing-resistant, OWASP A07).
+    trusted-proxies: ${HIVORA_TRUSTED_PROXIES:}
+  mongodb:
+    tls:
+      enabled: ${HIVORA_MONGO_TLS_ENABLED:false}
+      key-store: ${HIVORA_MONGO_TLS_KEYSTORE:}
+      key-store-password: ${HIVORA_MONGO_TLS_KEYSTORE_PASSWORD:}
+      trust-store: ${HIVORA_MONGO_TLS_TRUSTSTORE:}
+      trust-store-password: ${HIVORA_MONGO_TLS_TRUSTSTORE_PASSWORD:}
   app:
     min-version: ${HIVORA_APP_MIN_VERSION:1.0.0}
     privacy-policy-url: ${HIVORA_PRIVACY_POLICY_URL:}

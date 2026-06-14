@@ -52,6 +52,10 @@ public class StorageService {
 		if (file.getSize() > (long) storage.getMaxUploadMb() * 1024 * 1024) {
 			throw ApiException.badRequest("File exceeds " + storage.getMaxUploadMb() + " MB");
 		}
+		// The client-declared content type is not trusted on its own: verify the
+		// magic bytes for binary types so a file cannot masquerade as e.g. an
+		// image (defends against polyglot / content-sniffing attacks, A03/A05).
+		verifyMagicBytes(file, contentType);
 		String objectKey = UUID.randomUUID().toString();
 		try (var stream = file.getInputStream()) {
 			ensureBucket();
@@ -95,6 +99,54 @@ public class StorageService {
 		catch (Exception ex) {
 			log.warn("Deleting object {} failed: {}", objectKey, ex.getMessage());
 		}
+	}
+
+	/**
+	 * Verifies the leading bytes of binary uploads against the declared content
+	 * type. Text-like types (text/*, application/json) have no fixed signature
+	 * and are stored as-is; all downloads are served with
+	 * {@code Content-Disposition: attachment}, so they are never rendered inline.
+	 */
+	private void verifyMagicBytes(MultipartFile file, String contentType) {
+		byte[] head = new byte[12];
+		int read;
+		try (var stream = file.getInputStream()) {
+			read = stream.readNBytes(head, 0, head.length);
+		}
+		catch (Exception ex) {
+			throw ApiException.badRequest("Unreadable upload");
+		}
+		boolean ok = switch (contentType) {
+			case "image/png" -> startsWith(head, read, 0x89, 0x50, 0x4E, 0x47);
+			case "image/jpeg" -> startsWith(head, read, 0xFF, 0xD8, 0xFF);
+			case "image/gif" -> startsWith(head, read, 0x47, 0x49, 0x46, 0x38);
+			case "image/webp" -> read >= 12
+					&& startsWith(head, read, 0x52, 0x49, 0x46, 0x46)
+					&& head[8] == 0x57 && head[9] == 0x45 && head[10] == 0x42 && head[11] == 0x50;
+			case "application/pdf" -> startsWith(head, read, 0x25, 0x50, 0x44, 0x46);
+			// ZIP-based: application/zip and the OOXML office documents (docx/xlsx).
+			case "application/zip",
+					"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+					"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ->
+					startsWith(head, read, 0x50, 0x4B);
+			// No reliable signature; stored as-is (downloaded, never rendered).
+			default -> true;
+		};
+		if (!ok) {
+			throw ApiException.badRequest("File content does not match its declared type");
+		}
+	}
+
+	private static boolean startsWith(byte[] data, int len, int... prefix) {
+		if (len < prefix.length) {
+			return false;
+		}
+		for (int i = 0; i < prefix.length; i++) {
+			if ((data[i] & 0xFF) != prefix[i]) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private void ensureBucket() throws Exception {

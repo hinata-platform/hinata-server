@@ -32,14 +32,28 @@ public class IssueService {
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
 
+	/** Internal lookup with no authorization check. */
 	public Issue get(String idOrReadableId) {
 		return issues.findById(idOrReadableId)
 				.or(() -> issues.findByReadableIdIgnoreCase(idOrReadableId))
 				.orElseThrow(() -> ApiException.notFound("Issue"));
 	}
 
+	/** Lookup that enforces the caller is a member of the issue's project (A01). */
+	public Issue getForUser(String idOrReadableId, User user) {
+		Issue issue = get(idOrReadableId);
+		assertAccess(issue, user);
+		return issue;
+	}
+
+	/** Throws 403 unless {@code user} is an admin or a member of the project. */
+	private void assertAccess(Issue issue, User user) {
+		projects.assertMember(projects.get(issue.getProjectId()), user);
+	}
+
 	public Issue create(Issue issue, User author) {
 		Project project = projects.get(issue.getProjectId());
+		projects.assertMember(project, author); // only project members may add issues (A01)
 		long number = projects.nextIssueNumber(project.getId());
 		issue.setNumberInProject(number);
 		issue.setReadableId(project.getKey() + "-" + number);
@@ -64,6 +78,9 @@ public class IssueService {
 
 	public Issue update(String id, java.util.function.Consumer<Issue> mutator, User editor) {
 		Issue issue = get(id);
+		if (editor != null) {
+			assertAccess(issue, editor);
+		}
 		Issue before = snapshot(issue);
 		String previousAssignee = issue.getAssigneeId();
 		String previousState = issue.getState();
@@ -90,15 +107,16 @@ public class IssueService {
 		return saved;
 	}
 
-	public void delete(String id) {
+	public void delete(String id, User user) {
 		Issue issue = get(id);
+		assertAccess(issue, user);
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
 		issues.delete(issue);
 	}
 
-	public List<IssueActivity> activityOf(String issueId) {
-		return activities.findByIssueIdOrderByCreatedAtDesc(get(issueId).getId());
+	public List<IssueActivity> activityOf(String issueId, User user) {
+		return activities.findByIssueIdOrderByCreatedAtDesc(getForUser(issueId, user).getId());
 	}
 
 	// ── change history ────────────────────────────────────────────────────
@@ -182,9 +200,24 @@ public class IssueService {
 
 	/** Filtered, paginated search. Free-text is regex-escaped (NoSQL injection safe). */
 	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
-			String type, String text, int page, int size) {
+			String type, String text, int page, int size, User user) {
 		Query query = new Query();
-		if (projectId != null) query.addCriteria(Criteria.where("projectId").is(projectId));
+		// Non-admins only ever see issues from projects they belong to (A01).
+		if (!user.isAdmin()) {
+			List<String> visibleProjectIds = projects.visibleTo(user).stream()
+					.map(Project::getId).toList();
+			if (projectId != null && !visibleProjectIds.contains(projectId)) {
+				return Page.empty(PageRequest.of(page, Math.min(size, 100)));
+			}
+			List<String> scope = projectId != null ? List.of(projectId) : visibleProjectIds;
+			if (scope.isEmpty()) {
+				return Page.empty(PageRequest.of(page, Math.min(size, 100)));
+			}
+			query.addCriteria(Criteria.where("projectId").in(scope));
+		}
+		else if (projectId != null) {
+			query.addCriteria(Criteria.where("projectId").is(projectId));
+		}
 		if (state != null) query.addCriteria(Criteria.where("state").is(state));
 		if (assigneeId != null) query.addCriteria(Criteria.where("assigneeId").is(assigneeId));
 		if (sprintId != null) query.addCriteria(Criteria.where("sprintId").is(sprintId));
@@ -204,6 +237,7 @@ public class IssueService {
 
 	public IssueComment addComment(String issueId, String text, User author) {
 		Issue issue = get(issueId);
+		assertAccess(issue, author);
 		IssueComment comment = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
@@ -214,7 +248,7 @@ public class IssueService {
 		return saved;
 	}
 
-	public List<IssueComment> commentsOf(String issueId) {
-		return comments.findByIssueIdOrderByCreatedAtAsc(get(issueId).getId());
+	public List<IssueComment> commentsOf(String issueId, User user) {
+		return comments.findByIssueIdOrderByCreatedAtAsc(getForUser(issueId, user).getId());
 	}
 }

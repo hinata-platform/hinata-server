@@ -33,6 +33,46 @@ public class HivoraProperties {
 	private Cors cors = new Cors();
 	private App app = new App();
 	private Storage storage = new Storage();
+	private Security security = new Security();
+	private Mongodb mongodb = new Mongodb();
+
+	@Getter
+	@Setter
+	public static class Security {
+		/**
+		 * CIDR ranges of reverse proxies that are allowed to set
+		 * {@code X-Forwarded-For}. When empty (the secure default) the header is
+		 * ignored entirely and the direct socket address is used, so a client
+		 * cannot spoof its IP to bypass rate limiting or the login lockout
+		 * (OWASP A07). Behind a proxy/tunnel, set this to the proxy's address,
+		 * e.g. {@code 127.0.0.1/32} for a local ngrok agent.
+		 */
+		private List<String> trustedProxies = List.of();
+	}
+
+	@Getter
+	@Setter
+	public static class Mongodb {
+		private Tls tls = new Tls();
+
+		/**
+		 * Mutual-TLS / X.509 settings for the MongoDB connection. When enabled,
+		 * the driver presents the configured client certificate (keystore) and
+		 * verifies the server against the CA (truststore); combine with
+		 * {@code authMechanism=MONGODB-X509&authSource=$external} in the URI.
+		 */
+		@Getter
+		@Setter
+		public static class Tls {
+			private boolean enabled = false;
+			/** PKCS#12 keystore holding the client certificate + private key. */
+			private String keyStore = "";
+			private String keyStorePassword = "";
+			/** PKCS#12/JKS truststore holding the CA that signed the server cert. */
+			private String trustStore = "";
+			private String trustStorePassword = "";
+		}
+	}
 
 	@Getter
 	@Setter
@@ -107,7 +147,9 @@ public class HivoraProperties {
 		@Min(1)
 		private int maxUploadMb = 25;
 		private List<String> allowedContentTypes = List.of(
-				"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+				// image/svg+xml intentionally excluded: SVG can carry inline
+				// JavaScript (stored-XSS risk if ever rendered inline).
+				"image/png", "image/jpeg", "image/gif", "image/webp",
 				"application/pdf", "text/plain", "text/csv", "application/zip",
 				"application/json", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 				"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

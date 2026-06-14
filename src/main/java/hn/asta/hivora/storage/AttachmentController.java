@@ -27,6 +27,8 @@ public class AttachmentController {
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public Issue upload(@PathVariable String issueId, @RequestParam("file") MultipartFile file) {
+		// Authorize against the issue's project before touching storage (A01).
+		issueService.getForUser(issueId, currentUser.require());
 		String userId = currentUser.requireId();
 		String objectKey = storage.upload(file);
 		return issueService.update(issueId, issue -> issue.getAttachments().add(
@@ -45,8 +47,7 @@ public class AttachmentController {
 	@GetMapping("/{attachmentId}/download-url")
 	public Map<String, String> downloadUrl(@PathVariable String issueId,
 			@PathVariable String attachmentId) {
-		currentUser.require();
-		Issue issue = issueService.get(issueId);
+		Issue issue = issueService.getForUser(issueId, currentUser.require());
 		Issue.Attachment attachment = issue.getAttachments().stream()
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
@@ -58,7 +59,7 @@ public class AttachmentController {
 	@DeleteMapping("/{attachmentId}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String issueId, @PathVariable String attachmentId) {
-		Issue issue = issueService.get(issueId);
+		Issue issue = issueService.getForUser(issueId, currentUser.require());
 		Issue.Attachment attachment = issue.getAttachments().stream()
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()

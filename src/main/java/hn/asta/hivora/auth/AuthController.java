@@ -34,6 +34,7 @@ public class AuthController {
 	private final CurrentUser currentUser;
 	private final JwtDecoder jwtDecoder;
 	private final hn.asta.hivora.user.UserRepository users;
+	private final hn.asta.hivora.config.ClientIpResolver clientIpResolver;
 
 	public record LoginRequest(@NotBlank String identifier, @NotBlank String password) {
 	}
@@ -66,8 +67,8 @@ public class AuthController {
 	@PostMapping("/login")
 	public TokenResponse login(@RequestBody @jakarta.validation.Valid LoginRequest request,
 			HttpServletRequest http) {
-		AuthService.LoginResult result =
-				authService.login(request.identifier().trim(), request.password(), clientIp(http));
+		AuthService.LoginResult result = authService.login(
+				request.identifier().trim(), request.password(), clientIpResolver.resolve(http));
 		return toResponse(result.user(), result.tokens());
 	}
 
@@ -109,10 +110,5 @@ public class AuthController {
 	private TokenResponse toResponse(User user, TokenService.TokenPair pair) {
 		return new TokenResponse(pair.accessToken(), pair.refreshToken(), pair.expiresInSeconds(),
 				UserResponse.from(user));
-	}
-
-	static String clientIp(HttpServletRequest request) {
-		String forwarded = request.getHeader("X-Forwarded-For");
-		return forwarded != null ? forwarded.split(",")[0].trim() : request.getRemoteAddr();
 	}
 }

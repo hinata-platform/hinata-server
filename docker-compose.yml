@@ -4,12 +4,19 @@
 name: hivora
 
 x-mongo-common: &mongo-common
-  image: mongo:8
+  image: mongo:8.0
   restart: unless-stopped
+  # Internal cluster auth via keyfile (SCRAM); client connections require TLS and
+  # the app authenticates with a X.509 client certificate. Generate the PKI with
+  #   ./deploy/x509/generate-certs.sh prod
   command: >-
     mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo/keyfile
+    --tlsMode requireTLS
+    --tlsCertificateKeyFile /etc/mongo/certs/server.pem
+    --tlsCAFile /etc/mongo/certs/ca.crt
   volumes:
     - ./deploy/mongo-keyfile:/etc/mongo/keyfile:ro
+    - ./deploy/x509/prod:/etc/mongo/certs:ro
   networks: [hivora]
 
 services:
@@ -24,7 +31,10 @@ services:
     healthcheck:
       # Initiates the replica set on first run, then reports member health.
       test: >-
-        mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD"
+        mongosh --quiet --tls --tlsCAFile /etc/mongo/certs/ca.crt
+        --tlsCertificateKeyFile /etc/mongo/certs/server.pem --host mongo1
+        -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD"
+        --authenticationDatabase admin
         --eval "try { rs.status().ok } catch (e) {
           rs.initiate({_id: 'rs0', members: [
             {_id: 0, host: 'mongo1:27017', priority: 2},
@@ -72,9 +82,19 @@ services:
       minio:
         condition: service_started
     environment:
+      SPRING_PROFILES_ACTIVE: prod
       HIVORA_BASE_URL: ${HIVORA_BASE_URL:?set in .env}
       HIVORA_JWT_SECRET: ${HIVORA_JWT_SECRET:?set in .env}
-      HIVORA_MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongo1:27017,mongo2:27017/hivora?replicaSet=rs0&authSource=admin
+      # X.509 client auth over TLS (no password in the URI). The app presents the
+      # client certificate from HIVORA_MONGO_TLS_KEYSTORE; register its subject DN
+      # as the $external user via deploy/x509/init-prod-user.sh.
+      HIVORA_MONGODB_URI: mongodb://mongo1:27017,mongo2:27017/hivora?replicaSet=rs0&tls=true&authMechanism=MONGODB-X509&authSource=$$external
+      HIVORA_MONGO_TLS_ENABLED: "true"
+      HIVORA_MONGO_TLS_KEYSTORE: /etc/hivora/x509/hivora-app.p12
+      HIVORA_MONGO_TLS_KEYSTORE_PASSWORD: ${HIVORA_MONGO_TLS_KEYSTORE_PASSWORD:?set in .env}
+      HIVORA_MONGO_TLS_TRUSTSTORE: /etc/hivora/x509/truststore.p12
+      HIVORA_MONGO_TLS_TRUSTSTORE_PASSWORD: ${HIVORA_MONGO_TLS_TRUSTSTORE_PASSWORD:?set in .env}
+      HIVORA_TRUSTED_PROXIES: ${HIVORA_TRUSTED_PROXIES:-}
       HIVORA_SMTP_HOST: ${HIVORA_SMTP_HOST:-mailpit}
       HIVORA_SMTP_PORT: ${HIVORA_SMTP_PORT:-1025}
       HIVORA_SMTP_USERNAME: ${HIVORA_SMTP_USERNAME:-}
@@ -95,6 +115,10 @@ services:
       HIVORA_SETUP_ADMIN_USERNAME: ${HIVORA_SETUP_ADMIN_USERNAME:-}
       HIVORA_SETUP_ADMIN_PASSWORD: ${HIVORA_SETUP_ADMIN_PASSWORD:-}
       HIVORA_SETUP_ADMIN_DISPLAY_NAME: ${HIVORA_SETUP_ADMIN_DISPLAY_NAME:-}
+    volumes:
+      # App client certificate (keystore) + CA (truststore) for MONGODB-X509.
+      - ./deploy/x509/prod/hivora-app.p12:/etc/hivora/x509/hivora-app.p12:ro
+      - ./deploy/x509/prod/truststore.p12:/etc/hivora/x509/truststore.p12:ro
     ports:
       - "${HIVORA_PORT:-8080}:8080"
     networks: [hivora]

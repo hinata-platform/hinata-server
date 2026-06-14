@@ -1,0 +1,41 @@
+# ===== PROD profile =====
+# Hardened defaults for deployment. The full connection string (incl. TLS +
+# MONGODB-X509) and the certificate paths are injected by docker-compose.yml /
+# the deployment environment. Run deploy/x509/generate-certs.sh prod to create
+# the PKI and deploy/x509/init-prod-user.sh to register the X.509 $external user.
+spring:
+  mongodb:
+    # Must be provided by the environment; see docker-compose.yml. Uses
+    # tls=true&authMechanism=MONGODB-X509&authSource=$external over the replica set.
+    uri: ${HIVORA_MONGODB_URI}
+
+hivora:
+  mongodb:
+    tls:
+      enabled: ${HIVORA_MONGO_TLS_ENABLED:true}
+      key-store: ${HIVORA_MONGO_TLS_KEYSTORE:/etc/hivora/x509/hivora-app.p12}
+      key-store-password: ${HIVORA_MONGO_TLS_KEYSTORE_PASSWORD:}
+      trust-store: ${HIVORA_MONGO_TLS_TRUSTSTORE:/etc/hivora/x509/truststore.p12}
+      trust-store-password: ${HIVORA_MONGO_TLS_TRUSTSTORE_PASSWORD:}
+  security:
+    # e.g. "127.0.0.1/32" for a local ngrok agent, or your ingress/load-balancer CIDR.
+    trusted-proxies: ${HIVORA_TRUSTED_PROXIES:}
+
+# API docs disabled by default in production (avoid leaking the API surface, L1/A05).
+springdoc:
+  api-docs:
+    enabled: ${HIVORA_DOCS_ENABLED:false}
+scalar:
+  enabled: ${HIVORA_DOCS_ENABLED:false}
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true        # HTTPS-only session cookies in production
+        http-only: true
+        same-site: strict
+
+logging:
+  level:
+    org.springframework.security: ${HIVORA_LOG_SECURITY:WARN}

@@ -18,18 +18,23 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.client.oidc.authentication.OidcIdTokenValidator;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtDecoderFactory;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.header.writers.CrossOriginResourcePolicyHeaderWriter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.cors.CorsConfiguration;
@@ -67,9 +72,33 @@ public class SecurityConfig {
 		return new NimbusJwtEncoder(new ImmutableSecret<>(secretKey()));
 	}
 
+	/**
+	 * General-purpose decoder used by the {@code /auth/refresh} endpoint, which
+	 * must be able to decode refresh tokens. The API resource server uses a
+	 * stricter, access-token-only decoder ({@link #accessTokenJwtDecoder()}).
+	 */
 	@Bean
 	public JwtDecoder jwtDecoder() {
 		return NimbusJwtDecoder.withSecretKey(secretKey()).macAlgorithm(MacAlgorithm.HS512).build();
+	}
+
+	/**
+	 * Resource-server decoder that rejects anything other than an access token,
+	 * so a (long-lived) refresh token can never be used as a bearer token for
+	 * API access (OWASP A07/A01).
+	 */
+	private JwtDecoder accessTokenJwtDecoder() {
+		NimbusJwtDecoder decoder =
+				NimbusJwtDecoder.withSecretKey(secretKey()).macAlgorithm(MacAlgorithm.HS512).build();
+		OAuth2Error error = new OAuth2Error("invalid_token",
+				"Only access tokens are accepted on the API", null);
+		OAuth2TokenValidator<Jwt> accessOnly = jwt ->
+				TokenService.TYPE_ACCESS.equals(jwt.getClaimAsString(TokenService.CLAIM_TYPE))
+						? OAuth2TokenValidatorResult.success()
+						: OAuth2TokenValidatorResult.failure(error);
+		decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+				JwtValidators.createDefault(), accessOnly));
+		return decoder;
 	}
 
 	private SecretKey secretKey() {
@@ -130,9 +159,16 @@ public class SecurityConfig {
 			.csrf(csrf -> csrf.disable()) // stateless bearer-token API, no cookies
 			.cors(Customizer.withDefaults())
 			.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+			// A bearer-token API has no use for the saved-request cache; disabling
+			// it stops Spring from creating a JSESSIONID (without SameSite/Secure)
+			// on every 401 (OWASP A05). Sessions remain available only for the
+			// SAML2/OAuth2 login redirect flows that genuinely need them.
+			.requestCache(cache -> cache.disable())
 			.headers(headers -> headers
 				.httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000))
 				.contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'; frame-ancestors 'none'"))
+				.crossOriginResourcePolicy(corp -> corp
+					.policy(CrossOriginResourcePolicyHeaderWriter.CrossOriginResourcePolicy.SAME_ORIGIN))
 				.referrerPolicy(referrer -> referrer
 					.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)))
 			.authorizeHttpRequests(auth -> auth
@@ -148,7 +184,9 @@ public class SecurityConfig {
 				.requestMatchers("/actuator/**").hasRole("ADMIN")
 				.anyRequest().authenticated())
 			.oauth2ResourceServer(oauth2 -> oauth2
-				.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())))
+				.jwt(jwt -> jwt
+					.decoder(accessTokenJwtDecoder())
+					.jwtAuthenticationConverter(jwtAuthenticationConverter())))
 			.oauth2Login(login -> login
 				.authorizationEndpoint(endpoint -> endpoint
 					.authorizationRequestRepository(authorizationRequestRepository))

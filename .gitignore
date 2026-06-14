@@ -35,3 +35,8 @@ build/
 # Local secrets
 .env
 deploy/mongo-keyfile
+
+# Generated X.509 PKI (certs, keys, keystores) — never commit private keys
+deploy/x509/dev/
+deploy/x509/prod/
+!deploy/x509/*.sh

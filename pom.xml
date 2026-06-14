@@ -23,7 +23,12 @@
 	<properties>
 		<java.version>21</java.version>
 		<bucket4j.version>8.10.1</bucket4j.version>
-		<minio.version>8.5.17</minio.version>
+		<minio.version>8.6.0</minio.version>
+		<!-- Override the Bouncy Castle version pulled in transitively by
+		     spring-security-saml2 / OpenSAML. 1.78.1 is affected by a covert
+		     timing channel (GHSA-p93r-85wp-75v3) and an LDAP injection
+		     (GHSA-c3fc-8qff-9hwx); 1.84 fixes both. -->
+		<bouncycastle.version>1.84</bouncycastle.version>
 	</properties>
 	<repositories>
 		<!-- OpenSAML 5 (required by spring-security-saml2) is not on Maven Central. -->
@@ -137,6 +142,39 @@
 			<version>3.0.3</version>
 		</dependency>
 	</dependencies>
+
+	<dependencyManagement>
+		<dependencies>
+			<!-- MinIO 8.6.0 declares OkHttp 5.x, whose Maven artifact is a
+			     Kotlin-multiplatform aggregator (classes live in okhttp-jvm), so
+			     okhttp3.HttpUrl is missing from the compile classpath under Maven.
+			     Pin the well-behaved single-jar 4.12.0 release, which exposes the
+			     same stable OkHttp API MinIO uses. -->
+			<dependency>
+				<groupId>com.squareup.okhttp3</groupId>
+				<artifactId>okhttp</artifactId>
+				<version>4.12.0</version>
+			</dependency>
+			<!-- Force a consistent, non-vulnerable Bouncy Castle across the
+			     OpenSAML / Spring Security SAML2 transitive graph (overrides the
+			     1.78.1 bcprov pinned by the Spring Boot BOM). -->
+			<dependency>
+				<groupId>org.bouncycastle</groupId>
+				<artifactId>bcprov-jdk18on</artifactId>
+				<version>${bouncycastle.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.bouncycastle</groupId>
+				<artifactId>bcpkix-jdk18on</artifactId>
+				<version>${bouncycastle.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.bouncycastle</groupId>
+				<artifactId>bcutil-jdk18on</artifactId>
+				<version>${bouncycastle.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<build>
 		<plugins>

@@ -10,7 +10,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.CacheControl;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -86,7 +85,7 @@ public class MetaController {
 			return ResponseEntity.ok()
 					.contentType(contentType)
 					.cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
-					.header(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+					.headers(h -> { /* same-origin proxy: no ACAO, don't widen CORS (A05) */ })
 					.body(body);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();

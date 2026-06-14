@@ -72,14 +72,13 @@ public class IssueController {
 			@RequestParam(required = false) String query,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
-		currentUser.require();
-		return issueService.search(projectId, state, assigneeId, sprintId, type, query, page, size);
+		return issueService.search(projectId, state, assigneeId, sprintId, type, query, page, size,
+				currentUser.require());
 	}
 
 	@GetMapping("/{id}")
 	public Issue get(@PathVariable String id) {
-		currentUser.require();
-		return issueService.get(id);
+		return issueService.getForUser(id, currentUser.require());
 	}
 
 	@PostMapping
@@ -140,20 +139,17 @@ public class IssueController {
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String id) {
-		currentUser.require();
-		issueService.delete(id);
+		issueService.delete(id, currentUser.require());
 	}
 
 	@GetMapping("/{id}/activity")
 	public List<IssueActivity> activity(@PathVariable String id) {
-		currentUser.require();
-		return issueService.activityOf(id);
+		return issueService.activityOf(id, currentUser.require());
 	}
 
 	@GetMapping("/{id}/comments")
 	public List<IssueComment> comments(@PathVariable String id) {
-		currentUser.require();
-		return issueService.commentsOf(id);
+		return issueService.commentsOf(id, currentUser.require());
 	}
 
 	@PostMapping("/{id}/comments")

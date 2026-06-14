@@ -1,0 +1,25 @@
+# ===== DEV profile =====
+# Local development: TLS-encrypted, X.509-authenticated MongoDB (standalone),
+# API docs enabled. Run ./deploy/x509/setup-dev.sh once to create the certs and
+# the $external user, then: SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run
+spring:
+  mongodb:
+    # X.509 client auth: no username/password; the client certificate identifies
+    # the app. The SSLContext (keystore/truststore) is supplied by MongoTlsConfig.
+    uri: "${HIVORA_MONGODB_URI:mongodb://localhost:27017/hivora?tls=true&authMechanism=MONGODB-X509&authSource=$external&directConnection=true}"
+
+hivora:
+  mongodb:
+    tls:
+      enabled: ${HIVORA_MONGO_TLS_ENABLED:true}
+      key-store: ${HIVORA_MONGO_TLS_KEYSTORE:deploy/x509/dev/hivora-app.p12}
+      key-store-password: ${HIVORA_MONGO_TLS_KEYSTORE_PASSWORD:changeit}
+      trust-store: ${HIVORA_MONGO_TLS_TRUSTSTORE:deploy/x509/dev/truststore.p12}
+      trust-store-password: ${HIVORA_MONGO_TLS_TRUSTSTORE_PASSWORD:changeit}
+
+# Full API docs (Scalar UI) are convenient in dev.
+springdoc:
+  api-docs:
+    enabled: true
+scalar:
+  enabled: true

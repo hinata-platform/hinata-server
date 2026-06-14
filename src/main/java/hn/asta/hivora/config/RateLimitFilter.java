@@ -22,11 +22,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RateLimitFilter extends OncePerRequestFilter {
 
 	private final HivoraProperties properties;
+	private final ClientIpResolver clientIpResolver;
 	private final Map<String, Bucket> apiBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> authBuckets = new ConcurrentHashMap<>();
 
-	public RateLimitFilter(HivoraProperties properties) {
+	public RateLimitFilter(HivoraProperties properties, ClientIpResolver clientIpResolver) {
 		this.properties = properties;
+		this.clientIpResolver = clientIpResolver;
 	}
 
 	@Override
@@ -36,7 +38,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 			chain.doFilter(request, response);
 			return;
 		}
-		String ip = clientIp(request);
+		String ip = clientIpResolver.resolve(request);
 		boolean isAuth = request.getRequestURI().startsWith("/api/v1/auth/");
 		Bucket bucket = isAuth
 				? authBuckets.computeIfAbsent(ip,
@@ -60,10 +62,5 @@ public class RateLimitFilter extends OncePerRequestFilter {
 						.refillGreedy(perMinute, Duration.ofMinutes(1))
 						.build())
 				.build();
-	}
-
-	private String clientIp(HttpServletRequest request) {
-		String forwarded = request.getHeader("X-Forwarded-For");
-		return forwarded != null ? forwarded.split(",")[0].trim() : request.getRemoteAddr();
 	}
 }

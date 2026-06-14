@@ -107,10 +107,24 @@ public class MongoAuthorizationRequestRepository
 		}
 	}
 
+	/**
+	 * JEP-290 allow-list: only the Spring OAuth2 / Security types plus core JDK
+	 * value types may be deserialized, with bounded depth/array size. This is
+	 * defense-in-depth (the data is server-serialized and read back from our own
+	 * Mongo, not attacker-supplied over HTTP) but removes the unrestricted
+	 * {@link ObjectInputStream} gadget surface (OWASP A08).
+	 */
+	private static final java.io.ObjectInputFilter AUTH_REQUEST_FILTER =
+			java.io.ObjectInputFilter.Config.createFilter(
+					"org.springframework.security.oauth2.**;org.springframework.security.**;"
+					+ "java.util.**;java.lang.**;java.net.**;java.time.**;"
+					+ "maxdepth=20;maxarray=10000;maxrefs=10000;!*");
+
 	private OAuth2AuthorizationRequest deserialize(String value) {
 		try (ByteArrayInputStream bytes = new ByteArrayInputStream(Base64.getUrlDecoder().decode(value));
 				GZIPInputStream gzip = new GZIPInputStream(bytes);
 				ObjectInputStream in = new ObjectInputStream(gzip)) {
+			in.setObjectInputFilter(AUTH_REQUEST_FILTER);
 			return (OAuth2AuthorizationRequest) in.readObject();
 		}
 		catch (Exception ex) {

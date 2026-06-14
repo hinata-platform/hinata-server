@@ -1,39 +1,52 @@
 # Local development infrastructure only (run the server from your IDE):
-#   docker compose -f docker-compose.dev.yml up -d
-# Single-node replica set without auth, Mailpit and MinIO with default creds.
+#   ./deploy/x509/setup-dev.sh          # generates certs + starts mongo + X.509 user
+#   SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run
+#
+# MongoDB runs standalone with requireTLS + --auth and accepts only X.509
+# clients (gold standard: TLS encryption + X.509 authentication). MinIO/Mailpit
+# keep dev defaults. Images are pinned by digest-friendly minor tags (not :latest).
 name: hivora-dev
 
 services:
   mongo:
-    image: mongo:8
-    command: mongod --replSet rs0 --bind_ip_all
+    image: mongo:8.0
+    # requireTLS + client-cert verification (tlsCAFile). --auth turns on access
+    # control; the X.509 user is created by deploy/x509/setup-dev.sh.
+    command: >-
+      mongod --bind_ip_all --auth
+      --tlsMode requireTLS
+      --tlsCertificateKeyFile /etc/mongo/certs/server.pem
+      --tlsCAFile /etc/mongo/certs/ca.crt
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"   # loopback only — never expose dev Mongo on 0.0.0.0
     volumes:
       - mongo-dev-data:/data/db
+      - ./deploy/x509/dev:/etc/mongo/certs:ro
     healthcheck:
       test: >-
-        mongosh --quiet --eval "try { rs.status().ok } catch (e) {
-          rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]}).ok }"
-      interval: 5s
+        mongosh --quiet --tls --tlsCAFile /etc/mongo/certs/ca.crt
+        --tlsCertificateKeyFile /etc/mongo/certs/hivora-app.pem
+        --host localhost --eval "db.runCommand({ping:1}).ok" || exit 1
+      interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 10s
 
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.21
     ports:
-      - "1025:1025" # SMTP
-      - "8025:8025" # Web UI: http://localhost:8025
+      - "127.0.0.1:1025:1025" # SMTP
+      - "127.0.0.1:8025:8025" # Web UI: http://localhost:8025
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: hivora
       MINIO_ROOT_PASSWORD: hivora-dev-secret
     ports:
-      - "9000:9000" # S3 API
-      - "9001:9001" # Console: http://localhost:9001
+      - "127.0.0.1:9000:9000" # S3 API
+      - "127.0.0.1:9001:9001" # Console: http://localhost:9001
     volumes:
       - minio-dev-data:/data
 
