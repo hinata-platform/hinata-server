@@ -144,6 +144,12 @@ public class IssueController {
 		issueService.delete(id);
 	}
 
+	@GetMapping("/{id}/activity")
+	public List<IssueActivity> activity(@PathVariable String id) {
+		currentUser.require();
+		return issueService.activityOf(id);
+	}
+
 	@GetMapping("/{id}/comments")
 	public List<IssueComment> comments(@PathVariable String id) {
 		currentUser.require();
