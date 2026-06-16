@@ -34,14 +34,16 @@
 
 | Feature | Details |
 | --- | --- |
-| 📁 **Projects** | per-project workflows, issue numbering (`ASTA-42`) |
-| 🐛 **Issues** | types, priorities, tags, subtasks, dependencies, attachments (S3), comments |
-| 📋 **Agile boards** | sprints, columns mapped to workflow states, WIP limits |
+| 📁 **Projects** | per-project workflows, issue numbering (`ASTA-42`), reusable project labels |
+| 🐛 **Issues** | types, priorities, tags/labels, subtasks, dependencies, attachments (S3), comments |
+| 📋 **Agile boards** | columns mapped to workflow states, WIP limits, backlog |
+| 🏃 **Sprints** | plan / start / complete, capacity &amp; story points, burndown report |
 | ⏱️ **Time tracking** | work items with activity types + weekly timesheets |
 | 📈 **Gantt** | read model (start/due dates, dependencies, progress) |
-| 📑 **Reports** | state/priority/assignee distributions, created vs. resolved, time per project |
+| 📑 **Reports** | burndown, velocity, cycle time; state/priority/assignee distributions, created vs. resolved |
 | 📊 **Dashboard** | today's tasks, completion, ranking, tracker |
 | 📚 **Knowledge base** | hierarchical Markdown articles, global or per project |
+| 📎 **Attachments** | S3/MinIO storage, presigned downloads, **live (SSE)** add/remove events |
 | 🔔 **Notifications** | in-app + e-mail (SMTP), push-ready (FCM) |
 | 📨 **E-mail → ticket** | IMAP polling turns inbound mail into issues |
 | 🔑 **SSO** | OpenID Connect, OAuth 2.0, SAML 2.0, LDAP — configured at runtime |
@@ -146,7 +148,8 @@ REST under `/api/v1`. Public endpoints:
 /auth/sso/providers · /actuator/health
 ```
 
-Everything else requires a bearer token.
+Everything else requires a bearer token. Attachment changes stream in real time
+over **Server-Sent Events** at `/api/v1/issues/{issueId}/attachments/stream`.
 
 ---
 
