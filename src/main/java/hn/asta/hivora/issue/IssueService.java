@@ -67,6 +67,7 @@ public class IssueService {
 		}
 		issue.setRank(Instant.now().toEpochMilli());
 		Issue saved = issues.save(issue);
+		mergeProjectLabels(project, saved.getTags());
 		activities.save(IssueActivity.builder()
 				.issueId(saved.getId())
 				.actorId(author != null ? author.getId() : null)
@@ -98,6 +99,7 @@ public class IssueService {
 				: null);
 
 		Issue saved = issues.save(issue);
+		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);
 		if (saved.getAssigneeId() != null && !saved.getAssigneeId().equals(previousAssignee)) {
 			notifications.notifyIssueAssigned(saved);
@@ -115,6 +117,25 @@ public class IssueService {
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
 		issues.delete(issue);
+	}
+
+	/** Adds any new issue tags to the project's reusable label vocabulary so
+	 * they can be suggested when tagging other issues in the same project. */
+	private void mergeProjectLabels(Project project, List<String> tags) {
+		if (tags == null || tags.isEmpty()) return;
+		List<String> labels = project.getLabels();
+		if (labels == null) {
+			labels = new ArrayList<>();
+			project.setLabels(labels);
+		}
+		boolean changed = false;
+		for (String tag : tags) {
+			if (tag != null && !tag.isBlank() && !labels.contains(tag)) {
+				labels.add(tag);
+				changed = true;
+			}
+		}
+		if (changed) projects.save(project);
 	}
 
 	public List<IssueActivity> activityOf(String issueId, User user) {

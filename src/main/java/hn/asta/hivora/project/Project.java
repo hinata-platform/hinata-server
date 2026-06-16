@@ -45,6 +45,11 @@ public class Project {
 	@Builder.Default
 	private List<String> resolvedStates = new ArrayList<>(DEFAULT_RESOLVED);
 
+	/** Reusable issue labels ("Stichworte") for this project. Grows automatically
+	 * as issues are tagged; the assignable vocabulary surfaced by the app. */
+	@Builder.Default
+	private List<String> labels = new ArrayList<>();
+
 	/** Accent color (hex) used by the app, following the pastel design system. */
 	@Builder.Default
 	private String color = "#AEC6F4";
