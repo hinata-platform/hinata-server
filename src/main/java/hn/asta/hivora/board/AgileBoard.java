@@ -17,11 +17,24 @@ import java.util.List;
 @Document("agile_boards")
 public class AgileBoard {
 
+	/**
+	 * Working mode of the board:
+	 * <ul>
+	 *   <li>{@link #KANBAN} – continuous flow, no fixed timeboxes (default).</li>
+	 *   <li>{@link #SCRUM} – sprint planning in fixed iterations; unlocks the
+	 *       sprint planning / active-sprint / insights surfaces.</li>
+	 * </ul>
+	 */
+	public enum Type { KANBAN, SCRUM }
+
 	@Id
 	private String id;
 
 	@TextIndexed(weight = 10)
 	private String name;
+
+	@Builder.Default
+	private Type type = Type.KANBAN;
 
 	/** Boards can span multiple projects, like YouTrack agile boards. */
 	@Builder.Default

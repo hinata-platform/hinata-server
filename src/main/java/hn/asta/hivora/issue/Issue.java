@@ -85,6 +85,9 @@ public class Issue {
 
 	private Integer estimateMinutes;
 
+	/** Scrum effort estimate in story points (Fibonacci); null = unestimated. */
+	private Integer storyPoints;
+
 	/** Denormalized sum of work items, kept in sync by TimeTrackingService. */
 	@Builder.Default
 	private int spentMinutes = 0;

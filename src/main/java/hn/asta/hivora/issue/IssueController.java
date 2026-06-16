@@ -35,7 +35,8 @@ public class IssueController {
 			List<String> tags,
 			LocalDate startDate,
 			LocalDate dueDate,
-			Integer estimateMinutes) {
+			Integer estimateMinutes,
+			Integer storyPoints) {
 	}
 
 	public record UpdateIssueRequest(
@@ -52,11 +53,13 @@ public class IssueController {
 			LocalDate startDate,
 			LocalDate dueDate,
 			Integer estimateMinutes,
+			Integer storyPoints,
 			Double rank,
-			// Explicit clear flags — JSON null on a date field is "no change",
-			// so clearing a date requires its own signal.
+			// Explicit clear flags — JSON null on a field is "no change",
+			// so clearing a value requires its own signal.
 			Boolean clearStartDate,
-			Boolean clearDueDate) {
+			Boolean clearDueDate,
+			Boolean clearStoryPoints) {
 	}
 
 	public record CommentRequest(@NotBlank @Size(max = 10000) String text) {
@@ -70,10 +73,11 @@ public class IssueController {
 			@RequestParam(required = false) String sprintId,
 			@RequestParam(required = false) String type,
 			@RequestParam(required = false) String query,
+			@RequestParam(defaultValue = "false") boolean noSprint,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
-		return issueService.search(projectId, state, assigneeId, sprintId, type, query, page, size,
-				currentUser.require());
+		return issueService.search(projectId, state, assigneeId, sprintId, type, query, noSprint,
+				page, size, currentUser.require());
 	}
 
 	@GetMapping("/{id}")
@@ -98,6 +102,7 @@ public class IssueController {
 				.startDate(request.startDate())
 				.dueDate(request.dueDate())
 				.estimateMinutes(request.estimateMinutes())
+				.storyPoints(request.storyPoints())
 				.build();
 		return issueService.create(issue, currentUser.require());
 	}
@@ -132,6 +137,11 @@ public class IssueController {
 				issue.setDueDate(request.dueDate());
 			}
 			if (request.estimateMinutes() != null) issue.setEstimateMinutes(request.estimateMinutes());
+			if (Boolean.TRUE.equals(request.clearStoryPoints())) {
+				issue.setStoryPoints(null);
+			} else if (request.storyPoints() != null) {
+				issue.setStoryPoints(request.storyPoints());
+			}
 			if (request.rank() != null) issue.setRank(request.rank());
 		}, currentUser.require());
 	}

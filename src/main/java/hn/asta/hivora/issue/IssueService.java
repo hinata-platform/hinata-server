@@ -57,9 +57,7 @@ public class IssueService {
 		if (author != null) {
 			projects.assertMember(project, author); // only project members may add issues (A01)
 		}
-		long number = projects.nextIssueNumber(project.getId());
-		issue.setNumberInProject(number);
-		issue.setReadableId(project.getKey() + "-" + number);
+		assignIssueNumber(issue, project);
 		if (issue.getState() == null || !project.getWorkflowStates().contains(issue.getState())) {
 			issue.setState(project.getWorkflowStates().get(0));
 		}
@@ -67,7 +65,7 @@ public class IssueService {
 			issue.setReporterId(author.getId());
 		}
 		issue.setRank(Instant.now().toEpochMilli());
-		Issue saved = issues.save(issue);
+		Issue saved = saveWithNumberRetry(issue, project);
 		mergeProjectLabels(project, saved.getTags());
 		activities.save(IssueActivity.builder()
 				.issueId(saved.getId())
@@ -80,6 +78,34 @@ public class IssueService {
 		return saved;
 	}
 
+	/** Reserves the next project-scoped number and sets the readable id. */
+	private void assignIssueNumber(Issue issue, Project project) {
+		long number = projects.nextIssueNumber(project.getId());
+		issue.setNumberInProject(number);
+		issue.setReadableId(project.getKey() + "-" + number);
+	}
+
+	/**
+	 * Saves the issue, self-healing a stale project {@code issueCounter}. If the
+	 * unique (projectId, numberInProject) index rejects the insert — which means
+	 * the counter had fallen behind the real data — the counter is bumped to the
+	 * actual maximum and a fresh number is assigned once before giving up.
+	 */
+	private Issue saveWithNumberRetry(Issue issue, Project project) {
+		try {
+			return issues.save(issue);
+		}
+		catch (org.springframework.dao.DuplicateKeyException collision) {
+			long maxExisting = issues
+					.findTopByProjectIdOrderByNumberInProjectDesc(project.getId())
+					.map(Issue::getNumberInProject)
+					.orElse(0L);
+			projects.ensureIssueCounterAtLeast(project.getId(), maxExisting);
+			assignIssueNumber(issue, project);
+			return issues.save(issue);
+		}
+	}
+
 	public Issue update(String id, java.util.function.Consumer<Issue> mutator, User editor) {
 		Issue issue = get(id);
 		if (editor != null) {
@@ -88,9 +114,17 @@ public class IssueService {
 		Issue before = snapshot(issue);
 		String previousAssignee = issue.getAssigneeId();
 		String previousState = issue.getState();
+		String previousSprint = issue.getSprintId();
 		mutator.accept(issue);
 
 		Project project = projects.get(issue.getProjectId());
+		// Pulling a backlog issue into a sprint moves it onto the sprint board:
+		// auto-advance it out of the Backlog state so it's actually workable
+		// there (the sprint board hides the backlog column).
+		if (previousSprint == null && issue.getSprintId() != null
+				&& !issue.getSprintId().isBlank()) {
+			promoteFromBacklog(issue, project);
+		}
 		if (!project.getWorkflowStates().contains(issue.getState())) {
 			throw ApiException.badRequest("error.issue.unknownState", issue.getState());
 		}
@@ -110,6 +144,25 @@ public class IssueService {
 					"State changed to \"" + saved.getState() + "\"");
 		}
 		return saved;
+	}
+
+	/** A workflow state counts as "backlog" by its conventional name. */
+	private static boolean isBacklogState(String state) {
+		return state != null && state.equalsIgnoreCase("backlog");
+	}
+
+	/** If [issue] sits in a backlog state, advances it to the first non-backlog
+	 * workflow state (e.g. Backlog → Open) so it appears on the sprint board. */
+	private void promoteFromBacklog(Issue issue, Project project) {
+		if (!isBacklogState(issue.getState())) {
+			return;
+		}
+		for (String state : project.getWorkflowStates()) {
+			if (!isBacklogState(state)) {
+				issue.setState(state);
+				return;
+			}
+		}
 	}
 
 	public void delete(String id, User user) {
@@ -172,6 +225,7 @@ public class IssueService {
 				.startDate(issue.getStartDate())
 				.dueDate(issue.getDueDate())
 				.estimateMinutes(issue.getEstimateMinutes())
+				.storyPoints(issue.getStoryPoints())
 				.tags(new ArrayList<>(issue.getTags() != null ? issue.getTags() : List.of()))
 				.build();
 	}
@@ -202,6 +256,8 @@ public class IssueService {
 				str(before.getDueDate()), str(after.getDueDate()));
 		add(log, after.getId(), actor, IssueActivity.Field.ESTIMATE,
 				str(before.getEstimateMinutes()), str(after.getEstimateMinutes()));
+		add(log, after.getId(), actor, IssueActivity.Field.STORY_POINTS,
+				str(before.getStoryPoints()), str(after.getStoryPoints()));
 		List<String> beforeTags = before.getTags() != null ? before.getTags() : List.of();
 		List<String> afterTags = after.getTags() != null ? after.getTags() : List.of();
 		if (!beforeTags.equals(afterTags)) {
@@ -238,7 +294,7 @@ public class IssueService {
 
 	/** Filtered, paginated search. Free-text is regex-escaped (NoSQL injection safe). */
 	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
-			String type, String text, int page, int size, User user) {
+			String type, String text, boolean noSprint, int page, int size, User user) {
 		Query query = new Query();
 		// Non-admins only ever see issues from projects they belong to (A01).
 		if (!user.isAdmin()) {
@@ -259,6 +315,7 @@ public class IssueService {
 		if (state != null) query.addCriteria(Criteria.where("state").is(state));
 		if (assigneeId != null) query.addCriteria(Criteria.where("assigneeId").is(assigneeId));
 		if (sprintId != null) query.addCriteria(Criteria.where("sprintId").is(sprintId));
+		else if (noSprint) query.addCriteria(Criteria.where("sprintId").is(null));
 		if (type != null) query.addCriteria(Criteria.where("type").is(type));
 		if (text != null && !text.isBlank()) {
 			String quoted = Pattern.quote(text.trim());

@@ -33,7 +33,7 @@ public class BoardController {
 	private final CurrentUser currentUser;
 
 	public record CreateBoardRequest(@NotBlank @Size(max = 120) String name,
-			@NotEmpty List<String> projectIds) {
+			@NotEmpty List<String> projectIds, AgileBoard.Type type) {
 	}
 
 	public record SprintRequest(@NotBlank @Size(max = 120) String name, String goal,
@@ -68,6 +68,7 @@ public class BoardController {
 		}
 		return boards.save(AgileBoard.builder()
 				.name(request.name())
+				.type(request.type() != null ? request.type() : AgileBoard.Type.KANBAN)
 				.projectIds(request.projectIds())
 				.columns(columns)
 				.ownerId(userId)
@@ -109,6 +110,7 @@ public class BoardController {
 		currentUser.require();
 		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		if (updated.getName() != null) board.setName(updated.getName());
+		if (updated.getType() != null) board.setType(updated.getType());
 		if (updated.getProjectIds() != null && !updated.getProjectIds().isEmpty()) {
 			board.setProjectIds(updated.getProjectIds());
 		}

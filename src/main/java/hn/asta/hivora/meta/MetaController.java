@@ -41,7 +41,12 @@ public class MetaController {
 
 	public record Meta(String serverVersion, String minAppVersion, String organizationName,
 			String logoUrl, boolean setupCompleted, String privacyPolicyUrl,
-			Map<String, Boolean> featureFlags) {
+			Map<String, Boolean> featureFlags, UploadLimits uploadLimits) {
+	}
+
+	/** Attachment upload constraints so the client can validate before sending. */
+	public record UploadLimits(int maxFileMb, int maxFiles, int maxRequestMb,
+			java.util.List<String> allowedContentTypes) {
 	}
 
 	@Operation(summary = "Server metadata", description = "Returns server version, minimum required app version, feature flags and branding. Called by the app on every start.")
@@ -49,6 +54,7 @@ public class MetaController {
 	@GetMapping("/api/v1/meta")
 	public Meta meta() {
 		ServerSettings current = settings.get();
+		HivoraProperties.Storage storage = properties.getStorage();
 		return new Meta(
 				serverVersion,
 				properties.getApp().getMinVersion(),
@@ -56,7 +62,9 @@ public class MetaController {
 				current.getGeneral().getLogoUrl(),
 				current.isSetupCompleted(),
 				properties.getApp().getPrivacyPolicyUrl(),
-				properties.getApp().getFeatureFlags());
+				properties.getApp().getFeatureFlags(),
+				new UploadLimits(storage.getMaxUploadMb(), storage.getMaxFilesPerRequest(),
+						storage.getMaxRequestMb(), storage.getAllowedContentTypes()));
 	}
 
 	@Operation(summary = "Organization logo", description = "Proxies the configured logo URL so clients (incl. the web app and the PDF export) can load it same-origin without CORS restrictions.")

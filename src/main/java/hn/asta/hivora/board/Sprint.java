@@ -32,6 +32,9 @@ public class Sprint {
 
 	private LocalDate endDate;
 
+	/** Story-point capacity the team commits to for this sprint. */
+	private Integer capacityPoints;
+
 	@Builder.Default
 	private boolean archived = false;
 

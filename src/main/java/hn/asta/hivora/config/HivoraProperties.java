@@ -143,9 +143,15 @@ public class HivoraProperties {
 		private String secretKey = "";
 		private String bucket = "hivora";
 		private String region = "us-east-1";
-		/** Max upload size in megabytes. */
+		/** Max size of a single uploaded file in megabytes. */
 		@Min(1)
 		private int maxUploadMb = 25;
+		/** Max number of files accepted in one upload batch / request. */
+		@Min(1)
+		private int maxFilesPerRequest = 10;
+		/** Max aggregate size of one upload batch / request in megabytes. */
+		@Min(1)
+		private int maxRequestMb = 100;
 		private List<String> allowedContentTypes = List.of(
 				// image/svg+xml intentionally excluded: SVG can carry inline
 				// JavaScript (stored-XSS risk if ever rendered inline).

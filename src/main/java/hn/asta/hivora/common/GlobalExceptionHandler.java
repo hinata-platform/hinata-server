@@ -1,9 +1,12 @@
 package hn.asta.hivora.common;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
@@ -11,6 +14,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.HandlerMapping;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -47,8 +51,29 @@ public class GlobalExceptionHandler {
 		return messages.getMessage(key, args, key, locale);
 	}
 
+	/**
+	 * Streaming endpoints (e.g. the SSE attachment stream) are mapped with
+	 * {@code produces = text/event-stream}, which presets the response
+	 * Content-Type. If the handler throws <em>before</em> the stream opens, that
+	 * preset would force the JSON {@link ApiError} through a non-existent
+	 * text/event-stream converter (HttpMessageNotWritableException → masked 500),
+	 * and the client's {@code Accept: text/event-stream} would otherwise yield a
+	 * 406. Resetting the preset/attribute to JSON lets the real error status and
+	 * body reach the client unchanged.
+	 */
+	private void allowJsonError(HttpServletRequest request, HttpServletResponse response) {
+		if (request != null) {
+			request.removeAttribute(HandlerMapping.PRODUCIBLE_MEDIA_TYPES_ATTRIBUTE);
+		}
+		if (response != null && MediaType.TEXT_EVENT_STREAM_VALUE.equals(response.getContentType())) {
+			response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+		}
+	}
+
 	@ExceptionHandler(ApiException.class)
-	public ResponseEntity<ApiError> handleApi(ApiException ex) {
+	public ResponseEntity<ApiError> handleApi(ApiException ex, HttpServletRequest request,
+			HttpServletResponse response) {
+		allowJsonError(request, response);
 		String message = t(ex.getMessageKey(), ex.getArgs());
 		return ResponseEntity.status(ex.getStatus()).body(ApiError.of(ex.getStatus(), message, null));
 	}
@@ -81,19 +106,25 @@ public class GlobalExceptionHandler {
 	}
 
 	@ExceptionHandler(AuthenticationException.class)
-	public ResponseEntity<ApiError> handleAuth(AuthenticationException ex) {
+	public ResponseEntity<ApiError> handleAuth(AuthenticationException ex, HttpServletRequest request,
+			HttpServletResponse response) {
+		allowJsonError(request, response);
 		return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
 				.body(ApiError.of(HttpStatus.UNAUTHORIZED, t("error.auth.required"), null));
 	}
 
 	@ExceptionHandler(AccessDeniedException.class)
-	public ResponseEntity<ApiError> handleDenied(AccessDeniedException ex) {
+	public ResponseEntity<ApiError> handleDenied(AccessDeniedException ex, HttpServletRequest request,
+			HttpServletResponse response) {
+		allowJsonError(request, response);
 		return ResponseEntity.status(HttpStatus.FORBIDDEN)
 				.body(ApiError.of(HttpStatus.FORBIDDEN, t("error.accessDenied"), null));
 	}
 
 	@ExceptionHandler(Exception.class)
-	public ResponseEntity<ApiError> handleUnexpected(Exception ex) {
+	public ResponseEntity<ApiError> handleUnexpected(Exception ex, HttpServletRequest request,
+			HttpServletResponse response) {
+		allowJsonError(request, response);
 		log.error("Unhandled exception", ex);
 		return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
 				.body(ApiError.of(HttpStatus.INTERNAL_SERVER_ERROR, t("error.internal"), null));

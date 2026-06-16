@@ -21,6 +21,10 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 	List<Issue> findByParentId(String parentId);
 
+	/** Highest issue number currently used in a project — used to repair a
+	 * project's issueCounter if it ever falls behind the real data. */
+	Optional<Issue> findTopByProjectIdOrderByNumberInProjectDesc(String projectId);
+
 	long countByProjectId(String projectId);
 
 	long countByProjectIdAndStateIn(String projectId, List<String> states);

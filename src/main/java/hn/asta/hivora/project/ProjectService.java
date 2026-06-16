@@ -51,6 +51,18 @@ public class ProjectService {
 		return projects.save(project);
 	}
 
+	/**
+	 * Raises the project's {@code issueCounter} to at least [floor] if it has
+	 * fallen behind the real data (e.g. imported/seeded issues). Uses Mongo's
+	 * {@code $max} so concurrent callers can't lower it.
+	 */
+	public void ensureIssueCounterAtLeast(String projectId, long floor) {
+		mongo.updateFirst(
+				Query.query(Criteria.where("_id").is(projectId)),
+				new Update().max("issueCounter", floor),
+				Project.class);
+	}
+
 	/** Atomically reserves the next issue number for the project. */
 	public long nextIssueNumber(String projectId) {
 		Project updated = mongo.findAndModify(
