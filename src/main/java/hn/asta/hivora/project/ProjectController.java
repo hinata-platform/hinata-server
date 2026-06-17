@@ -27,7 +27,8 @@ public class ProjectController {
 			@NotBlank @Size(min = 2, max = 10) String key,
 			@NotBlank @Size(max = 120) String name,
 			@Size(max = 4000) String description,
-			String color) {
+			String color,
+			String leadId) {
 	}
 
 	@GetMapping
@@ -54,6 +55,7 @@ public class ProjectController {
 				.name(request.name())
 				.description(request.description())
 				.color(request.color() != null ? request.color() : "#AEC6F4")
+				.leadId(request.leadId())
 				.build();
 		return projectService.create(project, user);
 	}
