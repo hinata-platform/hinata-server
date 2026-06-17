@@ -15,12 +15,14 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -28,6 +30,7 @@ public class ProjectService {
 
 	private static final String ISSUES = "issues";
 	private static final String PROJECT_ID = "projectId";
+	private static final String STATE = "state";
 
 	private final ProjectRepository projects;
 	private final MongoTemplate mongo;
@@ -271,6 +274,7 @@ public class ProjectService {
 					}
 				}
 			}
+			renames.addAll(resolveDeletions(project, incoming, oldNameById, req.stateMigrations()));
 			project.setWorkflowStates(incoming);
 		}
 
@@ -288,6 +292,54 @@ public class ProjectService {
 		if (deduped.isEmpty()) throw ApiException.badRequest("error.project.minResolved");
 		project.setResolvedStates(deduped);
 		return renames;
+	}
+
+	/**
+	 * Handles workflow states that the update removes. A state with no issues is
+	 * simply dropped; a state that still has issues assigned may NOT be deleted
+	 * outright — the request must name a migration target (another surviving
+	 * state) so those issues are moved there first. Returns the reassignments to
+	 * cascade (old state name -> target's final name).
+	 */
+	private List<RenameOp> resolveDeletions(Project project, List<Project.WorkflowState> incoming,
+			Map<String, String> oldNameById, Map<String, String> migrations) {
+		Map<String, Project.WorkflowState> incomingById = incoming.stream()
+				.collect(Collectors.toMap(Project.WorkflowState::getId, s -> s, (a, b) -> a));
+		Map<String, String> moves = migrations != null ? migrations : Map.of();
+		List<RenameOp> ops = new ArrayList<>();
+		for (Map.Entry<String, String> entry : oldNameById.entrySet()) {
+			String deletedId = entry.getKey();
+			if (incomingById.containsKey(deletedId)) continue; // still present
+			String oldName = entry.getValue();
+			long count = countIssuesInState(project.getId(), oldName);
+			if (count == 0) continue; // safe to drop
+			String targetId = moves.get(deletedId);
+			if (targetId == null) {
+				throw ApiException.badRequest("error.project.stateHasIssues", oldName, count);
+			}
+			Project.WorkflowState target = incomingById.get(targetId);
+			if (target == null) {
+				throw ApiException.badRequest("error.project.invalidMigrationTarget");
+			}
+			ops.add(new RenameOp(oldName, target.getName()));
+		}
+		return ops;
+	}
+
+	private long countIssuesInState(String projectId, String stateName) {
+		return mongo.count(
+				new Query(Criteria.where(PROJECT_ID).is(projectId).and(STATE).is(stateName)),
+				ISSUES);
+	}
+
+	/** Issue count per current workflow-state name — drives the settings UI's
+	 * "this status still has N issues" guard before a delete. */
+	public Map<String, Long> stateUsage(Project project) {
+		Map<String, Long> usage = new LinkedHashMap<>();
+		for (String name : project.workflowStateNames()) {
+			usage.put(name, countIssuesInState(project.getId(), name));
+		}
+		return usage;
 	}
 
 	/** Validates labels, assigns ids to new ones, and returns label renames.
@@ -336,8 +388,8 @@ public class ProjectService {
 
 	private void cascadeStateRename(String projectId, String from, String to) {
 		mongo.updateMulti(
-				new Query(Criteria.where(PROJECT_ID).is(projectId).and("state").is(from)),
-				new Update().set("state", to), ISSUES);
+				new Query(Criteria.where(PROJECT_ID).is(projectId).and(STATE).is(from)),
+				new Update().set(STATE, to), ISSUES);
 	}
 
 	private void cascadeTagRename(String projectId, String from, String to) {

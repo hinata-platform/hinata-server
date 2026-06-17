@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @Tag(name = "Projects")
 @RestController
@@ -63,6 +64,16 @@ public class ProjectController {
 	@PatchMapping("/{id}")
 	public Project update(@PathVariable String id, @RequestBody @Valid ProjectUpdateRequest request) {
 		return projectService.applyUpdate(id, request, currentUser.require());
+	}
+
+	/** Issue count per workflow-state name — lets the settings UI warn before
+	 * deleting a state that still has issues and offer to migrate them. */
+	@GetMapping("/{id}/state-usage")
+	public Map<String, Long> stateUsage(@PathVariable String id) {
+		User user = currentUser.require();
+		Project project = projectService.get(id);
+		projectService.assertMember(project, user);
+		return projectService.stateUsage(project);
 	}
 
 	/** Permanently deletes a label from the project and every issue using it. */

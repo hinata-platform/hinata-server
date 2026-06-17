@@ -3,6 +3,7 @@ package hn.asta.hivora.project;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Partial update for a project's settings surface. Every field is optional; a
@@ -22,5 +23,9 @@ public record ProjectUpdateRequest(
 		List<String> resolvedStates,
 		List<Project.Label> labels,
 		String color,
-		Boolean archived) {
+		Boolean archived,
+		/** Maps a to-be-deleted workflow-state id to the surviving state id its
+		 * issues should be migrated into. Required when deleting a state that
+		 * still has issues assigned. */
+		Map<String, String> stateMigrations) {
 }
