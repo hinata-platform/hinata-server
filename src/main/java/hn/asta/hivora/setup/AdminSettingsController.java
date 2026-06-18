@@ -1,5 +1,6 @@
 package hn.asta.hivora.setup;
 
+import hn.asta.hivora.config.HivoraProperties;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,10 +20,25 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminSettingsController {
 
 	private final SettingsService settings;
+	private final HivoraProperties properties;
 
 	@GetMapping
 	public ServerSettings get() {
-		return settings.get();
+		ServerSettings current = settings.get();
+		// Surface the effective app config (env defaults when not yet overridden)
+		// so the admin form pre-fills the values currently served via /meta.
+		ServerSettings.App app = current.getApp();
+		HivoraProperties.App defaults = properties.getApp();
+		if (isBlank(app.getMinVersion())) {
+			app.setMinVersion(defaults.getMinVersion());
+		}
+		if (isBlank(app.getPrivacyPolicyUrl())) {
+			app.setPrivacyPolicyUrl(defaults.getPrivacyPolicyUrl());
+		}
+		if (app.getFeatureFlags() == null || app.getFeatureFlags().isEmpty()) {
+			app.setFeatureFlags(new java.util.LinkedHashMap<>(defaults.getFeatureFlags()));
+		}
+		return current;
 	}
 
 	@PutMapping

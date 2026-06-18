@@ -54,15 +54,20 @@ public class MetaController {
 	@GetMapping("/api/v1/meta")
 	public Meta meta() {
 		ServerSettings current = settings.get();
+		ServerSettings.App app = current.getApp();
+		HivoraProperties.App appDefaults = properties.getApp();
 		HivoraProperties.Storage storage = properties.getStorage();
+		Map<String, Boolean> featureFlags = app.getFeatureFlags() != null && !app.getFeatureFlags().isEmpty()
+				? app.getFeatureFlags()
+				: appDefaults.getFeatureFlags();
 		return new Meta(
 				serverVersion,
-				properties.getApp().getMinVersion(),
+				firstNonBlank(app.getMinVersion(), appDefaults.getMinVersion()),
 				current.getOrganizationName(),
 				current.getGeneral().getLogoUrl(),
 				current.isSetupCompleted(),
-				properties.getApp().getPrivacyPolicyUrl(),
-				properties.getApp().getFeatureFlags(),
+				firstNonBlank(app.getPrivacyPolicyUrl(), appDefaults.getPrivacyPolicyUrl()),
+				featureFlags,
 				new UploadLimits(storage.getMaxUploadMb(), storage.getMaxFilesPerRequest(),
 						storage.getMaxRequestMb(), storage.getAllowedContentTypes()));
 	}
@@ -103,6 +108,10 @@ public class MetaController {
 			log.warn("Failed to proxy organization logo from {}: {}", url, e.toString());
 			return ResponseEntity.notFound().build();
 		}
+	}
+
+	private static String firstNonBlank(String preferred, String fallback) {
+		return preferred != null && !preferred.isBlank() ? preferred : fallback;
 	}
 
 	private static MediaType parseMediaType(String raw) {

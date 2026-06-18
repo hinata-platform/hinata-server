@@ -7,6 +7,8 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Singleton document (id = "server") holding everything an administrator can
@@ -27,6 +29,7 @@ public class ServerSettings {
 	private String organizationName;
 
 	private General general = new General();
+	private App app = new App();
 	private Smtp smtp = new Smtp();
 	private Security security = new Security();
 	private Oidc oidc = new Oidc();
@@ -47,6 +50,20 @@ public class ServerSettings {
 		private String logoUrl;
 		private String timezone = "Europe/Berlin";
 		private String defaultLocale = "de";
+	}
+
+	/**
+	 * App/client settings served to the Flutter app via {@code /api/v1/meta}.
+	 * Admin-configurable at runtime; blank/empty values fall back to the
+	 * environment-driven {@code hivora.app.*} defaults.
+	 */
+	@Data
+	public static class App {
+		/** Minimum app version; older clients are forced to update. */
+		private String minVersion;
+		private String privacyPolicyUrl;
+		/** Optional client feature flags (name → enabled). */
+		private Map<String, Boolean> featureFlags = new LinkedHashMap<>();
 	}
 
 	/** Outbound SMTP – used for all transactional e-mails. */
