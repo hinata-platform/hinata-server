@@ -193,6 +193,7 @@ public class DemoSeeder {
 			settings.save(s);
 		}
 		admin.setTitle("Maintainer");
+		applyAccountDefaults(admin);
 		return users.save(admin);
 	}
 
@@ -200,7 +201,25 @@ public class DemoSeeder {
 		User u = userService.createLocal(email, username, displayName, DEMO_PASSWORD,
 				Set.of(Role.MEMBER));
 		u.setTitle(title);
+		applyAccountDefaults(u);
 		return users.save(u);
+	}
+
+	/**
+	 * Stamps the self-service account fields the {@code /me} surface reads, so
+	 * demo accounts render as fully-onboarded, verified members (not still-pending
+	 * invites): verified email, a sensible password-change / join date, and the
+	 * default notification matrix. 2FA is intentionally left off so the demo login
+	 * ({@code admin / } {@value #DEMO_PASSWORD}) stays single-step.
+	 */
+	private void applyAccountDefaults(User u) {
+		Instant joined = u.getCreatedAt() != null ? u.getCreatedAt() : Instant.now();
+		u.setEmailVerified(true);
+		u.setJoinedAt(joined);
+		u.setPasswordChangedAt(joined);
+		if (u.getNotificationPreferences() == null) {
+			u.setNotificationPreferences(NotificationPreferences.defaults());
+		}
 	}
 
 	private Project project(String key, String name, String description, String color,
