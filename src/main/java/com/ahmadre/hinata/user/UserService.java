@@ -1,0 +1,104 @@
+package com.ahmadre.hinata.user;
+
+import com.ahmadre.hinata.common.ApiException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+import java.util.Locale;
+import java.util.Set;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class UserService {
+
+	public static final int MIN_PASSWORD_LENGTH = 10;
+
+	private final UserRepository users;
+	private final PasswordEncoder passwordEncoder;
+	private final MongoTemplate mongo;
+
+	public User get(String id) {
+		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
+	}
+
+	/**
+	 * Permanently removes a user and scrubs the references that would otherwise
+	 * dangle: their in-app notifications are dropped, issues assigned to them are
+	 * unassigned, and they are removed from every watcher list. Historical author
+	 * references (reporter, comment authors) are intentionally retained.
+	 */
+	public void delete(User user) {
+		String id = user.getId();
+		mongo.remove(new Query(Criteria.where("userId").is(id)), "notifications");
+		mongo.updateMulti(new Query(Criteria.where("assigneeId").is(id)),
+				new Update().unset("assigneeId"), "issues");
+		mongo.updateMulti(new Query(Criteria.where("watcherIds").is(id)),
+				new Update().pull("watcherIds", id), "issues");
+		users.delete(user);
+		log.info("Deleted user {} ({}) and scrubbed dangling references", id, user.getUsername());
+	}
+
+	public User createLocal(String email, String username, String displayName, String rawPassword,
+			Set<Role> roles) {
+		validatePassword(rawPassword);
+		if (users.existsByEmailIgnoreCase(email)) {
+			throw ApiException.conflict("error.user.emailInUse");
+		}
+		if (users.existsByUsernameIgnoreCase(username)) {
+			throw ApiException.conflict("error.user.usernameInUse");
+		}
+		return users.save(User.builder()
+				.email(email.toLowerCase(Locale.ROOT))
+				.username(username)
+				.displayName(displayName)
+				.passwordHash(passwordEncoder.encode(rawPassword))
+				.roles(roles)
+				.origin(User.Origin.LOCAL)
+				.build());
+	}
+
+	/** Find-or-create for accounts arriving via OIDC, SAML or LDAP. */
+	public User provisionSso(String email, String displayName, User.Origin origin) {
+		return users.findByEmailIgnoreCase(email).orElseGet(() -> users.save(User.builder()
+				.email(email.toLowerCase(Locale.ROOT))
+				.username(uniqueUsernameFrom(email))
+				.displayName(displayName != null && !displayName.isBlank() ? displayName : email)
+				.roles(Set.of(Role.MEMBER))
+				.origin(origin)
+				.build()));
+	}
+
+	public void changePassword(User user, String currentPassword, String newPassword) {
+		if (user.getPasswordHash() == null
+				|| !passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+			throw ApiException.badRequest("error.user.currentPasswordIncorrect");
+		}
+		validatePassword(newPassword);
+		user.setPasswordHash(passwordEncoder.encode(newPassword));
+		users.save(user);
+	}
+
+	public void validatePassword(String rawPassword) {
+		if (rawPassword == null || rawPassword.length() < MIN_PASSWORD_LENGTH) {
+			throw ApiException.badRequest(
+					"error.user.passwordTooShort", MIN_PASSWORD_LENGTH);
+		}
+	}
+
+	private String uniqueUsernameFrom(String email) {
+		String base = email.substring(0, email.indexOf('@')).replaceAll("[^a-zA-Z0-9._-]", "");
+		String candidate = base;
+		int suffix = 1;
+		while (users.existsByUsernameIgnoreCase(candidate)) {
+			candidate = base + suffix++;
+		}
+		return candidate;
+	}
+}

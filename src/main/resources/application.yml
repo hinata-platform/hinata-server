@@ -119,7 +119,7 @@ springdoc:
     enabled: false
   show-actuator: false
   default-produces-media-type: application/json
-  packages-to-scan: hn.asta.hinata
+  packages-to-scan: com.ahmadre.hinata
 
 scalar:
   enabled: ${HINATA_DOCS_ENABLED:true}
