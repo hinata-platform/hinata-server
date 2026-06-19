@@ -10,6 +10,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Set;
 
@@ -61,6 +62,29 @@ public class UserService {
 				.passwordHash(passwordEncoder.encode(rawPassword))
 				.roles(roles)
 				.origin(User.Origin.LOCAL)
+				.build());
+	}
+
+	/**
+	 * Creates a still-pending, password-less LOCAL invite. The caller supplies the
+	 * already-hashed one-time token and its expiry; the account stays inactive until
+	 * the invitee accepts (see the public invite-accept flow).
+	 */
+	public User createInvited(String email, String displayName, Set<Role> roles, String invitedBy,
+			String inviteTokenHash, Instant invitedAt, Instant inviteExpiresAt) {
+		String normalized = email.toLowerCase(Locale.ROOT);
+		return users.save(User.builder()
+				.email(normalized)
+				.username(uniqueUsernameFrom(normalized))
+				.displayName(displayName)
+				.roles(roles)
+				.origin(User.Origin.LOCAL)
+				.active(false)
+				.emailVerified(false)
+				.invitedAt(invitedAt)
+				.invitedBy(invitedBy)
+				.inviteTokenHash(inviteTokenHash)
+				.inviteExpiresAt(inviteExpiresAt)
 				.build());
 	}
 

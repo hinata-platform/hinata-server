@@ -89,6 +89,23 @@ public class User {
 
 	private Instant passwordChangedAt;
 
+	// --- Admin invite lifecycle ----------------------------------------------
+
+	/** When an admin invited this (still-pending) local account; null once joined. */
+	private Instant invitedAt;
+
+	/** userId of the admin who issued the latest invitation. */
+	private String invitedBy;
+
+	/** First accepted invite / first successful sign-in. Backfilled to {@link #createdAt}. */
+	private Instant joinedAt;
+
+	/** BCrypt hash of the one-time invite token; never serialized. */
+	@JsonIgnore
+	private String inviteTokenHash;
+
+	private Instant inviteExpiresAt;
+
 	// --- Two-factor (TOTP) ---------------------------------------------------
 
 	@Builder.Default
@@ -120,6 +137,11 @@ public class User {
 
 	public boolean isSso() {
 		return origin != null && origin != Origin.LOCAL;
+	}
+
+	/** A still-pending invitation: created by an admin but never accepted. */
+	public boolean isInvitePending() {
+		return invitedAt != null && joinedAt == null;
 	}
 
 	public int recoveryCodesRemaining() {

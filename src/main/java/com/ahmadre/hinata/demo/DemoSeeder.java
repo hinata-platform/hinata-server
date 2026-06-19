@@ -7,6 +7,7 @@ import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.setup.ServerSettings;
