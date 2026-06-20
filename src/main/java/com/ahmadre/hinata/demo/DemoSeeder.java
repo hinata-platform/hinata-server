@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.demo;
 
+import com.ahmadre.hinata.article.Article;
+import com.ahmadre.hinata.article.ArticleRepository;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
@@ -86,6 +88,7 @@ public class DemoSeeder {
 	private final IssueRepository issues;
 	private final WorkItemRepository workItems;
 	private final TeamRepository teams;
+	private final ArticleRepository articleRepo;
 	private final MongoTemplate mongo;
 
 	private final Map<String, Long> counters = new LinkedHashMap<>();
@@ -123,9 +126,9 @@ public class DemoSeeder {
 				"#9BE0C7", jonas, List.of(admin, jonas, tomas));
 
 		// --- teams ----------------------------------------------------------
-		team("CORE", "Core Platform", "hexagon", 70, admin,
+		Team core = team("CORE", "Core Platform", "hexagon", 70, admin,
 				List.of(hin, inf), List.of(admin, tomas, jonas));
-		team("DSGN", "Design & Mobile", "palette", 300, lena,
+		Team dsgn = team("DSGN", "Design & Mobile", "palette", 300, lena,
 				List.of(mob), List.of(lena, amara, mei));
 
 		// --- scrum board + sprints for HIN ---------------------------------
@@ -152,8 +155,11 @@ public class DemoSeeder {
 		// --- this week's tracked work for the admin ------------------------
 		seedTracker(admin, hin);
 
-		log.info("[demo] done — {} users, {} projects, {} issues. Login: admin / {}",
-				users.count(), projects.count(), issues.count(), DEMO_PASSWORD);
+		// --- knowledge base (real articles, cross-linked to issues/people) --
+		seedKnowledge(core, dsgn, hin, inf, admin, tomas, lena, amara, mei, jonas);
+
+		log.info("[demo] done — {} users, {} projects, {} issues, {} articles. Login: admin / {}",
+				users.count(), projects.count(), issues.count(), articleRepo.count(), DEMO_PASSWORD);
 	}
 
 	/**
@@ -162,6 +168,7 @@ public class DemoSeeder {
 	 * Safe because the bean is {@code @Profile("!prod")} — this never runs in prod.
 	 */
 	private void resetWorkspace() {
+		mongo.dropCollection(Article.class);
 		mongo.dropCollection(WorkItem.class);
 		mongo.dropCollection(Issue.class);
 		mongo.dropCollection(Sprint.class);
@@ -242,7 +249,7 @@ public class DemoSeeder {
 		return projects.save(p);
 	}
 
-	private void team(String key, String name, String icon, int hue, User creator,
+	private Team team(String key, String name, String icon, int hue, User creator,
 			List<Project> teamProjects, List<User> members) {
 		List<String> projectIds = teamProjects.stream().map(Project::getId).toList();
 		List<TeamMembership> memberships = new ArrayList<>();
@@ -253,7 +260,7 @@ public class DemoSeeder {
 					.access(ProjectAccess.all())
 					.build());
 		}
-		teams.save(Team.builder()
+		return teams.save(Team.builder()
 				.key(key).name(name).icon(icon).colorHue(hue)
 				.createdBy(creator.getId())
 				.projectIds(new ArrayList<>(projectIds))
@@ -496,5 +503,95 @@ public class DemoSeeder {
 					.description("Demo tracked work")
 					.build());
 		}
+	}
+
+	// ---- knowledge base ----------------------------------------------------
+
+	/**
+	 * Seeds a small, organisation-wide knowledge base whose markdown bodies
+	 * cross-link to the *real* seeded issues ({@code {{issue:HIN-n}}}), people
+	 * ({@code {{user:<id>}}}) and other articles ({@code {{doc:<id>}}}). Mirrors
+	 * the spaces/articles the frontend KB renders — but as genuine backend data.
+	 */
+	private void seedKnowledge(Team core, Team dsgn, Project hin, Project inf,
+			User admin, User tomas, User lena, User amara, User mei, User jonas) {
+		String u = "{{user:" + admin.getId() + "}}";
+
+		// --- Engineering — team-wide (CORE team) ---------------------------
+		Article engHome = teamArticle(core, "Engineering", "code-xml", "Engineering handbook", null,
+				admin, List.of("handbook"), 0,
+				"# Engineering handbook\n\nHow we build, ship and run Hinata. Start with the "
+						+ "**Release checklist** before any deploy.\n\n:::info\nEvery production change "
+						+ "goes through review, CI and a tagged release.\n:::\n\nMaintained by " + u + ".");
+		Article release = teamArticle(core, "Engineering", "rocket", "Release checklist & version gating",
+				engHome.getId(), jonas, List.of("release", "ci"), 0,
+				"## Release checklist\n\nBefore cutting a release:\n\n- [ ] All blocking issues closed\n"
+						+ "- [ ] CI green on `main`\n- [ ] Version bumped & tagged\n\nThe self-host deploy "
+						+ "is automated in {{issue:HIN-5}}. Owner: {{user:" + jonas.getId() + "}}.\n\n"
+						+ "### Version gating\n\nThe `/meta` endpoint advertises the minimum client "
+						+ "version; older apps show an upgrade gate.");
+		teamArticle(core, "Engineering", "key-round", "Auth & token refresh", engHome.getId(),
+				tomas, List.of("auth", "api"), 1,
+				"## Auth & token refresh\n\nAccess + refresh tokens, rotated on use.\n\n:::warn\nWhen two "
+						+ "requests refresh at once, the second can present a used refresh token. Tracked in "
+						+ "{{issue:HIN-3}} — owner {{user:" + tomas.getId() + "}}.\n:::\n\n```ts\nlet inflight: "
+						+ "Promise<Tokens> | null = null;\nasync function refresh() { /* dedupe */ }\n```\n\n"
+						+ "See also the release flow in {{doc:" + release.getId() + "}}.");
+
+		// --- Product — project-scoped (HIN project) ------------------------
+		Article prodHome = projectArticle(hin, "Product", "compass", "Product principles", null, lena,
+				List.of("product"), 0,
+				"# Product principles\n\nCalm, fast, keyboard-first. We bias toward fewer, sharper "
+						+ "surfaces over many shallow ones.\n\nRoadmap themes live with the board redesign "
+						+ "{{issue:HIN-1}}.");
+		projectArticle(hin, "Product", "sparkles", "Board views v2 spec", prodHome.getId(), lena,
+				List.of("board", "spec"), 0,
+				"## Board views v2\n\nBoard · Backlog · Timeline, with a people filter and a calmer "
+						+ "column rhythm.\n\nDriven by {{issue:HIN-1}}; the drag performance work is "
+						+ "{{issue:HIN-2}} ({{user:" + amara.getId() + "}}).\n\n| View | Groups by |\n"
+						+ "| --- | --- |\n| Board | State |\n| Backlog | Sprint |\n| Timeline | Dates |");
+
+		// --- Design — team-wide (DSGN team) --------------------------------
+		teamArticle(dsgn, "Design", "palette", "The Hive design system", null, lena,
+				List.of("design", "tokens"), 0,
+				"# The Hive design system\n\nNavy rail, warm-paper canvas, honey-amber accents.\n\n"
+						+ "Inline editing on the issue detail is {{issue:HIN-3}}. Reviewed by " + u + ".");
+
+		// --- Operations — project-scoped (INF project) ---------------------
+		Article ops = projectArticle(inf, "Operations", "server-cog", "Self-hosting guide", null, jonas,
+				List.of("infra", "deploy"), 0,
+				"# Self-hosting guide\n\nReverse proxy, TLS, MongoDB and the bundled app.\n\n"
+						+ "Blue-green deploys are scripted in {{issue:HIN-5}}.");
+		projectArticle(inf, "Operations", "database-backup", "Backups & restore", ops.getId(), jonas,
+				List.of("infra", "backup"), 0,
+				"## Backups & restore\n\nNightly `mongodump`, encrypted off-site. Test the restore "
+						+ "monthly.\n\nOn-call: {{user:" + mei.getId() + "}}.");
+	}
+
+	private Article teamArticle(Team team, String space, String icon, String title, String parentId,
+			User author, List<String> tags, int sortOrder, String body) {
+		return article(null, team.getId(), space, icon, title, parentId, author, tags, sortOrder, body);
+	}
+
+	private Article projectArticle(Project project, String space, String icon, String title,
+			String parentId, User author, List<String> tags, int sortOrder, String body) {
+		return article(project.getId(), null, space, icon, title, parentId, author, tags, sortOrder,
+				body);
+	}
+
+	private Article article(String projectId, String teamId, String space, String icon, String title,
+			String parentId, User author, List<String> tags, int sortOrder, String body) {
+		return articleRepo.save(Article.builder()
+				.projectId(projectId)
+				.teamId(teamId)
+				.parentId(parentId)
+				.space(space)
+				.icon(icon)
+				.title(title)
+				.content(body)
+				.tags(new ArrayList<>(tags))
+				.authorId(author.getId())
+				.sortOrder(sortOrder)
+				.build());
 	}
 }

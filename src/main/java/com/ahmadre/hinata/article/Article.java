@@ -22,13 +22,24 @@ public class Article {
 	@Id
 	private String id;
 
-	/** Null for organization-wide articles. */
+	/** Project the article is scoped to; only members with project access see it. */
 	@Indexed
 	private String projectId;
+
+	/** Team the article belongs to (team-wide, no project). Null when project-scoped or global. */
+	@Indexed
+	private String teamId;
 
 	/** Parent article id for hierarchical organization. */
 	@Indexed
 	private String parentId;
+
+	/** Knowledge-base space the article lives in (e.g. "Engineering"). */
+	@Indexed
+	private String space;
+
+	/** Lucide icon name (kebab-case) for the article glyph. */
+	private String icon;
 
 	@TextIndexed(weight = 10)
 	private String title;

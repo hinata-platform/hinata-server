@@ -10,5 +10,7 @@ public interface ArticleRepository extends MongoRepository<Article, String> {
 
 	List<Article> findByProjectIdIsNullOrderBySortOrderAsc();
 
+	List<Article> findAllByOrderBySortOrderAsc();
+
 	List<Article> findByParentId(String parentId);
 }
