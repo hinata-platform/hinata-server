@@ -38,7 +38,8 @@ public class AdminUserController {
 
 	@GetMapping
 	public AdminUserListResponse list(
-			@RequestParam(required = false) String query,
+			// The client sends the search term as "q"; keep "query" as a fallback.
+			@RequestParam(name = "q", required = false) String query,
 			@RequestParam(required = false) String role,
 			@RequestParam(required = false) String status,
 			@RequestParam(required = false) String origin,
