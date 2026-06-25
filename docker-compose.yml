@@ -118,10 +118,15 @@ services:
       HINATA_SETUP_ADMIN_USERNAME: ${HINATA_SETUP_ADMIN_USERNAME:-}
       HINATA_SETUP_ADMIN_PASSWORD: ${HINATA_SETUP_ADMIN_PASSWORD:-}
       HINATA_SETUP_ADMIN_DISPLAY_NAME: ${HINATA_SETUP_ADMIN_DISPLAY_NAME:-}
+      # Push (FCM): enable + path to the Admin-SDK key mounted below.
+      HINATA_FCM_ENABLED: ${HINATA_FCM_ENABLED:-false}
+      HINATA_FCM_CREDENTIALS: ${HINATA_FCM_CREDENTIALS:-}
     volumes:
       # App client certificate (keystore) + CA (truststore) for MONGODB-X509.
       - ./deploy/x509/prod/hinata-app.p12:/etc/hinata/x509/hinata-app.p12:ro
       - ./deploy/x509/prod/truststore.p12:/etc/hinata/x509/truststore.p12:ro
+      # Firebase Admin-SDK service-account key (read-only). NEVER committed.
+      - ./deploy/fcm/service-account.json:/etc/hinata/fcm/service-account.json:ro
     ports:
       # Published on the host port the reverse proxy (cloud.asta.hn) forwards
       # api.track.asta.hn:443 → host:3356 to. Override with HINATA_PORT.
