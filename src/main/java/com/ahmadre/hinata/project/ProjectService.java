@@ -12,6 +12,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -31,6 +32,7 @@ public class ProjectService {
 	private static final String ISSUES = "issues";
 	private static final String PROJECT_ID = "projectId";
 	private static final String STATE = "state";
+	private static final String RESOLVED_AT = "resolvedAt";
 
 	private final ProjectRepository projects;
 	private final MongoTemplate mongo;
@@ -201,7 +203,30 @@ public class ProjectService {
 		Project saved = projects.save(project);
 		stateRenames.forEach(r -> cascadeStateRename(id, r.from(), r.to()));
 		labelRenames.forEach(r -> cascadeTagRename(id, r.from(), r.to()));
+		// A workflow / resolved-states change can leave issues with a stale
+		// resolvedAt (e.g. a once-resolved state is no longer resolved). Recompute
+		// it so "done" stays truthful (struck-through sub-tasks, throughput, etc.).
+		reconcileResolvedAt(saved);
 		return saved;
+	}
+
+	/**
+	 * Recomputes {@code resolvedAt} for every issue in the project from the
+	 * current {@code resolvedStates}: sets it (now) where the state is resolved
+	 * but the flag is missing, and clears it where the state is not resolved.
+	 */
+	private void reconcileResolvedAt(Project project) {
+		List<String> resolved = project.getResolvedStates();
+		// Mark issues now in a resolved state that lack a timestamp.
+		mongo.updateMulti(
+				new Query(Criteria.where(PROJECT_ID).is(project.getId())
+						.and(STATE).in(resolved).and(RESOLVED_AT).is(null)),
+				new Update().set(RESOLVED_AT, Instant.now()), ISSUES);
+		// Clear the flag on issues whose state is no longer resolved.
+		mongo.updateMulti(
+				new Query(Criteria.where(PROJECT_ID).is(project.getId())
+						.and(STATE).nin(resolved).and(RESOLVED_AT).ne(null)),
+				new Update().unset(RESOLVED_AT), ISSUES);
 	}
 
 	private void applyKey(Project project, String rawKey) {
