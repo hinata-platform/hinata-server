@@ -24,6 +24,9 @@ public class TokenService {
 	public static final String TYPE_ACCESS = "access";
 	public static final String TYPE_REFRESH = "refresh";
 	public static final String TYPE_MFA = "mfa";
+	public static final String TYPE_DOWNLOAD = "download";
+	public static final String CLAIM_PURPOSE = "purpose";
+	public static final String PURPOSE_DATA_EXPORT = "data-export";
 
 	private final JwtEncoder encoder;
 	private final HinataProperties properties;
@@ -64,6 +67,31 @@ public class TokenService {
 				.build();
 		return encoder.encode(JwtEncoderParameters.from(
 				JwsHeader.with(MacAlgorithm.HS512).build(), claims)).getTokenValue();
+	}
+
+	/**
+	 * A short-lived, signed token authorising an unauthenticated browser GET of a
+	 * download link (e.g. the GDPR data export e-mailed to the user). Carries no
+	 * roles, so it cannot be replayed against the regular API.
+	 */
+	public String issueDownloadToken(User user, String purpose, long ttlSeconds) {
+		Instant now = Instant.now();
+		JwtClaimsSet claims = JwtClaimsSet.builder()
+				.issuer(properties.getBaseUrl())
+				.subject(user.getId())
+				.issuedAt(now)
+				.expiresAt(now.plusSeconds(ttlSeconds))
+				.claim(CLAIM_TYPE, TYPE_DOWNLOAD)
+				.claim(CLAIM_PURPOSE, purpose)
+				.build();
+		return encoder.encode(JwtEncoderParameters.from(
+				JwsHeader.with(MacAlgorithm.HS512).build(), claims)).getTokenValue();
+	}
+
+	/** True when {@code jwt} is a download token minted for the given purpose. */
+	public static boolean isDownloadToken(Jwt jwt, String purpose) {
+		return TYPE_DOWNLOAD.equals(jwt.getClaimAsString(CLAIM_TYPE))
+				&& purpose.equals(jwt.getClaimAsString(CLAIM_PURPOSE));
 	}
 
 	private String encode(User user, String type, long ttlSeconds, String sessionId) {

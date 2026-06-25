@@ -14,6 +14,7 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -33,6 +34,9 @@ public class MeController {
 	private final MeService me;
 	private final CurrentUser currentUser;
 	private final UserEvents userEvents;
+	private final DataExportPdfService dataExportPdf;
+	private final com.ahmadre.hinata.user.UserService users;
+	private final org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
 
 	// --- DTOs -----------------------------------------------------------------
 
@@ -259,6 +263,54 @@ public class MeController {
 	@GetMapping("/export")
 	public Map<String, Object> export() {
 		return me.exportData(currentUser.require());
+	}
+
+	/**
+	 * Browser-facing download of the formatted PDF data report (Art. 15). The
+	 * link is e-mailed to the user and authorises itself with a short-lived,
+	 * signed {@code token} query param, so it works without an interactive
+	 * session. Invalid or expired links render a friendly HTML page.
+	 */
+	@Operation(summary = "Download my data report as a PDF (signed link)")
+	@SecurityRequirements
+	@GetMapping("/export.pdf")
+	public ResponseEntity<byte[]> exportPdf(@RequestParam(required = false) String token,
+			@org.springframework.web.bind.annotation.RequestHeader(name = "Accept-Language", required = false) String acceptLanguage) {
+		boolean de = acceptLanguage != null && acceptLanguage.toLowerCase().startsWith("de");
+		User user = resolveExportToken(token);
+		if (user == null) {
+			String body = resultPage(
+					de ? "Link ungültig oder abgelaufen" : "Link invalid or expired",
+					de ? "Bitte fordere deinen Datenexport in den Kontoeinstellungen erneut an."
+							: "Please request your data export again from your account settings.");
+			return ResponseEntity.status(HttpStatus.GONE)
+					.contentType(MediaType.TEXT_HTML)
+					.body(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		}
+		byte[] pdf = dataExportPdf.build(user);
+		return ResponseEntity.ok()
+				.contentType(MediaType.APPLICATION_PDF)
+				.header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+						"attachment; filename=\"" + dataExportPdf.fileName(user) + "\"")
+				.cacheControl(org.springframework.http.CacheControl.noStore())
+				.body(pdf);
+	}
+
+	/** Validates the signed export token and loads its subject, or null. */
+	private User resolveExportToken(String token) {
+		if (token == null || token.isBlank()) {
+			return null;
+		}
+		try {
+			org.springframework.security.oauth2.jwt.Jwt jwt = jwtDecoder.decode(token);
+			if (!com.ahmadre.hinata.auth.TokenService.isDownloadToken(
+					jwt, com.ahmadre.hinata.auth.TokenService.PURPOSE_DATA_EXPORT)) {
+				return null;
+			}
+			return users.get(jwt.getSubject());
+		} catch (Exception e) {
+			return null;
+		}
 	}
 
 	@Operation(summary = "Delete my account (Art. 17) — type DELETE to confirm")

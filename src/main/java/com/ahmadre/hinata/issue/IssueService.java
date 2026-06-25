@@ -466,4 +466,31 @@ public class IssueService {
 	public List<IssueComment> commentsOf(String issueId, User user) {
 		return comments.findByIssueIdOrderByCreatedAtAsc(getForUser(issueId, user).getId());
 	}
+
+	/** Edit a comment's text. Only the comment's own author may edit it. */
+	public IssueComment editComment(String issueId, String commentId, String text, User editor) {
+		IssueComment comment = requireComment(issueId, commentId, editor);
+		if (!comment.getAuthorId().equals(editor.getId())) {
+			throw ApiException.forbidden("error.comment.editOwnOnly");
+		}
+		comment.setText(text);
+		return comments.save(comment);
+	}
+
+	/** Delete a comment. The author may delete their own; admins may moderate any. */
+	public void deleteComment(String issueId, String commentId, User user) {
+		IssueComment comment = requireComment(issueId, commentId, user);
+		if (!user.isAdmin() && !comment.getAuthorId().equals(user.getId())) {
+			throw ApiException.forbidden("error.comment.deleteOwnOnly");
+		}
+		comments.delete(comment);
+	}
+
+	private IssueComment requireComment(String issueId, String commentId, User user) {
+		Issue issue = get(issueId);
+		assertAccess(issue, user);
+		return comments.findById(commentId)
+				.filter(c -> c.getIssueId().equals(issue.getId()))
+				.orElseThrow(() -> ApiException.notFound("comment"));
+	}
 }

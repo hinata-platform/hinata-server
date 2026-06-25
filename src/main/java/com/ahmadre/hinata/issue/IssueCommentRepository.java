@@ -8,5 +8,8 @@ public interface IssueCommentRepository extends MongoRepository<IssueComment, St
 
 	List<IssueComment> findByIssueIdOrderByCreatedAtAsc(String issueId);
 
+	/** Comments a user authored — for the GDPR self-service data export. */
+	List<IssueComment> findByAuthorIdOrderByCreatedAtDesc(String authorId);
+
 	void deleteByIssueId(String issueId);
 }

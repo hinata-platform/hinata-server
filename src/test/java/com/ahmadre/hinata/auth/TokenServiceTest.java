@@ -51,4 +51,22 @@ class TokenServiceTest {
 		assertThat(TokenService.isRefreshToken(refresh)).isTrue();
 		assertThat(refresh.getExpiresAt()).isAfter(access.getExpiresAt());
 	}
+
+	@Test
+	void issuesScopedDownloadToken() {
+		User user = User.builder().id("u1").username("ada").email("ada@example.org")
+				.roles(Set.of(Role.MEMBER)).build();
+
+		String token = tokenService.issueDownloadToken(
+				user, TokenService.PURPOSE_DATA_EXPORT, 3600);
+
+		Jwt jwt = decoder.decode(token);
+		assertThat(jwt.getSubject()).isEqualTo("u1");
+		assertThat(TokenService.isDownloadToken(jwt, TokenService.PURPOSE_DATA_EXPORT)).isTrue();
+		// carries no roles and is not usable as an access/refresh token
+		assertThat(jwt.getClaimAsStringList(TokenService.CLAIM_ROLES)).isNull();
+		assertThat(TokenService.isRefreshToken(jwt)).isFalse();
+		// a token minted for one purpose does not validate for another
+		assertThat(TokenService.isDownloadToken(jwt, "something-else")).isFalse();
+	}
 }

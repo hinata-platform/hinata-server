@@ -192,6 +192,7 @@ public class SecurityConfig {
 						"/api/v1/auth/sso/providers", "/api/v1/auth/sso/start/**",
 						"/api/v1/auth/invite/**", "/api/v1/auth/reset/**",
 						"/api/v1/me/email-change/confirm", "/api/v1/me/password-reset/confirm",
+						"/api/v1/me/export.pdf",
 						"/api/v1/meta", "/api/v1/meta/logo",
 						"/api/v1/users/*/avatar",
 						"/api/v1/setup/status", "/api/v1/setup",

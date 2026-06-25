@@ -26,14 +26,14 @@
         <p style="margin:0 0 24px">
           <a th:href="${downloadUrl}"
              style="display:inline-block;background:#2D2B55;color:#ffffff;padding:13px 26px;border-radius:24px;text-decoration:none;font-weight:600">
-            <span th:if="${locale == 'de'}">Datenexport herunterladen</span>
-            <span th:unless="${locale == 'de'}">Download my data</span>
+            <span th:if="${locale == 'de'}">Datenexport als PDF herunterladen</span>
+            <span th:unless="${locale == 'de'}">Download my data (PDF)</span>
           </a>
         </p>
 
         <p style="color:#6B6A85;font-size:13px;line-height:1.6;margin:0">
-          <span th:if="${locale == 'de'}">Der Link ist <strong th:text="${expiresHours}">72</strong> Stunden gültig und erfordert eine Anmeldung.</span>
-          <span th:unless="${locale == 'de'}">The link is valid for <strong th:text="${expiresHours}">72</strong> hours and requires you to be signed in.</span>
+          <span th:if="${locale == 'de'}">Der persönliche Download-Link ist <strong th:text="${expiresHours}">72</strong> Stunden gültig. Teile ihn nicht — er gewährt Zugriff auf deinen Datenexport.</span>
+          <span th:unless="${locale == 'de'}">This personal download link is valid for <strong th:text="${expiresHours}">72</strong> hours. Don't share it — it grants access to your data export.</span>
         </p>
 
         <p style="color:#9794AE;font-size:12px;line-height:1.6;margin:32px 0 0;border-top:1px solid #EFEEF5;padding-top:16px">

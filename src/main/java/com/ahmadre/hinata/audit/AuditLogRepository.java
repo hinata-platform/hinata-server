@@ -13,4 +13,7 @@ public interface AuditLogRepository extends MongoRepository<AuditLog, String> {
 
 	/** Retention sweep: drop everything older than the cut-off. */
 	long deleteByTimestampBefore(Instant cutoff);
+
+	/** A user's own recent account activity — for the GDPR data export. */
+	java.util.List<AuditLog> findTop200ByActorIdOrderByTimestampDesc(String actorId);
 }

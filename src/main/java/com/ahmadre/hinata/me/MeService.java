@@ -51,6 +51,10 @@ public class MeService {
 	private final ProjectService projects;
 	private final com.ahmadre.hinata.notification.NotificationService notifications;
 	private final AuditService audit;
+	private final com.ahmadre.hinata.auth.TokenService tokens;
+
+	/** How long the e-mailed data-export download link stays valid. */
+	private static final long EXPORT_TOKEN_TTL_SECONDS = 72 * 3600L;
 
 	// --- Profile --------------------------------------------------------------
 
@@ -292,10 +296,15 @@ public class MeService {
 
 	@Async
 	public void requestDataReport(User user) {
-		// Production: render a PDF (e.g. OpenPDF / Flying Saucer) + store behind a
-		// signed, expiring URL. Here the authenticated GET /me/export endpoint
-		// serves the machine-readable export; the mail links the user back to it.
-		String downloadUrl = apiBase() + "/api/v1/me/export";
+		// The e-mail links to GET /me/export.pdf, which renders the full personal
+		// data report (Art. 15) as a PDF on demand. The link carries a short-lived,
+		// signed download token so the browser can fetch it without an interactive
+		// session — replacing the old link to the bearer-only JSON endpoint, which
+		// browsers could not authenticate and so downloaded an empty file.
+		String token = tokens.issueDownloadToken(user,
+				com.ahmadre.hinata.auth.TokenService.PURPOSE_DATA_EXPORT, EXPORT_TOKEN_TTL_SECONDS);
+		String downloadUrl = apiBase() + "/api/v1/me/export.pdf?token="
+				+ java.net.URLEncoder.encode(token, java.nio.charset.StandardCharsets.UTF_8);
 		accountMail.sendDataReportReady(user, downloadUrl);
 		audit.event(AuditAction.DATA_EXPORT_REQUESTED).actor(user).log();
 		log.info("Data report prepared for user {}", user.getId());

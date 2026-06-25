@@ -173,4 +173,16 @@ public class IssueController {
 	public IssueComment comment(@PathVariable String id, @RequestBody @Valid CommentRequest request) {
 		return issueService.addComment(id, request.text(), currentUser.require());
 	}
+
+	@PatchMapping("/{id}/comments/{commentId}")
+	public IssueComment editComment(@PathVariable String id, @PathVariable String commentId,
+			@RequestBody @Valid CommentRequest request) {
+		return issueService.editComment(id, commentId, request.text(), currentUser.require());
+	}
+
+	@DeleteMapping("/{id}/comments/{commentId}")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void deleteComment(@PathVariable String id, @PathVariable String commentId) {
+		issueService.deleteComment(id, commentId, currentUser.require());
+	}
 }

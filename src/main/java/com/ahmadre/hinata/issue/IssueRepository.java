@@ -11,6 +11,12 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 	Optional<Issue> findByReadableIdIgnoreCase(String readableId);
 
+	/** Issues a user reported — for the GDPR self-service data export. */
+	List<Issue> findByReporterIdOrderByCreatedAtDesc(String reporterId);
+
+	/** Issues currently assigned to a user — for the GDPR data export. */
+	List<Issue> findByAssigneeIdOrderByCreatedAtDesc(String assigneeId);
+
 	Page<Issue> findByProjectId(String projectId, Pageable pageable);
 
 	List<Issue> findByProjectIdAndSprintId(String projectId, String sprintId);
