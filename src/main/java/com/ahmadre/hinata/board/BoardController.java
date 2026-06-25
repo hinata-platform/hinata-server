@@ -48,6 +48,11 @@ public class BoardController {
 			@NotEmpty List<String> projectIds, AgileBoard.Type type) {
 	}
 
+	/** Partial board update — every field is optional (null = no change). */
+	public record UpdateBoardRequest(@Size(max = 120) String name, AgileBoard.Type type,
+			List<String> projectIds, String activeSprintId) {
+	}
+
 	public record SprintRequest(@NotBlank @Size(max = 120) String name, String goal,
 			LocalDate startDate, LocalDate endDate) {
 	}
@@ -190,23 +195,21 @@ public class BoardController {
 	}
 
 	@PatchMapping("/{id}")
-	public AgileBoard update(@PathVariable String id, @RequestBody AgileBoard updated) {
+	public AgileBoard update(@PathVariable String id, @RequestBody UpdateBoardRequest req) {
 		User user = currentUser.require();
 		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		assertBoardAccess(board, user);
-		// Renaming a board is a management action — gate it beyond plain access.
-		if (updated.getName() != null && !updated.getName().equals(board.getName())) {
+		// Renaming or re-linking projects is a management action — gate it.
+		boolean renaming = req.name() != null && !req.name().equals(board.getName());
+		boolean relinking = req.projectIds() != null && !req.projectIds().isEmpty();
+		if (renaming || relinking) {
 			assertBoardManage(board, user);
 		}
-		if (updated.getName() != null) board.setName(updated.getName());
-		if (updated.getType() != null) board.setType(updated.getType());
-		if (updated.getProjectIds() != null && !updated.getProjectIds().isEmpty()) {
-			board.setProjectIds(updated.getProjectIds());
-		}
-		if (updated.getColumns() != null && !updated.getColumns().isEmpty()) {
-			board.setColumns(updated.getColumns());
-		}
-		board.setActiveSprintId(updated.getActiveSprintId());
+		if (req.name() != null) board.setName(req.name());
+		if (req.type() != null) board.setType(req.type());
+		if (relinking) board.setProjectIds(req.projectIds());
+		// Only set when provided, so a rename/relink doesn't wipe the active sprint.
+		if (req.activeSprintId() != null) board.setActiveSprintId(req.activeSprintId());
 		return boards.save(board);
 	}
 
