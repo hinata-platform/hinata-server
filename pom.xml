@@ -67,6 +67,13 @@
 			<artifactId>spring-boot-starter-thymeleaf</artifactId>
 		</dependency>
 
+		<!-- Firebase Admin SDK: server-side FCM push (no-op unless credentials set) -->
+		<dependency>
+			<groupId>com.google.firebase</groupId>
+			<artifactId>firebase-admin</artifactId>
+			<version>9.4.3</version>
+		</dependency>
+
 		<!-- Security & SSO -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

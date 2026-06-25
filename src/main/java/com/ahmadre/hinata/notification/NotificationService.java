@@ -25,6 +25,7 @@ public class NotificationService {
 	private final NotificationRepository notifications;
 	private final UserRepository users;
 	private final MailService mail;
+	private final PushService push;
 	private final HinataProperties props;
 
 	private static final String SUBJECT_PREFIX = "[Hinata] ";
@@ -95,6 +96,7 @@ public class NotificationService {
 		// In-app notifications keep the relative route; the e-mail button needs an
 		// absolute deep link to the frontend so it works from any mail client.
 		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, props.deepLink(link));
+		push.sendToUser(user.getId(), title, body, link);
 	}
 
 	private String teamLink(String teamId) {
@@ -159,6 +161,7 @@ public class NotificationService {
 	private void persist(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
+		push.sendToUser(user.getId(), title, body, link);
 	}
 
 	private Map<String, Object> accountModel(User user, String ctaLink) {
@@ -203,6 +206,7 @@ public class NotificationService {
 				// In-app notifications keep the relative route; the e-mail button gets
 				// an absolute deep link to the issue on the frontend.
 				mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, props.deepLink(link));
+				push.sendToUser(user.getId(), title, body, link);
 			});
 		}
 	}

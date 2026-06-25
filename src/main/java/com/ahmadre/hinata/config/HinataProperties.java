@@ -75,6 +75,21 @@ public class HinataProperties {
 	private Security security = new Security();
 	private Mongodb mongodb = new Mongodb();
 	private Demo demo = new Demo();
+	private Fcm fcm = new Fcm();
+
+	/**
+	 * Firebase Cloud Messaging (push). Disabled by default; when a credentials
+	 * file is configured (the Admin-SDK service-account JSON), the server sends a
+	 * push alongside every in-app notification. Without it, push is a no-op so
+	 * dev/test and self-hosters without Firebase still work.
+	 */
+	@Getter
+	@Setter
+	public static class Fcm {
+		private boolean enabled = false;
+		/** Filesystem path to the Firebase Admin-SDK service-account JSON. */
+		private String credentials = "";
+	}
 
 	/**
 	 * Demo / test data seeding. Never runs under the {@code prod} profile (see
