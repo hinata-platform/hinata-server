@@ -52,3 +52,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    name: Redeploy asta (ASTASRV01)
+    needs: docker
+    # Only on a real push to main — never on tags or PRs (the self-hosted runner
+    # has the host docker socket, so it must not run untrusted/fork code).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, astasrv01]
+    steps:
+      - name: Surgical redeploy of hinata-server
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Pull the freshly-built image and recreate ONLY the server container
+          # (--no-deps keeps mongo1/mongo2/mongo-arbiter/minio online). Compose
+          # runs in a docker:cli sidecar against the host socket; the stack lives
+          # at /opt/stacks/hinata on ASTASRV01 and has all values inline (no .env).
+          docker run --rm \
+            -e GHCR_USER -e GHCR_TOKEN \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v /opt/stacks/hinata:/work -w /work \
+            docker:cli sh -euc '
+              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+              docker compose -p hinata pull hinata-server
+              docker compose -p hinata up -d --no-deps --force-recreate hinata-server
+              docker logout ghcr.io'
