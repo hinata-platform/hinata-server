@@ -88,8 +88,8 @@ public class HinataProperties {
 	@Setter
 	public static class Gateway {
 		private boolean enabled = true;
-		/** Base URL of the central gateway, e.g. https://connect.track.asta.hn */
-		private String baseUrl = "https://connect.track.asta.hn";
+		/** Base URL of the central gateway, e.g. https://connect.hinata.ahmadre.com */
+		private String baseUrl = "https://connect.hinata.ahmadre.com";
 		/** Sent as X-Bootstrap-Secret when the gateway gates registration (blank = open). */
 		private String bootstrapSecret = "";
 	}

@@ -121,7 +121,7 @@ services:
       # Push + universal-link deep links go through the central Hinata Connect
       # gateway (no per-server Firebase). The URL is a shared constant; override
       # only for testing. See HinataProperties.Gateway.
-      HINATA_GATEWAY_BASE_URL: ${HINATA_GATEWAY_BASE_URL:-https://connect.track.asta.hn}
+      HINATA_GATEWAY_BASE_URL: ${HINATA_GATEWAY_BASE_URL:-https://connect.hinata.ahmadre.com}
     volumes:
       # App client certificate (keystore) + CA (truststore) for MONGODB-X509.
       - ./deploy/x509/prod/hinata-app.p12:/etc/hinata/x509/hinata-app.p12:ro
