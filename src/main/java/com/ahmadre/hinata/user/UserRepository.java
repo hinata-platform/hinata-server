@@ -1,6 +1,9 @@
 package com.ahmadre.hinata.user;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
 
 import java.util.Optional;
 
@@ -18,4 +21,15 @@ public interface UserRepository extends MongoRepository<User, String> {
 
 	/** Active admins other than {@code id} – used to prevent locking out the last admin. */
 	long countByRolesContainingAndActiveIsTrueAndIdNot(Role role, String id);
+
+	/**
+	 * Paginated directory type-ahead: active users whose name, username or title
+	 * matches [regex] (case-insensitive). The caller passes a regex-escaped term;
+	 * an escaped empty string matches everyone (first page of the directory).
+	 */
+	@Query("{ 'active': true, $or: [ "
+			+ "{ 'displayName': { $regex: ?0, $options: 'i' } }, "
+			+ "{ 'username': { $regex: ?0, $options: 'i' } }, "
+			+ "{ 'title': { $regex: ?0, $options: 'i' } } ] }")
+	Page<User> searchActive(String regex, Pageable pageable);
 }

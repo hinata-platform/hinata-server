@@ -369,8 +369,10 @@ public class IssueService {
 		if (changed) projects.save(project);
 	}
 
-	public List<IssueActivity> activityOf(String issueId, User user) {
-		return activities.findByIssueIdOrderByCreatedAtDesc(getForUser(issueId, user).getId());
+	public Page<IssueActivity> activityOf(String issueId, int page, int size, User user) {
+		String id = getForUser(issueId, user).getId();
+		return activities.findByIssueIdOrderByCreatedAtDesc(id,
+				PageRequest.of(page, Math.min(size, 100)));
 	}
 
 	// ── change history ────────────────────────────────────────────────────
@@ -519,8 +521,10 @@ public class IssueService {
 		return saved;
 	}
 
-	public List<IssueComment> commentsOf(String issueId, User user) {
-		return comments.findByIssueIdOrderByCreatedAtAsc(getForUser(issueId, user).getId());
+	public Page<IssueComment> commentsOf(String issueId, int page, int size, User user) {
+		String id = getForUser(issueId, user).getId();
+		return comments.findByIssueIdOrderByCreatedAtDesc(id,
+				PageRequest.of(page, Math.min(size, 100)));
 	}
 
 	/** Edit a comment's text. Only the comment's own author may edit it. */

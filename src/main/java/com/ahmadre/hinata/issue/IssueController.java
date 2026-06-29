@@ -162,8 +162,10 @@ public class IssueController {
 	}
 
 	@GetMapping("/{id}/activity")
-	public List<IssueActivity> activity(@PathVariable String id) {
-		return issueService.activityOf(id, currentUser.require());
+	public Page<IssueActivity> activity(@PathVariable String id,
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "30") int size) {
+		return issueService.activityOf(id, page, size, currentUser.require());
 	}
 
 	/** Breadcrumb ancestors + direct children for the issue hierarchy view. */
@@ -173,8 +175,10 @@ public class IssueController {
 	}
 
 	@GetMapping("/{id}/comments")
-	public List<IssueComment> comments(@PathVariable String id) {
-		return issueService.commentsOf(id, currentUser.require());
+	public Page<IssueComment> comments(@PathVariable String id,
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "30") int size) {
+		return issueService.commentsOf(id, page, size, currentUser.require());
 	}
 
 	@PostMapping("/{id}/comments")
