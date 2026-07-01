@@ -234,6 +234,14 @@ public class HinataProperties {
 		/** Max aggregate size of one upload batch / request in megabytes. */
 		@Min(1)
 		private int maxRequestMb = 100;
+		/**
+		 * Grace period, in hours, before an unreferenced inline-Markdown image
+		 * (under the {@code media/} prefix) is swept from the bucket. The grace
+		 * window protects images that were just uploaded but whose content has not
+		 * been saved yet. {@code 0} disables the orphan sweep entirely.
+		 */
+		@Min(0)
+		private int mediaOrphanGraceHours = 24;
 		private List<String> allowedContentTypes = List.of(
 				// image/svg+xml intentionally excluded: SVG can carry inline
 				// JavaScript (stored-XSS risk if ever rendered inline).

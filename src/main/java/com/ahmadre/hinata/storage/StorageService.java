@@ -6,17 +6,23 @@ import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
 import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.ListObjectsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.Result;
 import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
+import io.minio.messages.Item;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -48,6 +54,16 @@ public class StorageService {
 	}
 
 	public String upload(MultipartFile file) {
+		return upload(file, "");
+	}
+
+	/**
+	 * Uploads [file] under an optional [keyPrefix] "folder" (e.g. {@code media/})
+	 * so different concerns stay isolated in the bucket and can't be read across
+	 * endpoints by guessing a bare UUID. The object name is still a random UUID;
+	 * user-supplied file names never reach the bucket layout.
+	 */
+	public String upload(MultipartFile file, String keyPrefix) {
 		requireConfigured();
 		HinataProperties.Storage storage = properties.getStorage();
 		String contentType = file.getContentType();
@@ -61,7 +77,7 @@ public class StorageService {
 		// magic bytes for binary types so a file cannot masquerade as e.g. an
 		// image (defends against polyglot / content-sniffing attacks, A03/A05).
 		verifyMagicBytes(file, contentType);
-		String objectKey = UUID.randomUUID().toString();
+		String objectKey = keyPrefix + UUID.randomUUID();
 		try (var stream = file.getInputStream()) {
 			ensureBucket();
 			client.putObject(PutObjectArgs.builder()
@@ -143,6 +159,38 @@ public class StorageService {
 					.build());
 		}
 		catch (Exception ex) {
+			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
+		}
+	}
+
+	/** A stored object's key and when it was last written. */
+	public record ObjectInfo(String key, Instant lastModified) {
+	}
+
+	/**
+	 * Lists every object under [keyPrefix] with its last-modified time. Used by
+	 * the inline-media orphan sweep to find candidates for deletion; the object
+	 * store itself is the source of truth for the upload time, so no separate
+	 * metadata collection is needed.
+	 */
+	public List<ObjectInfo> list(String keyPrefix) {
+		requireConfigured();
+		List<ObjectInfo> objects = new ArrayList<>();
+		try {
+			Iterable<Result<Item>> results = client.listObjects(ListObjectsArgs.builder()
+					.bucket(properties.getStorage().getBucket())
+					.prefix(keyPrefix)
+					.recursive(true)
+					.build());
+			for (Result<Item> result : results) {
+				Item item = result.get();
+				Instant modified = item.lastModified() != null ? item.lastModified().toInstant() : null;
+				objects.add(new ObjectInfo(item.objectName(), modified));
+			}
+			return objects;
+		}
+		catch (Exception ex) {
+			log.error("Listing objects under {} failed: {}", keyPrefix, ex.getMessage());
 			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
 		}
 	}
