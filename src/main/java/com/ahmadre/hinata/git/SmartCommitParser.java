@@ -36,6 +36,9 @@ public final class SmartCommitParser {
 	/** A whole duration token: one or more {@code <n><unit>} groups, e.g. 2h, 30m, 2h30m. */
 	private static final Pattern DURATION_TOKEN = Pattern.compile("^(\\d+[wdhm])+$", Pattern.CASE_INSENSITIVE);
 	private static final Pattern DURATION_PART = Pattern.compile("(\\d+)([wdhm])", Pattern.CASE_INSENSITIVE);
+	/** Trim surrounding punctuation so "[HN-2]:", "(HN-2)" or "HN-2:" still bind as keys. */
+	private static final Pattern LEADING_PUNCT = Pattern.compile("^[^A-Za-z0-9]+");
+	private static final Pattern TRAILING_PUNCT = Pattern.compile("[^A-Za-z0-9]+$");
 
 	public static List<Command> parse(String message) {
 		List<Command> out = new ArrayList<>();
@@ -47,8 +50,9 @@ public final class SmartCommitParser {
 		int i = 0;
 		while (i < tokens.length) {
 			String token = tokens[i];
-			if (KEY.matcher(token).matches()) {
-				key = token.toUpperCase();
+			String asKey = asKey(token);
+			if (asKey != null) {
+				key = asKey;
 				i++;
 				continue;
 			}
@@ -57,7 +61,7 @@ public final class SmartCommitParser {
 				if (cmd.equals("comment")) {
 					StringBuilder text = new StringBuilder();
 					i++;
-					while (i < tokens.length && !isCommand(tokens[i]) && !KEY.matcher(tokens[i]).matches()) {
+					while (i < tokens.length && !isCommand(tokens[i]) && asKey(tokens[i]) == null) {
 						if (text.length() > 0) {
 							text.append(' ');
 						}
@@ -96,6 +100,16 @@ public final class SmartCommitParser {
 
 	private static boolean isCommand(String token) {
 		return token.length() > 1 && token.charAt(0) == '#';
+	}
+
+	/**
+	 * Returns the issue key carried by a token, tolerating wrapping punctuation
+	 * ("[HN-2]:", "(HN-2)", "HN-2:" → "HN-2"), or {@code null} if it isn't a key.
+	 */
+	private static String asKey(String token) {
+		String trimmed = LEADING_PUNCT.matcher(token).replaceFirst("");
+		trimmed = TRAILING_PUNCT.matcher(trimmed).replaceFirst("").toUpperCase();
+		return KEY.matcher(trimmed).matches() ? trimmed : null;
 	}
 
 	/**
