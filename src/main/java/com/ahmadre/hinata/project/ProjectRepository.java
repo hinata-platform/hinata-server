@@ -19,7 +19,11 @@ public interface ProjectRepository extends MongoRepository<Project, String> {
 
 	List<Project> findByMemberIdsContainsAndArchivedTrue(String userId);
 
-	/** Projects connected to a given repository — used to route inbound webhooks. */
+	/** Projects whose PRIMARY repo matches — used to route inbound webhooks. */
 	List<Project> findByGit_ProviderAndGit_OwnerIgnoreCaseAndGit_RepoIgnoreCase(
+			String provider, String owner, String repo);
+
+	/** Projects whose an ADDITIONAL repo matches — used to route inbound webhooks. */
+	List<Project> findByExtraRepos_ProviderAndExtraRepos_OwnerIgnoreCaseAndExtraRepos_RepoIgnoreCase(
 			String provider, String owner, String repo);
 }

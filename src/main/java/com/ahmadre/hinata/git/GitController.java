@@ -120,13 +120,13 @@ public class GitController {
 	}
 
 	@DeleteMapping("/projects/{id}/git")
-	public Project disconnect(@PathVariable String id) {
-		return git.disconnect(id, currentUser.require());
+	public Project disconnect(@PathVariable String id, @RequestParam(required = false) String repoId) {
+		return git.disconnect(id, repoId, currentUser.require());
 	}
 
 	@PostMapping("/projects/{id}/git/resync")
-	public Project resync(@PathVariable String id) {
-		return git.resync(id, currentUser.require());
+	public Project resync(@PathVariable String id, @RequestParam(required = false) String repoId) {
+		return git.resync(id, repoId, currentUser.require());
 	}
 
 	@PatchMapping("/projects/{id}/git/automation")

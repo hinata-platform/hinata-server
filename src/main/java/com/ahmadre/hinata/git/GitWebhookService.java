@@ -68,52 +68,52 @@ public class GitWebhookService {
 		if (or == null) {
 			return;
 		}
-		Project project = resolveProject("github", or[0], or[1], p -> verifyGithub(body, signature, p));
-		if (project == null) {
+		Matched m = resolve("github", or[0], or[1], g -> verifyGithub(body, signature, g));
+		if (m == null) {
 			return;
 		}
-		User actor = actor(project);
+		User actor = actor(m.repo());
 		switch (event == null ? "" : event) {
-			case "push" -> githubPush(project, payload, actor);
-			case "create" -> githubCreate(project, payload, actor);
-			case "pull_request" -> githubPr(project, payload, actor);
-			case "workflow_run" -> githubBuild(project, payload);
+			case "push" -> githubPush(m, payload, actor);
+			case "create" -> githubCreate(m, payload, actor);
+			case "pull_request" -> githubPr(m, payload, actor);
+			case "workflow_run" -> githubBuild(m, payload);
 			default -> { /* event we don't act on */ }
 		}
 	}
 
-	private void githubPush(Project project, JsonNode payload, User actor) {
+	private void githubPush(Matched m, JsonNode payload, User actor) {
 		String branch = stripRef(payload.path("ref").asText(""));
 		boolean created = payload.path("created").asBoolean(false);
-		boolean onDefault = isDefaultBranch(project, branch);
+		boolean onDefault = isDefaultBranch(m.repo(), branch);
 		Instant now = Instant.now();
-		recordBranch(project, branch, now);
+		recordBranch(m, branch, now);
 		if (created) {
-			applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
+			applyPushAutomation(m.project(), keysIn(branch), PushRule.BRANCH, actor);
 		}
 		for (JsonNode c : payload.path("commits")) {
 			String message = c.path("message").asText("");
 			Instant at = instant(c.path("timestamp").asText(null), now);
-			recordCommit(project, branch, c.path("id").asText(""), message, at,
+			recordCommit(m, branch, c.path("id").asText(""), message, at,
 					c.path("verification").path("verified").asBoolean(false));
 			smartCommit(message, actor);
 			if (onDefault) {
-				applyPushAutomation(project, keysIn(message, branch), PushRule.COMMIT, actor);
+				applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
 			}
 		}
 	}
 
 	/** GitHub fires a dedicated {@code create} event when a branch/tag is created (e.g. via the API). */
-	private void githubCreate(Project project, JsonNode payload, User actor) {
+	private void githubCreate(Matched m, JsonNode payload, User actor) {
 		if (!"branch".equals(payload.path("ref_type").asText(""))) {
 			return;
 		}
 		String branch = payload.path("ref").asText("");
-		recordBranch(project, branch, Instant.now());
-		applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
+		recordBranch(m, branch, Instant.now());
+		applyPushAutomation(m.project(), keysIn(branch), PushRule.BRANCH, actor);
 	}
 
-	private void githubPr(Project project, JsonNode payload, User actor) {
+	private void githubPr(Matched m, JsonNode payload, User actor) {
 		JsonNode pr = payload.path("pull_request");
 		String action = payload.path("action").asText("");
 		boolean merged = pr.path("merged").asBoolean(false);
@@ -129,19 +129,21 @@ public class GitWebhookService {
 				.sourceBranch(src)
 				.targetBranch(pr.path("base").path("ref").asText(""))
 				.comments(pr.path("comments").asInt(0))
+				.provider(m.repo().getProvider())
+				.repo(slug(m.repo()))
 				.at(Instant.now())
 				.build();
 		Set<String> keys = keysIn(pr.path("title").asText(""), src);
 		for (String key : keys) {
-			upsert(project, key, dev -> putPr(dev, dto));
+			upsert(m, key, dev -> putPr(dev, dto));
 		}
 		boolean openEvent = action.equals("opened") || action.equals("reopened")
 				|| action.equals("ready_for_review");
 		boolean mergeEvent = action.equals("closed") && merged;
-		applyPrAutomation(project, keys, openEvent, mergeEvent, actor);
+		applyPrAutomation(m.project(), keys, openEvent, mergeEvent, actor);
 	}
 
-	private void githubBuild(Project project, JsonNode payload) {
+	private void githubBuild(Matched m, JsonNode payload) {
 		JsonNode run = payload.path("workflow_run");
 		String branch = run.path("head_branch").asText("");
 		String name = run.path("name").asText("CI");
@@ -150,15 +152,17 @@ public class GitWebhookService {
 				.workflow(run.path("path").asText(name))
 				.branch(branch)
 				.status(buildStatus(run.path("status").asText(""), run.path("conclusion").asText("")))
+				.provider(m.repo().getProvider())
+				.repo(slug(m.repo()))
 				.at(Instant.now())
 				.build();
 		for (String key : keysIn(branch)) {
-			upsert(project, key, dev -> putBuild(dev, build));
+			upsert(m, key, dev -> putBuild(dev, build));
 		}
 	}
 
-	private boolean verifyGithub(byte[] body, String signature, Project project) {
-		String secret = secret(project);
+	private boolean verifyGithub(byte[] body, String signature, Project.Git repo) {
+		String secret = secret(repo);
 		if (secret == null || signature == null || !signature.startsWith("sha256=")) {
 			return false;
 		}
@@ -173,41 +177,40 @@ public class GitWebhookService {
 		if (or == null) {
 			return;
 		}
-		Project project = resolveProject("gitlab", or[0], or[1],
-				p -> token != null && token.equals(secret(p)));
-		if (project == null) {
+		Matched m = resolve("gitlab", or[0], or[1], g -> token != null && token.equals(secret(g)));
+		if (m == null) {
 			return;
 		}
-		User actor = actor(project);
+		User actor = actor(m.repo());
 		switch (event == null ? "" : event) {
-			case "Push Hook" -> gitlabPush(project, payload, actor);
-			case "Merge Request Hook" -> gitlabMr(project, payload, actor);
-			case "Pipeline Hook" -> gitlabPipeline(project, payload);
+			case "Push Hook" -> gitlabPush(m, payload, actor);
+			case "Merge Request Hook" -> gitlabMr(m, payload, actor);
+			case "Pipeline Hook" -> gitlabPipeline(m, payload);
 			default -> { /* ignore */ }
 		}
 	}
 
-	private void gitlabPush(Project project, JsonNode payload, User actor) {
+	private void gitlabPush(Matched m, JsonNode payload, User actor) {
 		String branch = stripRef(payload.path("ref").asText(""));
 		boolean created = NULL_SHA.equals(payload.path("before").asText(""));
-		boolean onDefault = isDefaultBranch(project, branch);
+		boolean onDefault = isDefaultBranch(m.repo(), branch);
 		Instant now = Instant.now();
-		recordBranch(project, branch, now);
+		recordBranch(m, branch, now);
 		if (created) {
-			applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
+			applyPushAutomation(m.project(), keysIn(branch), PushRule.BRANCH, actor);
 		}
 		for (JsonNode c : payload.path("commits")) {
 			String message = c.path("message").asText("");
-			recordCommit(project, branch, c.path("id").asText(""), message,
+			recordCommit(m, branch, c.path("id").asText(""), message,
 					instant(c.path("timestamp").asText(null), now), false);
 			smartCommit(message, actor);
 			if (onDefault) {
-				applyPushAutomation(project, keysIn(message, branch), PushRule.COMMIT, actor);
+				applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
 			}
 		}
 	}
 
-	private void gitlabMr(Project project, JsonNode payload, User actor) {
+	private void gitlabMr(Matched m, JsonNode payload, User actor) {
 		JsonNode a = payload.path("object_attributes");
 		String glState = a.path("state").asText("");
 		boolean draft = a.path("work_in_progress").asBoolean(false) || a.path("draft").asBoolean(false);
@@ -223,19 +226,21 @@ public class GitWebhookService {
 				.state(state)
 				.sourceBranch(src)
 				.targetBranch(a.path("target_branch").asText(""))
+				.provider(m.repo().getProvider())
+				.repo(slug(m.repo()))
 				.at(Instant.now())
 				.build();
 		Set<String> keys = keysIn(a.path("title").asText(""), src);
 		for (String key : keys) {
-			upsert(project, key, dev -> putPr(dev, dto));
+			upsert(m, key, dev -> putPr(dev, dto));
 		}
 		String action = a.path("action").asText("");
 		boolean openEvent = action.equals("open") || action.equals("reopen");
 		boolean mergeEvent = action.equals("merge");
-		applyPrAutomation(project, keys, openEvent, mergeEvent, actor);
+		applyPrAutomation(m.project(), keys, openEvent, mergeEvent, actor);
 	}
 
-	private void gitlabPipeline(Project project, JsonNode payload) {
+	private void gitlabPipeline(Matched m, JsonNode payload) {
 		JsonNode a = payload.path("object_attributes");
 		String branch = a.path("ref").asText("");
 		GitDevInfo.Build build = GitDevInfo.Build.builder()
@@ -243,10 +248,12 @@ public class GitWebhookService {
 				.workflow(".gitlab-ci.yml")
 				.branch(branch)
 				.status(pipelineStatus(a.path("status").asText("")))
+				.provider(m.repo().getProvider())
+				.repo(slug(m.repo()))
 				.at(Instant.now())
 				.build();
 		for (String key : keysIn(branch)) {
-			upsert(project, key, dev -> putBuild(dev, build));
+			upsert(m, key, dev -> putBuild(dev, build));
 		}
 	}
 
@@ -258,22 +265,21 @@ public class GitWebhookService {
 		if (or == null) {
 			return;
 		}
-		Project project = resolveProject("bitbucket", or[0], or[1],
-				p -> secretParam != null && secretParam.equals(secret(p)));
-		if (project == null) {
+		Matched m = resolve("bitbucket", or[0], or[1], g -> secretParam != null && secretParam.equals(secret(g)));
+		if (m == null) {
 			return;
 		}
-		User actor = actor(project);
+		User actor = actor(m.repo());
 		String key = eventKey == null ? "" : eventKey;
 		if (key.equals("repo:push")) {
-			bitbucketPush(project, payload, actor);
+			bitbucketPush(m, payload, actor);
 		}
 		else if (key.startsWith("pullrequest:")) {
-			bitbucketPr(project, payload, actor, key);
+			bitbucketPr(m, payload, actor, key);
 		}
 	}
 
-	private void bitbucketPush(Project project, JsonNode payload, User actor) {
+	private void bitbucketPush(Matched m, JsonNode payload, User actor) {
 		Instant now = Instant.now();
 		for (JsonNode change : payload.path("push").path("changes")) {
 			JsonNode target = change.path("new");
@@ -282,24 +288,24 @@ public class GitWebhookService {
 			}
 			String branch = target.path("name").asText("");
 			boolean created = change.path("old").isMissingNode() || change.path("old").isNull();
-			boolean onDefault = isDefaultBranch(project, branch);
-			recordBranch(project, branch, now);
+			boolean onDefault = isDefaultBranch(m.repo(), branch);
+			recordBranch(m, branch, now);
 			if (created) {
-				applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
+				applyPushAutomation(m.project(), keysIn(branch), PushRule.BRANCH, actor);
 			}
 			for (JsonNode c : change.path("commits")) {
 				String message = c.path("message").asText("");
-				recordCommit(project, branch, c.path("hash").asText(""), message,
+				recordCommit(m, branch, c.path("hash").asText(""), message,
 						instant(c.path("date").asText(null), now), false);
 				smartCommit(message, actor);
 				if (onDefault) {
-					applyPushAutomation(project, keysIn(message, branch), PushRule.COMMIT, actor);
+					applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
 				}
 			}
 		}
 	}
 
-	private void bitbucketPr(Project project, JsonNode payload, User actor, String eventKey) {
+	private void bitbucketPr(Matched m, JsonNode payload, User actor, String eventKey) {
 		JsonNode pr = payload.path("pullrequest");
 		String bbState = pr.path("state").asText("");
 		String state = switch (bbState) {
@@ -315,34 +321,38 @@ public class GitWebhookService {
 				.sourceBranch(src)
 				.targetBranch(pr.path("destination").path("branch").path("name").asText(""))
 				.comments(pr.path("comment_count").asInt(0))
+				.provider(m.repo().getProvider())
+				.repo(slug(m.repo()))
 				.at(Instant.now())
 				.build();
 		Set<String> keys = keysIn(pr.path("title").asText(""), src);
 		for (String key : keys) {
-			upsert(project, key, dev -> putPr(dev, dto));
+			upsert(m, key, dev -> putPr(dev, dto));
 		}
 		boolean mergeEvent = eventKey.equals("pullrequest:fulfilled");
 		boolean openEvent = eventKey.equals("pullrequest:created");
-		applyPrAutomation(project, keys, openEvent, mergeEvent, actor);
+		applyPrAutomation(m.project(), keys, openEvent, mergeEvent, actor);
 	}
 
 	// ─────────────────────────── shared recording ───────────────────────────
 
-	private void recordBranch(Project project, String branch, Instant at) {
+	private void recordBranch(Matched m, String branch, Instant at) {
 		if (branch.isBlank()) {
 			return;
 		}
 		for (String key : keysIn(branch)) {
-			upsert(project, key, dev -> {
+			upsert(m, key, dev -> {
 				dev.getBranches().removeIf(b -> b.getName().equalsIgnoreCase(branch));
 				dev.getBranches().add(GitDevInfo.Branch.builder()
-						.name(branch).base(project.getGit().getDefaultBranch())
-						.ahead(0).behind(0).updatedAt(at).build());
+						.name(branch).base(m.repo().getDefaultBranch())
+						.ahead(0).behind(0).updatedAt(at)
+						.provider(m.repo().getProvider()).repo(slug(m.repo()))
+						.build());
 			});
 		}
 	}
 
-	private void recordCommit(Project project, String branch, String sha, String message,
+	private void recordCommit(Matched m, String branch, String sha, String message,
 			Instant at, boolean verified) {
 		if (sha.isBlank()) {
 			return;
@@ -350,12 +360,14 @@ public class GitWebhookService {
 		String first = firstLine(message);
 		Set<String> keys = keysIn(message, branch);
 		for (String key : keys) {
-			upsert(project, key, dev -> {
+			upsert(m, key, dev -> {
 				if (dev.getCommits().stream().anyMatch(c -> sha.equals(c.getSha()))) {
 					return;
 				}
 				dev.getCommits().add(0, GitDevInfo.Commit.builder()
-						.sha(sha).message(first).at(at).verified(verified).build());
+						.sha(sha).message(first).at(at).verified(verified)
+						.provider(m.repo().getProvider()).repo(slug(m.repo()))
+						.build());
 				trim(dev.getCommits(), MAX_COMMITS);
 			});
 		}
@@ -375,7 +387,8 @@ public class GitWebhookService {
 	}
 
 	/** Loads (or creates) the issue's dev-info, applies the mutation, persists it. */
-	private void upsert(Project project, String key, Consumer<GitDevInfo> mutation) {
+	private void upsert(Matched m, String key, Consumer<GitDevInfo> mutation) {
+		Project project = m.project();
 		Issue issue;
 		try {
 			issue = issues.get(key);
@@ -445,9 +458,8 @@ public class GitWebhookService {
 		}
 	}
 
-	private static boolean isDefaultBranch(Project project, String branch) {
-		Project.Git git = project.getGit();
-		String def = git == null ? null : git.getDefaultBranch();
+	private static boolean isDefaultBranch(Project.Git repo, String branch) {
+		String def = repo == null ? null : repo.getDefaultBranch();
 		return def != null && !def.isBlank() && def.equalsIgnoreCase(branch);
 	}
 
@@ -459,28 +471,50 @@ public class GitWebhookService {
 
 	// ─────────────────────────── helpers ───────────────────────────
 
-	private Project resolveProject(String provider, String owner, String repo, Predicate<Project> verifier) {
-		List<Project> candidates = projects
-				.findByGit_ProviderAndGit_OwnerIgnoreCaseAndGit_RepoIgnoreCase(provider, owner, repo);
+	/** A verified inbound webhook: the owning project + the exact connected repo it hit. */
+	private record Matched(Project project, Project.Git repo) {
+	}
+
+	/**
+	 * Finds the project + specific connection an inbound webhook targets, across a
+	 * project's primary and additional repos, verifying that repo's own signing
+	 * secret. Returns {@code null} for an unknown repo (ignored, 200); throws when
+	 * the repo is known but no connection's secret verifies.
+	 */
+	private Matched resolve(String provider, String owner, String repo, Predicate<Project.Git> verifier) {
+		Set<Project> candidates = new LinkedHashSet<>();
+		candidates.addAll(projects.findByGit_ProviderAndGit_OwnerIgnoreCaseAndGit_RepoIgnoreCase(provider, owner, repo));
+		candidates.addAll(projects
+				.findByExtraRepos_ProviderAndExtraRepos_OwnerIgnoreCaseAndExtraRepos_RepoIgnoreCase(provider, owner, repo));
 		if (candidates.isEmpty()) {
 			return null; // unknown repo → silently ignored (200)
 		}
 		for (Project p : candidates) {
-			if (verifier.test(p)) {
-				return p;
+			for (Project.Git g : p.allRepos()) {
+				if (repoMatches(g, provider, owner, repo) && verifier.test(g)) {
+					return new Matched(p, g);
+				}
 			}
 		}
 		throw ApiException.unauthorized("error.git.webhookSignature");
 	}
 
-	private String secret(Project project) {
-		Project.Git git = project.getGit();
-		return git == null ? null : cipher.decrypt(git.getEncryptedWebhookSecret());
+	private static boolean repoMatches(Project.Git g, String provider, String owner, String repo) {
+		return g != null && provider.equalsIgnoreCase(g.getProvider())
+				&& owner.equalsIgnoreCase(g.getOwner()) && repo.equalsIgnoreCase(g.getRepo());
 	}
 
-	/** Actor for automation/smart-commits: the user who connected the repo. */
-	private User actor(Project project) {
-		String id = project.getGit() == null ? null : project.getGit().getConnectedBy();
+	private static String slug(Project.Git repo) {
+		return repo.getOwner() + "/" + repo.getRepo();
+	}
+
+	private String secret(Project.Git repo) {
+		return repo == null ? null : cipher.decrypt(repo.getEncryptedWebhookSecret());
+	}
+
+	/** Actor for automation/smart-commits: the user who connected the repo that fired. */
+	private User actor(Project.Git repo) {
+		String id = repo == null ? null : repo.getConnectedBy();
 		return id == null ? null : users.findById(id).orElse(null);
 	}
 

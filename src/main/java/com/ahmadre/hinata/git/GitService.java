@@ -145,7 +145,8 @@ public class GitService {
 		}
 		GitOAuthSession session = requireAuthorizedSession(state, projectId, provider, user);
 		Instant now = Instant.now();
-		project.setGit(Project.Git.builder()
+		Project.Git connection = Project.Git.builder()
+				.id(newRepoId())
 				.provider(provider)
 				.owner(owner.trim())
 				.repo(repo.trim())
@@ -157,8 +158,9 @@ public class GitService {
 				.branchTemplate(DEFAULT_TEMPLATE)
 				.automation(defaultAutomation(project))
 				.encryptedToken(session.getEncryptedToken())
-				.build());
-		registerWebhook(project, cipher.decrypt(session.getEncryptedToken()));
+				.build();
+		addConnection(project, connection);
+		registerWebhook(connection, cipher.decrypt(session.getEncryptedToken()));
 		Project saved = projects.save(project);
 		oauthSessions.deleteById(session.getState());
 		return saved;
@@ -173,7 +175,8 @@ public class GitService {
 		String provider = detectProvider(repoUrl);
 		String[] ownerRepo = ownerRepoFromUrl(repoUrl, project.getKey());
 		Instant now = Instant.now();
-		project.setGit(Project.Git.builder()
+		Project.Git connection = Project.Git.builder()
+				.id(newRepoId())
 				.provider(provider)
 				.owner(ownerRepo[0])
 				.repo(ownerRepo[1])
@@ -185,27 +188,99 @@ public class GitService {
 				.branchTemplate(DEFAULT_TEMPLATE)
 				.automation(defaultAutomation(project))
 				.encryptedToken(cipher.encrypt(token))
-				.build());
-		registerWebhook(project, token);
+				.build();
+		addConnection(project, connection);
+		registerWebhook(connection, token);
 		return projects.save(project);
 	}
 
-	public Project disconnect(String projectId, User user) {
+	/**
+	 * Removes a connected repository. {@code repoId} null/blank targets the primary
+	 * connection. When the primary is removed its shared automation + branch
+	 * template are carried onto the next repo so project-wide rules survive.
+	 */
+	public Project disconnect(String projectId, String repoId, User user) {
 		Project project = requireLead(projectId, user);
-		Project.Git git = project.getGit();
-		if (git != null && !isBlank(git.getWebhookId())) {
-			api.deleteWebhook(git.getProvider(), cipher.decrypt(git.getEncryptedToken()),
-					git.getOwner(), git.getRepo(), git.getWebhookId());
+		Project.Git target = findRepo(project, repoId);
+		if (target == null) {
+			return project;
 		}
-		project.setGit(null);
+		if (!isBlank(target.getWebhookId())) {
+			api.deleteWebhook(target.getProvider(), cipher.decrypt(target.getEncryptedToken()),
+					target.getOwner(), target.getRepo(), target.getWebhookId());
+		}
+		removeConnection(project, target);
 		return projects.save(project);
 	}
 
-	public Project resync(String projectId, User user) {
+	/** Bumps {@code lastSyncAt}; {@code repoId} null/blank syncs every connection. */
+	public Project resync(String projectId, String repoId, User user) {
 		Project project = requireLead(projectId, user);
 		requireConnected(project);
-		project.getGit().setLastSyncAt(Instant.now());
+		Instant now = Instant.now();
+		if (isBlank(repoId)) {
+			project.allRepos().forEach(g -> g.setLastSyncAt(now));
+		}
+		else {
+			Project.Git target = findRepo(project, repoId);
+			if (target != null) {
+				target.setLastSyncAt(now);
+			}
+		}
 		return projects.save(project);
+	}
+
+	private String newRepoId() {
+		return Project.newId();
+	}
+
+	/** Adds a connection as the primary (if none yet) or as an additional repo; rejects duplicates. */
+	private void addConnection(Project project, Project.Git connection) {
+		boolean duplicate = project.allRepos().stream().anyMatch(g ->
+				connection.getProvider().equalsIgnoreCase(g.getProvider())
+						&& connection.getOwner().equalsIgnoreCase(g.getOwner())
+						&& connection.getRepo().equalsIgnoreCase(g.getRepo()));
+		if (duplicate) {
+			throw ApiException.conflict("error.git.alreadyConnected");
+		}
+		if (project.getGit() == null) {
+			project.setGit(connection);
+		}
+		else {
+			if (project.getExtraRepos() == null) {
+				project.setExtraRepos(new java.util.ArrayList<>());
+			}
+			project.getExtraRepos().add(connection);
+		}
+	}
+
+	/** Finds a connection by id; a null/blank id resolves to the primary. */
+	private Project.Git findRepo(Project project, String repoId) {
+		if (isBlank(repoId)) {
+			return project.getGit();
+		}
+		return project.allRepos().stream()
+				.filter(g -> repoId.equals(g.getId()))
+				.findFirst().orElse(null);
+	}
+
+	/** Removes a connection; if it was the primary, promotes the next repo and keeps shared config. */
+	private void removeConnection(Project project, Project.Git target) {
+		if (target == project.getGit()) {
+			List<Project.Git> extras = project.getExtraRepos();
+			if (extras != null && !extras.isEmpty()) {
+				Project.Git promoted = extras.remove(0);
+				promoted.setAutomation(target.getAutomation());
+				promoted.setBranchTemplate(target.getBranchTemplate());
+				project.setGit(promoted);
+			}
+			else {
+				project.setGit(null);
+			}
+		}
+		else if (project.getExtraRepos() != null) {
+			project.getExtraRepos().removeIf(g -> g == target);
+		}
 	}
 
 	public Project setAutomation(String projectId, Project.Automation incoming, User user) {
@@ -504,8 +579,7 @@ public class GitService {
 	}
 
 	/** Best-effort webhook registration; records the hook id + secret on the connection. */
-	private void registerWebhook(Project project, String plainToken) {
-		Project.Git git = project.getGit();
+	private void registerWebhook(Project.Git git, String plainToken) {
 		if (git == null || isBlank(plainToken)) {
 			return;
 		}

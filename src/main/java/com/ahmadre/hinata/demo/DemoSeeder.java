@@ -563,6 +563,7 @@ public class DemoSeeder {
 		// the value bumped in the DB while seeding this project's issues.
 		Project fresh = projects.findById(project.getId()).orElse(project);
 		fresh.setGit(Project.Git.builder()
+				.id(Project.newId())
 				.provider(provider)
 				.owner(owner)
 				.repo(repo)

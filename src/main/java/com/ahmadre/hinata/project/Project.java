@@ -81,6 +81,24 @@ public class Project {
 	 */
 	private Git git;
 
+	/**
+	 * Additional connected repositories beyond the primary {@link #git}. A project
+	 * can track work across several repos (e.g. an app + a server). Each entry is a
+	 * full connection with its own identity, token and webhook, but automation
+	 * rules + branch template are shared and read from the primary {@code git}.
+	 */
+	@Builder.Default
+	private List<Git> extraRepos = new ArrayList<>();
+
+	/** Every connected repository, primary first (empty when none is linked). */
+	@JsonIgnore
+	public List<Git> allRepos() {
+		List<Git> all = new ArrayList<>();
+		if (git != null) all.add(git);
+		if (extraRepos != null) all.addAll(extraRepos);
+		return all;
+	}
+
 	@CreatedDate
 	private Instant createdAt;
 
@@ -135,6 +153,8 @@ public class Project {
 	@NoArgsConstructor
 	@AllArgsConstructor
 	public static class Git {
+		/** Stable per-connection id, so a specific repo can be re-synced / removed. */
+		private String id;
 		/** Provider id: {@code github} | {@code gitlab} | {@code bitbucket}. */
 		private String provider;
 		/** Org / group / workspace slug that owns the repository. */
