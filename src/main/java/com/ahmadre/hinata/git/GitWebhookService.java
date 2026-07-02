@@ -46,6 +46,8 @@ public class GitWebhookService {
 	private static final Logger log = LoggerFactory.getLogger(GitWebhookService.class);
 	private static final Pattern ISSUE_KEY = Pattern.compile("[A-Z][A-Z0-9]+-\\d+");
 	private static final String BRANCH_PREFIX = "refs/heads/";
+	/** GitLab sends this all-zero SHA as {@code before} when a branch is first created. */
+	private static final String NULL_SHA = "0000000000000000000000000000000000000000";
 	private static final int MAX_COMMITS = 30;
 	private static final int MAX_BUILDS = 20;
 
@@ -73,6 +75,7 @@ public class GitWebhookService {
 		User actor = actor(project);
 		switch (event == null ? "" : event) {
 			case "push" -> githubPush(project, payload, actor);
+			case "create" -> githubCreate(project, payload, actor);
 			case "pull_request" -> githubPr(project, payload, actor);
 			case "workflow_run" -> githubBuild(project, payload);
 			default -> { /* event we don't act on */ }
@@ -81,15 +84,33 @@ public class GitWebhookService {
 
 	private void githubPush(Project project, JsonNode payload, User actor) {
 		String branch = stripRef(payload.path("ref").asText(""));
+		boolean created = payload.path("created").asBoolean(false);
+		boolean onDefault = isDefaultBranch(project, branch);
 		Instant now = Instant.now();
 		recordBranch(project, branch, now);
+		if (created) {
+			applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
+		}
 		for (JsonNode c : payload.path("commits")) {
 			String message = c.path("message").asText("");
 			Instant at = instant(c.path("timestamp").asText(null), now);
 			recordCommit(project, branch, c.path("id").asText(""), message, at,
 					c.path("verification").path("verified").asBoolean(false));
 			smartCommit(message, actor);
+			if (onDefault) {
+				applyPushAutomation(project, keysIn(message, branch), PushRule.COMMIT, actor);
+			}
 		}
+	}
+
+	/** GitHub fires a dedicated {@code create} event when a branch/tag is created (e.g. via the API). */
+	private void githubCreate(Project project, JsonNode payload, User actor) {
+		if (!"branch".equals(payload.path("ref_type").asText(""))) {
+			return;
+		}
+		String branch = payload.path("ref").asText("");
+		recordBranch(project, branch, Instant.now());
+		applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
 	}
 
 	private void githubPr(Project project, JsonNode payload, User actor) {
@@ -168,13 +189,21 @@ public class GitWebhookService {
 
 	private void gitlabPush(Project project, JsonNode payload, User actor) {
 		String branch = stripRef(payload.path("ref").asText(""));
+		boolean created = NULL_SHA.equals(payload.path("before").asText(""));
+		boolean onDefault = isDefaultBranch(project, branch);
 		Instant now = Instant.now();
 		recordBranch(project, branch, now);
+		if (created) {
+			applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
+		}
 		for (JsonNode c : payload.path("commits")) {
 			String message = c.path("message").asText("");
 			recordCommit(project, branch, c.path("id").asText(""), message,
 					instant(c.path("timestamp").asText(null), now), false);
 			smartCommit(message, actor);
+			if (onDefault) {
+				applyPushAutomation(project, keysIn(message, branch), PushRule.COMMIT, actor);
+			}
 		}
 	}
 
@@ -252,12 +281,20 @@ public class GitWebhookService {
 				continue;
 			}
 			String branch = target.path("name").asText("");
+			boolean created = change.path("old").isMissingNode() || change.path("old").isNull();
+			boolean onDefault = isDefaultBranch(project, branch);
 			recordBranch(project, branch, now);
+			if (created) {
+				applyPushAutomation(project, keysIn(branch), PushRule.BRANCH, actor);
+			}
 			for (JsonNode c : change.path("commits")) {
 				String message = c.path("message").asText("");
 				recordCommit(project, branch, c.path("hash").asText(""), message,
 						instant(c.path("date").asText(null), now), false);
 				smartCommit(message, actor);
+				if (onDefault) {
+					applyPushAutomation(project, keysIn(message, branch), PushRule.COMMIT, actor);
+				}
 			}
 		}
 	}
@@ -375,6 +412,43 @@ public class GitWebhookService {
 				log.warn("[git] PR automation for {} skipped: {}", key, e.getMessage());
 			}
 		}
+	}
+
+	/** Which push-time rule to apply — a branch was created, or a commit was pushed. */
+	private enum PushRule { BRANCH, COMMIT }
+
+	/**
+	 * Applies the project's branch-created / commit-pushed automation to every
+	 * referenced issue that belongs to this repo's project. Idempotent: the
+	 * transition is a no-op when the issue is already in the target state.
+	 */
+	private void applyPushAutomation(Project project, Set<String> keys, PushRule kind, User actor) {
+		if (actor == null || keys.isEmpty()) {
+			return;
+		}
+		for (String key : keys) {
+			try {
+				Issue issue = issues.get(key);
+				if (!project.getId().equals(issue.getProjectId())) {
+					continue;
+				}
+				if (kind == PushRule.BRANCH) {
+					gitService.applyBranchRule(project, issue, actor);
+				}
+				else {
+					gitService.applyCommitRule(project, issue, actor);
+				}
+			}
+			catch (RuntimeException e) {
+				log.warn("[git] {} automation for {} skipped: {}", kind, key, e.getMessage());
+			}
+		}
+	}
+
+	private static boolean isDefaultBranch(Project project, String branch) {
+		Project.Git git = project.getGit();
+		String def = git == null ? null : git.getDefaultBranch();
+		return def != null && !def.isBlank() && def.equalsIgnoreCase(branch);
 	}
 
 	private void smartCommit(String message, User actor) {

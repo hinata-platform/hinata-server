@@ -531,10 +531,23 @@ public class GitService {
 		Project.Rule rule = merged
 				? project.getGit().getAutomation().getPrMerged()
 				: project.getGit().getAutomation().getPrOpened();
-		if (isOn(rule)) {
-			return applyTransition(project, issue, rule.getToStateId(), actor);
-		}
-		return issue;
+		return applyRule(project, issue, rule, actor);
+	}
+
+	/** Applies the project's branch-created automation on an inbound push/create webhook. */
+	public Issue applyBranchRule(Project project, Issue issue, User actor) {
+		Project.Automation auto = project.getGit() == null ? null : project.getGit().getAutomation();
+		return applyRule(project, issue, auto == null ? null : auto.getBranchCreated(), actor);
+	}
+
+	/** Applies the project's commit-pushed automation on an inbound push webhook. */
+	public Issue applyCommitRule(Project project, Issue issue, User actor) {
+		Project.Automation auto = project.getGit() == null ? null : project.getGit().getAutomation();
+		return applyRule(project, issue, auto == null ? null : auto.getCommitPushed(), actor);
+	}
+
+	private Issue applyRule(Project project, Issue issue, Project.Rule rule, User actor) {
+		return isOn(rule) ? applyTransition(project, issue, rule.getToStateId(), actor) : issue;
 	}
 
 	/**

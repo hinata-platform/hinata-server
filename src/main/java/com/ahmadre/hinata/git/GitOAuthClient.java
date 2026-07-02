@@ -296,6 +296,7 @@ public class GitOAuthClient {
 		body.put("active", true);
 		ArrayNode events = body.putArray("events");
 		events.add("push");
+		events.add("create"); // branch/tag creation (e.g. "Create branch" via the API, no push)
 		events.add("pull_request");
 		events.add("workflow_run");
 		body.set("config", cfg);
