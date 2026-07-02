@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.git.GitIntegrationSettings;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,6 +25,7 @@ public class AdminSettingsController {
 
 	private final SettingsService settings;
 	private final HinataProperties properties;
+	private final GitIntegrationSettings gitConfig;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
 
@@ -52,7 +54,35 @@ public class AdminSettingsController {
 		if (app.getFeatureFlags() == null || app.getFeatureFlags().isEmpty()) {
 			app.setFeatureFlags(new java.util.LinkedHashMap<>(defaults.getFeatureFlags()));
 		}
+		prefillGitIntegration(current);
 		return current;
+	}
+
+	/**
+	 * Pre-fill the Git integration non-secret fields from the env defaults (so the
+	 * form shows the currently-effective values) and surface the derived, read-only
+	 * status flags the admin UI uses to show whether a provider is live or emulated.
+	 * Secrets are WRITE_ONLY and deliberately never echoed.
+	 */
+	private void prefillGitIntegration(ServerSettings current) {
+		ServerSettings.GitIntegration git = current.getGitIntegration();
+		HinataProperties.GitIntegration gitDefaults = properties.getGitIntegration();
+		if (isBlank(git.getGithubClientId())) {
+			git.setGithubClientId(gitDefaults.getGithubClientId());
+		}
+		if (isBlank(git.getGitlabClientId())) {
+			git.setGitlabClientId(gitDefaults.getGitlabClientId());
+		}
+		if (isBlank(git.getBitbucketClientId())) {
+			git.setBitbucketClientId(gitDefaults.getBitbucketClientId());
+		}
+		if (isBlank(git.getWebhookBaseUrl())) {
+			git.setWebhookBaseUrl(gitDefaults.getWebhookBaseUrl());
+		}
+		git.setGithubConfigured(gitConfig.configured("github"));
+		git.setGitlabConfigured(gitConfig.configured("gitlab"));
+		git.setBitbucketConfigured(gitConfig.configured("bitbucket"));
+		git.setTokenSecretConfigured(gitConfig.tokenSecretConfigured());
 	}
 
 	@PutMapping
@@ -89,6 +119,31 @@ public class AdminSettingsController {
 		}
 		if (isBlank(updated.getSmtp().getPassword())) {
 			updated.getSmtp().setPassword(current.getSmtp().getPassword());
+		}
+		keepGitSecretsIfBlank(updated, current);
+	}
+
+	/** Git client secrets + token secret are WRITE_ONLY; keep stored on blank. */
+	private void keepGitSecretsIfBlank(ServerSettings updated, ServerSettings current) {
+		ServerSettings.GitIntegration git = updated.getGitIntegration();
+		if (git == null) {
+			git = new ServerSettings.GitIntegration();
+			updated.setGitIntegration(git);
+		}
+		ServerSettings.GitIntegration curGit = current.getGitIntegration() != null
+				? current.getGitIntegration()
+				: new ServerSettings.GitIntegration();
+		if (isBlank(git.getGithubClientSecret())) {
+			git.setGithubClientSecret(curGit.getGithubClientSecret());
+		}
+		if (isBlank(git.getGitlabClientSecret())) {
+			git.setGitlabClientSecret(curGit.getGitlabClientSecret());
+		}
+		if (isBlank(git.getBitbucketClientSecret())) {
+			git.setBitbucketClientSecret(curGit.getBitbucketClientSecret());
+		}
+		if (isBlank(git.getTokenSecret())) {
+			git.setTokenSecret(curGit.getTokenSecret());
 		}
 	}
 

@@ -30,9 +30,12 @@ import java.util.stream.Collectors;
 public class ProjectService {
 
 	private static final String ISSUES = "issues";
+	private static final String GIT_DEV_INFO = "git_dev_info";
 	private static final String PROJECT_ID = "projectId";
 	private static final String STATE = "state";
 	private static final String RESOLVED_AT = "resolvedAt";
+	private static final String READABLE_ID = "readableId";
+	private static final String ISSUE_KEY = "issueKey";
 
 	private final ProjectRepository projects;
 	private final MongoTemplate mongo;
@@ -193,6 +196,7 @@ public class ProjectService {
 		if (req.color() != null) project.setColor(req.color());
 		if (req.archived() != null) project.setArchived(req.archived());
 
+		String previousKey = project.getKey();
 		applyKey(project, req.key());
 		applyMembersAndLeads(project, req);
 		List<RenameOp> stateRenames = applyWorkflow(project, req);
@@ -201,6 +205,11 @@ public class ProjectService {
 		// Persist the project first so a cascade failure can't leave issues
 		// pointing at a name the project no longer advertises.
 		Project saved = projects.save(project);
+		// A key change must re-key every issue's denormalized readableId (and the
+		// git dev-info that mirrors it), or issues keep the old prefix (HN2-1).
+		if (previousKey != null && !previousKey.equalsIgnoreCase(saved.getKey())) {
+			reKeyIssues(id, saved.getKey());
+		}
 		stateRenames.forEach(r -> cascadeStateRename(id, r.from(), r.to()));
 		labelRenames.forEach(r -> cascadeTagRename(id, r.from(), r.to()));
 		// A workflow / resolved-states change can leave issues with a stale
@@ -409,6 +418,59 @@ public class ProjectService {
 			}
 		}
 		return renames;
+	}
+
+	/**
+	 * Re-keys every issue in the project so its denormalized {@code readableId}
+	 * reads {@code <key>-<numberInProject>}, and rewrites the matching
+	 * {@code git_dev_info.issueKey} (which mirrors the readableId) so the
+	 * development-info linkage survives. Per-issue writes only happen where the
+	 * value actually differs, so this is idempotent and cheap to re-run — the
+	 * boot migration calls it to repair projects renamed before this cascade
+	 * existed. Returns the number of issues rewritten.
+	 */
+	public long reKeyIssues(String projectId, String key) {
+		long changed = 0;
+		var issues = mongo.getCollection(ISSUES);
+		for (org.bson.Document doc : issues.find(new org.bson.Document(PROJECT_ID, projectId))) {
+			String number = issueNumber(doc);
+			if (number == null) continue;
+			String readableId = key + "-" + number;
+			if (!readableId.equals(doc.getString(READABLE_ID))) {
+				issues.updateOne(new org.bson.Document("_id", doc.get("_id")),
+						new org.bson.Document("$set", new org.bson.Document(READABLE_ID, readableId)));
+				changed++;
+			}
+		}
+		var devInfo = mongo.getCollection(GIT_DEV_INFO);
+		for (org.bson.Document doc : devInfo.find(new org.bson.Document(PROJECT_ID, projectId))) {
+			String issueKey = rePrefix(doc.getString(ISSUE_KEY), key);
+			if (issueKey != null && !issueKey.equals(doc.getString(ISSUE_KEY))) {
+				devInfo.updateOne(new org.bson.Document("_id", doc.get("_id")),
+						new org.bson.Document("$set", new org.bson.Document(ISSUE_KEY, issueKey)));
+			}
+		}
+		return changed;
+	}
+
+	/** Project-scoped issue number, from the authoritative counter or the id suffix. */
+	private static String issueNumber(org.bson.Document issue) {
+		Object number = issue.get("numberInProject");
+		if (number instanceof Number n) return Long.toString(n.longValue());
+		return numberSuffix(issue.getString(READABLE_ID));
+	}
+
+	/** Rewrites the "KEY-" prefix of a readable id / issue key, keeping the number. */
+	private static String rePrefix(String value, String key) {
+		String number = numberSuffix(value);
+		return number == null ? null : key + "-" + number;
+	}
+
+	/** The digits after the first "-" of a readable id (e.g. "HN2-14" -&gt; "14"). */
+	private static String numberSuffix(String readableId) {
+		if (readableId == null) return null;
+		int dash = readableId.indexOf('-');
+		return (dash >= 0 && dash + 1 < readableId.length()) ? readableId.substring(dash + 1) : null;
 	}
 
 	private void cascadeStateRename(String projectId, String from, String to) {

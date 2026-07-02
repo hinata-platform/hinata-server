@@ -157,6 +157,11 @@ public class Project {
 		/** Provider access token, encrypted at rest. Never sent to clients. */
 		@JsonIgnore
 		private String encryptedToken;
+		/** Provider webhook id, kept so the hook can be removed on disconnect. */
+		private String webhookId;
+		/** Webhook signing secret, encrypted at rest. Never sent to clients. */
+		@JsonIgnore
+		private String encryptedWebhookSecret;
 	}
 
 	/**

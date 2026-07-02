@@ -195,6 +195,7 @@ public class SecurityConfig {
 						"/api/v1/me/export.pdf",
 						"/api/v1/meta", "/api/v1/meta/logo",
 						"/api/v1/users/*/avatar",
+						"/api/v1/git/oauth/callback", "/api/v1/git/webhooks/**",
 						"/api/v1/setup/status", "/api/v1/setup",
 						"/actuator/health", "/actuator/health/**",
 						"/login/**", "/oauth2/**", "/saml2/**", "/error")

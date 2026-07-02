@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -39,6 +40,7 @@ public class ServerSettings {
 	private Kerberos kerberos = new Kerberos();
 	private Cas cas = new Cas();
 	private EmailIngest emailIngest = new EmailIngest();
+	private GitIntegration gitIntegration = new GitIntegration();
 	private Audit audit = new Audit();
 
 	@LastModifiedDate
@@ -176,6 +178,49 @@ public class ServerSettings {
 		/** Project that receives issues created from inbound mail. */
 		private String defaultProjectId;
 		private int pollSeconds = 60;
+	}
+
+	/**
+	 * Git integration — provider OAuth-app credentials (GitHub / GitLab /
+	 * Bitbucket), the public webhook base URL and the token-encryption secret.
+	 * Admin-configurable at runtime; blank values fall back to the env-driven
+	 * {@code hinata.git-integration.*} defaults. Client secrets and the token
+	 * secret are {@code WRITE_ONLY} (accepted on input, never echoed back). The
+	 * {@code *Configured} flags are derived, read-only status surfaced to the
+	 * admin UI so it can show whether a provider is live or running emulated.
+	 */
+	@Data
+	public static class GitIntegration {
+		private String githubClientId;
+		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+		private String githubClientSecret;
+		private String gitlabClientId;
+		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+		private String gitlabClientSecret;
+		private String bitbucketClientId;
+		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+		private String bitbucketClientSecret;
+		/** Public base URL provider webhooks POST to (e.g. https://…/api/v1). */
+		private String webhookBaseUrl;
+		/** Key used to encrypt stored provider access tokens at rest (>= 16 chars). */
+		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+		private String tokenSecret;
+
+		// ── Derived, read-only status (never persisted) ───────────────────────
+		/** Effective GitHub app has both a client id and secret → real OAuth. */
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		private boolean githubConfigured;
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		private boolean gitlabConfigured;
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		private boolean bitbucketConfigured;
+		/** A non-default token secret is in effect (tokens are protected). */
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		private boolean tokenSecretConfigured;
 	}
 
 	/**
