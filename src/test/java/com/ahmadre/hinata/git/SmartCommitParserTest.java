@@ -50,6 +50,17 @@ class SmartCommitParserTest {
 	}
 
 	@Test
+	void bindsKeysWrappedInPunctuation() {
+		// Commit messages often prefix the key like "[HN-2]:" or "(HN-2)".
+		assertThat(SmartCommitParser.parse("[HN-2]: #comment ready for QA"))
+				.containsExactly(new Command("HN-2", Type.COMMENT, "ready for QA"));
+		assertThat(SmartCommitParser.parse("[HN-2]: docs: #comment Add closing note"))
+				.containsExactly(new Command("HN-2", Type.COMMENT, "Add closing note"));
+		assertThat(SmartCommitParser.parse("(API-9) #done"))
+				.containsExactly(new Command("API-9", Type.TRANSITION, "done"));
+	}
+
+	@Test
 	void convertsDurationsToMinutes() {
 		assertThat(SmartCommitParser.minutes("2h 30m")).isEqualTo(150);
 		assertThat(SmartCommitParser.minutes("2h30m")).isEqualTo(150);

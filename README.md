@@ -157,7 +157,8 @@ over **Server-Sent Events** at `/api/v1/issues/{issueId}/attachments/stream`.
 
 ## 🔗 Git integration
 
-Connect each project to **its own** repository on **GitHub, GitLab or Bitbucket**.
+Connect each project to **one or more** repositories on **GitHub, GitLab or
+Bitbucket** (e.g. an app + a server repo tracked by the same project).
 The server brokers a real OAuth flow, registers a signed webhook, and turns
 inbound push / pull-request / CI events into per-issue development info
 (branches, commits, PR/MRs, build status) — plus **smart commits** and
@@ -240,9 +241,11 @@ Configured per project against **that project's** workflow states:
 `ASTA-42 #comment shipped` adds a comment, `#time 2h 30m` logs work, and any
 other `#word` transitions the issue.
 
-> 🔒 Access tokens and per-project webhook secrets are AES-GCM-encrypted at rest
-> and never returned by the API. **One project connects one repository** — work
-> pushed to a different repo won't surface on its issues.
+> 🔒 Access tokens and per-connection webhook secrets are AES-GCM-encrypted at
+> rest and never returned by the API. A project can connect **several** repos;
+> automation rules + branch template are shared project-wide, while each repo
+> keeps its own token, webhook and default branch. Only work pushed to a
+> **connected** repo surfaces on the project's issues.
 
 ---
 
