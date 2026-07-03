@@ -432,6 +432,15 @@ public class GitService {
 		if (name == null || name.equals(issue.getState())) {
 			return issue; // rule points at a state that no longer exists, or a no-op
 		}
+		// Automation only advances an issue FORWARD in the workflow, never
+		// backward, so a late commit can't drag an in-review / done issue back to
+		// in-progress. An issue whose state isn't in the workflow is still moved.
+		List<String> order = project.workflowStateNames();
+		int from = order.indexOf(issue.getState());
+		int to = order.indexOf(name);
+		if (to < 0 || (from >= 0 && to <= from)) {
+			return issue;
+		}
 		return issues.update(issue.getId(), i -> i.setState(name), actor);
 	}
 

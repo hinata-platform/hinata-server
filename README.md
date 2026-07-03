@@ -233,9 +233,12 @@ Configured per project against **that project's** workflow states:
 | Trigger | Rule |
 | --- | --- |
 | **Branch created** (`create` / `push` with a new ref) | move the issue (e.g. → *In Progress*) |
-| **Commit pushed** to the **default** branch | move the issue |
+| **Commit pushed** referencing the key (any branch) | move the issue |
 | **PR/MR opened** | move the issue (e.g. → *In Review*) |
 | **PR/MR merged** | move the issue (e.g. → *Done*) |
+
+Automation only ever moves an issue **forward** in the workflow, never backward —
+so a late commit can't drag an *In Review* / *Done* issue back to *In Progress*.
 
 **Smart commits** — trailers in a commit message act on the referenced issue:
 `ASTA-42 #comment shipped` adds a comment, `#time 2h 30m` logs work, and any

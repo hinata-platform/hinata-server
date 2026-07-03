@@ -85,7 +85,6 @@ public class GitWebhookService {
 	private void githubPush(Matched m, JsonNode payload, User actor) {
 		String branch = stripRef(payload.path("ref").asText(""));
 		boolean created = payload.path("created").asBoolean(false);
-		boolean onDefault = isDefaultBranch(m.repo(), branch);
 		Instant now = Instant.now();
 		recordBranch(m, branch, now);
 		if (created) {
@@ -97,9 +96,7 @@ public class GitWebhookService {
 			recordCommit(m, branch, c.path("id").asText(""), message, at,
 					c.path("verification").path("verified").asBoolean(false));
 			smartCommit(message, actor);
-			if (onDefault) {
-				applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
-			}
+			applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
 		}
 	}
 
@@ -193,7 +190,6 @@ public class GitWebhookService {
 	private void gitlabPush(Matched m, JsonNode payload, User actor) {
 		String branch = stripRef(payload.path("ref").asText(""));
 		boolean created = NULL_SHA.equals(payload.path("before").asText(""));
-		boolean onDefault = isDefaultBranch(m.repo(), branch);
 		Instant now = Instant.now();
 		recordBranch(m, branch, now);
 		if (created) {
@@ -204,9 +200,7 @@ public class GitWebhookService {
 			recordCommit(m, branch, c.path("id").asText(""), message,
 					instant(c.path("timestamp").asText(null), now), false);
 			smartCommit(message, actor);
-			if (onDefault) {
-				applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
-			}
+			applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
 		}
 	}
 
@@ -288,7 +282,6 @@ public class GitWebhookService {
 			}
 			String branch = target.path("name").asText("");
 			boolean created = change.path("old").isMissingNode() || change.path("old").isNull();
-			boolean onDefault = isDefaultBranch(m.repo(), branch);
 			recordBranch(m, branch, now);
 			if (created) {
 				applyPushAutomation(m.project(), keysIn(branch), PushRule.BRANCH, actor);
@@ -298,9 +291,7 @@ public class GitWebhookService {
 				recordCommit(m, branch, c.path("hash").asText(""), message,
 						instant(c.path("date").asText(null), now), false);
 				smartCommit(message, actor);
-				if (onDefault) {
-					applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
-				}
+				applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
 			}
 		}
 	}
@@ -456,11 +447,6 @@ public class GitWebhookService {
 				log.warn("[git] {} automation for {} skipped: {}", kind, key, e.getMessage());
 			}
 		}
-	}
-
-	private static boolean isDefaultBranch(Project.Git repo, String branch) {
-		String def = repo == null ? null : repo.getDefaultBranch();
-		return def != null && !def.isBlank() && def.equalsIgnoreCase(branch);
 	}
 
 	private void smartCommit(String message, User actor) {
