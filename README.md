@@ -223,8 +223,16 @@ a **public**, signature-verified receiver, signed with a **per-project** secret:
 | **GitLab** | `POST /git/webhooks/gitlab` | token compare (`X-Gitlab-Token`) |
 | **Bitbucket** | `POST /git/webhooks/bitbucket` | shared secret in the URL (`?secret=…`) |
 
-The receiver finds the project by repo, verifies the secret, then maps the event
-to any issue key (`ASTA-42`) found in the branch, commit message or PR title.
+The receiver finds the project by repo, verifies the secret, then links the event
+to issue keys (`ASTA-42`): a **branch** by the key in its name, a **commit** by the
+key(s) in its **message**, a **PR/MR** by its title or source branch. A commit is
+never linked to an issue merely because it rides on that issue's branch.
+
+Every commit's side effects — smart commits and the commit-pushed transition — are
+applied **exactly once**, guarded by a small ledger (`git_processed_commits`). This
+matters because providers redeliver webhooks, and the same commit is re-listed
+whenever a feature branch is merged into the default branch; without the guard each
+redelivery would re-post every comment and re-log every worklog.
 
 ### Automation &amp; smart commits
 

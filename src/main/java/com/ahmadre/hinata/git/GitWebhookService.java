@@ -55,6 +55,7 @@ public class GitWebhookService {
 	private final GitDevInfoRepository devInfos;
 	private final IssueService issues;
 	private final GitService gitService;
+	private final GitCommitLedger ledger;
 	private final TokenCipher cipher;
 	private final UserRepository users;
 	// Self-contained mapper (the app registers no ObjectMapper bean to inject).
@@ -92,11 +93,11 @@ public class GitWebhookService {
 		}
 		for (JsonNode c : payload.path("commits")) {
 			String message = c.path("message").asText("");
+			String sha = c.path("id").asText("");
 			Instant at = instant(c.path("timestamp").asText(null), now);
-			recordCommit(m, branch, c.path("id").asText(""), message, at,
+			recordCommit(m, sha, message, at,
 					c.path("verification").path("verified").asBoolean(false));
-			smartCommit(message, actor);
-			applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
+			applyCommitEffects(m, sha, message, actor);
 		}
 	}
 
@@ -197,10 +198,10 @@ public class GitWebhookService {
 		}
 		for (JsonNode c : payload.path("commits")) {
 			String message = c.path("message").asText("");
-			recordCommit(m, branch, c.path("id").asText(""), message,
+			String sha = c.path("id").asText("");
+			recordCommit(m, sha, message,
 					instant(c.path("timestamp").asText(null), now), false);
-			smartCommit(message, actor);
-			applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
+			applyCommitEffects(m, sha, message, actor);
 		}
 	}
 
@@ -288,10 +289,10 @@ public class GitWebhookService {
 			}
 			for (JsonNode c : change.path("commits")) {
 				String message = c.path("message").asText("");
-				recordCommit(m, branch, c.path("hash").asText(""), message,
+				String sha = c.path("hash").asText("");
+				recordCommit(m, sha, message,
 						instant(c.path("date").asText(null), now), false);
-				smartCommit(message, actor);
-				applyPushAutomation(m.project(), keysIn(message, branch), PushRule.COMMIT, actor);
+				applyCommitEffects(m, sha, message, actor);
 			}
 		}
 	}
@@ -343,13 +344,16 @@ public class GitWebhookService {
 		}
 	}
 
-	private void recordCommit(Matched m, String branch, String sha, String message,
+	private void recordCommit(Matched m, String sha, String message,
 			Instant at, boolean verified) {
 		if (sha.isBlank()) {
 			return;
 		}
 		String first = firstLine(message);
-		Set<String> keys = keysIn(message, branch);
+		// Link a commit only to the issue key(s) in its own message — not the
+		// branch's key. The branch is linked separately (recordBranch), so a
+		// commit never surfaces on an issue just because of the branch it rides on.
+		Set<String> keys = keysIn(message);
 		for (String key : keys) {
 			upsert(m, key, dev -> {
 				if (dev.getCommits().stream().anyMatch(c -> sha.equals(c.getSha()))) {
@@ -449,10 +453,24 @@ public class GitWebhookService {
 		}
 	}
 
-	private void smartCommit(String message, User actor) {
+	/**
+	 * Applies a commit's side effects — smart commits + the commit-pushed
+	 * transition — <strong>exactly once</strong> per commit. Guarded by the
+	 * {@link GitCommitLedger} so a redelivered or re-listed commit (e.g. the same
+	 * SHA re-appearing when a feature branch is merged into the default branch)
+	 * never re-posts a comment, re-logs time or re-runs a transition. Linking is
+	 * by the issue key(s) in the commit <em>message</em> only — the branch is
+	 * linked separately via {@link #recordBranch}, so a commit never leaks onto
+	 * an issue merely because it sits on that issue's branch.
+	 */
+	private void applyCommitEffects(Matched m, String sha, String message, User actor) {
+		if (!ledger.firstSight(m.repo().getProvider(), slug(m.repo()), sha)) {
+			return; // already processed — idempotent
+		}
 		if (actor != null) {
 			gitService.applySmartCommits(message, actor);
 		}
+		applyPushAutomation(m.project(), keysIn(message), PushRule.COMMIT, actor);
 	}
 
 	// ─────────────────────────── helpers ───────────────────────────
