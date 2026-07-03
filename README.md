@@ -25,6 +25,7 @@
   <a href="#-local-development">Development</a> ·
   <a href="#-configuration">Configuration</a> ·
   <a href="#-api">API</a> ·
+  <a href="#-git-integration">Git integration</a> ·
   <a href="#-license">License</a>
 </p>
 
@@ -134,6 +135,7 @@ the app's admin area; changes apply **without restart**.
 | `HINATA_PRIVACY_POLICY_URL` | Privacy policy link served to the app |
 | `HINATA_SETUP_*` | Optional non-interactive first-run setup |
 | `HINATA_RATE_LIMIT_*` | Rate limiting &amp; brute-force thresholds |
+| `HINATA_GIT_*` | Git integration OAuth apps, public API base &amp; token-encryption secret — see [Git integration](#-git-integration) |
 
 </details>
 
@@ -153,6 +155,103 @@ over **Server-Sent Events** at `/api/v1/issues/{issueId}/attachments/stream`.
 
 ---
 
+## 🔗 Git integration
+
+Connect each project to **one or more** repositories on **GitHub, GitLab or
+Bitbucket** (e.g. an app + a server repo tracked by the same project).
+The server brokers a real OAuth flow, registers a signed webhook, and turns
+inbound push / pull-request / CI events into per-issue development info
+(branches, commits, PR/MRs, build status) — plus **smart commits** and
+**status automation**. Nothing is emulated: an event only lands when its
+signature verifies against the secret stored when the repo was connected.
+
+### Operator setup (one-time, platform-wide)
+
+Register **one OAuth app per provider** and give the server its credentials —
+either in the app's **Admin area → Git integration** (stored in Mongo, **DB
+overrides env**, secrets write-only) or via environment. Both the OAuth callback
+and the webhooks must be reachable from the provider, so set a **public API
+base** (`HINATA_GIT_WEBHOOK_BASE_URL`, e.g. `https://<host>/api/v1`); it falls
+back to `HINATA_BASE_URL` + `/api/v1`. Register this callback at each provider:
+
+```text
+<public-api-base>/git/oauth/callback
+```
+
+<details>
+  <summary><b>📋 Git environment variables</b></summary>
+
+<br>
+
+| Variable | Purpose |
+| --- | --- |
+| `HINATA_GIT_GITHUB_CLIENT_ID` / `…_SECRET` | GitHub OAuth app credentials |
+| `HINATA_GIT_GITLAB_CLIENT_ID` / `…_SECRET` | GitLab OAuth app credentials |
+| `HINATA_GIT_BITBUCKET_CLIENT_ID` / `…_SECRET` | Bitbucket OAuth consumer credentials |
+| `HINATA_GIT_WEBHOOK_BASE_URL` | Public API base for the OAuth callback **and** webhook registration |
+| `HINATA_GIT_TOKEN_SECRET` | Key that AES-GCM-encrypts stored access tokens at rest (**change the default in production**) |
+
+</details>
+
+### OAuth flow (server-brokered)
+
+```mermaid
+sequenceDiagram
+    participant App as 📱 App
+    participant Srv as ☕ Server
+    participant Prov as 🐙 Provider
+    App->>Srv: POST /projects/{id}/git/oauth/start
+    Srv-->>App: authorize URL + session state (Mongo, TTL 15m)
+    App->>Prov: open consent (browser)
+    Prov->>Srv: GET /git/oauth/callback?code&state  (public)
+    Srv->>Prov: exchange code → token (stored AES-GCM)
+    App->>Srv: poll GET /git/oauth/session/{state} → AUTHORIZED
+    App->>Srv: owners → repos → connect (registers webhook)
+```
+
+Self-managed **GitHub Enterprise / GitLab / Bitbucket Data Center** skip OAuth:
+`POST /projects/{id}/git/connect-token` with a repo URL + personal access token.
+
+### Webhooks
+
+On connect the server registers a hook (`push`, `create`, PR/MR, CI) pointing at
+a **public**, signature-verified receiver, signed with a **per-project** secret:
+
+| Provider | Endpoint | Verification |
+| --- | --- | --- |
+| **GitHub** | `POST /git/webhooks/github` | HMAC-SHA256 over the raw body (`X-Hub-Signature-256`) |
+| **GitLab** | `POST /git/webhooks/gitlab` | token compare (`X-Gitlab-Token`) |
+| **Bitbucket** | `POST /git/webhooks/bitbucket` | shared secret in the URL (`?secret=…`) |
+
+The receiver finds the project by repo, verifies the secret, then maps the event
+to any issue key (`ASTA-42`) found in the branch, commit message or PR title.
+
+### Automation &amp; smart commits
+
+Configured per project against **that project's** workflow states:
+
+| Trigger | Rule |
+| --- | --- |
+| **Branch created** (`create` / `push` with a new ref) | move the issue (e.g. → *In Progress*) |
+| **Commit pushed** referencing the key (any branch) | move the issue |
+| **PR/MR opened** | move the issue (e.g. → *In Review*) |
+| **PR/MR merged** | move the issue (e.g. → *Done*) |
+
+Automation only ever moves an issue **forward** in the workflow, never backward —
+so a late commit can't drag an *In Review* / *Done* issue back to *In Progress*.
+
+**Smart commits** — trailers in a commit message act on the referenced issue:
+`ASTA-42 #comment shipped` adds a comment, `#time 2h 30m` logs work, and any
+other `#word` transitions the issue.
+
+> 🔒 Access tokens and per-connection webhook secrets are AES-GCM-encrypted at
+> rest and never returned by the API. A project can connect **several** repos;
+> automation rules + branch template are shared project-wide, while each repo
+> keeps its own token, webhook and default branch. Only work pushed to a
+> **connected** repo surfaces on the project's issues.
+
+---
+
 ## 🔁 CI/CD
 
 GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs tests
@@ -166,3 +265,4 @@ version tags.
 **GPL-3.0** — see [LICENSE](LICENSE).
 
 <p align="center"><sub>Made with 🍯 by Rebar Ahmad</sub></p>
+

@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.git;
 
-import com.ahmadre.hinata.config.HinataProperties;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Cipher;
@@ -17,8 +16,15 @@ import java.util.Base64;
 
 /**
  * AES-256-GCM encryption for provider access tokens at rest. The key is derived
- * (SHA-256) from {@code hinata.git-integration.token-secret}. Ciphertext is
- * {@code base64(iv || ciphertext||tag)} so each value is self-describing.
+ * (SHA-256) from the <em>effective</em> token secret ({@link GitIntegrationSettings}
+ * — an admin's runtime override, else {@code hinata.git-integration.token-secret}).
+ * Ciphertext is {@code base64(iv || ciphertext||tag)} so each value is
+ * self-describing.
+ *
+ * <p>The key is derived lazily and cached until the secret changes, so an admin
+ * rotating the token secret takes effect without a restart. Note that rotating
+ * it makes any previously stored tokens undecryptable — affected projects must
+ * reconnect (the admin UI warns about this).
  *
  * <p>Tokens are only ever stored encrypted and are {@code @JsonIgnore}'d on the
  * document, so a provider token never leaves the server.
@@ -30,15 +36,33 @@ public class TokenCipher {
 	private static final int IV_LENGTH = 12;
 	private static final int TAG_BITS = 128;
 
-	private final SecretKey key;
+	private final GitIntegrationSettings config;
 	private final SecureRandom random = new SecureRandom();
 
-	public TokenCipher(HinataProperties properties) {
-		String secret = properties.getGitIntegration().getTokenSecret();
+	// Cache the derived key so we only re-hash when the secret actually changes.
+	private volatile String cachedSecret;
+	private volatile SecretKey cachedKey;
+
+	public TokenCipher(GitIntegrationSettings config) {
+		this.config = config;
+	}
+
+	private SecretKey key() {
+		String secret = config.tokenSecret();
+		if (secret == null || secret.isBlank()) {
+			secret = GitIntegrationSettings.DEFAULT_TOKEN_SECRET;
+		}
+		SecretKey cached = cachedKey;
+		if (cached != null && secret.equals(cachedSecret)) {
+			return cached;
+		}
 		try {
 			byte[] digest = MessageDigest.getInstance("SHA-256")
 					.digest(secret.getBytes(StandardCharsets.UTF_8));
-			this.key = new SecretKeySpec(digest, "AES");
+			SecretKey derived = new SecretKeySpec(digest, "AES");
+			this.cachedSecret = secret;
+			this.cachedKey = derived;
+			return derived;
 		}
 		catch (NoSuchAlgorithmException e) {
 			throw new IllegalStateException("SHA-256 unavailable", e);
@@ -54,7 +78,7 @@ public class TokenCipher {
 			byte[] iv = new byte[IV_LENGTH];
 			random.nextBytes(iv);
 			Cipher cipher = Cipher.getInstance(TRANSFORM);
-			cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
+			cipher.init(Cipher.ENCRYPT_MODE, key(), new GCMParameterSpec(TAG_BITS, iv));
 			byte[] ct = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
 			byte[] out = ByteBuffer.allocate(iv.length + ct.length).put(iv).put(ct).array();
 			return Base64.getEncoder().encodeToString(out);
@@ -77,7 +101,7 @@ public class TokenCipher {
 			byte[] ct = new byte[buffer.remaining()];
 			buffer.get(ct);
 			Cipher cipher = Cipher.getInstance(TRANSFORM);
-			cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, iv));
+			cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(TAG_BITS, iv));
 			return new String(cipher.doFinal(ct), StandardCharsets.UTF_8);
 		}
 		catch (GeneralSecurityException e) {

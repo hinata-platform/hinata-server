@@ -63,6 +63,9 @@ public class GitDevInfo {
 		private int behind;
 		private Instant updatedAt;
 		private String authorId;
+		/** Source repo attribution (multi-repo): provider id + {@code owner/repo}. */
+		private String provider;
+		private String repo;
 	}
 
 	@Data
@@ -77,6 +80,8 @@ public class GitDevInfo {
 		private int additions;
 		private int deletions;
 		private boolean verified;
+		private String provider;
+		private String repo;
 	}
 
 	/** state: {@code OPEN} | {@code DRAFT} | {@code MERGED} | {@code CLOSED}. */
@@ -99,6 +104,8 @@ public class GitDevInfo {
 		private Instant at;
 		/** checks roll-up: {@code passing} | {@code failing} | {@code pending} | {@code running}. */
 		private String checks;
+		private String provider;
+		private String repo;
 	}
 
 	/** status: {@code passing} | {@code failing} | {@code pending} | {@code running}. */
@@ -113,5 +120,7 @@ public class GitDevInfo {
 		private String status;
 		private String duration;
 		private Instant at;
+		private String provider;
+		private String repo;
 	}
 }

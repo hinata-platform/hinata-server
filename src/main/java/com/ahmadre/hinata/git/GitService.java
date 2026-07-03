@@ -1,7 +1,6 @@
 package com.ahmadre.hinata.git;
 
 import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.project.Project;
@@ -14,11 +13,11 @@ import org.springframework.stereotype.Service;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -46,44 +45,108 @@ public class GitService {
 	private final IssueService issues;
 	private final GitDevInfoRepository devInfos;
 	private final TokenCipher cipher;
-	private final HinataProperties properties;
+	private final GitIntegrationSettings config;
+	private final GitOAuthClient api;
+	private final GitOAuthSessionRepository oauthSessions;
+	private final SecureRandom random = new SecureRandom();
 
 	// ─────────────────────────── connection (per project) ───────────────────────────
 
-	/** Kicks off the OAuth app flow; returns the URL to open (emulated when no creds). */
+	/**
+	 * Kicks off the real OAuth Authorization-Code flow: records a pending session
+	 * keyed by an unguessable {@code state} and returns the provider authorize URL
+	 * to open. When no provider app is configured, {@code available} is false and
+	 * the client routes to the URL + token method instead (no emulation).
+	 */
 	public OAuthStart oauthStart(String projectId, String provider, User user) {
 		Project project = requireLead(projectId, user);
 		validateProvider(provider);
-		boolean configured = clientConfigured(provider);
-		return new OAuthStart(buildAuthorizeUrl(provider, project, configured), !configured);
+		if (!config.configured(provider)) {
+			return new OAuthStart(null, null, false);
+		}
+		String state = newState();
+		oauthSessions.save(GitOAuthSession.builder()
+				.state(state)
+				.projectId(project.getId())
+				.provider(provider)
+				.userId(user.getId())
+				.status(GitOAuthSession.Status.PENDING)
+				.createdAt(Instant.now())
+				.build());
+		return new OAuthStart(buildAuthorizeUrl(provider, state), state, true);
 	}
 
-	/** Owners (org / group / workspace) the account exposes for {@code provider}. */
-	public List<OwnerDto> owners(String projectId, String provider, User user) {
+	/**
+	 * Public OAuth callback — the browser lands here after the provider consent.
+	 * Exchanges the {@code code} for an access token and parks it (encrypted) on
+	 * the session; the wizard polls {@link #sessionStatus} to continue. Returns a
+	 * small self-contained HTML page for the browser.
+	 */
+	public String handleCallback(String code, String state, String error) {
+		GitOAuthSession session = isBlank(state) ? null : oauthSessions.findById(state).orElse(null);
+		if (session == null) {
+			return callbackPage(false, "This authorization link is invalid or has expired.");
+		}
+		if (!isBlank(error)) {
+			return failSession(session, error, "Access was declined — you can close this window.");
+		}
+		if (isBlank(code)) {
+			return failSession(session, "missing_code", "No authorization code was returned.");
+		}
+		try {
+			String token = api.exchangeCode(session.getProvider(), code, config.oauthRedirectUri());
+			session.setEncryptedToken(cipher.encrypt(token));
+			session.setStatus(GitOAuthSession.Status.AUTHORIZED);
+			session.setError(null);
+			oauthSessions.save(session);
+			return callbackPage(true,
+					"You're connected. This tab closes automatically — if it stays open, "
+							+ "use the button below and pick your repository back in Hinata.");
+		}
+		catch (RuntimeException e) {
+			log.warn("[git] OAuth callback exchange for {} failed: {}", session.getProvider(), e.getMessage());
+			return failSession(session, "exchange_failed", "Could not complete the connection. Please try again.");
+		}
+	}
+
+	/** Polled by the wizard after opening the authorize URL. */
+	public SessionStatus sessionStatus(String state, User user) {
+		GitOAuthSession session = oauthSessions.findById(state)
+				.filter(s -> s.getUserId().equals(user.getId()))
+				.orElseThrow(() -> ApiException.notFound("git.oauthSession"));
+		return new SessionStatus(session.getStatus().name(), session.getProvider(), session.getError());
+	}
+
+	/** Owners (org / group / workspace) the authorized account exposes. */
+	public List<OwnerDto> owners(String projectId, String provider, String state, User user) {
 		requireLead(projectId, user);
 		validateProvider(provider);
-		return EMULATED_OWNERS.getOrDefault(provider, List.of());
+		String token = sessionToken(state, projectId, provider, user);
+		return api.listOwners(provider, token);
 	}
 
 	/** Repositories under {@code owner}, filtered by an optional query. */
-	public List<RepoDto> repos(String projectId, String provider, String owner, String query, User user) {
+	public List<RepoDto> repos(String projectId, String provider, String owner, String query, String state, User user) {
 		requireLead(projectId, user);
 		validateProvider(provider);
-		String needle = query == null ? "" : query.toLowerCase().trim();
-		return EMULATED_REPOS.stream()
-				.filter(r -> needle.isEmpty() || r.name().toLowerCase().contains(needle))
-				.toList();
+		if (isBlank(owner)) {
+			throw ApiException.badRequest("error.git.repoRequired");
+		}
+		String token = sessionToken(state, projectId, provider, user);
+		return api.listRepos(provider, token, owner, query);
 	}
 
-	/** Binds the chosen repo to the project (would register webhooks in a real setup). */
-	public Project connect(String projectId, String provider, String owner, String repo, User user) {
+	/** Binds the chosen repo to the project, moving the OAuth token onto it. */
+	public Project connect(String projectId, String provider, String owner, String repo, String state, User user) {
 		Project project = requireLead(projectId, user);
 		validateProvider(provider);
 		if (isBlank(owner) || isBlank(repo)) {
 			throw ApiException.badRequest("error.git.repoRequired");
 		}
+		GitOAuthSession session = requireAuthorizedSession(state, projectId, provider, user);
 		Instant now = Instant.now();
-		project.setGit(Project.Git.builder()
+		Project.Git connection = Project.Git.builder()
+				.id(newRepoId())
 				.provider(provider)
 				.owner(owner.trim())
 				.repo(repo.trim())
@@ -94,9 +157,13 @@ public class GitService {
 				.method("oauth")
 				.branchTemplate(DEFAULT_TEMPLATE)
 				.automation(defaultAutomation(project))
-				.encryptedToken(cipher.encrypt(emulatedToken(provider)))
-				.build());
-		return projects.save(project);
+				.encryptedToken(session.getEncryptedToken())
+				.build();
+		addConnection(project, connection);
+		registerWebhook(connection, cipher.decrypt(session.getEncryptedToken()));
+		Project saved = projects.save(project);
+		oauthSessions.deleteById(session.getState());
+		return saved;
 	}
 
 	/** Self-managed fallback — store repo URL + PAT (encrypted, server-side). */
@@ -108,7 +175,8 @@ public class GitService {
 		String provider = detectProvider(repoUrl);
 		String[] ownerRepo = ownerRepoFromUrl(repoUrl, project.getKey());
 		Instant now = Instant.now();
-		project.setGit(Project.Git.builder()
+		Project.Git connection = Project.Git.builder()
+				.id(newRepoId())
 				.provider(provider)
 				.owner(ownerRepo[0])
 				.repo(ownerRepo[1])
@@ -120,21 +188,99 @@ public class GitService {
 				.branchTemplate(DEFAULT_TEMPLATE)
 				.automation(defaultAutomation(project))
 				.encryptedToken(cipher.encrypt(token))
-				.build());
+				.build();
+		addConnection(project, connection);
+		registerWebhook(connection, token);
 		return projects.save(project);
 	}
 
-	public Project disconnect(String projectId, User user) {
+	/**
+	 * Removes a connected repository. {@code repoId} null/blank targets the primary
+	 * connection. When the primary is removed its shared automation + branch
+	 * template are carried onto the next repo so project-wide rules survive.
+	 */
+	public Project disconnect(String projectId, String repoId, User user) {
 		Project project = requireLead(projectId, user);
-		project.setGit(null);
+		Project.Git target = findRepo(project, repoId);
+		if (target == null) {
+			return project;
+		}
+		if (!isBlank(target.getWebhookId())) {
+			api.deleteWebhook(target.getProvider(), cipher.decrypt(target.getEncryptedToken()),
+					target.getOwner(), target.getRepo(), target.getWebhookId());
+		}
+		removeConnection(project, target);
 		return projects.save(project);
 	}
 
-	public Project resync(String projectId, User user) {
+	/** Bumps {@code lastSyncAt}; {@code repoId} null/blank syncs every connection. */
+	public Project resync(String projectId, String repoId, User user) {
 		Project project = requireLead(projectId, user);
 		requireConnected(project);
-		project.getGit().setLastSyncAt(Instant.now());
+		Instant now = Instant.now();
+		if (isBlank(repoId)) {
+			project.allRepos().forEach(g -> g.setLastSyncAt(now));
+		}
+		else {
+			Project.Git target = findRepo(project, repoId);
+			if (target != null) {
+				target.setLastSyncAt(now);
+			}
+		}
 		return projects.save(project);
+	}
+
+	private String newRepoId() {
+		return Project.newId();
+	}
+
+	/** Adds a connection as the primary (if none yet) or as an additional repo; rejects duplicates. */
+	private void addConnection(Project project, Project.Git connection) {
+		boolean duplicate = project.allRepos().stream().anyMatch(g ->
+				connection.getProvider().equalsIgnoreCase(g.getProvider())
+						&& connection.getOwner().equalsIgnoreCase(g.getOwner())
+						&& connection.getRepo().equalsIgnoreCase(g.getRepo()));
+		if (duplicate) {
+			throw ApiException.conflict("error.git.alreadyConnected");
+		}
+		if (project.getGit() == null) {
+			project.setGit(connection);
+		}
+		else {
+			if (project.getExtraRepos() == null) {
+				project.setExtraRepos(new java.util.ArrayList<>());
+			}
+			project.getExtraRepos().add(connection);
+		}
+	}
+
+	/** Finds a connection by id; a null/blank id resolves to the primary. */
+	private Project.Git findRepo(Project project, String repoId) {
+		if (isBlank(repoId)) {
+			return project.getGit();
+		}
+		return project.allRepos().stream()
+				.filter(g -> repoId.equals(g.getId()))
+				.findFirst().orElse(null);
+	}
+
+	/** Removes a connection; if it was the primary, promotes the next repo and keeps shared config. */
+	private void removeConnection(Project project, Project.Git target) {
+		if (target == project.getGit()) {
+			List<Project.Git> extras = project.getExtraRepos();
+			if (extras != null && !extras.isEmpty()) {
+				Project.Git promoted = extras.remove(0);
+				promoted.setAutomation(target.getAutomation());
+				promoted.setBranchTemplate(target.getBranchTemplate());
+				project.setGit(promoted);
+			}
+			else {
+				project.setGit(null);
+			}
+		}
+		else if (project.getExtraRepos() != null) {
+			project.getExtraRepos().removeIf(g -> g == target);
+		}
 	}
 
 	public Project setAutomation(String projectId, Project.Automation incoming, User user) {
@@ -286,6 +432,15 @@ public class GitService {
 		if (name == null || name.equals(issue.getState())) {
 			return issue; // rule points at a state that no longer exists, or a no-op
 		}
+		// Automation only advances an issue FORWARD in the workflow, never
+		// backward, so a late commit can't drag an in-review / done issue back to
+		// in-progress. An issue whose state isn't in the workflow is still moved.
+		List<String> order = project.workflowStateNames();
+		int from = order.indexOf(issue.getState());
+		int to = order.indexOf(name);
+		if (to < 0 || (from >= 0 && to <= from)) {
+			return issue;
+		}
 		return issues.update(issue.getId(), i -> i.setState(name), actor);
 	}
 
@@ -379,50 +534,149 @@ public class GitService {
 		return s.toLowerCase().replaceAll("[^a-z0-9]", "");
 	}
 
-	private boolean clientConfigured(String provider) {
-		HinataProperties.GitIntegration g = properties.getGitIntegration();
+	private String buildAuthorizeUrl(String provider, String state) {
+		String redirect = config.oauthRedirectUri();
 		return switch (provider) {
-			case "github" -> !isBlank(g.getGithubClientId());
-			case "gitlab" -> !isBlank(g.getGitlabClientId());
-			case "bitbucket" -> !isBlank(g.getBitbucketClientId());
-			default -> false;
-		};
-	}
-
-	private String clientId(String provider) {
-		HinataProperties.GitIntegration g = properties.getGitIntegration();
-		return switch (provider) {
-			case "github" -> g.getGithubClientId();
-			case "gitlab" -> g.getGitlabClientId();
-			case "bitbucket" -> g.getBitbucketClientId();
-			default -> "";
-		};
-	}
-
-	private String buildAuthorizeUrl(String provider, Project project, boolean configured) {
-		String state = project.getId();
-		if (!configured) {
-			// No real app registered — the client detects `emulated` and skips the
-			// browser hand-off, proceeding straight to owner/repo picking.
-			return properties.webBase() + "/git/authorize?provider=" + enc(provider)
-					+ "&project=" + enc(project.getId()) + "&emulated=1";
-		}
-		String redirect = properties.getBaseUrl() + "/api/v1/projects/" + project.getId() + "/git/oauth/callback";
-		return switch (provider) {
-			case "github" -> "https://github.com/login/oauth/authorize?client_id=" + enc(clientId(provider))
+			case "github" -> "https://github.com/login/oauth/authorize?client_id=" + enc(config.githubClientId())
 					+ "&redirect_uri=" + enc(redirect) + "&scope=" + enc("repo read:org")
 					+ "&state=" + enc(state);
-			case "gitlab" -> "https://gitlab.com/oauth/authorize?client_id=" + enc(clientId(provider))
+			case "gitlab" -> "https://gitlab.com/oauth/authorize?client_id=" + enc(config.gitlabClientId())
 					+ "&redirect_uri=" + enc(redirect) + "&response_type=code"
 					+ "&scope=" + enc("api read_repository write_repository") + "&state=" + enc(state);
-			case "bitbucket" -> "https://bitbucket.org/site/oauth2/authorize?client_id=" + enc(clientId(provider))
+			case "bitbucket" -> "https://bitbucket.org/site/oauth2/authorize?client_id=" + enc(config.bitbucketClientId())
 					+ "&response_type=code&state=" + enc(state);
 			default -> throw ApiException.badRequest("error.git.unknownProvider", provider);
 		};
 	}
 
-	private static String emulatedToken(String provider) {
-		return provider + "-emulated-" + UUID.randomUUID();
+	/** Resolves + decrypts the provider token from an authorized OAuth session. */
+	private String sessionToken(String state, String projectId, String provider, User user) {
+		GitOAuthSession session = requireAuthorizedSession(state, projectId, provider, user);
+		String token = cipher.decrypt(session.getEncryptedToken());
+		if (isBlank(token)) {
+			throw ApiException.badRequest("error.git.oauthNotAuthorized");
+		}
+		return token;
+	}
+
+	private GitOAuthSession requireAuthorizedSession(String state, String projectId, String provider, User user) {
+		if (isBlank(state)) {
+			throw ApiException.badRequest("error.git.oauthNotAuthorized");
+		}
+		GitOAuthSession session = oauthSessions.findById(state)
+				.orElseThrow(() -> ApiException.badRequest("error.git.oauthNotAuthorized"));
+		if (!session.getUserId().equals(user.getId()) || !session.getProjectId().equals(projectId)
+				|| !session.getProvider().equals(provider)
+				|| session.getStatus() != GitOAuthSession.Status.AUTHORIZED
+				|| isBlank(session.getEncryptedToken())) {
+			throw ApiException.badRequest("error.git.oauthNotAuthorized");
+		}
+		return session;
+	}
+
+	private String failSession(GitOAuthSession session, String error, String userMessage) {
+		session.setStatus(GitOAuthSession.Status.ERROR);
+		session.setError(error);
+		oauthSessions.save(session);
+		return callbackPage(false, userMessage);
+	}
+
+	private String newState() {
+		byte[] bytes = new byte[32];
+		random.nextBytes(bytes);
+		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+	}
+
+	/** Best-effort webhook registration; records the hook id + secret on the connection. */
+	private void registerWebhook(Project.Git git, String plainToken) {
+		if (git == null || isBlank(plainToken)) {
+			return;
+		}
+		try {
+			String secret = newState();
+			String callback = config.publicApiBase() + "/git/webhooks/" + git.getProvider();
+			String hookId = api.registerWebhook(git.getProvider(), plainToken, git.getOwner(),
+					git.getRepo(), callback, secret);
+			git.setWebhookId(hookId);
+			git.setEncryptedWebhookSecret(cipher.encrypt(secret));
+		}
+		catch (RuntimeException e) {
+			log.warn("[git] webhook registration for {}/{} failed: {}",
+					git.getOwner(), git.getRepo(), e.getMessage());
+		}
+	}
+
+	/** Applies the project's PR/MR automation on an inbound webhook PR event. */
+	public Issue applyPrRule(Project project, Issue issue, boolean merged, User actor) {
+		if (project.getGit() == null || project.getGit().getAutomation() == null) {
+			return issue;
+		}
+		Project.Rule rule = merged
+				? project.getGit().getAutomation().getPrMerged()
+				: project.getGit().getAutomation().getPrOpened();
+		return applyRule(project, issue, rule, actor);
+	}
+
+	/** Applies the project's branch-created automation on an inbound push/create webhook. */
+	public Issue applyBranchRule(Project project, Issue issue, User actor) {
+		Project.Automation auto = project.getGit() == null ? null : project.getGit().getAutomation();
+		return applyRule(project, issue, auto == null ? null : auto.getBranchCreated(), actor);
+	}
+
+	/** Applies the project's commit-pushed automation on an inbound push webhook. */
+	public Issue applyCommitRule(Project project, Issue issue, User actor) {
+		Project.Automation auto = project.getGit() == null ? null : project.getGit().getAutomation();
+		return applyRule(project, issue, auto == null ? null : auto.getCommitPushed(), actor);
+	}
+
+	private Issue applyRule(Project project, Issue issue, Project.Rule rule, User actor) {
+		return isOn(rule) ? applyTransition(project, issue, rule.getToStateId(), actor) : issue;
+	}
+
+	/**
+	 * Minimal self-contained page shown to the browser after the provider
+	 * redirect. It tries to close its own tab automatically, but providers such
+	 * as GitHub send a {@code Cross-Origin-Opener-Policy} header that severs the
+	 * opener relationship, so Chrome blocks the scripted close. The prominent
+	 * button closes reliably under the user gesture (via the self-reopen trick),
+	 * revealing the original Hinata tab where the wizard has already advanced to
+	 * repository selection through polling.
+	 */
+	private static String callbackPage(boolean ok, String message) {
+		String title = ok ? "Connected to Hinata" : "Connection failed";
+		String accent = ok ? "#B9831F" : "#B4443B";
+		// Honey-amber hex mark, matching the app brand.
+		String hex = "<svg width=\"30\" height=\"30\" viewBox=\"0 0 24 24\" fill=\"none\" "
+				+ "xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2l8.66 5v10L12 22l-8.66-5V7L12 2z\" "
+				+ "fill=\"" + accent + "\"/></svg>";
+		String button = ok
+				? "<button onclick=\"hnClose()\" style=\"margin-top:22px;border:0;cursor:pointer;"
+						+ "background:#1C2438;color:#fff;font-size:14px;font-weight:600;padding:12px 22px;"
+						+ "border-radius:11px;font-family:inherit\">Close this tab &amp; return to Hinata</button>"
+				: "";
+		return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+				+ "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+				+ "<title>" + title + "</title></head>"
+				+ "<body style=\"margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+				+ "font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#F6F2EA;color:#2A2723\">"
+				+ "<div style=\"max-width:360px;text-align:center;padding:28px\">"
+				+ "<div style=\"width:56px;height:56px;margin:0 auto 18px;border-radius:16px;background:#1C2438;"
+				+ "display:flex;align-items:center;justify-content:center\">" + hex + "</div>"
+				+ "<div style=\"display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;"
+				+ "color:" + accent + ";margin-bottom:10px\"><span style=\"font-size:16px\">"
+				+ (ok ? "&#10003;" : "!") + "</span>" + title + "</div>"
+				+ "<p style=\"font-size:14px;line-height:1.55;color:#6B6459;margin:0\">" + escapeHtml(message) + "</p>"
+				+ button
+				+ "</div>"
+				+ "<script>"
+				+ "function hnClose(){try{window.open('','_self');}catch(e){}try{window.close();}catch(e){}}"
+				+ "function hnTry(){try{window.close();}catch(e){}}"
+				+ (ok ? "hnTry();setTimeout(hnTry,300);setTimeout(hnTry,1200);" : "")
+				+ "</script></body></html>";
+	}
+
+	private static String escapeHtml(String s) {
+		return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 	}
 
 	private static String detectProvider(String url) {
@@ -460,27 +714,17 @@ public class GitService {
 		return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
 	}
 
-	// ─────────────────────────── emulated account graph + DTOs ───────────────────────────
+	// ─────────────────────────── DTOs ───────────────────────────
 
-	private static final Map<String, List<OwnerDto>> EMULATED_OWNERS = Map.of(
-			"github", List.of(
-					new OwnerDto("hinata-platform", "hinata-platform", "Organization", 12),
-					new OwnerDto("rebar-ahmad", "rebar-ahmad", "Personal account", 34)),
-			"gitlab", List.of(
-					new OwnerDto("hinata-platform", "hinata-platform", "Group", 9),
-					new OwnerDto("asta-hn", "asta-hn", "Group", 21)),
-			"bitbucket", List.of(
-					new OwnerDto("hinata", "hinata", "Workspace", 7)));
+	/**
+	 * @param authorizeUrl provider consent URL to open (null when unavailable)
+	 * @param state        OAuth {@code state} to poll the session with
+	 * @param available    whether a provider app is configured (real OAuth possible)
+	 */
+	public record OAuthStart(String authorizeUrl, String state, boolean available) {
+	}
 
-	private static final List<RepoDto> EMULATED_REPOS = List.of(
-			new RepoDto("hinata-app", true, "Dart", "#00B4AB", "2m"),
-			new RepoDto("hinata-api", true, "Kotlin", "#A97BFF", "11m"),
-			new RepoDto("hinata-infra", true, "HCL", "#844FBA", "1h"),
-			new RepoDto("hinata-web", false, "TypeScript", "#3178C6", "3h"),
-			new RepoDto("design-tokens", false, "CSS", "#663399", "2d"),
-			new RepoDto("handbook", false, "MDX", "#FCB32C", "5d"));
-
-	public record OAuthStart(String authorizeUrl, boolean emulated) {
+	public record SessionStatus(String status, String provider, String error) {
 	}
 
 	public record OwnerDto(String id, String name, String kind, int repos) {
