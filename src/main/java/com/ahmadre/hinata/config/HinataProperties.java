@@ -76,6 +76,7 @@ public class HinataProperties {
 	private Mongodb mongodb = new Mongodb();
 	private Demo demo = new Demo();
 	private Gateway gateway = new Gateway();
+	private GitIntegration gitIntegration = new GitIntegration();
 
 	/**
 	 * Hinata Connect — the single central service every Hinata server uses for the
@@ -92,6 +93,29 @@ public class HinataProperties {
 		private String baseUrl = "https://connect.hinata.ahmadre.com";
 		/** Sent as X-Bootstrap-Secret when the gateway gates registration (blank = open). */
 		private String bootstrapSecret = "";
+	}
+
+	/**
+	 * Git integration — per-project repository connections + development
+	 * automation. OAuth is brokered <em>server-side</em>; the client never
+	 * receives a provider token. Provider client id/secret pairs enable the real
+	 * OAuth app flow; where they are blank the connect wizard's owner/repo picking
+	 * is served from an emulated account graph, so the whole flow is still
+	 * exercisable end-to-end and the app carries no fixture data.
+	 */
+	@Getter
+	@Setter
+	public static class GitIntegration {
+		private String githubClientId = "";
+		private String githubClientSecret = "";
+		private String gitlabClientId = "";
+		private String gitlabClientSecret = "";
+		private String bitbucketClientId = "";
+		private String bitbucketClientSecret = "";
+		/** Public base URL provider webhooks POST to, e.g. {@code https://…/api/v1/webhooks/git}. */
+		private String webhookBaseUrl = "";
+		/** Key used to encrypt stored provider access tokens at rest (>= 16 chars). */
+		private String tokenSecret = "change-me-change-me-change-me-git-tokens";
 	}
 
 	/**

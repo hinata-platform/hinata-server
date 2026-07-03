@@ -113,6 +113,15 @@ hinata:
     admin-username: ${HINATA_SETUP_ADMIN_USERNAME:}
     admin-password: ${HINATA_SETUP_ADMIN_PASSWORD:}
     admin-display-name: ${HINATA_SETUP_ADMIN_DISPLAY_NAME:}
+  git-integration:
+    github-client-id: ${HINATA_GIT_GITHUB_CLIENT_ID:}
+    github-client-secret: ${HINATA_GIT_GITHUB_CLIENT_SECRET:}
+    gitlab-client-id: ${HINATA_GIT_GITLAB_CLIENT_ID:}
+    gitlab-client-secret: ${HINATA_GIT_GITLAB_CLIENT_SECRET:}
+    bitbucket-client-id: ${HINATA_GIT_BITBUCKET_CLIENT_ID:}
+    bitbucket-client-secret: ${HINATA_GIT_BITBUCKET_CLIENT_SECRET:}
+    webhook-base-url: ${HINATA_GIT_WEBHOOK_BASE_URL:}
+    token-secret: ${HINATA_GIT_TOKEN_SECRET:change-me-change-me-change-me-git-tokens}
 
 springdoc:
   api-docs:

@@ -9,6 +9,10 @@ import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.git.GitDevInfo;
+import com.ahmadre.hinata.git.GitDevInfoRepository;
+import com.ahmadre.hinata.git.GitService;
+import com.ahmadre.hinata.git.TokenCipher;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueLink;
 import com.ahmadre.hinata.issue.IssueLinkRepository;
@@ -38,6 +42,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -45,6 +50,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -99,6 +105,9 @@ public class DemoSeeder {
 	private final ArticleRepository articleRepo;
 	private final SpaceRepository spaceRepo;
 	private final MongoTemplate mongo;
+	private final GitService gitService;
+	private final GitDevInfoRepository gitDevInfos;
+	private final TokenCipher tokenCipher;
 
 	private final Map<String, Long> counters = new LinkedHashMap<>();
 
@@ -157,6 +166,11 @@ public class DemoSeeder {
 		seedSideIssues(mob, amara, lena, mei, admin);
 		seedSideIssues(inf, jonas, tomas, admin, mei);
 
+		// Per-project Git integration: each project links to its OWN repo (mixed
+		// providers → exercises provider-adaptive PR/MR) with auto-linked branches,
+		// commits, pull/merge requests and builds on a spread of its issues.
+		seedGitIntegration(hin, mob, inf, admin, everyone);
+
 		// Give a slice of HIN issues real start/due dates (+ a dependency chain)
 		// so the Gantt / Timeline surface renders bars instead of an empty state.
 		scheduleTimeline(hin);
@@ -188,6 +202,7 @@ public class DemoSeeder {
 		mongo.dropCollection(Space.class);
 		mongo.dropCollection(Article.class);
 		mongo.dropCollection(WorkItem.class);
+		mongo.dropCollection(GitDevInfo.class);
 		mongo.dropCollection(IssueLink.class);
 		mongo.dropCollection(Issue.class);
 		mongo.dropCollection(Sprint.class);
@@ -509,6 +524,194 @@ public class DemoSeeder {
 
 	private Instant daysAgo(int days) {
 		return LocalDate.now().minusDays(days).atTime(14, 30).toInstant(ZoneOffset.UTC);
+	}
+
+	// ---- git integration ---------------------------------------------------
+
+	/**
+	 * Links each project to its <em>own</em> repository (mixed providers, so the
+	 * Development panel exercises both "PR" and "MR") and seeds auto-linked
+	 * branches / commits / pull-or-merge-requests / builds on a spread of each
+	 * project's issues. Automation is pre-enabled on the demo projects to show the
+	 * wiring; the remaining issues stay unlinked to exercise the empty state.
+	 */
+	private void seedGitIntegration(Project hin, Project mob, Project inf, User admin, List<User> everyone) {
+		// HIN → GitHub (OAuth): branch-created, PR-opened and PR-merged all wired.
+		Project hinGit = connectDemo(hin, "github", "hinata-platform", "hinata-app", "oauth",
+				userById(everyone, hin.getLeadId(), admin), 9, 2, true, true, true);
+		// MOB → GitLab (OAuth): shows "Merge request / MR" everywhere.
+		Project mobGit = connectDemo(mob, "gitlab", "hinata-platform", "hinata-mobile", "oauth",
+				userById(everyone, mob.getLeadId(), admin), 6, 11, true, true, true);
+		// INF → GitHub via URL + access token: only PR-merged automation enabled.
+		Project infGit = connectDemo(inf, "github", "hinata-platform", "hinata-infra", "token",
+				userById(everyone, inf.getLeadId(), admin), 3, 60, false, false, true);
+
+		seedDevInfoFor(hinGit, everyone);
+		seedDevInfoFor(mobGit, everyone);
+		seedDevInfoFor(infGit, everyone);
+	}
+
+	private Project connectDemo(Project project, String provider, String owner, String repo, String method,
+			User connectedBy, int connectedDaysAgo, int syncMinutesAgo,
+			boolean branchOn, boolean prOpenedOn, boolean prMergedOn) {
+		Project.Automation automation = gitService.defaultAutomation(project);
+		automation.getBranchCreated().setOn(branchOn);
+		automation.getPrOpened().setOn(prOpenedOn);
+		automation.getPrMerged().setOn(prMergedOn);
+		Instant now = Instant.now();
+		// Re-fetch so we don't write the stale in-memory issueCounter (0) back over
+		// the value bumped in the DB while seeding this project's issues.
+		Project fresh = projects.findById(project.getId()).orElse(project);
+		fresh.setGit(Project.Git.builder()
+				.id(Project.newId())
+				.provider(provider)
+				.owner(owner)
+				.repo(repo)
+				.defaultBranch("main")
+				.connectedBy(connectedBy.getId())
+				.connectedAt(now.minus(Duration.ofDays(connectedDaysAgo)))
+				.lastSyncAt(now.minus(Duration.ofMinutes(syncMinutesAgo)))
+				.method(method)
+				.branchTemplate("{key}-{summary}")
+				.automation(automation)
+				.encryptedToken(tokenCipher.encrypt(provider + "-demo-token-" + project.getKey()))
+				.build());
+		return projects.save(fresh);
+	}
+
+	private void seedDevInfoFor(Project project, List<User> people) {
+		boolean gitlab = "gitlab".equals(project.getGit().getProvider());
+		List<Issue> pool = issues
+				.findByProjectId(project.getId(), PageRequest.of(0, 40, Sort.by("numberInProject")))
+				.getContent().stream()
+				.filter(i -> i.getType() != Issue.Type.EPIC && i.getType() != Issue.Type.SUBTASK)
+				.limit(3)
+				.toList();
+		Instant now = Instant.now();
+		for (int idx = 0; idx < pool.size(); idx++) {
+			Issue issue = pool.get(idx);
+			String key = issue.getReadableId();
+			String branchName = key + "-" + gitSlug(issue.getTitle());
+			String authorId = primaryUser(issue, people);
+			// idx 0 → open PR, 1 → draft PR, 2 → merged PR (with fewer categories).
+			String prState = switch (idx) {
+				case 0 -> "OPEN";
+				case 1 -> "DRAFT";
+				default -> "MERGED";
+			};
+			String checks = idx == 1 ? "failing" : "passing";
+
+			List<GitDevInfo.Commit> commits = new ArrayList<>();
+			commits.add(GitDevInfo.Commit.builder()
+					.sha(fakeSha(key, 1)).message(key + " " + issue.getTitle())
+					.authorId(authorId).at(now.minus(Duration.ofHours(2))).additions(142).deletions(38)
+					.verified(true).build());
+			if (idx <= 1) {
+				commits.add(GitDevInfo.Commit.builder()
+						.sha(fakeSha(key, 2)).message(key + " Add regression coverage and tidy edge cases")
+						.authorId(authorId).at(now.minus(Duration.ofHours(6))).additions(64).deletions(12)
+						.verified(true).build());
+			}
+			if (idx == 0 && project.getGit().getAutomation().isSmartCommits()) {
+				// A real smart-commit message — parsed by SmartCommitParser / applied by
+				// GitService.applySmartCommits on a push webhook (see §5).
+				commits.add(GitDevInfo.Commit.builder()
+						.sha(fakeSha(key, 3))
+						.message(key + " #time 2h 30m #comment Verified against the design redline")
+						.authorId(authorId).at(now.minus(Duration.ofHours(9))).additions(22).deletions(9)
+						.verified(false).build());
+			}
+
+			GitDevInfo.PullRequest pr = GitDevInfo.PullRequest.builder()
+					.number((gitlab ? 50 : 120) + idx)
+					.title(key + " " + issue.getTitle())
+					.state(prState)
+					.authorId(authorId)
+					.reviewerIds(pickReviewers(authorId, people, idx == 1 ? 0 : (idx == 2 ? 1 : 2)))
+					.approvals(idx == 2 ? 2 : (idx == 0 ? 1 : 0))
+					.changesRequested(0)
+					.comments(idx + 2)
+					.sourceBranch(branchName).targetBranch("main")
+					.at(now.minus(Duration.ofHours(1L + idx)))
+					.checks(checks)
+					.build();
+
+			List<GitDevInfo.Branch> branches = new ArrayList<>();
+			List<GitDevInfo.Build> builds = new ArrayList<>();
+			if (idx <= 1) {
+				branches.add(GitDevInfo.Branch.builder()
+						.name(branchName).base("main")
+						.ahead(idx == 0 ? 6 : 3).behind(idx == 0 ? 2 : 0)
+						.updatedAt(now.minus(Duration.ofHours(2L + idx))).authorId(authorId).build());
+				builds.add(GitDevInfo.Build.builder()
+						.name(gitlab ? "pipeline · test" : "CI · build & test")
+						.workflow(gitlab ? ".gitlab-ci.yml" : "ci.yml")
+						.branch(branchName)
+						.status(checks)
+						.duration(idx == 1 ? "3m 09s" : "2m 41s")
+						.at(now.minus(Duration.ofHours(1L + idx))).build());
+			}
+
+			gitDevInfos.save(GitDevInfo.builder()
+					.issueKey(key)
+					.projectId(project.getId())
+					.branches(branches)
+					.commits(commits)
+					.prs(new ArrayList<>(List.of(pr)))
+					.builds(builds)
+					.updatedAt(now)
+					.build());
+		}
+	}
+
+	private static String primaryUser(Issue issue, List<User> people) {
+		if (issue.getAssigneeId() != null) {
+			return issue.getAssigneeId();
+		}
+		if (issue.getReporterId() != null) {
+			return issue.getReporterId();
+		}
+		return people.get(0).getId();
+	}
+
+	private static List<String> pickReviewers(String authorId, List<User> people, int count) {
+		List<String> reviewers = new ArrayList<>();
+		for (User u : people) {
+			if (reviewers.size() >= count) {
+				break;
+			}
+			if (!u.getId().equals(authorId)) {
+				reviewers.add(u.getId());
+			}
+		}
+		return reviewers;
+	}
+
+	private static User userById(List<User> people, String id, User fallback) {
+		return people.stream().filter(u -> u.getId().equals(id)).findFirst().orElse(fallback);
+	}
+
+	/** Branch-name slug: lowercase, non-alphanumerics → '-', first five words. */
+	private static String gitSlug(String title) {
+		String cleaned = title.toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("^-+|-+$", "");
+		String[] words = cleaned.split("-");
+		StringBuilder slug = new StringBuilder();
+		for (int i = 0; i < words.length && i < 5; i++) {
+			if (slug.length() > 0) {
+				slug.append('-');
+			}
+			slug.append(words[i]);
+		}
+		return slug.toString();
+	}
+
+	/** Deterministic, sha-like 7-char hex for a seeded commit. */
+	private static String fakeSha(String key, int n) {
+		String hex = Integer.toHexString((key + ":" + n).hashCode() & 0x0fffffff);
+		while (hex.length() < 7) {
+			hex = "0" + hex;
+		}
+		return hex.substring(0, 7);
 	}
 
 	// ---- security audit log ------------------------------------------------
