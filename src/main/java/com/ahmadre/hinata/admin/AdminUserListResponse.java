@@ -16,6 +16,6 @@ public record AdminUserListResponse(
 
 	/** Global tallies across all users, mirroring the board's KPI strip. */
 	public record Counts(long total, long admins, long active, long invited,
-			long expiredInvites, long disabled, long activeAdmins) {
+			long expiredInvites, long disabled, long activeAdmins, long pendingApproval) {
 	}
 }

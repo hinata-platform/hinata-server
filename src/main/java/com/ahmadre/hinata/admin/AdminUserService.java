@@ -91,11 +91,13 @@ public class AdminUserService {
 		long active = all.stream().filter(u -> u.isActive() && !u.isInvitePending()).count();
 		long invited = all.stream().filter(User::isInvitePending).count();
 		long expired = all.stream().filter(this::inviteExpired).count();
-		long disabled = all.stream().filter(u -> !u.isActive() && !u.isInvitePending()).count();
+		long pending = all.stream().filter(User::isPendingApproval).count();
+		long disabled = all.stream()
+				.filter(u -> !u.isActive() && !u.isInvitePending() && !u.isPendingApproval()).count();
 		long activeAdmins = all.stream()
 				.filter(u -> u.isAdmin() && u.isActive() && !u.isInvitePending()).count();
 		return new AdminUserListResponse.Counts(total, admins, active, invited, expired,
-				disabled, activeAdmins);
+				disabled, activeAdmins, pending);
 	}
 
 	private boolean inviteExpired(User u) {
@@ -230,6 +232,24 @@ public class AdminUserService {
 		}
 	}
 
+	/**
+	 * Approves verified self-registrations that are waiting for admin sign-off
+	 * (the {@code requireAdminApproval} flow): activates the account, clears the
+	 * pending flag and notifies the user their account is live.
+	 */
+	public void approve(List<String> ids) {
+		for (String id : ids) {
+			User u = userService.get(id);
+			if (!u.isPendingApproval()) continue;
+			u.setAwaitingApproval(false);
+			u.setActive(true);
+			if (u.getJoinedAt() == null) u.setJoinedAt(Instant.now());
+			User saved = users.save(u);
+			notifications.notifyAccountActivated(saved);
+			audit.event(AuditAction.USER_APPROVED).actor(actingAdmin()).target(saved).log();
+		}
+	}
+
 	public void setRole(List<String> ids, String role) {
 		boolean admin = "ADMIN".equalsIgnoreCase(role);
 		for (String id : ids) {
@@ -308,6 +328,11 @@ public class AdminUserService {
 
 	// --- Mapping / helpers ---------------------------------------------------
 
+	/** Single-user projection for the admin board (e.g. an approval deep-link). */
+	public AdminUserResponse getOne(String id) {
+		return toResponse(userService.get(id));
+	}
+
 	public AdminUserResponse toResponse(User u) {
 		List<RefreshSession> ss = sessions.list(u.getId());
 		return new AdminUserResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
@@ -322,6 +347,7 @@ public class AdminUserService {
 
 	private String status(User u) {
 		if (u.isInvitePending()) return "INVITED";
+		if (u.isPendingApproval()) return "PENDING";
 		return u.isActive() ? "ACTIVE" : "DISABLED";
 	}
 

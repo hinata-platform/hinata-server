@@ -35,6 +35,7 @@ public class MetaController {
 
 	private final HinataProperties properties;
 	private final SettingsService settings;
+	private final com.ahmadre.hinata.auth.AuthPolicy authPolicy;
 
 	@Value("${hinata.version:1.0.0}")
 	private String serverVersion;
@@ -42,7 +43,8 @@ public class MetaController {
 	public record Meta(String serverVersion, String minAppVersion, String organizationName,
 			String logoUrl, boolean setupCompleted, String privacyPolicyUrl,
 			String iosStoreUrl, String androidStoreUrl, String macosStoreUrl,
-			Map<String, Boolean> featureFlags, UploadLimits uploadLimits) {
+			Map<String, Boolean> featureFlags, boolean localAuthEnabled,
+			boolean registrationEnabled, boolean adminApprovalRequired, UploadLimits uploadLimits) {
 	}
 
 	/** Attachment upload constraints so the client can validate before sending. */
@@ -72,6 +74,9 @@ public class MetaController {
 				firstNonBlank(app.getAndroidStoreUrl(), appDefaults.getAndroidStoreUrl()),
 				firstNonBlank(app.getMacosStoreUrl(), appDefaults.getMacosStoreUrl()),
 				featureFlags,
+				authPolicy.localAuthEnabled(),
+				authPolicy.registrationEnabled(),
+				authPolicy.requireAdminApproval(),
 				new UploadLimits(storage.getMaxUploadMb(), storage.getMaxFilesPerRequest(),
 						storage.getMaxRequestMb(), storage.getAllowedContentTypes()));
 	}

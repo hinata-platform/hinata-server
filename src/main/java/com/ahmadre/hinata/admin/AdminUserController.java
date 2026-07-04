@@ -50,6 +50,11 @@ public class AdminUserController {
 		return service.list(query, role, status, origin, sort, dir, page, perPage);
 	}
 
+	@GetMapping("/{id}")
+	public AdminUserResponse getOne(@PathVariable String id) {
+		return service.getOne(id);
+	}
+
 	// --- Create (local, with password) — kept for power/admin-settings use ----
 
 	public record CreateUserRequest(
@@ -112,6 +117,14 @@ public class AdminUserController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void role(@RequestBody @Valid RoleRequest request) {
 		service.setRole(request.ids(), request.role());
+	}
+
+	// --- Approvals ------------------------------------------------------------
+
+	@PostMapping("/approve")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void approve(@RequestBody @Valid IdsRequest request) {
+		service.approve(request.ids());
 	}
 
 	// --- Credentials / sessions ----------------------------------------------

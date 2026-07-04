@@ -89,6 +89,22 @@ public class User {
 
 	private Instant passwordChangedAt;
 
+	// --- Self-registration + email verification ------------------------------
+
+	/** BCrypt hash of the one-time email-verification token; never serialized. */
+	@JsonIgnore
+	private String emailVerificationTokenHash;
+
+	private Instant emailVerificationExpiresAt;
+
+	/**
+	 * Set for a self-registered user who has verified their email but still needs
+	 * an admin to approve them (only when the admin-approval flag is enabled).
+	 * The account stays {@link #active} == false until approved.
+	 */
+	@Builder.Default
+	private boolean awaitingApproval = false;
+
 	// --- Admin invite lifecycle ----------------------------------------------
 
 	/** When an admin invited this (still-pending) local account; null once joined. */
@@ -142,6 +158,11 @@ public class User {
 	/** A still-pending invitation: created by an admin but never accepted. */
 	public boolean isInvitePending() {
 		return invitedAt != null && joinedAt == null;
+	}
+
+	/** A verified self-registration awaiting an admin's approval. */
+	public boolean isPendingApproval() {
+		return awaitingApproval;
 	}
 
 	public int recoveryCodesRemaining() {

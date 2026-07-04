@@ -72,6 +72,18 @@ public class ServerSettings {
 		private String macosStoreUrl;
 		/** Optional client feature flags (name → enabled). */
 		private Map<String, Boolean> featureFlags = new LinkedHashMap<>();
+
+		// Nullable so a missing field on an existing document falls back to the
+		// env default (see AuthPolicy / MetaController) instead of defaulting false.
+
+		/** Master switch for local email/password auth (sign-in, sign-up, reset). */
+		private Boolean localAuthEnabled;
+
+		/** Whether the public self-registration (sign-up) flow is open. */
+		private Boolean registrationEnabled;
+
+		/** Require an admin to approve verified self-registrations before sign-in. */
+		private Boolean requireAdminApproval;
 	}
 
 	/** Outbound SMTP – used for all transactional e-mails. */

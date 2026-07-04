@@ -79,6 +79,34 @@ public class UserService {
 	}
 
 	/**
+	 * Creates a self-registered LOCAL account from the public sign-up flow. The
+	 * account is inactive and unverified until the user proves their email via the
+	 * verification link; {@code active}/{@code emailVerified} are flipped by
+	 * {@code RegistrationService} once verified (and, when required, approved).
+	 */
+	public User createSelfRegistered(String email, String username, String displayName,
+			String rawPassword) {
+		validatePassword(rawPassword);
+		if (users.existsByEmailIgnoreCase(email)) {
+			throw ApiException.conflict("error.user.emailInUse");
+		}
+		if (users.existsByUsernameIgnoreCase(username)) {
+			throw ApiException.conflict("error.user.usernameInUse");
+		}
+		return users.save(User.builder()
+				.email(email.toLowerCase(Locale.ROOT))
+				.username(username)
+				.displayName(displayName != null && !displayName.isBlank() ? displayName : username)
+				.passwordHash(passwordEncoder.encode(rawPassword))
+				.roles(new java.util.HashSet<>(Set.of(Role.MEMBER)))
+				.origin(User.Origin.LOCAL)
+				.active(false)
+				.emailVerified(false)
+				.awaitingApproval(false)
+				.build());
+	}
+
+	/**
 	 * Creates a still-pending, password-less LOCAL invite. The caller supplies the
 	 * already-hashed one-time token and its expiry; the account stays inactive until
 	 * the invitee accepts (see the public invite-accept flow).

@@ -54,6 +54,17 @@ public class AdminSettingsController {
 		if (app.getFeatureFlags() == null || app.getFeatureFlags().isEmpty()) {
 			app.setFeatureFlags(new java.util.LinkedHashMap<>(defaults.getFeatureFlags()));
 		}
+		// Surface the effective auth toggles so the switches reflect the value
+		// currently in force (env default until an admin overrides it).
+		if (app.getLocalAuthEnabled() == null) {
+			app.setLocalAuthEnabled(defaults.isLocalAuthEnabled());
+		}
+		if (app.getRegistrationEnabled() == null) {
+			app.setRegistrationEnabled(defaults.isRegistrationEnabled());
+		}
+		if (app.getRequireAdminApproval() == null) {
+			app.setRequireAdminApproval(defaults.isRequireAdminApproval());
+		}
 		prefillGitIntegration(current);
 		return current;
 	}

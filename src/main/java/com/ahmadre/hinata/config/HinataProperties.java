@@ -239,6 +239,22 @@ public class HinataProperties {
 		/** Deep link scheme the app registers for SSO callbacks. */
 		private String callbackScheme = "hinata";
 		private Map<String, Boolean> featureFlags = Map.of();
+
+		/**
+		 * Master switch for local (email/password) authentication. When false, local
+		 * sign-in, self-registration and forgot-password are all disabled and users
+		 * must authenticate via SSO. Overridable at runtime in the admin settings.
+		 */
+		private boolean localAuthEnabled = true;
+
+		/** Whether the public self-registration (sign-up) flow is open. */
+		private boolean registrationEnabled = true;
+
+		/**
+		 * When true, a self-registered user who has verified their email still needs
+		 * an admin to approve them before they can sign in. Default off.
+		 */
+		private boolean requireAdminApproval = false;
 	}
 
 	@Getter

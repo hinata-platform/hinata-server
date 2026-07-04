@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${locale}">
+<head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#F2F1F8">
+  <div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F2F1F8;padding:32px">
+    <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #E7E5F0">
+      <div style="height:4px;background:#F5A623"></div>
+      <div style="padding:32px">
+        <div style="font-weight:800;font-size:18px;color:#2D2B55;letter-spacing:0.5px;margin-bottom:24px">Hinata</div>
+
+        <h1 style="color:#2D2B55;font-size:20px;margin:0 0 16px">
+          <span th:if="${locale == 'de'}">Neue Registrierung wartet auf Freigabe</span>
+          <span th:unless="${locale == 'de'}">A new registration awaits approval</span>
+        </h1>
+
+        <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0 0 12px">
+          <span th:if="${locale == 'de'}">Hallo <strong th:text="${displayName}">Admin</strong>,</span>
+          <span th:unless="${locale == 'de'}">Hi <strong th:text="${displayName}">Admin</strong>,</span>
+        </p>
+
+        <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0 0 20px">
+          <span th:if="${locale == 'de'}">eine neue Person hat sich registriert und ihre E-Mail-Adresse bestätigt. Sie benötigt deine Freigabe, um sich anmelden zu können.</span>
+          <span th:unless="${locale == 'de'}">a new person has registered and confirmed their email address. They need your approval before they can sign in.</span>
+        </p>
+
+        <div style="background:#F7F6FB;border:1px solid #EFEEF5;border-radius:16px;padding:16px 20px;margin:0 0 24px">
+          <div style="color:#2D2B55;font-size:15px;font-weight:600" th:text="${newUserName}">New User</div>
+          <div style="color:#6B6A85;font-size:13px" th:text="${newUserEmail}">new@example.com</div>
+        </div>
+
+        <p style="margin:0 0 24px">
+          <a th:href="${reviewUrl}"
+             style="display:inline-block;background:#2D2B55;color:#ffffff;padding:13px 26px;border-radius:24px;text-decoration:none;font-weight:600">
+            <span th:if="${locale == 'de'}">Registrierung prüfen</span>
+            <span th:unless="${locale == 'de'}">Review registration</span>
+          </a>
+        </p>
+
+        <p style="color:#9794AE;font-size:12px;line-height:1.6;margin:32px 0 0;border-top:1px solid #EFEEF5;padding-top:16px">
+          <span th:if="${locale == 'de'}">Diese Nachricht wurde automatisch von Hinata gesendet.</span>
+          <span th:unless="${locale == 'de'}">This is an automated message from Hinata.</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -49,5 +49,23 @@ public class UserSchemaMigration implements ApplicationRunner {
 			log.info("UserSchemaMigration: backfilled joinedAt on {} user document(s)",
 					result.getModifiedCount());
 		}
+
+		// Newly-added primitive boolean fields are absent on legacy documents; a
+		// missing value maps to null and Spring Data cannot bind null to a
+		// primitive constructor parameter (breaking EVERY typed User read, incl.
+		// login). Backfill each with its model default so old docs deserialize.
+		backfillBoolean(col, "awaitingApproval", false); // self-registration approval gate
+		backfillBoolean(col, "emailVerified", true);     // default: existing accounts are verified
+	}
+
+	/** Sets {@code field = value} on every document where it is currently absent. */
+	private void backfillBoolean(MongoCollection<Document> col, String field, boolean value) {
+		UpdateResult result = col.updateMany(
+				new Document(field, new Document("$exists", false)),
+				new Document("$set", new Document(field, value)));
+		if (result.getModifiedCount() > 0) {
+			log.info("UserSchemaMigration: backfilled {}={} on {} user document(s)",
+					field, value, result.getModifiedCount());
+		}
 	}
 }

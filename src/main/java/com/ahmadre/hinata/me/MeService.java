@@ -53,6 +53,7 @@ public class MeService {
 	private final com.ahmadre.hinata.notification.GatewayService gateway;
 	private final AuditService audit;
 	private final com.ahmadre.hinata.auth.TokenService tokens;
+	private final com.ahmadre.hinata.auth.PasswordResetService passwordResetService;
 
 	/** How long the e-mailed data-export download link stays valid. */
 	private static final long EXPORT_TOKEN_TTL_SECONDS = 72 * 3600L;
@@ -120,16 +121,9 @@ public class MeService {
 	// --- Password reset -------------------------------------------------------
 
 	public void sendPasswordReset(User user) {
-		if (user.isSso()) {
-			throw ApiException.badRequest("error.me.passwordManagedByProvider");
-		}
-		String secret = randomToken();
-		user.setPasswordResetTokenHash(passwordEncoder.encode(secret));
-		user.setPasswordResetExpiresAt(Instant.now().plusSeconds(30L * 60));
-		users.save(user);
-		// Deep link straight to the in-app reset page (Flutter), no backend form.
-		accountMail.sendPasswordReset(user, gateway.relayLink("/reset-password", user.getId() + "." + secret));
-		audit.event(AuditAction.PASSWORD_RESET_REQUESTED).actor(user).log();
+		// Shared with the public forgot-password flow (mints token + emails the
+		// in-app reset deep link; no backend form). SSO accounts are rejected there.
+		passwordResetService.sendFor(user);
 	}
 
 	public void confirmPasswordReset(String token, String newPassword) {

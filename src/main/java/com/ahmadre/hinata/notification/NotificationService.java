@@ -283,6 +283,25 @@ public class NotificationService {
 				accountModel(user, null));
 	}
 
+	/**
+	 * In-app (bell) notice to each admin that a verified self-registration is
+	 * waiting for approval. The templated approval e-mail is sent separately by
+	 * {@code AuthMailService}, so this only persists the in-app notification (+push).
+	 */
+	public void notifyAdminsPendingApproval(java.util.Collection<User> admins, User newUser) {
+		for (User admin : admins) {
+			if (admin == null) continue;
+			String title = de(admin) ? "Registrierung wartet auf Freigabe"
+					: "Registration awaiting approval";
+			String body = (de(admin)
+					? "%s (%s) hat sich registriert und benötigt deine Freigabe."
+					: "%s (%s) registered and needs your approval.")
+					.formatted(newUser.getDisplayName(), newUser.getEmail());
+			persist(admin, Notification.Type.SYSTEM, title, body,
+					"/admin/users?user=" + newUser.getId());
+		}
+	}
+
 	private void persist(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());

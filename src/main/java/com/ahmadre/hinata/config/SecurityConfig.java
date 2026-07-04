@@ -191,6 +191,8 @@ public class SecurityConfig {
 						"/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/2fa",
 						"/api/v1/auth/sso/providers", "/api/v1/auth/sso/start/**",
 						"/api/v1/auth/invite/**", "/api/v1/auth/reset/**",
+						"/api/v1/auth/register", "/api/v1/auth/verify-email",
+						"/api/v1/auth/resend-verification",
 						"/api/v1/me/email-change/confirm", "/api/v1/me/password-reset/confirm",
 						"/api/v1/me/export.pdf",
 						"/api/v1/meta", "/api/v1/meta/logo",

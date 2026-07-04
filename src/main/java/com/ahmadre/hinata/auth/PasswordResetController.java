@@ -11,14 +11,18 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.Map;
 
 /**
  * Public password-reset JSON API. The reset email links straight to the Flutter
@@ -38,8 +42,23 @@ public class PasswordResetController {
 	private final AuthService authService;
 	private final SessionService sessions;
 	private final ClientIpResolver clientIpResolver;
+	private final PasswordResetService passwordResetService;
+
+	public record RequestReset(@NotBlank @Email String email) {
+	}
 
 	public record AcceptRequest(@NotBlank String token, @NotBlank String password) {
+	}
+
+	@Operation(summary = "Request a password-reset email (forgot password)")
+	@SecurityRequirements
+	@ResponseStatus(HttpStatus.ACCEPTED)
+	@PostMapping("/api/v1/auth/reset/request")
+	public Map<String, String> request(@RequestBody @Valid RequestReset body) {
+		// Always 202, whether or not the address maps to a usable local account,
+		// so the endpoint can't be used to probe which emails are registered.
+		passwordResetService.requestByEmail(body.email());
+		return Map.of("status", "reset_requested");
 	}
 
 	@Operation(summary = "Set a new password from a reset link and sign in")

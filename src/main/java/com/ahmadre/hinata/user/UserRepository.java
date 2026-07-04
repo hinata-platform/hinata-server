@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface UserRepository extends MongoRepository<User, String> {
@@ -21,6 +22,12 @@ public interface UserRepository extends MongoRepository<User, String> {
 
 	/** Active admins other than {@code id} – used to prevent locking out the last admin. */
 	long countByRolesContainingAndActiveIsTrueAndIdNot(Role role, String id);
+
+	/** Every active user holding {@code role} – used to notify admins of pending approvals. */
+	List<User> findByRolesContainingAndActiveIsTrue(Role role);
+
+	/** Self-registrations that have verified their email but await an admin's approval. */
+	long countByAwaitingApprovalIsTrue();
 
 	/**
 	 * Paginated directory type-ahead: active users whose name, username or title

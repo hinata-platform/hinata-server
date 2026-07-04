@@ -33,6 +33,7 @@ public class AuthService {
 	private final TotpService totp;
 	private final RecoveryCodeService recoveryCodes;
 	private final AuditService audit;
+	private final AuthPolicy authPolicy;
 	private final org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
 
 	public record LoginResult(User user, TokenService.TokenPair tokens) {
@@ -69,6 +70,20 @@ public class AuthService {
 					.ip(ip).userAgent(userAgent).meta("reason", "invalidCredentials").log();
 			return ApiException.unauthorized("error.auth.invalidCredentials");
 		});
+		// Self-registered locals: give a precise reason. Scoped to LOCAL origin so
+		// an SSO/LDAP account is never gated on email verification; and since
+		// emailVerified defaults true for invited/admin-created accounts, this only
+		// blocks a genuine unverified sign-up.
+		if (user.getOrigin() == User.Origin.LOCAL && !user.isEmailVerified()) {
+			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
+					.ip(ip).userAgent(userAgent).meta("reason", "emailNotVerified").log();
+			throw ApiException.forbidden("error.auth.emailNotVerified");
+		}
+		if (user.isAwaitingApproval()) {
+			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
+					.ip(ip).userAgent(userAgent).meta("reason", "pendingApproval").log();
+			throw ApiException.forbidden("error.auth.pendingApproval");
+		}
 		if (!user.isActive()) {
 			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
 					.ip(ip).userAgent(userAgent).meta("reason", "accountDeactivated").log();
@@ -119,6 +134,11 @@ public class AuthService {
 	}
 
 	private Optional<User> localLogin(String identifier, String password) {
+		// When local auth is disabled (SSO-only mode), skip password matching
+		// entirely; LDAP/OIDC/SAML sign-in stays available.
+		if (!authPolicy.localAuthEnabled()) {
+			return Optional.empty();
+		}
 		return users.findByEmailIgnoreCase(identifier)
 				.or(() -> users.findByUsernameIgnoreCase(identifier))
 				.filter(u -> u.getPasswordHash() != null
