@@ -12,6 +12,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -31,6 +32,9 @@ import java.time.Instant;
 @RestController
 @RequiredArgsConstructor
 public class InviteController {
+
+	/** Languages we ship email templates for; anything else keeps the default. */
+	private static final java.util.Set<String> SUPPORTED_LOCALES = java.util.Set.of("en", "de");
 
 	private final UserRepository users;
 	private final UserService userService;
@@ -60,6 +64,11 @@ public class InviteController {
 		User user = resolve(request.token());
 		userService.validatePassword(request.password());
 		user.setPasswordHash(passwordEncoder.encode(request.password()));
+		// Adopt the invitee's own device/browser language (sent as Accept-Language
+		// by the app on this first-open request) so account emails from now on are
+		// localized to them, rather than the "en" the invite was created with.
+		String lang = LocaleContextHolder.getLocale().getLanguage();
+		if (SUPPORTED_LOCALES.contains(lang)) user.setLocale(lang);
 		user.setJoinedAt(Instant.now());
 		user.setActive(true);
 		user.setEmailVerified(true);

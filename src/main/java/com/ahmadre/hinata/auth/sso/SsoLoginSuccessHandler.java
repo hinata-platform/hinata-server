@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticatedPrincipal;
@@ -40,6 +41,11 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 	@Override
 	public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
 			Authentication authentication) throws IOException {
+		// Success handlers run in the security filter chain, before the
+		// DispatcherServlet resolves the request locale — seed it from the
+		// browser's Accept-Language so a first-time SSO user is provisioned in
+		// their own language (see UserService#provisionSso).
+		LocaleContextHolder.setLocale(request.getLocale());
 		User user = provision(authentication);
 		com.ahmadre.hinata.me.RefreshSession session = sessions.start(user,
 				clientIpResolver.resolve(request), request.getHeader("User-Agent"));

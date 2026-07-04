@@ -3,6 +3,7 @@ package com.ahmadre.hinata.user;
 import com.ahmadre.hinata.common.ApiException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -100,15 +101,24 @@ public class UserService {
 				.build());
 	}
 
+	/** Languages we ship email templates for; anything else keeps the default. */
+	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de");
+
 	/** Find-or-create for accounts arriving via OIDC, SAML or LDAP. */
 	public User provisionSso(String email, String displayName, User.Origin origin) {
-		return users.findByEmailIgnoreCase(email).orElseGet(() -> users.save(User.builder()
-				.email(email.toLowerCase(Locale.ROOT))
-				.username(uniqueUsernameFrom(email))
-				.displayName(displayName != null && !displayName.isBlank() ? displayName : email)
-				.roles(Set.of(Role.MEMBER))
-				.origin(origin)
-				.build()));
+		return users.findByEmailIgnoreCase(email).orElseGet(() -> {
+			// New SSO users inherit the browser language from the login redirect
+			// (Accept-Language) so their emails are localized from the start.
+			User.UserBuilder builder = User.builder()
+					.email(email.toLowerCase(Locale.ROOT))
+					.username(uniqueUsernameFrom(email))
+					.displayName(displayName != null && !displayName.isBlank() ? displayName : email)
+					.roles(Set.of(Role.MEMBER))
+					.origin(origin);
+			String lang = LocaleContextHolder.getLocale().getLanguage();
+			if (SUPPORTED_LOCALES.contains(lang)) builder.locale(lang);
+			return users.save(builder.build());
+		});
 	}
 
 	public void changePassword(User user, String currentPassword, String newPassword) {
