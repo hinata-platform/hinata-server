@@ -63,8 +63,15 @@ public class DashboardController {
 	public record SprintMember(String userId, String displayName, String avatarUrl) {
 	}
 
-	/** Snapshot of the board's active sprint, or {@code null} when none runs. */
-	public record SprintSummary(String boardId, String sprintId, String name, String goal,
+	/**
+	 * Snapshot of the caller's active board for the dashboard hero.
+	 * {@code kind} is {@code SPRINT} (a running sprint on a SCRUM board) or
+	 * {@code KANBAN} (any board without an active sprint). Sprint-only fields
+	 * ({@code day}/{@code days}/{@code points}/{@code pointsTotal}) are {@code 0}
+	 * for Kanban; progress there is driven by issue completion. {@code null} only
+	 * when the caller has no board at all.
+	 */
+	public record BoardSummary(String kind, String boardId, String name, String goal,
 			int day, int days, int points, int pointsTotal, int issuesDone, int issuesTotal,
 			List<SprintMember> members) {
 	}
@@ -79,7 +86,7 @@ public class DashboardController {
 
 	public record DashboardData(List<Issue> todayTasks, ProjectCompletion completion,
 			List<RankEntry> ranking, List<TrackerDay> tracker, List<TrackerWeek> trackerMonth,
-			SprintSummary activeSprint, List<GitEvent> gitActivity) {
+			BoardSummary activeBoard, List<GitEvent> gitActivity) {
 	}
 
 	@GetMapping
@@ -93,7 +100,7 @@ public class DashboardController {
 				ranking(projectIds),
 				tracker(user),
 				trackerMonth(user),
-				activeSprint(visible, projectIds),
+				activeBoard(visible, projectIds),
 				gitActivity(projectIds));
 	}
 
@@ -181,28 +188,38 @@ public class DashboardController {
 	}
 
 	/**
-	 * The active sprint of the first accessible SCRUM board that has one, with
-	 * points/issue progress derived live from its issues and members inferred
-	 * from their assignees. Returns {@code null} when no sprint is running.
+	 * The caller's active board for the hero: a running sprint when a SCRUM board
+	 * has one, otherwise the first board as a Kanban overview (issue completion).
+	 * Returns {@code null} only when the caller has no board at all.
 	 */
-	private SprintSummary activeSprint(List<Project> visible, List<String> projectIds) {
+	private BoardSummary activeBoard(List<Project> visible, List<String> projectIds) {
 		if (projectIds.isEmpty()) {
 			return null;
 		}
-		List<AgileBoard> boards = mongo.find(Query.query(Criteria.where("projectIds").in(projectIds)
-				.and("activeSprintId").ne(null)), AgileBoard.class);
+		List<AgileBoard> boards = mongo.find(
+				Query.query(Criteria.where("projectIds").in(projectIds)), AgileBoard.class);
 		if (boards.isEmpty()) {
-			return null;
-		}
-		AgileBoard board = boards.get(0);
-		Sprint sprint = mongo.findById(board.getActiveSprintId(), Sprint.class);
-		if (sprint == null) {
 			return null;
 		}
 		Map<String, Set<String>> resolvedByProject = new HashMap<>();
 		for (Project p : visible) {
 			resolvedByProject.put(p.getId(), Set.copyOf(p.getResolvedStates()));
 		}
+		// Prefer a running sprint; fall back to a Kanban overview of the first board.
+		for (AgileBoard board : boards) {
+			if (board.getActiveSprintId() == null) {
+				continue;
+			}
+			Sprint sprint = mongo.findById(board.getActiveSprintId(), Sprint.class);
+			if (sprint != null) {
+				return sprintBoard(board, sprint, resolvedByProject);
+			}
+		}
+		return kanbanBoard(boards.get(0), projectIds, resolvedByProject);
+	}
+
+	private BoardSummary sprintBoard(AgileBoard board, Sprint sprint,
+			Map<String, Set<String>> resolvedByProject) {
 		List<Issue> inSprint = mongo.find(
 				Query.query(Criteria.where("sprintId").is(sprint.getId())), Issue.class);
 		int pointsTotal = 0;
@@ -229,14 +246,41 @@ public class DashboardController {
 			long elapsed = ChronoUnit.DAYS.between(sprint.getStartDate(), LocalDate.now()) + 1;
 			day = (int) Math.min(Math.max(elapsed, 1), days);
 		}
-		List<SprintMember> memberList = members.stream().limit(6)
+		return new BoardSummary("SPRINT", board.getId(), sprint.getName(), sprint.getGoal(),
+				day, days, points, pointsTotal, issuesDone, inSprint.size(), resolveMembers(members));
+	}
+
+	private BoardSummary kanbanBoard(AgileBoard board, List<String> visibleIds,
+			Map<String, Set<String>> resolvedByProject) {
+		List<String> boardProjects = board.getProjectIds().stream()
+				.filter(visibleIds::contains).toList();
+		if (boardProjects.isEmpty()) {
+			boardProjects = visibleIds;
+		}
+		List<Issue> onBoard = mongo.find(
+				Query.query(Criteria.where("projectId").in(boardProjects)), Issue.class);
+		int issuesDone = 0;
+		LinkedHashSet<String> members = new LinkedHashSet<>();
+		for (Issue issue : onBoard) {
+			if (resolvedByProject.getOrDefault(issue.getProjectId(), Set.of())
+					.contains(issue.getState())) {
+				issuesDone++;
+			}
+			if (issue.getAssigneeId() != null) {
+				members.add(issue.getAssigneeId());
+			}
+		}
+		return new BoardSummary("KANBAN", board.getId(), board.getName(), null,
+				0, 0, 0, 0, issuesDone, onBoard.size(), resolveMembers(members));
+	}
+
+	private List<SprintMember> resolveMembers(LinkedHashSet<String> memberIds) {
+		return memberIds.stream().limit(6)
 				.map(id -> users.findById(id)
 						.map(u -> new SprintMember(u.getId(), u.getDisplayName(), u.getAvatarUrl()))
 						.orElse(null))
 				.filter(java.util.Objects::nonNull)
 				.toList();
-		return new SprintSummary(board.getId(), sprint.getId(), sprint.getName(), sprint.getGoal(),
-				day, days, points, pointsTotal, issuesDone, inSprint.size(), memberList);
 	}
 
 	/** Recent commits, PRs, deploys and merges across the caller's repos, newest first. */
