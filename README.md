@@ -16,9 +16,15 @@
   <img alt="MongoDB" src="https://img.shields.io/badge/MongoDB-replica%20set-47A248?style=for-the-badge&logo=mongodb&logoColor=white">
   <img alt="Docker" src="https://img.shields.io/badge/Docker-compose-2496ED?style=for-the-badge&logo=docker&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/License-GPL%203.0-D9A032?style=for-the-badge&logo=gnu&logoColor=white">
+  <a href="https://hinata-platform.github.io"><img alt="Documentation" src="https://img.shields.io/badge/Documentation-hinata--platform.github.io-D9A032?style=for-the-badge&logo=readthedocs&logoColor=white"></a>
 </p>
 
 <p align="center">
+  <b>📖 Full documentation &amp; self-hosting guide: <a href="https://hinata-platform.github.io">hinata-platform.github.io</a></b> — bilingual (EN&nbsp;/&nbsp;DE)
+</p>
+
+<p align="center">
+  <a href="https://hinata-platform.github.io"><b>Docs</b></a> ·
   <a href="#-features">Features</a> ·
   <a href="#-security">Security</a> ·
   <a href="#-quick-start-production">Quick start</a> ·
