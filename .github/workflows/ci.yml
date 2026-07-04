@@ -54,28 +54,35 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    name: Redeploy asta (ASTASRV01)
+    name: Redeploy asta + bear (ASTASRV01)
     needs: docker
     # Only on a real push to main — never on tags or PRs (the self-hosted runner
     # has the host docker socket, so it must not run untrusted/fork code).
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, astasrv01]
     steps:
-      - name: Surgical redeploy of hinata-server
+      - name: Surgical redeploy of hinata-server (asta + bear)
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Pull the freshly-built image and recreate ONLY the server container
-          # (--no-deps keeps mongo1/mongo2/mongo-arbiter/minio online). Compose
-          # runs in a docker:cli sidecar against the host socket; the stack lives
-          # at /opt/stacks/hinata on ASTASRV01 and has all values inline (no .env).
-          docker run --rm \
-            -e GHCR_USER -e GHCR_TOKEN \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v /opt/stacks/hinata:/work -w /work \
-            docker:cli sh -euc '
-              echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-              docker compose -p hinata pull hinata-server
-              docker compose -p hinata up -d --no-deps --force-recreate hinata-server
-              docker logout ghcr.io'
+          # Both instances run the SAME ghcr server image (:latest) — the backend
+          # URL is runtime env, not baked — so each stack just pulls + recreates
+          # ONLY its server container (--no-deps keeps mongo1/mongo2/mongo-arbiter/
+          # minio online). Compose runs in a docker:cli sidecar against the host
+          # socket. Stack dirs on ASTASRV01:
+          #   asta -> /opt/stacks/hinata       (project "hinata",      inline values)
+          #   bear -> /opt/stacks/hinata-bear  (project "hinata-bear", loads its .env)
+          for STACK in hinata hinata-bear; do
+            echo "::group::redeploy $STACK (server)"
+            docker run --rm \
+              -e GHCR_USER -e GHCR_TOKEN -e STACK="$STACK" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "/opt/stacks/$STACK:/work" -w /work \
+              docker:cli sh -euc '
+                echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+                docker compose -p "$STACK" pull hinata-server
+                docker compose -p "$STACK" up -d --no-deps --force-recreate hinata-server
+                docker logout ghcr.io'
+            echo "::endgroup::"
+          done
