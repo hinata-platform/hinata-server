@@ -51,7 +51,16 @@ public enum AuditAction {
 	SETTINGS_CHANGED(CONFIGURATION, WARNING, true),
 
 	// --- Data / privacy ------------------------------------------------------
-	DATA_EXPORT_REQUESTED(DATA, NOTICE, true);
+	DATA_EXPORT_REQUESTED(DATA, NOTICE, true),
+
+	// --- Integration (Personal Access Tokens + MCP writes) -------------------
+	PAT_CREATED(INTEGRATION, NOTICE, true),
+	PAT_REVOKED(INTEGRATION, NOTICE, true),
+	MCP_ISSUE_CREATED(INTEGRATION, INFO, true),
+	MCP_ISSUE_UPDATED(INTEGRATION, INFO, true),
+	MCP_COMMENT_ADDED(INTEGRATION, INFO, true),
+	MCP_KB_CREATED(INTEGRATION, INFO, true),
+	MCP_WORK_LOGGED(INTEGRATION, INFO, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

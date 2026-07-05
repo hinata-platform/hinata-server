@@ -66,7 +66,28 @@ public class AdminSettingsController {
 			app.setRequireAdminApproval(defaults.isRequireAdminApproval());
 		}
 		prefillGitIntegration(current);
+		prefillMcp(current);
 		return current;
+	}
+
+	/**
+	 * Pre-fill the MCP overrides from the env defaults so the admin form shows the
+	 * currently-effective values (env default until an admin overrides them). MCP
+	 * has no secrets, so this is a plain env prefill — no keep-secret logic.
+	 */
+	private void prefillMcp(ServerSettings current) {
+		ServerSettings.Mcp mcp = current.getMcp();
+		if (mcp == null) {
+			mcp = new ServerSettings.Mcp();
+			current.setMcp(mcp);
+		}
+		HinataProperties.Mcp mcpDefaults = properties.getMcp();
+		if (mcp.getEnabled() == null) {
+			mcp.setEnabled(mcpDefaults.isEnabled());
+		}
+		if (mcp.getMaxPatsPerUser() == null) {
+			mcp.setMaxPatsPerUser(mcpDefaults.getMaxPatsPerUser());
+		}
 	}
 
 	/**

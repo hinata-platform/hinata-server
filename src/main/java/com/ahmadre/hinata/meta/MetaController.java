@@ -36,6 +36,7 @@ public class MetaController {
 	private final HinataProperties properties;
 	private final SettingsService settings;
 	private final com.ahmadre.hinata.auth.AuthPolicy authPolicy;
+	private final com.ahmadre.hinata.mcp.McpSettings mcpSettings;
 
 	@Value("${hinata.version:1.0.0}")
 	private String serverVersion;
@@ -60,9 +61,14 @@ public class MetaController {
 		ServerSettings.App app = current.getApp();
 		HinataProperties.App appDefaults = properties.getApp();
 		HinataProperties.Storage storage = properties.getStorage();
-		Map<String, Boolean> featureFlags = app.getFeatureFlags() != null && !app.getFeatureFlags().isEmpty()
+		Map<String, Boolean> baseFlags = app.getFeatureFlags() != null && !app.getFeatureFlags().isEmpty()
 				? app.getFeatureFlags()
 				: appDefaults.getFeatureFlags();
+		// Copy so we never mutate the shared DB/env source map, then surface the
+		// effective MCP toggle (admin DB override, else env default) as a flag the
+		// app uses to show/hide the Personal Access Token UI.
+		Map<String, Boolean> featureFlags = new java.util.LinkedHashMap<>(baseFlags);
+		featureFlags.put("mcp", mcpSettings.enabled());
 		return new Meta(
 				serverVersion,
 				firstNonBlank(app.getMinVersion(), appDefaults.getMinVersion()),

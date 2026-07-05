@@ -77,6 +77,7 @@ public class HinataProperties {
 	private Demo demo = new Demo();
 	private Gateway gateway = new Gateway();
 	private GitIntegration gitIntegration = new GitIntegration();
+	private Mcp mcp = new Mcp();
 
 	/**
 	 * Hinata Connect — the single central service every Hinata server uses for the
@@ -209,6 +210,13 @@ public class HinataProperties {
 		/** Requests per minute per client IP for authentication endpoints. */
 		@Min(3)
 		private int authPerMinute = 10;
+		/**
+		 * Requests per minute per client IP for the MCP endpoint. Kept on its own
+		 * budget so AI-client traffic can neither exhaust nor be exhausted by the
+		 * general API bucket.
+		 */
+		@Min(10)
+		private int mcpPerMinute = 120;
 		/** Failed logins per account before a temporary database-backed block. */
 		@Min(3)
 		private int maxLoginFailures = 5;
@@ -255,6 +263,28 @@ public class HinataProperties {
 		 * an admin to approve them before they can sign in. Default off.
 		 */
 		private boolean requireAdminApproval = false;
+	}
+
+	/**
+	 * MCP (Model Context Protocol) server. Exposes a curated set of read/write
+	 * tools to AI clients (Claude, Cursor, …), authenticated with scoped Personal
+	 * Access Tokens on the dedicated {@code /mcp} endpoint. These are the ENV
+	 * defaults; an admin can override {@code enabled}/{@code maxPatsPerUser} at
+	 * runtime via {@code ServerSettings} (DB-overrides-ENV, see {@code McpSettings}).
+	 */
+	@Getter
+	@Setter
+	public static class Mcp {
+		/** Feature master switch. Gates the /mcp transport, PAT UI and tools. */
+		private boolean enabled = true;
+		/** Advertised MCP server name (also {@code spring.ai.mcp.server.name}). */
+		private String serverName = "hinata";
+		/** Max active Personal Access Tokens a single user may hold. */
+		@Min(1)
+		private int maxPatsPerUser = 20;
+		/** Default PAT lifetime in days when none is given. {@code 0} ⇒ never expires. */
+		@Min(0)
+		private long defaultTokenTtlDays = 90;
 	}
 
 	@Getter

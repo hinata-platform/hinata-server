@@ -41,6 +41,7 @@ public class ServerSettings {
 	private Cas cas = new Cas();
 	private EmailIngest emailIngest = new EmailIngest();
 	private GitIntegration gitIntegration = new GitIntegration();
+	private Mcp mcp = new Mcp();
 	private Audit audit = new Audit();
 
 	@LastModifiedDate
@@ -233,6 +234,20 @@ public class ServerSettings {
 		@Transient
 		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
 		private boolean tokenSecretConfigured;
+	}
+
+	/**
+	 * MCP (Model Context Protocol) server overrides. Nullable wrapper types so a
+	 * blank/unset field falls back to the env-driven {@code hinata.mcp.*} defaults
+	 * (see {@link com.ahmadre.hinata.mcp.McpSettings}). {@code enabled} gates the
+	 * {@code /mcp} transport, the PAT UI feature flag and the exposed tools.
+	 */
+	@Data
+	public static class Mcp {
+		/** Master switch override; null ⇒ use the env default. */
+		private Boolean enabled;
+		/** Max active Personal Access Tokens per user override; null ⇒ env default. */
+		private Integer maxPatsPerUser;
 	}
 
 	/**

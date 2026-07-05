@@ -41,6 +41,23 @@ spring:
       # _MAX_REQUEST_MB) on top of these.
       max-file-size: ${HINATA_STORAGE_MAX_UPLOAD_MB:25}MB
       max-request-size: ${HINATA_STORAGE_MAX_REQUEST_MB:100}MB
+  # MCP (Model Context Protocol) server. Spring AI auto-configures a synchronous
+  # WebMVC Streamable-HTTP endpoint at /mcp; @McpTool/@McpResource/@McpPrompt beans
+  # are discovered by the annotation scanner. The endpoint is a normal filtered
+  # servlet request and is secured by the dedicated /mcp SecurityFilterChain
+  # (PAT or app-JWT bearer). SYNC keeps tool invocations on the request thread so
+  # the SecurityContext (and thus CurrentUser) is available inside the tools.
+  # HINATA_MCP_ENABLED is the single master switch shared with hinata.mcp.enabled.
+  ai:
+    mcp:
+      server:
+        enabled: ${HINATA_MCP_ENABLED:true}
+        name: ${HINATA_MCP_SERVER_NAME:hinata}
+        version: '@project.version@'
+        protocol: STREAMABLE
+        type: SYNC
+        annotation-scanner:
+          enabled: true
 
 server:
   port: ${HINATA_PORT:8080}
@@ -85,8 +102,19 @@ hinata:
     enabled: ${HINATA_RATE_LIMIT_ENABLED:true}
     api-per-minute: ${HINATA_RATE_LIMIT_API:300}
     auth-per-minute: ${HINATA_RATE_LIMIT_AUTH:10}
+    mcp-per-minute: ${HINATA_RATE_LIMIT_MCP:120}
     max-login-failures: ${HINATA_MAX_LOGIN_FAILURES:5}
     login-block-minutes: ${HINATA_LOGIN_BLOCK_MINUTES:15}
+  mcp:
+    # Master switch for the MCP feature (also gates the /mcp transport above and
+    # the `mcp` app feature flag). Personal Access Tokens are the Phase-1 auth.
+    enabled: ${HINATA_MCP_ENABLED:true}
+    server-name: ${HINATA_MCP_SERVER_NAME:hinata}
+    # Max active Personal Access Tokens a single user may hold.
+    max-pats-per-user: ${HINATA_MCP_MAX_PATS:20}
+    # Default lifetime (days) applied when a PAT is created without an explicit
+    # expiry. 0 ⇒ never expires.
+    default-token-ttl-days: ${HINATA_MCP_TOKEN_TTL_DAYS:90}
   cors:
     allowed-origins: ${HINATA_CORS_ALLOWED_ORIGINS:}
   security:

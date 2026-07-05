@@ -15,6 +15,13 @@ val bucket4jVersion = "8.10.1"
 val minioVersion = "8.6.0"
 val openpdfVersion = "2.0.3"
 val springdocScalarVersion = "3.0.3"
+// Spring AI provides the MCP (Model Context Protocol) server: it embeds the
+// official io.modelcontextprotocol Java SDK and auto-configures the WebMVC
+// Streamable-HTTP transport + @McpTool/@McpResource/@McpPrompt scanning. Spring
+// AI 2.0 requires Spring Boot 4.1 / Spring Framework 7 (our stack). Its artifacts
+// are NOT governed by the Spring Boot BOM, so its own BOM is imported below —
+// exactly the pattern already used for the Testcontainers BOM.
+val springAiVersion = "2.0.0"
 // Override the Bouncy Castle version pulled in transitively by
 // spring-security-saml2 / OpenSAML. The BOM pins 1.78.1, which is affected by a
 // covert timing channel (GHSA-p93r-85wp-75v3) and an LDAP injection
@@ -52,6 +59,12 @@ dependencies {
     annotationProcessor(platform(SpringBootPlugin.BOM_COORDINATES))
     testAnnotationProcessor(platform(SpringBootPlugin.BOM_COORDINATES))
 
+    // Spring AI BOM — governs the MCP server starter + the MCP Java SDK versions.
+    // Applied to the annotation-processor configs too so any generated config
+    // metadata resolves consistently (mirrors the Spring Boot BOM handling above).
+    implementation(platform("org.springframework.ai:spring-ai-bom:$springAiVersion"))
+    annotationProcessor(platform("org.springframework.ai:spring-ai-bom:$springAiVersion"))
+
     // Web / data / platform starters
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-data-mongodb")
@@ -80,6 +93,12 @@ dependencies {
 
     // API documentation: OpenAPI 3.1 spec + Scalar UI
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-scalar:$springdocScalarVersion")
+
+    // MCP (Model Context Protocol) server — synchronous WebMVC Streamable-HTTP
+    // transport. Auto-configures a RouterFunction served by the existing
+    // DispatcherServlet under /mcp, so requests pass through the Spring Security
+    // filter chain like any other endpoint. Version comes from the Spring AI BOM.
+    implementation("org.springframework.ai:spring-ai-starter-mcp-server-webmvc")
 
     // Lombok (compile-time only — excluded from the runtime/boot jar automatically)
     compileOnly("org.projectlombok:lombok")

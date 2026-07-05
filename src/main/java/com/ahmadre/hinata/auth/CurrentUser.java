@@ -2,6 +2,7 @@ package com.ahmadre.hinata.auth;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.me.SessionService;
+import com.ahmadre.hinata.pat.PatAuthenticationToken;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -10,7 +11,12 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 
-/** Resolves the authenticated {@link User} from the JWT in the security context. */
+/**
+ * Resolves the authenticated {@link User} from the security context. Handles both
+ * the interactive app JWT (with real-time session-revocation checks) and, on the
+ * {@code /mcp} endpoint only, a {@link PatAuthenticationToken} from a verified
+ * Personal Access Token.
+ */
 @Component
 @RequiredArgsConstructor
 public class CurrentUser {
@@ -30,6 +36,14 @@ public class CurrentUser {
 				throw ApiException.unauthorized("error.auth.sessionRevoked");
 			}
 			return users.findById(jwt.getToken().getSubject())
+					.filter(User::isActive)
+					.orElseThrow(() -> ApiException.unauthorized("error.auth.unknownUser"));
+		}
+		// Personal Access Token (MCP endpoint only). The token was already verified
+		// — not revoked, not expired — by PatAuthenticationFilter; resolve the owner
+		// and apply the same active-account gate as the JWT path.
+		if (authentication instanceof PatAuthenticationToken pat) {
+			return users.findById(pat.getUserId())
 					.filter(User::isActive)
 					.orElseThrow(() -> ApiException.unauthorized("error.auth.unknownUser"));
 		}

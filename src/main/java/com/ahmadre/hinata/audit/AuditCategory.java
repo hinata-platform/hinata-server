@@ -19,5 +19,11 @@ public enum AuditCategory {
 	CONFIGURATION,
 
 	/** Data access / export with privacy relevance (GDPR). */
-	DATA
+	DATA,
+
+	/**
+	 * External integrations acting on the workspace — Personal Access Token
+	 * lifecycle and writes performed by AI clients over the MCP endpoint.
+	 */
+	INTEGRATION
 }

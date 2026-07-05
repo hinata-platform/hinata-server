@@ -25,6 +25,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 	private final ClientIpResolver clientIpResolver;
 	private final Map<String, Bucket> apiBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> authBuckets = new ConcurrentHashMap<>();
+	private final Map<String, Bucket> mcpBuckets = new ConcurrentHashMap<>();
 
 	public RateLimitFilter(HinataProperties properties, ClientIpResolver clientIpResolver) {
 		this.properties = properties;
@@ -39,12 +40,20 @@ public class RateLimitFilter extends OncePerRequestFilter {
 			return;
 		}
 		String ip = clientIpResolver.resolve(request);
-		boolean isAuth = request.getRequestURI().startsWith("/api/v1/auth/");
-		Bucket bucket = isAuth
-				? authBuckets.computeIfAbsent(ip,
-						k -> newBucket(properties.getRateLimit().getAuthPerMinute()))
-				: apiBuckets.computeIfAbsent(ip,
-						k -> newBucket(properties.getRateLimit().getApiPerMinute()));
+		String uri = request.getRequestURI();
+		Bucket bucket;
+		if (uri.startsWith("/mcp")) {
+			bucket = mcpBuckets.computeIfAbsent(ip,
+					k -> newBucket(properties.getRateLimit().getMcpPerMinute()));
+		}
+		else if (uri.startsWith("/api/v1/auth/")) {
+			bucket = authBuckets.computeIfAbsent(ip,
+					k -> newBucket(properties.getRateLimit().getAuthPerMinute()));
+		}
+		else {
+			bucket = apiBuckets.computeIfAbsent(ip,
+					k -> newBucket(properties.getRateLimit().getApiPerMinute()));
+		}
 		if (bucket.tryConsume(1)) {
 			chain.doFilter(request, response);
 		}

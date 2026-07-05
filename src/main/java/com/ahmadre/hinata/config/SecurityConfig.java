@@ -163,8 +163,50 @@ public class SecurityConfig {
 		return http.build();
 	}
 
+	/**
+	 * Dedicated chain for the MCP endpoint. Sits ahead of the catch-all so that
+	 * Personal Access Token auth is confined to {@code /mcp} and can never grant
+	 * access to the regular REST API (where scopes are not enforced). Accepts a
+	 * PAT ({@code hn_pat_…}, handled by {@link PatAuthenticationFilter}) or a
+	 * normal app access-token JWT — both resolve to the same authenticated user,
+	 * so the existing service-layer ACLs apply unchanged inside the MCP tools.
+	 */
 	@Bean
 	@Order(2)
+	public SecurityFilterChain mcpFilterChain(HttpSecurity http,
+			RateLimitFilter rateLimitFilter,
+			com.ahmadre.hinata.pat.PatAuthenticationFilter patAuthenticationFilter,
+			McpBearerTokenResolver mcpBearerTokenResolver) throws Exception {
+		http
+			.securityMatcher("/mcp", "/mcp/**")
+			.csrf(csrf -> csrf.disable())
+			.cors(Customizer.withDefaults())
+			.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+			.requestCache(cache -> cache.disable())
+			.headers(headers -> headers
+				.httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000))
+				.contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'; frame-ancestors 'none'"))
+				.crossOriginResourcePolicy(corp -> corp
+					.policy(CrossOriginResourcePolicyHeaderWriter.CrossOriginResourcePolicy.SAME_ORIGIN))
+				.referrerPolicy(referrer -> referrer
+					.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)))
+			.authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+			.oauth2ResourceServer(oauth2 -> oauth2
+				.bearerTokenResolver(mcpBearerTokenResolver)
+				.jwt(jwt -> jwt
+					.decoder(accessTokenJwtDecoder())
+					.jwtAuthenticationConverter(jwtAuthenticationConverter())))
+			.exceptionHandling(handling -> handling
+				.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+			.addFilterBefore(rateLimitFilter,
+					org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class)
+			.addFilterBefore(patAuthenticationFilter,
+					org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class);
+		return http.build();
+	}
+
+	@Bean
+	@Order(3)
 	public SecurityFilterChain securityFilterChain(HttpSecurity http,
 			RateLimitFilter rateLimitFilter, SsoLoginSuccessHandler ssoSuccessHandler,
 			com.ahmadre.hinata.auth.sso.SsoLoginFailureHandler ssoFailureHandler,
