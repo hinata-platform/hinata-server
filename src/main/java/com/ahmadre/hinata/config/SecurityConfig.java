@@ -30,10 +30,15 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+
+import java.util.Arrays;
 import org.springframework.security.web.header.writers.CrossOriginResourcePolicyHeaderWriter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.client.RestTemplate;
@@ -167,9 +172,10 @@ public class SecurityConfig {
 	 * Dedicated chain for the MCP endpoint. Sits ahead of the catch-all so that
 	 * Personal Access Token auth is confined to {@code /mcp} and can never grant
 	 * access to the regular REST API (where scopes are not enforced). Accepts a
-	 * PAT ({@code hn_pat_…}, handled by {@link PatAuthenticationFilter}) or a
-	 * normal app access-token JWT — both resolve to the same authenticated user,
-	 * so the existing service-layer ACLs apply unchanged inside the MCP tools.
+	 * PAT ({@code hn_pat_…}, handled by {@link PatAuthenticationFilter}), a Phase-2
+	 * MCP OAuth access token ({@code type=mcp}, scoped) or a normal app
+	 * access-token JWT — all resolve to the same authenticated user, so the
+	 * existing service-layer ACLs apply unchanged inside the MCP tools.
 	 */
 	@Bean
 	@Order(2)
@@ -193,16 +199,114 @@ public class SecurityConfig {
 			.authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
 			.oauth2ResourceServer(oauth2 -> oauth2
 				.bearerTokenResolver(mcpBearerTokenResolver)
+				.authenticationEntryPoint(mcpAuthenticationEntryPoint())
 				.jwt(jwt -> jwt
-					.decoder(accessTokenJwtDecoder())
-					.jwtAuthenticationConverter(jwtAuthenticationConverter())))
+					.decoder(mcpResourceJwtDecoder())
+					.jwtAuthenticationConverter(mcpJwtAuthenticationConverter())))
 			.exceptionHandling(handling -> handling
-				.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+				.authenticationEntryPoint(mcpAuthenticationEntryPoint()))
 			.addFilterBefore(rateLimitFilter,
 					org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class)
 			.addFilterBefore(patAuthenticationFilter,
 					org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class);
 		return http.build();
+	}
+
+	/** This server's issuer identifier (its public base URL, no trailing slash). */
+	private String mcpIssuer() {
+		String base = properties.getBaseUrl();
+		return base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+	}
+
+	/** The canonical MCP resource URI that Phase-2 OAuth access tokens are bound to. */
+	private String mcpResource() {
+		return mcpIssuer() + "/mcp";
+	}
+
+	/**
+	 * Resource-server decoder for the {@code /mcp} chain: accepts an app access
+	 * token ({@code type=access}) or a Phase-2 MCP OAuth token ({@code type=mcp}),
+	 * enforces real-time session revocation for session-bearing tokens, and binds
+	 * MCP tokens to this server's resource audience (RFC 8707). Refresh tokens and
+	 * every other token type are rejected.
+	 */
+	private JwtDecoder mcpResourceJwtDecoder() {
+		NimbusJwtDecoder decoder =
+				NimbusJwtDecoder.withSecretKey(secretKey()).macAlgorithm(MacAlgorithm.HS512).build();
+		OAuth2Error typeError = new OAuth2Error("invalid_token",
+				"Only access or MCP tokens are accepted on /mcp", null);
+		OAuth2TokenValidator<Jwt> typeOk = jwt -> {
+			String type = jwt.getClaimAsString(TokenService.CLAIM_TYPE);
+			return (TokenService.TYPE_ACCESS.equals(type) || TokenService.TYPE_MCP.equals(type))
+					? OAuth2TokenValidatorResult.success()
+					: OAuth2TokenValidatorResult.failure(typeError);
+		};
+		OAuth2Error revoked = new OAuth2Error("invalid_token", "Session has been revoked", null);
+		OAuth2TokenValidator<Jwt> sessionAlive = jwt -> {
+			String sid = jwt.getClaimAsString(TokenService.CLAIM_SID);
+			return (sid == null || sessions.isActive(sid))
+					? OAuth2TokenValidatorResult.success()
+					: OAuth2TokenValidatorResult.failure(revoked);
+		};
+		OAuth2Error audienceError = new OAuth2Error("invalid_token",
+				"Token audience does not match the MCP resource", null);
+		String resource = mcpResource();
+		OAuth2TokenValidator<Jwt> audienceOk = jwt -> {
+			if (!TokenService.TYPE_MCP.equals(jwt.getClaimAsString(TokenService.CLAIM_TYPE))) {
+				return OAuth2TokenValidatorResult.success();
+			}
+			return (jwt.getAudience() != null && jwt.getAudience().contains(resource))
+					? OAuth2TokenValidatorResult.success()
+					: OAuth2TokenValidatorResult.failure(audienceError);
+		};
+		decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+				JwtValidators.createDefault(), typeOk, sessionAlive, audienceOk));
+		return decoder;
+	}
+
+	/**
+	 * Authority mapping for the {@code /mcp} chain: an MCP OAuth token's
+	 * space-delimited {@code scope} claim becomes {@code SCOPE_*} authorities (so
+	 * {@code ScopeGuard} enforces least privilege); an app access token keeps its
+	 * {@code ROLE_*} authorities (a full session that implies every scope).
+	 */
+	private JwtAuthenticationConverter mcpJwtAuthenticationConverter() {
+		JwtGrantedAuthoritiesConverter roles = new JwtGrantedAuthoritiesConverter();
+		roles.setAuthoritiesClaimName(TokenService.CLAIM_ROLES);
+		roles.setAuthorityPrefix("ROLE_");
+		JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+		converter.setJwtGrantedAuthoritiesConverter(jwt -> {
+			if (TokenService.TYPE_MCP.equals(jwt.getClaimAsString(TokenService.CLAIM_TYPE))) {
+				String scope = jwt.getClaimAsString(TokenService.CLAIM_SCOPE);
+				if (scope == null || scope.isBlank()) {
+					return List.of();
+				}
+				return Arrays.stream(scope.trim().split("\\s+"))
+						.filter(s -> !s.isBlank())
+						.map(s -> (GrantedAuthority) new SimpleGrantedAuthority("SCOPE_" + s))
+						.toList();
+			}
+			return roles.convert(jwt);
+		});
+		return converter;
+	}
+
+	/**
+	 * On a 401 at {@code /mcp}, advertise the RFC 9728 protected-resource metadata
+	 * URL via {@code WWW-Authenticate} so an OAuth-capable client (Claude) can
+	 * discover the authorization server and start the connect flow.
+	 */
+	private AuthenticationEntryPoint mcpAuthenticationEntryPoint() {
+		String base = properties.getBaseUrl();
+		if (base.endsWith("/")) {
+			base = base.substring(0, base.length() - 1);
+		}
+		String metadataUrl = base + "/.well-known/oauth-protected-resource";
+		return (request, response, authException) -> {
+			response.setHeader("WWW-Authenticate",
+					"Bearer resource_metadata=\"" + metadataUrl + "\"");
+			response.sendError(HttpStatus.UNAUTHORIZED.value());
+		};
 	}
 
 	@Bean
@@ -242,12 +346,28 @@ public class SecurityConfig {
 						"/api/v1/git/oauth/callback", "/api/v1/git/webhooks/**",
 						"/api/v1/setup/status", "/api/v1/setup",
 						"/actuator/health", "/actuator/health/**",
+						// MCP OAuth 2.1: discovery + protocol endpoints are public
+						// (security is PKCE + exact redirect + client auth). The
+						// consent endpoints under /api/v1/oauth/** stay authenticated.
+						"/.well-known/oauth-protected-resource",
+						"/.well-known/oauth-protected-resource/**",
+						"/.well-known/oauth-authorization-server",
+						"/oauth/register", "/oauth/authorize", "/oauth/token",
 						"/login/**", "/oauth2/**", "/saml2/**", "/error")
 				.permitAll()
 				.requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 				.requestMatchers("/actuator/**").hasRole("ADMIN")
 				.anyRequest().authenticated())
 			.oauth2ResourceServer(oauth2 -> oauth2
+				// RFC 9728: customize Spring Security's built-in metadata endpoint
+				// (/.well-known/oauth-protected-resource) so it advertises the /mcp
+				// resource and this server as its authorization server, letting an
+				// OAuth-capable AI client discover how to connect.
+				.protectedResourceMetadata(prm -> prm.protectedResourceMetadataCustomizer(metadata -> {
+					metadata.resource(mcpResource());
+					metadata.authorizationServer(mcpIssuer());
+					metadata.scopes(scopes -> scopes.addAll(com.ahmadre.hinata.pat.Scopes.ALL));
+				}))
 				.jwt(jwt -> jwt
 					.decoder(accessTokenJwtDecoder())
 					.jwtAuthenticationConverter(jwtAuthenticationConverter())))

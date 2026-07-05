@@ -60,7 +60,8 @@ public enum AuditAction {
 	MCP_ISSUE_UPDATED(INTEGRATION, INFO, true),
 	MCP_COMMENT_ADDED(INTEGRATION, INFO, true),
 	MCP_KB_CREATED(INTEGRATION, INFO, true),
-	MCP_WORK_LOGGED(INTEGRATION, INFO, true);
+	MCP_WORK_LOGGED(INTEGRATION, INFO, true),
+	MCP_OAUTH_AUTHORIZED(INTEGRATION, NOTICE, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

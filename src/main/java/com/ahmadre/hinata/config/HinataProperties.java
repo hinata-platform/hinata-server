@@ -285,6 +285,25 @@ public class HinataProperties {
 		/** Default PAT lifetime in days when none is given. {@code 0} ⇒ never expires. */
 		@Min(0)
 		private long defaultTokenTtlDays = 90;
+
+		/**
+		 * Phase-2 OAuth 2.1 authorization server for the MCP resource. When enabled,
+		 * this server advertises RFC 9728 / RFC 8414 metadata and runs the
+		 * authorization-code (PKCE) + refresh flows so AI clients can connect with a
+		 * one-click "Connect" button (no PAT paste). PATs keep working regardless.
+		 */
+		private boolean oauthEnabled = true;
+		/** Allow anonymous RFC 7591 Dynamic Client Registration (Claude needs it). */
+		private boolean dynamicClientRegistration = true;
+		/** MCP OAuth access-token lifetime (seconds). */
+		@Min(60)
+		private long accessTokenTtlSeconds = 3600;
+		/** Authorization-code lifetime (seconds) — single-use, kept short. */
+		@Min(30)
+		private long authCodeTtlSeconds = 120;
+		/** Refresh-token lifetime (days). */
+		@Min(1)
+		private long refreshTokenTtlDays = 30;
 	}
 
 	@Getter

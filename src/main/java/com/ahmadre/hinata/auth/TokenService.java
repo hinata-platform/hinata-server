@@ -12,6 +12,8 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.stream.Collectors;
 
 /** Issues short-lived access tokens and long-lived refresh tokens (HS512). */
@@ -27,6 +29,10 @@ public class TokenService {
 	public static final String TYPE_DOWNLOAD = "download";
 	public static final String CLAIM_PURPOSE = "purpose";
 	public static final String PURPOSE_DATA_EXPORT = "data-export";
+	/** An MCP OAuth 2.1 access token (Phase 2): scoped, session-less, audience-bound. */
+	public static final String TYPE_MCP = "mcp";
+	public static final String CLAIM_SCOPE = "scope";
+	public static final String CLAIM_CLIENT_ID = "client_id";
 
 	private final JwtEncoder encoder;
 	private final HinataProperties properties;
@@ -83,6 +89,29 @@ public class TokenService {
 				.expiresAt(now.plusSeconds(ttlSeconds))
 				.claim(CLAIM_TYPE, TYPE_DOWNLOAD)
 				.claim(CLAIM_PURPOSE, purpose)
+				.build();
+		return encoder.encode(JwtEncoderParameters.from(
+				JwsHeader.with(MacAlgorithm.HS512).build(), claims)).getTokenValue();
+	}
+
+	/**
+	 * Issues an MCP OAuth 2.1 access token: session-less (no {@code sid}), scoped
+	 * (space-delimited {@code scope} claim → {@code SCOPE_*} authorities on the
+	 * /mcp chain), and audience-bound to the MCP {@code resource} (RFC 8707). The
+	 * client never inspects it — it is validated by this same server.
+	 */
+	public String issueMcpAccessToken(String userId, String clientId,
+			Collection<String> scopes, String resource, long ttlSeconds) {
+		Instant now = Instant.now();
+		JwtClaimsSet claims = JwtClaimsSet.builder()
+				.issuer(properties.getBaseUrl())
+				.subject(userId)
+				.audience(List.of(resource))
+				.issuedAt(now)
+				.expiresAt(now.plusSeconds(ttlSeconds))
+				.claim(CLAIM_TYPE, TYPE_MCP)
+				.claim(CLAIM_SCOPE, String.join(" ", scopes))
+				.claim(CLAIM_CLIENT_ID, clientId)
 				.build();
 		return encoder.encode(JwtEncoderParameters.from(
 				JwsHeader.with(MacAlgorithm.HS512).build(), claims)).getTokenValue();
