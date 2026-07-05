@@ -20,9 +20,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
-      - name: Run tests
-        run: ./mvnw -B verify
+      # Validates the checked-in gradle-wrapper.jar against known-good checksums
+      # and provides dependency/build caching.
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build & test
+        run: ./gradlew build
 
   docker:
     name: Publish Docker image

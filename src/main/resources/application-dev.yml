@@ -1,7 +1,7 @@
 # ===== DEV profile =====
 # Local development: TLS-encrypted, X.509-authenticated MongoDB (standalone),
 # API docs enabled. Run ./deploy/x509/setup-dev.sh once to create the certs and
-# the $external user, then: SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run
+# the $external user, then: SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
 spring:
   mongodb:
     # X.509 client auth: no username/password; the client certificate identifies

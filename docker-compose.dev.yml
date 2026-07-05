@@ -1,6 +1,6 @@
 # Local development infrastructure only (run the server from your IDE):
 #   ./deploy/x509/setup-dev.sh          # generates certs + starts mongo + X.509 user
-#   SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run
+#   SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
 #
 # MongoDB runs standalone with requireTLS + --auth and accepts only X.509
 # clients (gold standard: TLS encryption + X.509 authentication). MinIO/Mailpit

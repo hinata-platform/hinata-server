@@ -111,11 +111,11 @@ in-app setup wizard (or set `HINATA_SETUP_AUTO_COMPLETE=true`).
 docker compose -f docker-compose.dev.yml up -d   # Mongo RS, Mailpit, MinIO
 HINATA_MONGODB_URI="mongodb://localhost:27017/hinata?replicaSet=rs0&directConnection=true" \
 HINATA_S3_ACCESS_KEY=hinata HINATA_S3_SECRET_KEY=hinata-dev-secret \
-./mvnw spring-boot:run
+./gradlew bootRun
 ```
 
 - 📬 Mailpit UI: <http://localhost:8025> · 🪣 MinIO console: <http://localhost:9001>
-- ✅ Run tests: `./mvnw verify`
+- ✅ Run tests: `./gradlew build`
 
 ---
 

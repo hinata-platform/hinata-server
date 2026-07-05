@@ -76,5 +76,5 @@ docker exec -i "$CID" mongosh --quiet \
 
 echo ""
 echo "== 4/4  Done. Start the server with the dev profile: =="
-echo "   SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run"
+echo "   SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun"
 echo "   (application-dev.yml already points at the TLS/X.509 connection)"
