@@ -28,7 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.WeekFields;
 import java.util.ArrayList;
@@ -238,8 +238,8 @@ public class DashboardController {
 		// issue due *later today* still counts — matching the client's calendar-day
 		// comparison. Using start-of-today with lte would drop same-day items whose
 		// due timestamp is past midnight.
-		Instant endOfToday = LocalDate.now().plusDays(1)
-				.atStartOfDay(ZoneId.systemDefault()).toInstant();
+		Instant endOfToday = LocalDate.now(ZoneOffset.UTC).plusDays(1)
+				.atStartOfDay(ZoneOffset.UTC).toInstant();
 		// "Assigned to me" matches primary or secondary assignee (legacy + new docs).
 		Criteria assignedToMe = new Criteria().orOperator(
 				Criteria.where("assigneeIds").is(user.getId()),
@@ -291,7 +291,7 @@ public class DashboardController {
 	}
 
 	private List<TrackerDay> tracker(User user) {
-		LocalDate today = LocalDate.now();
+		LocalDate today = LocalDate.now(ZoneOffset.UTC);
 		LocalDate from = today.minusDays(6);
 		List<WorkItem> items = mongo.find(Query.query(Criteria.where("userId").is(user.getId())
 				.and("date").gte(from).lte(today)), WorkItem.class);
@@ -307,7 +307,7 @@ public class DashboardController {
 
 	/** Focus minutes bucketed into the last five ISO weeks (Mon-anchored). */
 	private List<TrackerWeek> trackerMonth(User user) {
-		LocalDate today = LocalDate.now();
+		LocalDate today = LocalDate.now(ZoneOffset.UTC);
 		LocalDate from = today.minusWeeks(4).with(DayOfWeek.MONDAY);
 		List<WorkItem> items = mongo.find(Query.query(Criteria.where("userId").is(user.getId())
 				.and("date").gte(from).lte(today)), WorkItem.class);
@@ -394,7 +394,7 @@ public class DashboardController {
 		int day = 0;
 		if (sprint.getStartDate() != null && sprint.getEndDate() != null) {
 			days = (int) Math.max(1, ChronoUnit.DAYS.between(sprint.getStartDate(), sprint.getEndDate()));
-			long elapsed = ChronoUnit.DAYS.between(sprint.getStartDate(), LocalDate.now()) + 1;
+			long elapsed = ChronoUnit.DAYS.between(sprint.getStartDate(), LocalDate.now(ZoneOffset.UTC)) + 1;
 			day = (int) Math.min(Math.max(elapsed, 1), days);
 		}
 		return new BoardSummary("SPRINT", board.getId(), sprint.getName(), sprint.getGoal(),

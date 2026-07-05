@@ -151,7 +151,7 @@ public class DemoSeeder {
 
 		// --- scrum board + sprints for HIN ---------------------------------
 		AgileBoard board = board(hin, admin);
-		LocalDate today = LocalDate.now();
+		LocalDate today = LocalDate.now(ZoneOffset.UTC);
 		Sprint s22 = sprint(board, "Sprint 22", "Stabilize attachments & SSE sync",
 				today.minusDays(35), today.minusDays(21), 36, true);
 		Sprint s23 = sprint(board, "Sprint 23", "Teams, project access & search palette",
@@ -475,7 +475,7 @@ public class DemoSeeder {
 			String state, User assignee, Sprint sprint, int points, int estimate, int spent,
 			List<String> tags, Integer dueOffsetDays, int rank, String parentId) {
 		long number = counters.merge(p.getKey(), 1L, Long::sum);
-		LocalDate due = dueOffsetDays == null ? null : LocalDate.now().plusDays(dueOffsetDays);
+		LocalDate due = dueOffsetDays == null ? null : LocalDate.now(ZoneOffset.UTC).plusDays(dueOffsetDays);
 		Issue i = Issue.builder()
 				.projectId(p.getId())
 				.numberInProject(number)
@@ -523,7 +523,7 @@ public class DemoSeeder {
 	}
 
 	private Instant daysAgo(int days) {
-		return LocalDate.now().minusDays(days).atTime(14, 30).toInstant(ZoneOffset.UTC);
+		return LocalDate.now(ZoneOffset.UTC).minusDays(days).atTime(14, 30).toInstant(ZoneOffset.UTC);
 	}
 
 	// ---- git integration ---------------------------------------------------
@@ -794,7 +794,7 @@ public class DemoSeeder {
 	private void scheduleTimeline(Project p) {
 		List<Issue> list = mongo.find(Query.query(Criteria.where("projectId").is(p.getId()))
 				.with(Sort.by("numberInProject")).limit(12), Issue.class);
-		LocalDate base = LocalDate.now().minusDays(6);
+		LocalDate base = LocalDate.now(ZoneOffset.UTC).minusDays(6);
 		String prev = null;
 		int offset = 0;
 		for (Issue i : list) {
@@ -849,7 +849,7 @@ public class DemoSeeder {
 	private void seedTracker(User user, Project p) {
 		String issueId = issues.findByProjectId(p.getId(),
 				org.springframework.data.domain.PageRequest.of(0, 1)).getContent().get(0).getId();
-		LocalDate monday = LocalDate.now().with(java.time.DayOfWeek.MONDAY);
+		LocalDate monday = LocalDate.now(ZoneOffset.UTC).with(java.time.DayOfWeek.MONDAY);
 		int[] minutes = {255, 300, 210, 345, 270, 0, 0}; // Mon–Sun
 		String[] activities = {"Development", "Development", "Code Review", "Development",
 				"Testing", "Development", "Development"};

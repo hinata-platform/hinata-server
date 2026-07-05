@@ -58,7 +58,7 @@ public class ReportController {
 			@RequestParam(defaultValue = "30") int days) {
 		currentUser.require();
 		int range = Math.min(days, 180);
-		LocalDate today = LocalDate.now();
+		LocalDate today = LocalDate.now(ZoneOffset.UTC);
 		List<Issue> issues = mongo.find(
 				Query.query(Criteria.where("projectId").is(projectId)), Issue.class);
 		return today.minusDays(range - 1).datesUntil(today.plusDays(1))

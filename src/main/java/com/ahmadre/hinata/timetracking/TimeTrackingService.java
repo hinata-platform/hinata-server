@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -31,7 +32,7 @@ public class TimeTrackingService {
 		item.setIssueId(issue.getId());
 		item.setProjectId(issue.getProjectId());
 		if (item.getDate() == null) {
-			item.setDate(LocalDate.now());
+			item.setDate(LocalDate.now(ZoneOffset.UTC));
 		}
 		WorkItem saved = workItems.save(item);
 		syncSpentTime(issue);

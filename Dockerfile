@@ -12,6 +12,9 @@ RUN ./gradlew --no-daemon -x test clean bootJar
 
 # ---- Runtime stage ----
 FROM eclipse-temurin:21-jre-alpine
+# Run the container in UTC so timestamps are timezone-deterministic (the app also
+# pins the JVM default zone to UTC in code; this keeps OS-level tools aligned).
+ENV TZ=UTC
 RUN addgroup -S hinata && adduser -S hinata -G hinata
 USER hinata:hinata
 WORKDIR /app
