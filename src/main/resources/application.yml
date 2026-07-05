@@ -3,11 +3,11 @@ spring:
     name: hinata-server
   # All timestamps are serialized as ISO-8601 UTC (trailing 'Z'); clients localize
   # for display. Pinning the zone (rather than relying on the JVM default) keeps
-  # the API contract stable regardless of host/container timezone.
+  # the API contract stable regardless of host/container timezone. Jackson 3
+  # already defaults WRITE_DATES_AS_TIMESTAMPS to false, so java.time types
+  # serialize as ISO-8601 strings without any extra configuration.
   jackson:
     time-zone: UTC
-    serialization:
-      write-dates-as-timestamps: false
   # Localized error messages (messages.properties / messages_de.properties).
   # fallback-to-system-locale=false so unsupported languages use the English
   # default bundle rather than the server's OS locale.
