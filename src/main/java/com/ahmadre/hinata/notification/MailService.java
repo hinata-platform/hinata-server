@@ -30,7 +30,14 @@ public class MailService {
 
 	@Async
 	public void send(String to, String subject, String headline, String body, String link) {
-		dispatch(to, subject, html(headline, body, link));
+		dispatch(to, subject, html(headline, body, link, "Open in Hinata"));
+	}
+
+	/** As {@link #send}, with a localized call-to-action button label. */
+	@Async
+	public void send(String to, String subject, String headline, String body, String link,
+			String buttonLabel) {
+		dispatch(to, subject, html(headline, body, link, buttonLabel));
 	}
 
 	/**
@@ -89,13 +96,14 @@ public class MailService {
 	}
 
 	/** Minimal, accessible HTML template matching the Hinata design system. */
-	private String html(String headline, String body, String link) {
+	private String html(String headline, String body, String link, String buttonLabel) {
 		String safeHeadline = HtmlUtils.htmlEscape(headline);
 		String safeBody = HtmlUtils.htmlEscape(body);
 		String button = link != null
 				? "<p style=\"margin-top:24px\"><a href=\"" + HtmlUtils.htmlEscape(link)
 						+ "\" style=\"background:#2D2B55;color:#ffffff;padding:12px 24px;"
-						+ "border-radius:24px;text-decoration:none\">Open in Hinata</a></p>"
+						+ "border-radius:24px;text-decoration:none\">"
+						+ HtmlUtils.htmlEscape(buttonLabel) + "</a></p>"
 				: "";
 		return """
 				<div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F2F1F8;padding:32px">

@@ -39,12 +39,20 @@ public class NotificationService {
 		if (actor != null) recipients.remove(actor.getId());
 		if (recipients.isEmpty()) return;
 		deliver(recipients, Notification.Type.ISSUE_ASSIGNED,
-				issue.getReadableId() + " assigned to you", issue.getTitle(), issueLink(issue));
+				de -> de ? issue.getReadableId() + " dir zugewiesen"
+						: issue.getReadableId() + " assigned to you",
+				de -> issue.getTitle(), // user content — same in every language
+				issueLink(issue));
 	}
 
-	public void notifyIssueUpdated(Issue issue, User editor, String change) {
+	/** Notify the issue's watchers that its workflow state changed. */
+	public void notifyStateChanged(Issue issue, User editor, String newState) {
 		deliver(watchersWithout(issue, editor), Notification.Type.ISSUE_UPDATED,
-				issue.getReadableId() + " updated", change, issueLink(issue));
+				de -> de ? issue.getReadableId() + " aktualisiert"
+						: issue.getReadableId() + " updated",
+				de -> de ? "Status geändert zu \"" + newState + "\""
+						: "State changed to \"" + newState + "\"",
+				issueLink(issue));
 	}
 
 	/** Matches the inline mention token the editor emits: {@code {{user:<id>}}}. */
@@ -68,11 +76,15 @@ public class NotificationService {
 			// Lead with a teaser of the comment itself so the recipient can triage
 			// straight from the push/e-mail; fall back to the issue title when the
 			// comment has no readable text (e.g. attachment-only).
-			String body = preview.isBlank()
-					? author.getDisplayName() + " commented on \"" + issue.getTitle() + "\""
-					: author.getDisplayName() + " commented: \"" + preview + "\"";
 			deliver(watchers, Notification.Type.ISSUE_COMMENTED,
-					"New comment on " + issue.getReadableId(), body, issueLink(issue));
+					de -> de ? "Neuer Kommentar zu " + issue.getReadableId()
+							: "New comment on " + issue.getReadableId(),
+					de -> preview.isBlank()
+							? (de ? author.getDisplayName() + " hat \"" + issue.getTitle() + "\" kommentiert"
+									: author.getDisplayName() + " commented on \"" + issue.getTitle() + "\"")
+							: author.getDisplayName() + (de ? " kommentierte: \"" : " commented: \"")
+									+ preview + "\"",
+					issueLink(issue));
 		}
 	}
 
@@ -96,12 +108,16 @@ public class NotificationService {
 		Set<String> recipients = new HashSet<>(mentionedIds);
 		recipients.remove(actor.getId());
 		if (recipients.isEmpty()) return;
-		String body = (preview == null || preview.isBlank())
-				? actor.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\""
-				: actor.getDisplayName() + ": \"" + preview + "\"";
+		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(recipients, Notification.Type.MENTION,
-				actor.getDisplayName() + " mentioned you in " + issue.getReadableId(),
-				body, issueLink(issue));
+				de -> de
+						? actor.getDisplayName() + " hat dich in " + issue.getReadableId() + " erwähnt"
+						: actor.getDisplayName() + " mentioned you in " + issue.getReadableId(),
+				de -> hasPreview
+						? actor.getDisplayName() + ": \"" + preview + "\""
+						: (de ? actor.getDisplayName() + " hat dich zu \"" + issue.getTitle() + "\" erwähnt"
+								: actor.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\""),
+				issueLink(issue));
 	}
 
 	/**
@@ -220,7 +236,8 @@ public class NotificationService {
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
 		// In-app notifications keep the relative route; the e-mail button needs an
 		// absolute deep link to the frontend so it works from any mail client.
-		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, props.deepLink(link));
+		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, props.deepLink(link),
+				buttonLabel(de(user)));
 		push.sendToUser(user.getId(), title, body, link);
 	}
 
@@ -340,27 +357,47 @@ public class NotificationService {
 		return recipients;
 	}
 
-	private void deliver(Set<String> userIds, Notification.Type type, String title, String body,
+	/**
+	 * Fan-out to a set of recipients, localizing the title/body <em>per recipient</em>
+	 * from their persisted {@code User.locale} (watchers of one issue may each read a
+	 * different language). {@code title}/{@code body} receive {@code true} for German.
+	 */
+	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link) {
 		String eventId = eventId(type);
 		for (String userId : userIds) {
 			if (userId == null) continue;
 			users.findById(userId).filter(User::isActive).ifPresent(user -> {
+				boolean de = de(user);
+				String t = title.of(de);
+				String b = body.of(de);
 				// The in-app (bell) notification is always recorded; e-mail and push
 				// are gated by the recipient's per-event channel preferences.
 				notifications.save(Notification.builder()
-						.userId(user.getId()).type(type).title(title).body(body).link(link).build());
+						.userId(user.getId()).type(type).title(t).body(b).link(link).build());
 				NotificationPreferences prefs = prefsOf(user);
 				// In-app notifications keep the relative route; the e-mail button gets
 				// an absolute deep link to the issue on the frontend.
 				if (prefs.deliversEmail(eventId)) {
-					mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, props.deepLink(link));
+					mail.send(user.getEmail(), SUBJECT_PREFIX + t, t, b, props.deepLink(link),
+							buttonLabel(de));
 				}
 				if (prefs.deliversPush(eventId)) {
-					push.sendToUser(user.getId(), title, body, link);
+					push.sendToUser(user.getId(), t, b, link);
 				}
 			});
 		}
+	}
+
+	/** Produces a string in the recipient's language ({@code true} ⇒ German). */
+	@FunctionalInterface
+	private interface L10n {
+		String of(boolean de);
+	}
+
+	/** Localized label for the e-mail call-to-action button. */
+	private String buttonLabel(boolean de) {
+		return de ? "In Hinata öffnen" : "Open in Hinata";
 	}
 
 	/** Recipient's notification preferences, normalised (defaults for legacy users). */

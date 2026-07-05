@@ -71,8 +71,10 @@ public class MeController {
 	public record AccessProjectDto(String id, String key, String name, String color, String role) {
 	}
 
+	// Only en/de are actually translated (templates, e-mails, message bundles), so
+	// reject locales we can't serve rather than silently downgrading them to English.
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
-			@Size(max = 120) String title, @Pattern(regexp = "de|en|fr|es|ku") String locale) {
+			@Size(max = 120) String title, @Pattern(regexp = "de|en") String locale) {
 	}
 
 	public record EmailChangeRequest(@NotBlank @Email String newEmail) {

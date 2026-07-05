@@ -7,6 +7,9 @@ import com.ahmadre.hinata.git.GitDevInfo;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.team.Team;
+import com.ahmadre.hinata.team.TeamMembership;
+import com.ahmadre.hinata.team.TeamService;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -16,7 +19,10 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.DayOfWeek;
@@ -45,8 +51,19 @@ public class DashboardController {
 	private final UserRepository users;
 	private final MongoTemplate mongo;
 	private final CurrentUser currentUser;
+	private final TeamService teamService;
+	private final DashboardPrefsRepository prefsRepo;
 
 	public record ProjectCompletion(long done, long inProgress, long backlog, long total) {
+	}
+
+	/** A board the caller can pin to the dashboard hero (for the picker). */
+	public record BoardOption(String id, String name, String type) {
+	}
+
+	/** The caller's saved dashboard personalisation, echoed back for the UI. */
+	public record DashboardPrefsDto(String boardId, List<String> projectIds,
+			List<String> teamIds, List<String> hiddenCards) {
 	}
 
 	public record RankEntry(String userId, String displayName, String title, String avatarUrl,
@@ -86,25 +103,123 @@ public class DashboardController {
 
 	public record DashboardData(List<Issue> todayTasks, ProjectCompletion completion,
 			List<RankEntry> ranking, List<TrackerDay> tracker, List<TrackerWeek> trackerMonth,
-			BoardSummary activeBoard, List<GitEvent> gitActivity) {
+			BoardSummary activeBoard, List<GitEvent> gitActivity, List<BoardOption> boards,
+			DashboardPrefsDto prefs) {
 	}
 
+	/**
+	 * Aggregated dashboard. Query params (sent for live preview while the user is
+	 * in edit mode) override the saved personalisation; when absent, the caller's
+	 * persisted {@link DashboardPrefs} drive the scope and pinned hero board.
+	 *
+	 * @param projectIds scope for aggregated data; empty ⇒ all visible projects
+	 * @param teamIds    scope for the ranking; empty ⇒ all teams
+	 * @param boardId    pinned hero board; blank ⇒ auto-pick
+	 */
 	@GetMapping
-	public DashboardData dashboard() {
+	public DashboardData dashboard(
+			@RequestParam(required = false) String boardId,
+			@RequestParam(required = false) List<String> projectIds,
+			@RequestParam(required = false) List<String> teamIds) {
 		User user = currentUser.require();
-		List<Project> visible = projects.visibleTo(user);
-		List<String> projectIds = visible.stream().map(Project::getId).toList();
+		DashboardPrefs saved = prefsRepo.findById(user.getId()).orElse(null);
+		boolean preview = boardId != null || projectIds != null || teamIds != null;
+
+		String effBoardId = blankToNull(preview ? boardId : (saved != null ? saved.getBoardId() : null));
+		List<String> reqProjects = preview ? projectIds : (saved != null ? saved.getProjectIds() : null);
+		List<String> reqTeams = preview ? teamIds : (saved != null ? saved.getTeamIds() : null);
+
+		List<Project> allVisible = projects.visibleTo(user);
+		List<Project> visible = scopeProjects(allVisible, reqProjects);
+		List<String> scopedIds = visible.stream().map(Project::getId).toList();
+		Set<String> rankingUsers = teamMemberIds(user, reqTeams);
+
 		return new DashboardData(
-				todayTasks(user),
-				completion(visible, projectIds),
-				ranking(projectIds),
+				todayTasks(user, scopedIds),
+				completion(visible, scopedIds),
+				ranking(scopedIds, rankingUsers),
 				tracker(user),
 				trackerMonth(user),
-				activeBoard(visible, projectIds),
-				gitActivity(projectIds));
+				activeBoard(visible, scopedIds, effBoardId),
+				gitActivity(scopedIds),
+				boardOptions(allVisible),
+				toDto(saved));
 	}
 
-	private List<Issue> todayTasks(User user) {
+	/** Persist the caller's dashboard personalisation. */
+	@PutMapping("/prefs")
+	public DashboardPrefsDto savePrefs(@RequestBody DashboardPrefsDto body) {
+		User user = currentUser.require();
+		DashboardPrefs prefs = DashboardPrefs.builder()
+				.userId(user.getId())
+				.boardId(blankToNull(body.boardId()))
+				.projectIds(new ArrayList<>(body.projectIds() != null ? body.projectIds() : List.of()))
+				.teamIds(new ArrayList<>(body.teamIds() != null ? body.teamIds() : List.of()))
+				.hiddenCards(new ArrayList<>(body.hiddenCards() != null ? body.hiddenCards() : List.of()))
+				.build();
+		return toDto(prefsRepo.save(prefs));
+	}
+
+	private static DashboardPrefsDto toDto(DashboardPrefs p) {
+		if (p == null) {
+			return new DashboardPrefsDto(null, List.of(), List.of(), List.of());
+		}
+		return new DashboardPrefsDto(p.getBoardId(), p.getProjectIds(), p.getTeamIds(),
+				p.getHiddenCards());
+	}
+
+	private static String blankToNull(String s) {
+		return s == null || s.isBlank() ? null : s;
+	}
+
+	/** Narrow [all] visible projects to [requested] (by id); empty/null ⇒ all. */
+	private static List<Project> scopeProjects(List<Project> all, List<String> requested) {
+		if (requested == null || requested.isEmpty()) {
+			return all;
+		}
+		Set<String> wanted = Set.copyOf(requested);
+		List<Project> scoped = all.stream().filter(p -> wanted.contains(p.getId())).toList();
+		return scoped.isEmpty() ? all : scoped;
+	}
+
+	/**
+	 * The union of member ids across the requested (and caller-visible) teams, or
+	 * {@code null} when no team filter is requested (ranking spans everyone).
+	 */
+	private Set<String> teamMemberIds(User user, List<String> teamIds) {
+		if (teamIds == null || teamIds.isEmpty()) {
+			return null;
+		}
+		Set<String> visibleTeamIds = teamService.visibleTo(user).stream()
+				.map(Team::getId).collect(Collectors.toSet());
+		Set<String> wanted = teamIds.stream().filter(visibleTeamIds::contains)
+				.collect(Collectors.toSet());
+		if (wanted.isEmpty()) {
+			return Set.of();
+		}
+		return teamService.visibleTo(user).stream()
+				.filter(t -> wanted.contains(t.getId()))
+				.flatMap(t -> t.getMembers().stream())
+				.map(TeamMembership::getUserId)
+				.collect(Collectors.toSet());
+	}
+
+	/** All boards across the caller's visible projects, for the hero picker. */
+	private List<BoardOption> boardOptions(List<Project> visible) {
+		List<String> projectIds = visible.stream().map(Project::getId).toList();
+		if (projectIds.isEmpty()) {
+			return List.of();
+		}
+		return mongo.find(Query.query(Criteria.where("projectIds").in(projectIds)), AgileBoard.class)
+				.stream()
+				.map(b -> new BoardOption(b.getId(), b.getName(), b.getType().name()))
+				.toList();
+	}
+
+	private List<Issue> todayTasks(User user, List<String> projectIds) {
+		if (projectIds.isEmpty()) {
+			return List.of();
+		}
 		LocalDate today = LocalDate.now();
 		// "Assigned to me" matches primary or secondary assignee (legacy + new docs).
 		Criteria assignedToMe = new Criteria().orOperator(
@@ -115,6 +230,7 @@ public class DashboardController {
 				Criteria.where("priority").in("SHOWSTOPPER", "CRITICAL", "MAJOR"));
 		Query query = Query.query(new Criteria().andOperator(
 				assignedToMe,
+				Criteria.where("projectId").in(projectIds),
 				Criteria.where("resolvedAt").is(null),
 				urgent));
 		query.limit(12);
@@ -137,15 +253,20 @@ public class DashboardController {
 		return new ProjectCompletion(done, Math.max(0, total - done - backlog), backlog, total);
 	}
 
-	/** Resolved issues in the last 30 days, scored per assignee. */
-	private List<RankEntry> ranking(List<String> projectIds) {
-		if (projectIds.isEmpty()) {
+	/**
+	 * Resolved issues in the last 30 days, scored per assignee. When
+	 * {@code teamUsers} is non-null the ranking is restricted to those users
+	 * (the union of the selected teams' members); {@code null} spans everyone.
+	 */
+	private List<RankEntry> ranking(List<String> projectIds, Set<String> teamUsers) {
+		if (projectIds.isEmpty() || (teamUsers != null && teamUsers.isEmpty())) {
 			return List.of();
 		}
 		Instant since = Instant.now().minus(30, ChronoUnit.DAYS);
 		List<Issue> resolved = mongo.find(Query.query(Criteria.where("projectId").in(projectIds)
 				.and("resolvedAt").gte(since).and("assigneeId").ne(null)), Issue.class);
 		Map<String, Long> points = resolved.stream()
+				.filter(i -> teamUsers == null || teamUsers.contains(i.getAssigneeId()))
 				.collect(Collectors.groupingBy(Issue::getAssigneeId, Collectors.counting()));
 		List<RankEntry> entries = new ArrayList<>();
 		points.forEach((userId, count) -> users.findById(userId).ifPresent(u -> entries.add(
@@ -192,7 +313,8 @@ public class DashboardController {
 	 * has one, otherwise the first board as a Kanban overview (issue completion).
 	 * Returns {@code null} only when the caller has no board at all.
 	 */
-	private BoardSummary activeBoard(List<Project> visible, List<String> projectIds) {
+	private BoardSummary activeBoard(List<Project> visible, List<String> projectIds,
+			String pinnedBoardId) {
 		if (projectIds.isEmpty()) {
 			return null;
 		}
@@ -204,6 +326,20 @@ public class DashboardController {
 		Map<String, Set<String>> resolvedByProject = new HashMap<>();
 		for (Project p : visible) {
 			resolvedByProject.put(p.getId(), Set.copyOf(p.getResolvedStates()));
+		}
+		// A pinned board wins: show its sprint if one is running, else as Kanban.
+		if (pinnedBoardId != null) {
+			AgileBoard pinned = boards.stream()
+					.filter(b -> pinnedBoardId.equals(b.getId())).findFirst().orElse(null);
+			if (pinned != null) {
+				if (pinned.getActiveSprintId() != null) {
+					Sprint sprint = mongo.findById(pinned.getActiveSprintId(), Sprint.class);
+					if (sprint != null) {
+						return sprintBoard(pinned, sprint, resolvedByProject);
+					}
+				}
+				return kanbanBoard(pinned, projectIds, resolvedByProject);
+			}
 		}
 		// Prefer a running sprint; fall back to a Kanban overview of the first board.
 		for (AgileBoard board : boards) {

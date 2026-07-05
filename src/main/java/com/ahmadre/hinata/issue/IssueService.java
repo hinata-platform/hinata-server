@@ -184,8 +184,7 @@ public class IssueService {
 			notifications.notifyAssigned(saved, editor, newlyAssigned);
 		}
 		else if (!saved.getState().equals(previousState)) {
-			notifications.notifyIssueUpdated(saved, editor,
-					"State changed to \"" + saved.getState() + "\"");
+			notifications.notifyStateChanged(saved, editor, saved.getState());
 		}
 		return saved;
 	}
