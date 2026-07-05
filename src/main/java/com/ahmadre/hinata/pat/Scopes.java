@@ -24,15 +24,23 @@ public final class Scopes {
 	public static final String ISSUES_READ = "issues:read";
 	public static final String ISSUES_WRITE = "issues:write";
 	public static final String PROJECTS_READ = "projects:read";
+	public static final String BOARDS_READ = "boards:read";
+	public static final String SPRINTS_WRITE = "sprints:write";
+	public static final String TEAMS_READ = "teams:read";
+	public static final String USERS_READ = "users:read";
 	public static final String KB_READ = "kb:read";
 	public static final String KB_WRITE = "kb:write";
+	public static final String WORKLOG_READ = "worklog:read";
 	public static final String WORKLOG_WRITE = "worklog:write";
 	public static final String SEARCH_READ = "search:read";
+	public static final String NOTIFICATIONS_READ = "notifications:read";
 
 	/** Every scope a token may be granted. */
 	public static final Set<String> ALL = Set.of(
 			ISSUES_READ, ISSUES_WRITE, PROJECTS_READ,
-			KB_READ, KB_WRITE, WORKLOG_WRITE, SEARCH_READ);
+			BOARDS_READ, SPRINTS_WRITE, TEAMS_READ, USERS_READ,
+			KB_READ, KB_WRITE, WORKLOG_READ, WORKLOG_WRITE,
+			SEARCH_READ, NOTIFICATIONS_READ);
 
 	public static boolean isValid(String scope) {
 		return ALL.contains(scope);

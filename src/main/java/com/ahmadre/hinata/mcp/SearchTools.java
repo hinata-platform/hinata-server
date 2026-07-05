@@ -25,6 +25,7 @@ public class SearchTools {
 	private final SearchService searchService;
 
 	@McpTool(name = "search", title = "Global search",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
 			description = "Unified search across issues, projects, people, boards and knowledge "
 					+ "articles. Returns results grouped by category. scope is optional: 'all' "
 					+ "(default) or one of ISSUES, PROJECTS, PEOPLE, BOARDS, DOCS.")

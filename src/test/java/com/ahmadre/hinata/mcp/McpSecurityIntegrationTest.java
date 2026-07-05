@@ -288,4 +288,62 @@ class McpSecurityIntegrationTest {
 		JsonNode result = mcpBody(mcp(callRpc, pat, sessionId)).path("result");
 		assertThat(result.path("isError").asBoolean(false)).as("tool call not an error").isFalse();
 	}
+
+	@Test
+	@DisplayName("domain tools are registered, annotated read-only and scope-gated")
+	void domainToolsRegisteredAnnotatedAndScopeGated() {
+		String jwt = login();
+		// Deliberately WITHOUT teams:read — the scope gate must refuse list_teams.
+		String pat = createPat(jwt, "scoped client", "issues:read");
+
+		String init = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+				+ "\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},"
+				+ "\"clientInfo\":{\"name\":\"itest\",\"version\":\"1.0\"}}}";
+		HttpResponse<java.io.InputStream> initRes = mcp(init, pat, null);
+		assertThat(initRes.statusCode()).as("initialize").isEqualTo(200);
+		String sessionId = initRes.headers().firstValue("Mcp-Session-Id").orElse(null);
+		mcpBody(initRes);
+
+		// The expanded tool surface is registered.
+		String listRpc = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}";
+		JsonNode tools = mcpBody(mcp(listRpc, pat, sessionId)).path("result").path("tools");
+		String names = tools.toString();
+		assertThat(names)
+				.contains("list_boards").contains("list_sprints").contains("get_sprint_report")
+				.contains("create_sprint").contains("complete_sprint")
+				.contains("list_teams").contains("search_users").contains("get_me")
+				.contains("list_comments").contains("list_attachments").contains("get_dev_info")
+				.contains("list_kb_articles").contains("update_kb_article")
+				.contains("list_work_items").contains("my_timesheet")
+				.contains("list_my_notifications").contains("get_project_metrics");
+
+		// Read tools advertise readOnlyHint=true so clients can group them safely;
+		// delete tools stay destructive.
+		JsonNode searchIssues = null;
+		JsonNode deleteComment = null;
+		for (JsonNode tool : tools) {
+			if ("search_issues".equals(tool.path("name").asText())) searchIssues = tool;
+			if ("delete_comment".equals(tool.path("name").asText())) deleteComment = tool;
+		}
+		assertThat(searchIssues).as("search_issues registered").isNotNull();
+		assertThat(searchIssues.path("annotations").path("readOnlyHint").asBoolean(false))
+				.as("search_issues readOnlyHint").isTrue();
+		assertThat(deleteComment).as("delete_comment registered").isNotNull();
+		assertThat(deleteComment.path("annotations").path("readOnlyHint").asBoolean(false))
+				.as("delete_comment not read-only").isFalse();
+
+		// Scope gate: the PAT lacks teams:read, so list_teams must be refused …
+		String teamsRpc = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\","
+				+ "\"params\":{\"name\":\"list_teams\",\"arguments\":{}}}";
+		JsonNode refused = mcpBody(mcp(teamsRpc, pat, sessionId)).path("result");
+		assertThat(refused.path("isError").asBoolean(false)).as("missing scope refused").isTrue();
+
+		// … while a token holding the scope succeeds.
+		String teamsPat = createPat(jwt, "teams client", "teams:read");
+		HttpResponse<java.io.InputStream> initRes2 = mcp(init, teamsPat, null);
+		String sessionId2 = initRes2.headers().firstValue("Mcp-Session-Id").orElse(null);
+		mcpBody(initRes2);
+		JsonNode allowed = mcpBody(mcp(teamsRpc, teamsPat, sessionId2)).path("result");
+		assertThat(allowed.path("isError").asBoolean(false)).as("granted scope allowed").isFalse();
+	}
 }

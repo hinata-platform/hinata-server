@@ -1,8 +1,11 @@
 package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.git.GitService;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.mcp.McpViews.CommentView;
 import com.ahmadre.hinata.mcp.McpViews.IssueView;
 import com.ahmadre.hinata.mcp.McpViews.PageResult;
 import com.ahmadre.hinata.pat.Scopes;
@@ -13,6 +16,7 @@ import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -29,8 +33,10 @@ public class IssueReadTools {
 	private final ScopeGuard scopeGuard;
 	private final CurrentUser currentUser;
 	private final IssueService issueService;
+	private final GitService gitService;
 
 	@McpTool(name = "search_issues", title = "Search issues",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
 			description = "Search and filter issues the caller can access. All filters are "
 					+ "optional; results are paginated (newest first). projectId/state/"
 					+ "assigneeId/sprintId/type are exact matches, query is a free-text match "
@@ -53,6 +59,7 @@ public class IssueReadTools {
 	}
 
 	@McpTool(name = "list_my_issues", title = "List my issues",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
 			description = "List issues assigned to the current caller, paginated (newest first).")
 	public PageResult<IssueView> listMyIssues(
 			@McpToolParam(required = false, description = "Zero-based page index (default 0)") Integer page,
@@ -65,6 +72,7 @@ public class IssueReadTools {
 	}
 
 	@McpTool(name = "get_issue", title = "Get an issue",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
 			description = "Fetch a single issue by its canonical id or its readable id "
 					+ "(e.g. ASTA-42). Fails if the caller is not a member of the issue's project.")
 	public IssueView getIssue(
@@ -75,6 +83,7 @@ public class IssueReadTools {
 	}
 
 	@McpTool(name = "get_issue_hierarchy", title = "Get an issue's hierarchy",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
 			description = "Fetch an issue's breadcrumb ancestors (root -> immediate parent) "
 					+ "and its direct children, by id or readable id (e.g. ASTA-42).")
 	public HierarchyView getIssueHierarchy(
@@ -89,6 +98,55 @@ public class IssueReadTools {
 
 	/** Breadcrumb ancestors (root first) plus the direct children of an issue. */
 	public record HierarchyView(List<IssueView> ancestors, List<IssueView> children) {
+	}
+
+	@McpTool(name = "list_comments", title = "List comments",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
+			description = "List an issue's comments, paginated (newest first), by issue id or "
+					+ "readable id (e.g. ASTA-42).")
+	public PageResult<CommentView> listComments(
+			@McpToolParam(description = "Issue id or readable id (e.g. ASTA-42)") String idOrReadableId,
+			@McpToolParam(required = false, description = "Zero-based page index (default 0)") Integer page,
+			@McpToolParam(required = false, description = "Page size, max 100 (default 25)") Integer size) {
+		scopeGuard.require(Scopes.ISSUES_READ);
+		User user = currentUser.require();
+		Page<IssueComment> result = issueService.commentsOf(idOrReadableId, pageOr(page), sizeOr(size), user);
+		return PageResult.of(result, CommentView::of);
+	}
+
+	@McpTool(name = "list_attachments", title = "List attachments",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
+			description = "List the file attachments of an issue (metadata only — name, type, "
+					+ "size, uploader; files are downloaded through the app).")
+	public List<AttachmentView> listAttachments(
+			@McpToolParam(description = "Issue id or readable id (e.g. ASTA-42)") String idOrReadableId) {
+		scopeGuard.require(Scopes.ISSUES_READ);
+		User user = currentUser.require();
+		Issue issue = issueService.getForUser(idOrReadableId, user);
+		return issue.getAttachments().stream().map(AttachmentView::of).toList();
+	}
+
+	/** Attachment metadata without the internal storage object key. */
+	public record AttachmentView(String id, String fileName, String contentType, long size,
+			String uploaderId, Instant uploadedAt) {
+
+		static AttachmentView of(Issue.Attachment a) {
+			return new AttachmentView(a.getId(), a.getFileName(), a.getContentType(), a.getSize(),
+					a.getUploaderId(), a.getUploadedAt());
+		}
+	}
+
+	@McpTool(name = "get_dev_info", title = "Get an issue's development info",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
+			description = "Fetch the development panel of an issue — linked branches, commits, "
+					+ "pull/merge requests and CI builds from the project's connected repository. "
+					+ "Returns connected=false when the project has no repository connection.")
+	public GitService.DevInfoResponse getDevInfo(
+			@McpToolParam(description = "Issue id or readable id (e.g. ASTA-42)") String idOrReadableId) {
+		scopeGuard.require(Scopes.ISSUES_READ);
+		User user = currentUser.require();
+		Issue issue = issueService.getForUser(idOrReadableId, user);
+		return gitService.devInfo(issue.getReadableId(), user);
 	}
 
 	private static int pageOr(Integer page) {

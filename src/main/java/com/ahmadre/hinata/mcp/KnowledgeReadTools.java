@@ -39,6 +39,7 @@ public class KnowledgeReadTools {
 	private final TeamService teamService;
 
 	@McpTool(name = "read_kb_article", title = "Read a knowledge base article",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
 			description = "Fetch a knowledge base article's markdown content by id. Fails with "
 					+ "not-found if the caller has no access to the article's project or team.")
 	public ArticleView readKbArticle(
@@ -46,6 +47,53 @@ public class KnowledgeReadTools {
 		scopeGuard.require(Scopes.KB_READ);
 		User user = currentUser.require();
 		return ArticleView.of(requireVisible(id, user));
+	}
+
+	@McpTool(name = "list_kb_articles", title = "List knowledge base articles",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
+			description = "List the knowledge base articles visible to the caller (metadata only, "
+					+ "no content — use read_kb_article for the body). Optionally restrict to one "
+					+ "project or one space.")
+	public List<ArticleListItem> listKbArticles(
+			@McpToolParam(required = false, description = "Only articles of this project") String projectId,
+			@McpToolParam(required = false, description = "Only articles in this space (e.g. Engineering)") String space) {
+		scopeGuard.require(Scopes.KB_READ);
+		User user = currentUser.require();
+		// Precompute the caller's visibility once instead of per article.
+		Set<String> projectIds = projectService.visibleTo(user).stream()
+				.map(Project::getId).collect(Collectors.toSet());
+		Set<String> teamIds = teamService.visibleTo(user).stream()
+				.map(Team::getId).collect(Collectors.toSet());
+		List<Article> candidates = projectId != null
+				? articles.findByProjectIdOrderBySortOrderAsc(projectId)
+				: articles.findAllByOrderBySortOrderAsc();
+		return candidates.stream()
+				.filter(a -> space == null || space.equalsIgnoreCase(a.getSpace()))
+				.filter(a -> user.isAdmin() || canSee(a, projectIds, teamIds))
+				.map(ArticleListItem::of)
+				.toList();
+	}
+
+	private static boolean canSee(Article article, Set<String> projectIds, Set<String> teamIds) {
+		if (article.getProjectId() != null) {
+			return projectIds.contains(article.getProjectId());
+		}
+		if (article.getTeamId() != null) {
+			return teamIds.contains(article.getTeamId());
+		}
+		return true; // global / organisation-wide
+	}
+
+	/** Article metadata without the (potentially large) markdown body. */
+	public record ArticleListItem(String id, String title, String space, String icon,
+			String projectId, String teamId, String parentId, List<String> tags,
+			String authorId, Instant updatedAt) {
+
+		static ArticleListItem of(Article a) {
+			return new ArticleListItem(a.getId(), a.getTitle(), a.getSpace(), a.getIcon(),
+					a.getProjectId(), a.getTeamId(), a.getParentId(), a.getTags(),
+					a.getAuthorId(), a.getUpdatedAt());
+		}
 	}
 
 	/**

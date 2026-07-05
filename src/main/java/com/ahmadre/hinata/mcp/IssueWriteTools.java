@@ -33,6 +33,7 @@ public class IssueWriteTools {
 	private final AuditService audit;
 
 	@McpTool(name = "create_issue", title = "Create issue",
+			annotations = @McpTool.McpAnnotations(destructiveHint = false, openWorldHint = false),
 			description = "Create a new issue in a project. Requires the project id and a title; "
 					+ "all other fields are optional. Returns the created issue.")
 	public McpViews.IssueView create_issue(
@@ -75,6 +76,7 @@ public class IssueWriteTools {
 	}
 
 	@McpTool(name = "update_issue", title = "Update issue",
+			annotations = @McpTool.McpAnnotations(idempotentHint = true, openWorldHint = false),
 			description = "Update fields on an existing issue. Only the fields you pass are changed; "
 					+ "leaving a field unset means \"no change\". To clear a start date, due date or story "
 					+ "points, set the matching clear* flag to true (passing null never clears a value). "
@@ -138,6 +140,7 @@ public class IssueWriteTools {
 	}
 
 	@McpTool(name = "add_comment", title = "Add comment",
+			annotations = @McpTool.McpAnnotations(destructiveHint = false, openWorldHint = false),
 			description = "Add a comment to an issue. Returns the created comment.")
 	public McpViews.CommentView add_comment(
 			@McpToolParam(required = true, description = "Issue id or readable id (e.g. HIN-42)") String idOrReadableId,
@@ -148,5 +151,36 @@ public class IssueWriteTools {
 		audit.event(AuditAction.MCP_COMMENT_ADDED).actor(me)
 				.meta("issue", saved.getIssueId()).log();
 		return McpViews.CommentView.of(saved);
+	}
+
+	@McpTool(name = "edit_comment", title = "Edit comment",
+			annotations = @McpTool.McpAnnotations(idempotentHint = true, openWorldHint = false),
+			description = "Edit an existing comment on an issue. Only the comment's author may "
+					+ "edit it. Returns the updated comment.")
+	public McpViews.CommentView edit_comment(
+			@McpToolParam(required = true, description = "Issue id or readable id (e.g. HIN-42)") String idOrReadableId,
+			@McpToolParam(required = true, description = "Id of the comment to edit") String commentId,
+			@McpToolParam(required = true, description = "Replacement comment text (markdown)") String text) {
+		scopeGuard.require(Scopes.ISSUES_WRITE);
+		User me = currentUser.require();
+		IssueComment saved = issueService.editComment(idOrReadableId, commentId, text, me);
+		audit.event(AuditAction.MCP_COMMENT_EDITED).actor(me)
+				.meta("issue", saved.getIssueId()).meta("comment", saved.getId()).log();
+		return McpViews.CommentView.of(saved);
+	}
+
+	@McpTool(name = "delete_comment", title = "Delete comment",
+			annotations = @McpTool.McpAnnotations(destructiveHint = true, idempotentHint = true, openWorldHint = false),
+			description = "Delete a comment from an issue. Allowed for the comment's author "
+					+ "(or a platform admin). This cannot be undone.")
+	public String delete_comment(
+			@McpToolParam(required = true, description = "Issue id or readable id (e.g. HIN-42)") String idOrReadableId,
+			@McpToolParam(required = true, description = "Id of the comment to delete") String commentId) {
+		scopeGuard.require(Scopes.ISSUES_WRITE);
+		User me = currentUser.require();
+		issueService.deleteComment(idOrReadableId, commentId, me);
+		audit.event(AuditAction.MCP_COMMENT_DELETED).actor(me)
+				.meta("issue", idOrReadableId).meta("comment", commentId).log();
+		return "deleted";
 	}
 }
