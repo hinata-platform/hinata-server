@@ -42,7 +42,12 @@ import org.testcontainers.utility.DockerImageName;
 		"hinata.demo.seed=true",
 		"hinata.demo.reset=true",
 		// Rate limiter off so repeated logins in the suite aren't throttled.
-		"hinata.rate-limit.enabled=false"
+		"hinata.rate-limit.enabled=false",
+		// The built-in mail health indicator pings SMTP (spring.mail.host defaults
+		// to localhost:1025). No SMTP server exists in a clean CI environment, which
+		// would flip /actuator/health to DOWN. Mail reachability is not what this
+		// test verifies (prod runs real SMTP), so exclude it from the aggregate.
+		"management.health.mail.enabled=false"
 })
 @Testcontainers(disabledWithoutDocker = true)
 class ApiE2EIntegrationTest {
