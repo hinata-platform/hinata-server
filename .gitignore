@@ -3,6 +3,10 @@ HELP.md
 ### Gradle ###
 .gradle/
 
+# Obsolete Maven output — the project builds to build/ now, but the IDE's Java
+# tooling can still regenerate target/ until it finishes re-importing as Gradle.
+target/
+
 ### STS ###
 .apt_generated
 .classpath
