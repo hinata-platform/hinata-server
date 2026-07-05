@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.WeekFields;
 import java.util.ArrayList;
@@ -233,7 +234,12 @@ public class DashboardController {
 		if (projectIds.isEmpty()) {
 			return List.of();
 		}
-		LocalDate today = LocalDate.now();
+		// Compare against the exclusive start of tomorrow (end of today) so an
+		// issue due *later today* still counts — matching the client's calendar-day
+		// comparison. Using start-of-today with lte would drop same-day items whose
+		// due timestamp is past midnight.
+		Instant endOfToday = LocalDate.now().plusDays(1)
+				.atStartOfDay(ZoneId.systemDefault()).toInstant();
 		// "Assigned to me" matches primary or secondary assignee (legacy + new docs).
 		Criteria assignedToMe = new Criteria().orOperator(
 				Criteria.where("assigneeIds").is(user.getId()),
@@ -242,7 +248,7 @@ public class DashboardController {
 				assignedToMe,
 				Criteria.where("projectId").in(projectIds),
 				Criteria.where("resolvedAt").is(null),
-				Criteria.where("dueDate").lte(today)));
+				Criteria.where("dueDate").lt(endOfToday)));
 		return mongo.find(query, Issue.class).stream()
 				.sorted(Comparator.comparing(Issue::getPriority))
 				.toList();
