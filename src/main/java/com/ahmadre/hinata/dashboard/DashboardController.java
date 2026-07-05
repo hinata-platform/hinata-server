@@ -101,7 +101,7 @@ public class DashboardController {
 			Instant at, String issueKey) {
 	}
 
-	public record DashboardData(List<Issue> todayTasks, ProjectCompletion completion,
+	public record DashboardData(List<Issue> todayTasks, int todayCount, ProjectCompletion completion,
 			List<RankEntry> ranking, List<TrackerDay> tracker, List<TrackerWeek> trackerMonth,
 			BoardSummary activeBoard, List<GitEvent> gitActivity, List<BoardOption> boards,
 			DashboardPrefsDto prefs) {
@@ -134,8 +134,14 @@ public class DashboardController {
 		List<String> scopedIds = visible.stream().map(Project::getId).toList();
 		Set<String> rankingUsers = teamMemberIds(user, reqTeams);
 
+		// "Today's tasks": the caller's own open issues due today or overdue. The
+		// full set drives the KPI count; the list is capped for the focus card.
+		List<Issue> today = todayTasks(user, scopedIds);
+		List<Issue> todayList = today.size() > 12 ? today.subList(0, 12) : today;
+
 		return new DashboardData(
-				todayTasks(user, scopedIds),
+				todayList,
+				today.size(),
 				completion(visible, scopedIds),
 				ranking(scopedIds, rankingUsers),
 				tracker(user),
@@ -216,6 +222,13 @@ public class DashboardController {
 				.toList();
 	}
 
+	/**
+	 * The caller's own open issues that are due today or overdue (due date on or
+	 * before today, not yet resolved). This exact, reproducible definition is what
+	 * the "Today's tasks" KPI counts and what its deep-link into the Issues
+	 * overview re-applies (assigned-to-me + due-by-today), so the number the user
+	 * sees on the card matches the filtered list one-to-one.
+	 */
 	private List<Issue> todayTasks(User user, List<String> projectIds) {
 		if (projectIds.isEmpty()) {
 			return List.of();
@@ -225,15 +238,11 @@ public class DashboardController {
 		Criteria assignedToMe = new Criteria().orOperator(
 				Criteria.where("assigneeIds").is(user.getId()),
 				Criteria.where("assigneeId").is(user.getId()));
-		Criteria urgent = new Criteria().orOperator(
-				Criteria.where("dueDate").lte(today),
-				Criteria.where("priority").in("SHOWSTOPPER", "CRITICAL", "MAJOR"));
 		Query query = Query.query(new Criteria().andOperator(
 				assignedToMe,
 				Criteria.where("projectId").in(projectIds),
 				Criteria.where("resolvedAt").is(null),
-				urgent));
-		query.limit(12);
+				Criteria.where("dueDate").lte(today)));
 		return mongo.find(query, Issue.class).stream()
 				.sorted(Comparator.comparing(Issue::getPriority))
 				.toList();
