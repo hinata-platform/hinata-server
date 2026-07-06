@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.notification;
 
-import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,7 +24,7 @@ class NotificationServiceTest {
 		users = mock(UserRepository.class);
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
 		service = new NotificationService(mock(NotificationRepository.class), users,
-				mock(MailService.class), mock(PushService.class), mock(HinataProperties.class));
+				mock(MailService.class), mock(PushService.class), mock(GatewayService.class));
 	}
 
 	@Test
