@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.notification;
 
-import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.user.Role;
@@ -29,7 +28,7 @@ public class NotificationService {
 	private final UserRepository users;
 	private final MailService mail;
 	private final PushService push;
-	private final HinataProperties props;
+	private final GatewayService gateway;
 
 	private static final String SUBJECT_PREFIX = "[Hinata] ";
 
@@ -235,8 +234,8 @@ public class NotificationService {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
 		// In-app notifications keep the relative route; the e-mail button needs an
-		// absolute deep link to the frontend so it works from any mail client.
-		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, props.deepLink(link),
+		// absolute deep link that the native app intercepts as a Universal/App Link.
+		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link),
 				buttonLabel(de(user)));
 		push.sendToUser(user.getId(), title, body, link);
 	}
@@ -346,7 +345,19 @@ public class NotificationService {
 	}
 
 	private String signInLink() {
-		return props.deepLink("/login");
+		return appLink("/login");
+	}
+
+	/**
+	 * Absolute deep link for a mail CTA, routed through Hinata Connect so the
+	 * native app intercepts it as a Universal/App Link on any platform (the
+	 * server's own {@code webBaseUrl} is never registered as one — self-hosters
+	 * can pick any domain). Falls back to a plain web link if the gateway is
+	 * unreachable. {@code null} when there's no in-app destination to link to.
+	 */
+	private String appLink(String link) {
+		if (link == null || link.isBlank()) return null;
+		return gateway.relayLink(link, null);
 	}
 
 	private Set<String> watchersWithout(Issue issue, User exclude) {
@@ -377,9 +388,10 @@ public class NotificationService {
 						.userId(user.getId()).type(type).title(t).body(b).link(link).build());
 				NotificationPreferences prefs = prefsOf(user);
 				// In-app notifications keep the relative route; the e-mail button gets
-				// an absolute deep link to the issue on the frontend.
+				// an absolute deep link that the native app intercepts as a
+				// Universal/App Link, straight to the issue.
 				if (prefs.deliversEmail(eventId)) {
-					mail.send(user.getEmail(), SUBJECT_PREFIX + t, t, b, props.deepLink(link),
+					mail.send(user.getEmail(), SUBJECT_PREFIX + t, t, b, appLink(link),
 							buttonLabel(de));
 				}
 				if (prefs.deliversPush(eventId)) {

@@ -52,16 +52,6 @@ public class HinataProperties {
 		return webBase() + "/reset-password?token=" + enc(token) + "&server=" + enc(baseUrl);
 	}
 
-	/**
-	 * Turns an in-app relative route (e.g. {@code /issues/MOB-9}) into an absolute
-	 * deep link to the frontend, suitable for use as an email button href.
-	 * Returns {@code null} for a null/blank route so callers can omit the button.
-	 */
-	public String deepLink(String relativeRoute) {
-		if (relativeRoute == null || relativeRoute.isBlank()) return null;
-		return webBase() + (relativeRoute.startsWith("/") ? relativeRoute : "/" + relativeRoute);
-	}
-
 	private static String enc(String value) {
 		return java.net.URLEncoder.encode(value == null ? "" : value,
 				java.nio.charset.StandardCharsets.UTF_8);
