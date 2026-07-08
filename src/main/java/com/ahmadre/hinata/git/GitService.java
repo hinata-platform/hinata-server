@@ -670,8 +670,15 @@ public class GitService {
 				+ "</div>"
 				+ "<script>"
 				+ "function hnClose(){try{window.open('','_self');}catch(e){}try{window.close();}catch(e){}}"
-				+ "function hnTry(){try{window.close();}catch(e){}}"
-				+ (ok ? "hnTry();setTimeout(hnTry,300);setTimeout(hnTry,1200);" : "")
+				// On success, drive the same robust self-reopen close the button
+				// uses (not a bare window.close(), which the browser blocks after
+				// the OAuth redirect chain). Retry a few times because some
+				// browsers only honour the close a tick or two after load. The
+				// button stays as the fallback when the browser refuses outright.
+				+ (ok
+						? "hnClose();setTimeout(hnClose,150);setTimeout(hnClose,600);"
+								+ "setTimeout(hnClose,1500);"
+						: "")
 				+ "</script></body></html>";
 	}
 
