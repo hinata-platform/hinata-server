@@ -308,6 +308,78 @@ public class GitOAuthClient {
 		return new CommitStats(added, removed);
 	}
 
+	// ─────────────────────────── merge PR ───────────────────────────
+
+	/**
+	 * Merges a pull/merge request on the provider. Throws {@link ApiException} on
+	 * any non-success (conflict, blocked checks, already closed, unreachable) so
+	 * the caller never records a fake merge — the failure propagates to the client
+	 * and the optimistic UI rolls back.
+	 */
+	public void mergePr(String provider, String token, String owner, String repo, int number) {
+		if (token == null || token.isBlank()) {
+			throw ApiException.badRequest("error.git.mergeFailed");
+		}
+		switch (provider) {
+			case "github" -> githubMerge(token, owner, repo, number);
+			case "gitlab" -> gitlabMerge(token, owner, repo, number);
+			case "bitbucket" -> bitbucketMerge(token, owner, repo, number);
+			default -> throw ApiException.badRequest("error.git.unknownProvider", provider);
+		}
+	}
+
+	private void githubMerge(String token, String owner, String repo, int number) {
+		ObjectNode body = mapper.createObjectNode();
+		body.put("merge_method", "merge");
+		putJson(GH_API + "/repos/" + enc(owner) + "/" + enc(repo) + "/pulls/" + number + "/merge",
+				token, body, "error.git.mergeFailed");
+	}
+
+	private void gitlabMerge(String token, String owner, String repo, int number) {
+		putJson(GL_API + "/projects/" + enc(owner + "/" + repo) + "/merge_requests/" + number + "/merge",
+				token, mapper.createObjectNode(), "error.git.mergeFailed");
+	}
+
+	private void bitbucketMerge(String token, String owner, String repo, int number) {
+		// Bitbucket merges via POST (no body required).
+		HttpResponse<String> resp = send(HttpRequest.newBuilder(URI.create(
+				BB_API + "/repositories/" + enc(owner) + "/" + enc(repo) + "/pullrequests/" + number + "/merge"))
+				.timeout(Duration.ofSeconds(20))
+				.header("Authorization", "Bearer " + token)
+				.header(ACCEPT, APPLICATION_JSON)
+				.header("Content-Type", APPLICATION_JSON)
+				.header("User-Agent", "hinata")
+				.POST(HttpRequest.BodyPublishers.noBody())
+				.build());
+		if (resp.statusCode() / 100 != 2) {
+			log.warn("[git] PR merge POST {} -> HTTP {}", resp.uri(), resp.statusCode());
+			throw ApiException.badRequest("error.git.mergeFailed");
+		}
+	}
+
+	/** Authenticated PUT of a JSON body; non-2xx throws the given error key. */
+	private void putJson(String url, String token, JsonNode body, String errorKey) {
+		String json;
+		try {
+			json = mapper.writeValueAsString(body);
+		}
+		catch (JsonProcessingException e) {
+			throw ApiException.badRequest(errorKey);
+		}
+		HttpResponse<String> resp = send(HttpRequest.newBuilder(URI.create(url))
+				.timeout(Duration.ofSeconds(20))
+				.header("Authorization", "Bearer " + token)
+				.header(ACCEPT, APPLICATION_JSON)
+				.header("Content-Type", APPLICATION_JSON)
+				.header("User-Agent", "hinata")
+				.PUT(HttpRequest.BodyPublishers.ofString(json))
+				.build());
+		if (resp.statusCode() / 100 != 2) {
+			log.warn("[git] PR merge PUT {} -> HTTP {}", url, resp.statusCode());
+			throw ApiException.badRequest(errorKey);
+		}
+	}
+
 	// ─────────────────────────── webhooks ───────────────────────────
 
 	/**

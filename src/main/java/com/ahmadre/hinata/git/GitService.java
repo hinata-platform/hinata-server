@@ -264,6 +264,24 @@ public class GitService {
 				.findFirst().orElse(null);
 	}
 
+	/**
+	 * The connection a PR belongs to — matched by the PR's own provider + slug so
+	 * the right token/owner/repo is used in a multi-repo project. Falls back to the
+	 * primary repo when the PR carries no attribution (e.g. older/demo data).
+	 */
+	private Project.Git repoFor(Project project, GitDevInfo.PullRequest pr) {
+		String slug = pr.getRepo();
+		if (pr.getProvider() != null && slug != null) {
+			for (Project.Git g : project.allRepos()) {
+				if (g != null && pr.getProvider().equalsIgnoreCase(g.getProvider())
+						&& slug.equalsIgnoreCase(g.getOwner() + "/" + g.getRepo())) {
+					return g;
+				}
+			}
+		}
+		return project.getGit();
+	}
+
 	/** Removes a connection; if it was the primary, promotes the next repo and keeps shared config. */
 	private void removeConnection(Project project, Project.Git target) {
 		if (target == project.getGit()) {
@@ -358,6 +376,15 @@ public class GitService {
 				.filter(p -> p.getNumber() == number)
 				.findFirst()
 				.orElseThrow(() -> ApiException.notFound("git.pullRequest"));
+		// A merge must actually happen on the provider before we record it or move
+		// the issue — otherwise the UI shows a merge that never occurred. On any
+		// provider failure this throws, so nothing below runs and the client rolls
+		// back its optimistic state.
+		if ("MERGED".equals(newState)) {
+			Project.Git repo = repoFor(project, pr);
+			api.mergePr(repo.getProvider(), cipher.decrypt(repo.getEncryptedToken()),
+					repo.getOwner(), repo.getRepo(), number);
+		}
 		pr.setState(newState);
 		info.setUpdatedAt(Instant.now());
 		devInfos.save(info);
