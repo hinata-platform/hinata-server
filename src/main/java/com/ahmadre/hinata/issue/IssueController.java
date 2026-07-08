@@ -7,7 +7,10 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.data.domain.Page;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -197,5 +200,48 @@ public class IssueController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void deleteComment(@PathVariable String id, @PathVariable String commentId) {
 		issueService.deleteComment(id, commentId, currentUser.require());
+	}
+
+	/**
+	 * Posts a recorded voice message as a comment. The audio blob is multipart;
+	 * {@code durationMs} and {@code peaks} (comma-separated 0–100 amplitudes)
+	 * carry the pre-computed waveform so the feed can render it without decoding.
+	 */
+	@PostMapping(value = "/{id}/comments/voice", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+	@ResponseStatus(HttpStatus.CREATED)
+	public IssueComment voiceComment(@PathVariable String id,
+			@RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+			@RequestParam(defaultValue = "0") int durationMs,
+			@RequestParam(required = false) String peaks) {
+		List<Integer> parsedPeaks = new java.util.ArrayList<>();
+		if (peaks != null && !peaks.isBlank()) {
+			for (String part : peaks.split(",")) {
+				String trimmed = part.trim();
+				if (!trimmed.isEmpty()) {
+					try {
+						parsedPeaks.add(Integer.parseInt(trimmed));
+					}
+					catch (NumberFormatException ignored) {
+						// Skip malformed peak values; the waveform degrades gracefully.
+					}
+				}
+			}
+		}
+		return issueService.addVoiceComment(id, file, durationMs, parsedPeaks, currentUser.require());
+	}
+
+	/**
+	 * Streams a voice comment's audio bytes through the server (authorized
+	 * per-issue), so the client never reaches the object store directly. Served
+	 * inline for the in-app audio player.
+	 */
+	@GetMapping("/{id}/comments/{commentId}/voice")
+	public ResponseEntity<byte[]> voiceAudio(@PathVariable String id, @PathVariable String commentId) {
+		com.ahmadre.hinata.storage.StorageService.StoredObject object =
+				issueService.loadVoice(id, commentId, currentUser.require());
+		return ResponseEntity.ok()
+				.header(HttpHeaders.ACCEPT_RANGES, "none")
+				.contentType(MediaType.parseMediaType(object.contentType()))
+				.body(object.data());
 	}
 }

@@ -4,8 +4,12 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -30,6 +34,10 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class IssueService {
 
+	// Distinct name: several methods use a local `log` list, so we can't rely on
+	// Lombok's @Slf4j `log` field here.
+	private static final Logger LOGGER = LoggerFactory.getLogger(IssueService.class);
+
 	private final IssueRepository issues;
 	private final IssueCommentRepository comments;
 	private final IssueActivityRepository activities;
@@ -37,7 +45,19 @@ public class IssueService {
 	private final IssueLinkEvents linkEvents;
 	private final ProjectService projects;
 	private final NotificationService notifications;
+	private final StorageService storage;
 	private final MongoTemplate mongo;
+
+	/** Bucket "folder" isolating voice-message audio from other stored objects. */
+	private static final String VOICE_PREFIX = "voice/";
+	/** Audio MIME types accepted for voice comments (per recording platform). */
+	private static final Set<String> VOICE_TYPES = Set.of(
+			"audio/mp4", "audio/aac", "audio/x-m4a", "audio/m4a", "audio/mpeg",
+			"audio/webm", "audio/ogg", "audio/wav", "audio/x-wav");
+	/** Hard cap on a single voice message (guards memory + storage). */
+	private static final long VOICE_MAX_BYTES = 16L * 1024 * 1024;
+	/** Waveform bar count bounds — a malformed client can't flood the document. */
+	private static final int VOICE_MAX_PEAKS = 96;
 
 	/** Internal lookup with no authorization check. */
 	public Issue get(String idOrReadableId) {
@@ -516,7 +536,16 @@ public class IssueService {
 				.text(text)
 				.build();
 		IssueComment saved = comments.save(comment);
-		notifications.notifyComment(issue, author, text);
+		// Notifications are best-effort: a failure in the mail/push fan-out (e.g.
+		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
+		// the already-saved comment by bubbling a 500 back to the author.
+		try {
+			notifications.notifyComment(issue, author, text);
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("comment notification failed for issue {} (comment kept)",
+					issue.getId(), ex);
+		}
 		return saved;
 	}
 
@@ -526,11 +555,89 @@ public class IssueService {
 				PageRequest.of(page, Math.min(size, 100)));
 	}
 
+	/**
+	 * Stores a recorded voice message as a {@link IssueComment.Type#VOICE}
+	 * comment: the audio blob goes to object storage under {@code voice/}, while
+	 * the pre-computed waveform peaks + duration are persisted inline so the feed
+	 * renders the bubble without re-decoding the audio.
+	 */
+	public IssueComment addVoiceComment(String issueId, MultipartFile file, int durationMs,
+			List<Integer> peaks, User author) {
+		Issue issue = get(issueId);
+		assertAccess(issue, author);
+		if (file == null || file.isEmpty()) {
+			throw ApiException.badRequest("error.voice.empty");
+		}
+		String contentType = file.getContentType();
+		if (contentType == null || !VOICE_TYPES.contains(contentType.toLowerCase())) {
+			throw ApiException.badRequest("error.voice.notAudio");
+		}
+		if (file.getSize() > VOICE_MAX_BYTES) {
+			throw ApiException.badRequest("error.voice.tooLarge");
+		}
+		byte[] data;
+		try {
+			data = file.getBytes();
+		}
+		catch (java.io.IOException ex) {
+			throw ApiException.badRequest("error.storage.unreadableUpload");
+		}
+		// Clamp untrusted metadata: non-negative duration, at most VOICE_MAX_PEAKS
+		// bars, each normalised into 0–100.
+		int safeDuration = Math.max(0, durationMs);
+		List<Integer> safePeaks = new ArrayList<>();
+		if (peaks != null) {
+			peaks.stream()
+					.filter(Objects::nonNull)
+					.limit(VOICE_MAX_PEAKS)
+					.forEach(p -> safePeaks.add(Math.clamp(p, 0, 100)));
+		}
+		String objectKey = VOICE_PREFIX + java.util.UUID.randomUUID();
+		storage.putObject(objectKey, data, contentType);
+		IssueComment.Voice voice = IssueComment.Voice.builder()
+				.objectKey(objectKey)
+				.durationMs(safeDuration)
+				.peaks(safePeaks)
+				.size(file.getSize())
+				.contentType(contentType)
+				.build();
+		IssueComment comment = IssueComment.builder()
+				.issueId(issue.getId())
+				.authorId(author.getId())
+				.type(IssueComment.Type.VOICE)
+				.voice(voice)
+				.build();
+		IssueComment saved = comments.save(comment);
+		// Blank text → notifyComment falls back to a "commented on <title>" body.
+		// Best-effort (see addComment): never fail a saved voice comment on it.
+		try {
+			notifications.notifyComment(issue, author, "");
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("voice-comment notification failed for issue {} (comment kept)",
+					issue.getId(), ex);
+		}
+		return saved;
+	}
+
+	/** Authorised read of a voice comment's audio bytes for the bytes proxy. */
+	public StorageService.StoredObject loadVoice(String issueId, String commentId, User user) {
+		IssueComment comment = requireComment(issueId, commentId, user);
+		if (comment.resolvedType() != IssueComment.Type.VOICE || comment.getVoice() == null) {
+			throw ApiException.notFound("comment");
+		}
+		return storage.getObject(comment.getVoice().getObjectKey())
+				.orElseThrow(() -> ApiException.notFound("voice"));
+	}
+
 	/** Edit a comment's text. Only the comment's own author may edit it. */
 	public IssueComment editComment(String issueId, String commentId, String text, User editor) {
 		IssueComment comment = requireComment(issueId, commentId, editor);
 		if (!comment.getAuthorId().equals(editor.getId())) {
 			throw ApiException.forbidden("error.comment.editOwnOnly");
+		}
+		if (comment.resolvedType() == IssueComment.Type.VOICE) {
+			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
 		comment.setText(text);
 		return comments.save(comment);
@@ -543,6 +650,10 @@ public class IssueService {
 			throw ApiException.forbidden("error.comment.deleteOwnOnly");
 		}
 		comments.delete(comment);
+		// Free the audio blob backing a voice message (best-effort; delete() logs).
+		if (comment.resolvedType() == IssueComment.Type.VOICE && comment.getVoice() != null) {
+			storage.delete(comment.getVoice().getObjectKey());
+		}
 	}
 
 	private IssueComment requireComment(String issueId, String commentId, User user) {

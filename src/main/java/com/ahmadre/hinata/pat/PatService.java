@@ -118,6 +118,17 @@ public class PatService {
 		}
 	}
 
+	/**
+	 * Permanently removes an owned token from storage. Unlike {@link #revoke},
+	 * the row is deleted outright, so the token drops from the caller's list.
+	 */
+	public void deletePermanently(String userId, String id) {
+		PersonalAccessToken token = repository.findById(id)
+				.filter(candidate -> candidate.getUserId().equals(userId))
+				.orElseThrow(() -> ApiException.notFound("pat"));
+		repository.delete(token);
+	}
+
 	private PersonalAccessToken touch(PersonalAccessToken token) {
 		try {
 			token.setLastUsedAt(Instant.now());

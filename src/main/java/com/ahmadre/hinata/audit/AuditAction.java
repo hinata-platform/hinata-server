@@ -56,6 +56,7 @@ public enum AuditAction {
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),
 	PAT_REVOKED(INTEGRATION, NOTICE, true),
+	PAT_DELETED(INTEGRATION, NOTICE, true),
 	MCP_ISSUE_CREATED(INTEGRATION, INFO, true),
 	MCP_ISSUE_UPDATED(INTEGRATION, INFO, true),
 	MCP_COMMENT_ADDED(INTEGRATION, INFO, true),

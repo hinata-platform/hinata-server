@@ -88,4 +88,13 @@ public class PatController {
 		patService.revoke(me.getId(), id);
 		audit.event(AuditAction.PAT_REVOKED).actor(me).meta("id", id).log();
 	}
+
+	/** Permanently removes a token, dropping it from the caller's list entirely. */
+	@DeleteMapping("/{id}/permanent")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void delete(@PathVariable String id) {
+		User me = currentUser.require();
+		patService.deletePermanently(me.getId(), id);
+		audit.event(AuditAction.PAT_DELETED).actor(me).meta("id", id).log();
+	}
 }
