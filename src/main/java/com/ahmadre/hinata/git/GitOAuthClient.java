@@ -240,6 +240,74 @@ public class GitOAuthClient {
 		return array;
 	}
 
+	// ─────────────────────────── commit stats ───────────────────────────
+
+	/** Line additions/deletions for a single commit; zeros when unavailable. */
+	public record CommitStats(int additions, int deletions) {
+		static final CommitStats NONE = new CommitStats(0, 0);
+	}
+
+	/**
+	 * Fetches a commit's line stats from the provider API. Push webhooks don't
+	 * carry per-commit line counts, so the {@code +x / -y} shown on an issue comes
+	 * from here. Best-effort: any failure (missing token, rate limit, network, an
+	 * unreachable self-managed host) yields zeros rather than throwing, so
+	 * recording the commit is never blocked.
+	 */
+	public CommitStats commitStats(String provider, String token, String owner, String repo, String sha) {
+		if (token == null || token.isBlank() || sha == null || sha.isBlank()) {
+			return CommitStats.NONE;
+		}
+		try {
+			return switch (provider) {
+				case "github" -> githubCommitStats(token, owner, repo, sha);
+				case "gitlab" -> gitlabCommitStats(token, owner, repo, sha);
+				case "bitbucket" -> bitbucketCommitStats(token, owner, repo, sha);
+				default -> CommitStats.NONE;
+			};
+		}
+		catch (RuntimeException e) {
+			log.warn("[git] commit stats ({}) for {} failed: {}", provider, sha, e.getMessage());
+			return CommitStats.NONE;
+		}
+	}
+
+	private CommitStats githubCommitStats(String token, String owner, String repo, String sha) {
+		HttpResponse<String> resp = get(GH_API + "/repos/" + enc(owner) + "/" + enc(repo)
+				+ "/commits/" + enc(sha), token);
+		if (resp.statusCode() / 100 != 2) {
+			return CommitStats.NONE;
+		}
+		JsonNode stats = parse(resp).path("stats");
+		return new CommitStats(stats.path("additions").asInt(0), stats.path("deletions").asInt(0));
+	}
+
+	private CommitStats gitlabCommitStats(String token, String owner, String repo, String sha) {
+		HttpResponse<String> resp = get(GL_API + "/projects/" + enc(owner + "/" + repo)
+				+ "/repository/commits/" + enc(sha), token);
+		if (resp.statusCode() / 100 != 2) {
+			return CommitStats.NONE;
+		}
+		JsonNode stats = parse(resp).path("stats");
+		return new CommitStats(stats.path("additions").asInt(0), stats.path("deletions").asInt(0));
+	}
+
+	private CommitStats bitbucketCommitStats(String token, String owner, String repo, String sha) {
+		// Bitbucket commits carry no line totals; sum the diffstat entries instead.
+		HttpResponse<String> resp = get(BB_API + "/repositories/" + enc(owner) + "/" + enc(repo)
+				+ "/diffstat/" + enc(sha) + "?pagelen=100", token);
+		if (resp.statusCode() / 100 != 2) {
+			return CommitStats.NONE;
+		}
+		int added = 0;
+		int removed = 0;
+		for (JsonNode f : parse(resp).path("values")) {
+			added += f.path("lines_added").asInt(0);
+			removed += f.path("lines_removed").asInt(0);
+		}
+		return new CommitStats(added, removed);
+	}
+
 	// ─────────────────────────── webhooks ───────────────────────────
 
 	/**

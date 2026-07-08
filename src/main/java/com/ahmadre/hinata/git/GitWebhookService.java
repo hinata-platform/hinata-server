@@ -55,6 +55,7 @@ public class GitWebhookService {
 	private final GitDevInfoRepository devInfos;
 	private final IssueService issues;
 	private final GitService gitService;
+	private final GitOAuthClient api;
 	private final GitCommitLedger ledger;
 	private final TokenCipher cipher;
 	private final UserRepository users;
@@ -349,11 +350,17 @@ public class GitWebhookService {
 		if (sha.isBlank()) {
 			return;
 		}
-		String first = firstLine(message);
 		// Link a commit only to the issue key(s) in its own message — not the
 		// branch's key. The branch is linked separately (recordBranch), so a
 		// commit never surfaces on an issue just because of the branch it rides on.
 		Set<String> keys = keysIn(message);
+		if (keys.isEmpty()) {
+			return; // no linked issue → skip recording (and the stats API call)
+		}
+		String first = firstLine(message);
+		// Push payloads don't include per-commit line counts, so fetch them from
+		// the provider API (best-effort: zeros when unavailable).
+		GitOAuthClient.CommitStats stats = commitStats(m.repo(), sha);
 		for (String key : keys) {
 			upsert(m, key, dev -> {
 				if (dev.getCommits().stream().anyMatch(c -> sha.equals(c.getSha()))) {
@@ -361,11 +368,18 @@ public class GitWebhookService {
 				}
 				dev.getCommits().add(0, GitDevInfo.Commit.builder()
 						.sha(sha).message(first).at(at).verified(verified)
+						.additions(stats.additions()).deletions(stats.deletions())
 						.provider(m.repo().getProvider()).repo(slug(m.repo()))
 						.build());
 				trim(dev.getCommits(), MAX_COMMITS);
 			});
 		}
+	}
+
+	/** A commit's line stats via the provider API; zeros when unavailable (best-effort). */
+	private GitOAuthClient.CommitStats commitStats(Project.Git repo, String sha) {
+		return api.commitStats(repo.getProvider(), cipher.decrypt(repo.getEncryptedToken()),
+				repo.getOwner(), repo.getRepo(), sha);
 	}
 
 	private static void putPr(GitDevInfo dev, GitDevInfo.PullRequest pr) {
