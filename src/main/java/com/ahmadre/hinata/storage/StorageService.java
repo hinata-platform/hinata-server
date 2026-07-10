@@ -53,6 +53,11 @@ public class StorageService {
 		return client != null;
 	}
 
+	/** Maximum accepted upload size in bytes (mirrors the multipart limit). */
+	public long maxUploadBytes() {
+		return (long) properties.getStorage().getMaxUploadMb() * 1024 * 1024;
+	}
+
 	public String upload(MultipartFile file) {
 		return upload(file, "");
 	}
