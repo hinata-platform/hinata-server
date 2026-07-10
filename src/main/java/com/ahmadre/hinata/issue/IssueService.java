@@ -743,7 +743,7 @@ public class IssueService {
 		comment.setEditedAt(Instant.now());
 		IssueComment saved = comments.save(comment);
 		commentEvents.publishChanged(comment.getIssueId());
-		return saved;
+		return withReplyCount(saved);
 	}
 
 	/**
@@ -804,7 +804,7 @@ public class IssueService {
 		}
 		IssueComment saved = comments.save(comment);
 		commentEvents.publishChanged(comment.getIssueId());
-		return saved;
+		return withReplyCount(saved);
 	}
 
 	/** Pins/unpins a comment. Any project member may pin and unpin. */
@@ -814,7 +814,7 @@ public class IssueService {
 		comment.setPinnedAt(pinned ? Instant.now() : null);
 		IssueComment saved = comments.save(comment);
 		commentEvents.publishChanged(comment.getIssueId());
-		return saved;
+		return withReplyCount(saved);
 	}
 
 	/** Pinned TOP-LEVEL comments of a thread, in pin order — surfaced above the feed. */
@@ -826,6 +826,12 @@ public class IssueService {
 				.toList();
 		attachReplyCounts(pinned);
 		return pinned;
+	}
+
+	/** Sets the read-time reply count on a single comment (0 for a reply). */
+	private IssueComment withReplyCount(IssueComment comment) {
+		comment.setReplyCount((int) comments.countByReplyToId(comment.getId()));
+		return comment;
 	}
 
 	private IssueComment requireComment(String issueId, String commentId, User user) {
