@@ -635,8 +635,14 @@ public class IssueService {
 		}
 		List<String> ids = roots.stream().map(IssueComment::getId).toList();
 		Map<String, Long> counts = new HashMap<>();
-		for (IssueCommentRepository.ReplyCount rc : comments.countRepliesGrouped(ids)) {
-			counts.put(rc.rootId(), rc.count());
+		// Never let a count hiccup break the comment list — default to 0 instead.
+		try {
+			for (IssueCommentRepository.ReplyCount rc : comments.countRepliesGrouped(ids)) {
+				counts.put(rc.rootId(), rc.count());
+			}
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("reply-count aggregation failed (counts default to 0)", ex);
 		}
 		for (IssueComment c : roots) {
 			c.setReplyCount(counts.getOrDefault(c.getId(), 0L).intValue());
