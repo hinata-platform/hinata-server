@@ -513,7 +513,7 @@ public class DemoSeeder {
 
 	private void backlog(Project p, String title, Issue.Type type, User assignee, int points,
 			List<String> tags) {
-		issue(p, title, type, Issue.Priority.NORMAL, "Backlog", assignee, null,
+		issue(p, title, type, Issue.Priority.NORMAL, "Open", assignee, null,
 				points, points * 60, 0, tags, null, 0);
 	}
 

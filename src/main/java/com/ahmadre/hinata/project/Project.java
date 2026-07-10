@@ -234,8 +234,8 @@ public class Project {
 
 	// Default workflow per the product spec (names + oklch hues).
 	private static final List<String> DEFAULT_STATE_NAMES =
-			List.of("Backlog", "Open", "In Progress", "In Review", "Done");
-	private static final List<Integer> DEFAULT_STATE_HUES = List.of(255, 250, 70, 300, 155);
+			List.of("Open", "In Progress", "In Parking", "In Review", "Done");
+	private static final List<Integer> DEFAULT_STATE_HUES = List.of(250, 70, 255, 300, 155);
 	public static final List<String> DEFAULT_RESOLVED = List.of("Done");
 
 	/** A fresh default workflow (new ids each call). */
@@ -255,6 +255,9 @@ public class Project {
 	 * migration when upgrading legacy string-only workflow arrays. */
 	public static int defaultHueForState(String name) {
 		if (name != null) {
+			if ("Backlog".equalsIgnoreCase(name.trim())) {
+				return 255; // legacy default state (pre "In Parking" workflow)
+			}
 			for (int i = 0; i < DEFAULT_STATE_NAMES.size(); i++) {
 				if (DEFAULT_STATE_NAMES.get(i).equalsIgnoreCase(name.trim())) {
 					return DEFAULT_STATE_HUES.get(i);
