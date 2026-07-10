@@ -83,8 +83,14 @@ public class IssueComment {
 	@Builder.Default
 	private List<Reaction> reactions = new java.util.ArrayList<>();
 
-	/** Whether this comment is pinned to the top of the thread. */
-	private boolean pinned;
+	/**
+	 * Whether this comment is pinned to the top of the thread. Boxed {@link Boolean}
+	 * (not primitive) so legacy documents predating this field — which read back as
+	 * {@code null} — don't fail the all-args persistence constructor. Treated as
+	 * {@code false} when null.
+	 */
+	@Builder.Default
+	private Boolean pinned = false;
 
 	/** When it was pinned (pin ordering); null when not pinned. */
 	private Instant pinnedAt;
