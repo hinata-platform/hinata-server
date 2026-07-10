@@ -221,7 +221,13 @@ public class SearchService {
 			return SearchHit.builder()
 					.category(SearchCategory.PROJECTS.name())
 					.id(p.getId())
-					.route("/projects")
+					// Active → the project's issue list (mirrors tapping its card on
+					// the Projects screen). Archived → its settings page, the only
+					// meaningful destination (its issues are hidden platform-wide,
+					// and that's where it can be restored).
+					.route(archived
+							? "/projects/" + p.getId() + "/settings"
+							: "/issues?projectId=" + p.getId())
 					.archived(archived ? Boolean.TRUE : null)
 					.title(p.getName())
 					.projectKey(p.getKey())
