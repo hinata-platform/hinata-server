@@ -112,6 +112,13 @@ public class Issue {
 	private LocalDate startDate;
 	private LocalDate dueDate;
 
+	/**
+	 * The {@link #dueDate} value the "due soon" reminder was last sent for. The
+	 * daily job only reminds when this differs from the current due date, so it
+	 * never re-notifies — yet automatically re-arms if the due date is changed.
+	 */
+	private LocalDate dueReminderFor;
+
 	private Integer estimateMinutes;
 
 	/** Scrum effort estimate in story points (Fibonacci); null = unestimated. */

@@ -26,6 +26,9 @@ public interface UserRepository extends MongoRepository<User, String> {
 	/** Every active user holding {@code role} – used to notify admins of pending approvals. */
 	List<User> findByRolesContainingAndActiveIsTrue(Role role);
 
+	/** All active users – used to fan out the periodic digest. */
+	List<User> findByActiveIsTrue();
+
 	/** Self-registrations that have verified their email but await an admin's approval. */
 	long countByAwaitingApprovalIsTrue();
 

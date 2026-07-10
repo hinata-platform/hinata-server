@@ -1,12 +1,14 @@
 package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Creates, refreshes and revokes {@link RefreshSession} records — the per-device
@@ -21,12 +23,16 @@ public class SessionService {
 	private final RefreshSessionRepository sessions;
 	private final HinataProperties properties;
 	private final UserEvents userEvents;
+	private final NotificationService notifications;
 
 	/** Opens a new session for a fresh sign-in. Best-effort device metadata. */
 	public RefreshSession start(User user, String ip, String userAgent) {
 		Instant now = Instant.now();
 		Agent agent = parse(userAgent);
-		return sessions.save(RefreshSession.builder()
+		// A device we've never seen before triggers a security alert (new sign-in).
+		boolean knownDevice = sessions.findByUserIdOrderByLastActiveAtDesc(user.getId()).stream()
+				.anyMatch(existing -> sameDevice(existing, agent));
+		RefreshSession saved = sessions.save(RefreshSession.builder()
 				.userId(user.getId())
 				.kind(agent.kind())
 				.os(agent.os())
@@ -38,6 +44,35 @@ public class SessionService {
 				.lastActiveAt(now)
 				.expiresAt(now.plusSeconds(properties.getJwt().getRefreshTokenSeconds()))
 				.build());
+		if (!knownDevice) {
+			notifyNewSignIn(user, saved);
+		}
+		return saved;
+	}
+
+	/** Two sessions are the "same device" when platform, client and form factor match. */
+	private boolean sameDevice(RefreshSession existing, Agent agent) {
+		return existing.getKind() == agent.kind()
+				&& Objects.equals(existing.getOs(), agent.os())
+				&& Objects.equals(existing.getClient(), agent.client());
+	}
+
+	/** Security alert for a sign-in from a device not previously seen for this user. */
+	private void notifyNewSignIn(User user, RefreshSession session) {
+		String device = describe(session);
+		boolean de = "de".equalsIgnoreCase(user.getLocale());
+		notifications.notifySecurityAlert(user,
+				de ? "Neue Anmeldung" : "New sign-in",
+				de ? "Neue Anmeldung bei deinem Konto: " + device
+						+ ". Warst du das nicht, ändere sofort dein Passwort."
+						: "New sign-in to your account: " + device
+								+ ". If this wasn't you, change your password immediately.");
+	}
+
+	/** Human-readable "Client · OS" for an alert, tolerant of missing metadata. */
+	private String describe(RefreshSession session) {
+		String client = session.getClient() != null ? session.getClient() : "Unknown app";
+		return session.getOs() != null ? client + " · " + session.getOs() : client;
 	}
 
 	/** Bumps the last-active timestamp on token refresh. Silent if revoked. */

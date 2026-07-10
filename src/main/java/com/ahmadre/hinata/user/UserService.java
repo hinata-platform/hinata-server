@@ -26,6 +26,7 @@ public class UserService {
 	private final PasswordEncoder passwordEncoder;
 	private final MongoTemplate mongo;
 	private final com.ahmadre.hinata.audit.AuditService audit;
+	private final com.ahmadre.hinata.notification.NotificationService notifications;
 
 	public User get(String id) {
 		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
@@ -158,6 +159,11 @@ public class UserService {
 		user.setPasswordHash(passwordEncoder.encode(newPassword));
 		users.save(user);
 		audit.event(com.ahmadre.hinata.audit.AuditAction.PASSWORD_CHANGED).actor(user).log();
+		boolean de = "de".equalsIgnoreCase(user.getLocale());
+		notifications.notifySecurityAlert(user,
+				de ? "Passwort geändert" : "Password changed",
+				de ? "Das Passwort deines Kontos wurde geändert. Warst du das nicht, ändere es sofort."
+						: "Your account password was changed. If this wasn't you, change it immediately.");
 	}
 
 	public void validatePassword(String rawPassword) {

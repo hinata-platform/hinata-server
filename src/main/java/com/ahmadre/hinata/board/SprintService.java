@@ -5,10 +5,12 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueActivityRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -33,6 +35,7 @@ import java.util.stream.Collectors;
  * members of any of the board's projects (mirrors {@code IssueService}'s A01
  * rule). Story points are the unit of capacity, velocity and burndown.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SprintService {
@@ -47,6 +50,7 @@ public class SprintService {
 	private final IssueRepository issues;
 	private final IssueActivityRepository activities;
 	private final ProjectService projects;
+	private final NotificationService notifications;
 	private final MongoTemplate mongo;
 
 	// ── access ────────────────────────────────────────────────────────────
@@ -128,7 +132,44 @@ public class SprintService {
 		Sprint saved = sprints.save(sprint);
 		board.setActiveSprintId(saved.getId());
 		boards.save(board);
+		notifySprintLifecycle(board, saved.getName(), user, true);
 		return saved;
+	}
+
+	/** Union of the member ids of every project the board spans. */
+	private Set<String> boardMembers(AgileBoard board) {
+		Set<String> ids = new java.util.HashSet<>();
+		for (String pid : board.getProjectIds()) {
+			try {
+				ids.addAll(projects.get(pid).getMemberIds());
+			}
+			catch (RuntimeException ignored) {
+				// A dangling project id must not block the sprint action.
+			}
+		}
+		return ids;
+	}
+
+	/** Deep-links to the board of the first project the board belongs to. */
+	private String boardLink(AgileBoard board) {
+		return board.getProjectIds().isEmpty() ? null
+				: "/projects/" + board.getProjectIds().get(0) + "/boards";
+	}
+
+	/** Best-effort member fan-out for sprint start / completion; never fails the action. */
+	private void notifySprintLifecycle(AgileBoard board, String sprintName, User actor, boolean started) {
+		try {
+			Set<String> members = boardMembers(board);
+			if (started) {
+				notifications.notifySprintStarted(members, sprintName, boardLink(board), actor);
+			}
+			else {
+				notifications.notifySprintCompleted(members, sprintName, boardLink(board), actor);
+			}
+		}
+		catch (RuntimeException ex) {
+			log.warn("Notifying members of sprint '{}' failed: {}", sprintName, ex.getMessage());
+		}
 	}
 
 	/**
@@ -180,6 +221,7 @@ public class SprintService {
 			board.setActiveSprintId(null);
 			boards.save(board);
 		}
+		notifySprintLifecycle(board, sprint.getName(), user, false);
 	}
 
 	// ── insights report ───────────────────────────────────────────────────

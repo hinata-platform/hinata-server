@@ -110,7 +110,7 @@ public class MeService {
 		user.setEmailChangeExpiresAt(null);
 		users.save(user);
 		sessions.revokeAll(user.getId());
-		accountMail.sendSecurityAlert(user,
+		notifications.notifySecurityAlert(user,
 				de(user) ? "E-Mail-Adresse geändert" : "Email address changed",
 				de(user) ? "Deine Anmelde-E-Mail wurde aktualisiert."
 						: "Your sign-in email was updated.");
@@ -136,7 +136,7 @@ public class MeService {
 		user.setPasswordResetExpiresAt(null);
 		users.save(user);
 		sessions.revokeAll(user.getId());
-		accountMail.sendSecurityAlert(user,
+		notifications.notifySecurityAlert(user,
 				de(user) ? "Passwort geändert" : "Password changed",
 				de(user) ? "Dein Passwort wurde zurückgesetzt." : "Your password was reset.");
 		audit.event(AuditAction.PASSWORD_RESET_COMPLETED).actor(user).log();
@@ -208,7 +208,7 @@ public class MeService {
 		user.setTotpEnabledAt(Instant.now());
 		user.setRecoveryCodeHashes(recoveryCodes.hashAll(plain));
 		users.save(user);
-		accountMail.sendSecurityAlert(user,
+		notifications.notifySecurityAlert(user,
 				de(user) ? "Zwei-Faktor-Authentifizierung aktiviert" : "Two-factor authentication enabled",
 				de(user) ? "2FA wurde für dein Konto aktiviert." : "2FA was enabled on your account.");
 		audit.event(AuditAction.TWO_FACTOR_ENABLED).actor(user).log();
@@ -238,7 +238,7 @@ public class MeService {
 		user.setTotpEnabledAt(null);
 		user.getRecoveryCodeHashes().clear();
 		users.save(user);
-		accountMail.sendSecurityAlert(user,
+		notifications.notifySecurityAlert(user,
 				de(user) ? "Zwei-Faktor-Authentifizierung deaktiviert" : "Two-factor authentication disabled",
 				de(user) ? "2FA wurde für dein Konto deaktiviert." : "2FA was disabled on your account.");
 		audit.event(AuditAction.TWO_FACTOR_DISABLED).actor(user).log();

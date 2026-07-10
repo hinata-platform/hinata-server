@@ -219,7 +219,7 @@ public class NotificationService {
 			String body = de(user)
 					? "Du wurdest dem Team \"" + teamName + "\" hinzugefügt."
 					: "You've been added to the team \"" + teamName + "\".";
-			deliverOne(user, Notification.Type.TEAM_ADDED, title, body, teamLink(teamId));
+			deliverGated(user, Notification.Type.TEAM_ADDED, title, body, teamLink(teamId));
 		});
 	}
 
@@ -263,7 +263,7 @@ public class NotificationService {
 			String body = de(user)
 					? "Du wurdest dem Projekt \"" + projectName + "\" hinzugefügt."
 					: "You've been added to the project \"" + projectName + "\".";
-			deliverOne(user, Notification.Type.PROJECT_ADDED, title, body, projectLink(projectId));
+			deliverGated(user, Notification.Type.PROJECT_ADDED, title, body, projectLink(projectId));
 		});
 	}
 
@@ -275,6 +275,90 @@ public class NotificationService {
 		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link),
 				buttonLabel(de(user)));
 		push.sendToUser(user.getId(), title, body, link);
+	}
+
+	/**
+	 * Single-recipient delivery that respects the user's channel preferences: the
+	 * in-app (bell) notification is always recorded, while e-mail and push are
+	 * gated by {@code prefs.deliversEmail/Push(eventId(type))}. Used for events the
+	 * user can toggle (invites, digest); locked events (security) always deliver.
+	 */
+	private void deliverGated(User user, Notification.Type type, String title, String body, String link) {
+		if (user == null || !user.isActive()) return;
+		String eventId = eventId(type);
+		notifications.save(Notification.builder()
+				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
+		NotificationPreferences prefs = prefsOf(user);
+		boolean de = de(user);
+		if (prefs.deliversEmail(eventId)) {
+			mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link), buttonLabel(de));
+		}
+		if (prefs.deliversPush(eventId)) {
+			push.sendToUser(user.getId(), title, body, link);
+		}
+	}
+
+	/**
+	 * Notifies every member of the sprint's project(s) that it has started. Gated
+	 * by the recipient's {@code sprint} channel preference; the actor who started
+	 * it is not notified.
+	 */
+	public void notifySprintStarted(java.util.Collection<String> recipients, String sprintName,
+			String link, User actor) {
+		Set<String> ids = new HashSet<>(recipients != null ? recipients : Set.of());
+		if (actor != null) ids.remove(actor.getId());
+		if (ids.isEmpty()) return;
+		deliver(ids, Notification.Type.SPRINT_STARTED,
+				de -> de ? "Sprint gestartet: " + sprintName : "Sprint started: " + sprintName,
+				de -> de ? "Der Sprint \"" + sprintName + "\" wurde gestartet."
+						: "The sprint \"" + sprintName + "\" has started.",
+				link);
+	}
+
+	/** As {@link #notifySprintStarted}, for sprint completion. */
+	public void notifySprintCompleted(java.util.Collection<String> recipients, String sprintName,
+			String link, User actor) {
+		Set<String> ids = new HashSet<>(recipients != null ? recipients : Set.of());
+		if (actor != null) ids.remove(actor.getId());
+		if (ids.isEmpty()) return;
+		deliver(ids, Notification.Type.SPRINT_COMPLETED,
+				de -> de ? "Sprint abgeschlossen: " + sprintName : "Sprint completed: " + sprintName,
+				de -> de ? "Der Sprint \"" + sprintName + "\" wurde abgeschlossen."
+						: "The sprint \"" + sprintName + "\" has been completed.",
+				link);
+	}
+
+	/**
+	 * Reminds the given recipients (typically the issue's assignees) that an issue
+	 * is due soon. Gated by the {@code sprint} channel preference (the "Sprints &
+	 * deadlines" setting also covers approaching due dates).
+	 */
+	public void notifyDueSoon(Issue issue, java.util.Collection<String> recipients) {
+		Set<String> ids = new HashSet<>(recipients != null ? recipients : Set.of());
+		if (ids.isEmpty()) return;
+		deliver(ids, Notification.Type.ISSUE_DUE_SOON,
+				de -> de ? issue.getReadableId() + " ist bald fällig"
+						: issue.getReadableId() + " is due soon",
+				de -> de ? "\"" + issue.getTitle() + "\" ist am " + issue.getDueDate() + " fällig."
+						: "\"" + issue.getTitle() + "\" is due on " + issue.getDueDate() + ".",
+				issueLink(issue));
+	}
+
+	/**
+	 * Sends a user their periodic digest. Title/body are pre-composed and localized
+	 * by the caller (the digest job). Gated by the {@code digest} channel preference.
+	 */
+	public void notifyDigest(User user, String title, String body, String link) {
+		deliverGated(user, Notification.Type.DIGEST, title, body, link);
+	}
+
+	/**
+	 * Security alert (new sign-in, password / e-mail change, 2FA change). Maps to
+	 * the locked {@code security} event, so it always reaches the user on every
+	 * channel — in-app, e-mail and push. Title/body are pre-localized by the caller.
+	 */
+	public void notifySecurityAlert(User user, String title, String body) {
+		deliverGated(user, Notification.Type.SECURITY_ALERT, title, body, "/settings");
 	}
 
 	private String teamLink(String teamId) {
@@ -472,7 +556,9 @@ public class NotificationService {
 			case ISSUE_COMMENTED -> "comments";
 			case ISSUE_UPDATED -> "status";
 			case ISSUE_INGESTED -> "ingest";
-			case SPRINT_STARTED -> "sprint";
+			case ISSUE_DUE_SOON, SPRINT_STARTED, SPRINT_COMPLETED -> "sprint";
+			case TEAM_ADDED, PROJECT_ADDED -> "invites";
+			case DIGEST -> "digest";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}
