@@ -23,9 +23,11 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -560,21 +562,30 @@ public class IssueService {
 		return saved;
 	}
 
-	/** Copies a denormalised quote snapshot of the reply target onto the builder. */
+	/**
+	 * Attaches the reply target to the builder, normalising to the thread ROOT:
+	 * flat one-level threading means a reply to a reply shares the same
+	 * {@code replyToId} (the root), so a thread stays a single flat list. The
+	 * denormalised quote snapshot still records the DIRECT target. A dangling or
+	 * foreign target is silently ignored (the comment posts as top-level).
+	 */
 	private void applyReplyTo(IssueComment.IssueCommentBuilder builder, String issueId,
 			String replyToId) {
 		if (replyToId == null || replyToId.isBlank()) {
 			return;
 		}
-		IssueComment parent = comments.findById(replyToId)
+		IssueComment target = comments.findById(replyToId)
 				.filter(c -> c.getIssueId().equals(issueId))
 				.orElse(null);
-		if (parent == null) {
+		if (target == null) {
 			return;
 		}
-		builder.replyToId(parent.getId())
-				.replyToAuthorId(parent.getAuthorId())
-				.replyToPreview(previewOf(parent));
+		String rootId = (target.getReplyToId() != null && !target.getReplyToId().isBlank())
+				? target.getReplyToId()
+				: target.getId();
+		builder.replyToId(rootId)
+				.replyToAuthorId(target.getAuthorId())
+				.replyToPreview(previewOf(target));
 	}
 
 	/** Compact one-line quote preview ("🎤" for voice) for a reply snapshot. */
@@ -588,9 +599,48 @@ public class IssueService {
 	}
 
 	public Page<IssueComment> commentsOf(String issueId, int page, int size, User user) {
+		return commentsOf(issueId, page, size, "newest", user);
+	}
+
+	/**
+	 * One page of a thread's TOP-LEVEL comments (replies excluded), ordered by
+	 * {@code sort} ("oldest" → oldest-first, else newest-first). Each comment's
+	 * transient {@code replyCount} is populated in one batched aggregation.
+	 */
+	public Page<IssueComment> commentsOf(String issueId, int page, int size, String sort,
+			User user) {
 		String id = getForUser(issueId, user).getId();
-		return comments.findByIssueIdOrderByCreatedAtDesc(id,
-				PageRequest.of(page, Math.min(size, 100)));
+		Sort.Direction dir = "oldest".equalsIgnoreCase(sort)
+				? Sort.Direction.ASC
+				: Sort.Direction.DESC;
+		Page<IssueComment> result = comments.findByIssueIdAndReplyToIdIsNull(id,
+				PageRequest.of(page, Math.min(size, 100), Sort.by(dir, "createdAt")));
+		attachReplyCounts(result.getContent());
+		return result;
+	}
+
+	/** One page of a root comment's replies, oldest-first (flat, one level). */
+	public Page<IssueComment> repliesOf(String issueId, String rootId, int page, int size,
+			User user) {
+		IssueComment root = requireComment(issueId, rootId, user);
+		return comments.findByReplyToId(root.getId(),
+				PageRequest.of(page, Math.min(size, 100),
+						Sort.by(Sort.Direction.ASC, "createdAt")));
+	}
+
+	/** Populates the transient {@code replyCount} on a page of top-level comments. */
+	private void attachReplyCounts(List<IssueComment> roots) {
+		if (roots.isEmpty()) {
+			return;
+		}
+		List<String> ids = roots.stream().map(IssueComment::getId).toList();
+		Map<String, Long> counts = new HashMap<>();
+		for (IssueCommentRepository.ReplyCount rc : comments.countRepliesGrouped(ids)) {
+			counts.put(rc.rootId(), rc.count());
+		}
+		for (IssueComment c : roots) {
+			c.setReplyCount(counts.getOrDefault(c.getId(), 0L).intValue());
+		}
 	}
 
 	/**
@@ -690,11 +740,24 @@ public class IssueService {
 		return saved;
 	}
 
-	/** Delete a comment. The author may delete their own; admins may moderate any. */
+	/**
+	 * Delete a comment. The author may delete their own; admins may moderate any.
+	 * Deleting a ROOT cascades its whole reply thread (and frees each reply's blob).
+	 */
 	public void deleteComment(String issueId, String commentId, User user) {
 		IssueComment comment = requireComment(issueId, commentId, user);
 		if (!user.isAdmin() && !comment.getAuthorId().equals(user.getId())) {
 			throw ApiException.forbidden("error.comment.deleteOwnOnly");
+		}
+		// A top-level comment owns a flat reply thread — remove it too so replies
+		// don't orphan, freeing any voice blobs they hold (best-effort).
+		if (comment.getReplyToId() == null) {
+			for (IssueComment reply : comments.findByReplyToId(comment.getId())) {
+				if (reply.resolvedType() == IssueComment.Type.VOICE && reply.getVoice() != null) {
+					storage.delete(reply.getVoice().getObjectKey());
+				}
+			}
+			comments.deleteByReplyToId(comment.getId());
 		}
 		comments.delete(comment);
 		// Free the audio blob backing a voice message (best-effort; delete() logs).
@@ -748,10 +811,15 @@ public class IssueService {
 		return saved;
 	}
 
-	/** Pinned comments of a thread, in pin order — surfaced above the feed. */
+	/** Pinned TOP-LEVEL comments of a thread, in pin order — surfaced above the feed. */
 	public List<IssueComment> pinnedComments(String issueId, User user) {
 		String id = getForUser(issueId, user).getId();
-		return comments.findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(id);
+		List<IssueComment> pinned = comments.findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(id)
+				.stream()
+				.filter(c -> c.getReplyToId() == null)
+				.toList();
+		attachReplyCounts(pinned);
+		return pinned;
 	}
 
 	private IssueComment requireComment(String issueId, String commentId, User user) {

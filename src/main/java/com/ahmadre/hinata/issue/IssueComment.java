@@ -5,6 +5,7 @@ import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -102,7 +103,13 @@ public class IssueComment {
 	 */
 	private Instant editedAt;
 
-	/** The comment this one is a reply to (WhatsApp quote); null otherwise. */
+	/**
+	 * The root comment this one is a reply to; null for top-level comments. Always
+	 * normalised to the thread ROOT in the service (a reply to a reply points at the
+	 * same root), so replies form a single flat thread. Indexed for reply counts and
+	 * per-root reply fetches.
+	 */
+	@Indexed
 	private String replyToId;
 
 	/** Denormalised author of {@link #replyToId} so the quote renders without a lookup. */
@@ -110,6 +117,14 @@ public class IssueComment {
 
 	/** Denormalised short preview of the quoted comment ("🎤"/"📷" for media). */
 	private String replyToPreview;
+
+	/**
+	 * Number of replies whose (root-normalised) {@link #replyToId} points at this
+	 * comment. Computed at read time for top-level comments and never persisted
+	 * ({@link Transient}); null on replies and on writes.
+	 */
+	@Transient
+	private Integer replyCount;
 
 	@CreatedDate
 	private Instant createdAt;

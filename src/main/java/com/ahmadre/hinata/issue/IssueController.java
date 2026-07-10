@@ -188,8 +188,17 @@ public class IssueController {
 	@GetMapping("/{id}/comments")
 	public Page<IssueComment> comments(@PathVariable String id,
 			@RequestParam(defaultValue = "0") int page,
-			@RequestParam(defaultValue = "30") int size) {
-		return issueService.commentsOf(id, page, size, currentUser.require());
+			@RequestParam(defaultValue = "30") int size,
+			@RequestParam(defaultValue = "newest") String sort) {
+		return issueService.commentsOf(id, page, size, sort, currentUser.require());
+	}
+
+	/** One page of a root comment's replies, oldest-first (flat, lazily loaded). */
+	@GetMapping("/{id}/comments/{rootId}/replies")
+	public Page<IssueComment> replies(@PathVariable String id, @PathVariable String rootId,
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "10") int size) {
+		return issueService.repliesOf(id, rootId, page, size, currentUser.require());
 	}
 
 	@PostMapping("/{id}/comments")
