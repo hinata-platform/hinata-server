@@ -1,10 +1,12 @@
 package com.ahmadre.hinata.project;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.TeamAccess;
 import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -25,6 +27,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProjectService {
@@ -42,6 +45,8 @@ public class ProjectService {
 	// Injected as a repository (not TeamService) so project gating can read team
 	// access without forming a bean cycle (TeamService depends on this service).
 	private final TeamRepository teams;
+	// Safe to inject: NotificationService does not depend back on this service.
+	private final NotificationService notifications;
 
 	public Project get(String id) {
 		return projects.findById(id).orElseThrow(() -> ApiException.notFound("project"));
@@ -197,6 +202,9 @@ public class ProjectService {
 		if (req.archived() != null) project.setArchived(req.archived());
 
 		String previousKey = project.getKey();
+		// Snapshot members before the wholesale replace so we can notify only the
+		// newly-added ones after save (mirrors TeamService.addMembers' diff).
+		Set<String> previousMembers = new HashSet<>(project.getMemberIds());
 		applyKey(project, req.key());
 		applyMembersAndLeads(project, req);
 		List<RenameOp> stateRenames = applyWorkflow(project, req);
@@ -216,7 +224,28 @@ public class ProjectService {
 		// resolvedAt (e.g. a once-resolved state is no longer resolved). Recompute
 		// it so "done" stays truthful (struck-through sub-tasks, throughput, etc.).
 		reconcileResolvedAt(saved);
+		notifyNewMembers(saved, previousMembers, user);
 		return saved;
+	}
+
+	/**
+	 * Notifies each member added by this update (in-app + e-mail + push), except
+	 * the actor who performed it. Best-effort: a notification failure must never
+	 * fail the settings save.
+	 */
+	private void notifyNewMembers(Project saved, Set<String> previousMembers, User actor) {
+		try {
+			for (String userId : saved.getMemberIds()) {
+				if (userId == null || previousMembers.contains(userId)
+						|| userId.equals(actor.getId())) {
+					continue;
+				}
+				notifications.notifyAddedToProject(userId, saved.getId(), saved.getName());
+			}
+		}
+		catch (Exception ex) {
+			log.warn("Notifying new members of project {} failed: {}", saved.getId(), ex.getMessage());
+		}
 	}
 
 	/**

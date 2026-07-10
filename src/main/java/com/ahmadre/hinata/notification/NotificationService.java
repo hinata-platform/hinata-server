@@ -251,6 +251,22 @@ public class NotificationService {
 		});
 	}
 
+	/**
+	 * Notifies a user that they were added to a project (in-app + e-mail + push),
+	 * localized to their own UI language. Mirrors {@link #notifyAddedToTeam}: the
+	 * caller passes the project name/id so this package need not depend on the
+	 * project type. No-op for unknown or deactivated users.
+	 */
+	public void notifyAddedToProject(String userId, String projectId, String projectName) {
+		users.findById(userId).filter(User::isActive).ifPresent(user -> {
+			String title = de(user) ? "Zu einem Projekt hinzugefügt" : "Added to a project";
+			String body = de(user)
+					? "Du wurdest dem Projekt \"" + projectName + "\" hinzugefügt."
+					: "You've been added to the project \"" + projectName + "\".";
+			deliverOne(user, Notification.Type.PROJECT_ADDED, title, body, projectLink(projectId));
+		});
+	}
+
 	private void deliverOne(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
@@ -263,6 +279,11 @@ public class NotificationService {
 
 	private String teamLink(String teamId) {
 		return "/teams/" + teamId;
+	}
+
+	private String projectLink(String projectId) {
+		// The project's landing view is its board (there is no bare /projects/:id route).
+		return "/projects/" + projectId + "/boards";
 	}
 
 	// --- Account lifecycle events ---------------------------------------------
