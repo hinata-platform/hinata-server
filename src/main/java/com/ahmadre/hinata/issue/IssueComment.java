@@ -46,6 +46,23 @@ public class IssueComment {
 		private String contentType;
 	}
 
+	/**
+	 * A single emoji reaction from one user. WhatsApp semantics: a user holds at
+	 * most one reaction per comment (adding another replaces it, re-adding the
+	 * same emoji removes it), enforced in the service — this list therefore has at
+	 * most one entry per {@link #userId}.
+	 */
+	@Data
+	@Builder
+	public static class Reaction {
+		/** The emoji grapheme (e.g. {@code ❤️}). */
+		private String emoji;
+		/** User who reacted. */
+		private String userId;
+		/** When the reaction was set (for stable ordering). */
+		private Instant createdAt;
+	}
+
 	@Id
 	private String id;
 
@@ -61,6 +78,32 @@ public class IssueComment {
 
 	/** Present only for {@link Type#VOICE}. */
 	private Voice voice;
+
+	/** Emoji reactions; at most one per user (WhatsApp-style). Never null on save. */
+	@Builder.Default
+	private List<Reaction> reactions = new java.util.ArrayList<>();
+
+	/** Whether this comment is pinned to the top of the thread. */
+	private boolean pinned;
+
+	/** When it was pinned (pin ordering); null when not pinned. */
+	private Instant pinnedAt;
+
+	/**
+	 * When the text was last edited by its author. Distinct from {@link #updatedAt}
+	 * (which @LastModifiedDate bumps on <em>any</em> save, incl. reactions/pins), so
+	 * the "edited" marker only reflects real content edits.
+	 */
+	private Instant editedAt;
+
+	/** The comment this one is a reply to (WhatsApp quote); null otherwise. */
+	private String replyToId;
+
+	/** Denormalised author of {@link #replyToId} so the quote renders without a lookup. */
+	private String replyToAuthorId;
+
+	/** Denormalised short preview of the quoted comment ("🎤"/"📷" for media). */
+	private String replyToPreview;
 
 	@CreatedDate
 	private Instant createdAt;

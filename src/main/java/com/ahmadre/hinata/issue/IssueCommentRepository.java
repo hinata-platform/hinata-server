@@ -13,6 +13,9 @@ public interface IssueCommentRepository extends MongoRepository<IssueComment, St
 	/** Newest-first page of a thread, for the paginated comments endpoint. */
 	Page<IssueComment> findByIssueIdOrderByCreatedAtDesc(String issueId, Pageable pageable);
 
+	/** Pinned comments of a thread, in pin order — surfaced above the feed. */
+	List<IssueComment> findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(String issueId);
+
 	/** Comments a user authored — for the GDPR self-service data export. */
 	List<IssueComment> findByAuthorIdOrderByCreatedAtDesc(String authorId);
 

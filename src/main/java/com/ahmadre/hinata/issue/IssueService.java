@@ -43,6 +43,7 @@ public class IssueService {
 	private final IssueActivityRepository activities;
 	private final IssueLinkRepository links;
 	private final IssueLinkEvents linkEvents;
+	private final CommentEvents commentEvents;
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final StorageService storage;
@@ -528,14 +529,23 @@ public class IssueService {
 	}
 
 	public IssueComment addComment(String issueId, String text, User author) {
+		return addComment(issueId, text, null, author);
+	}
+
+	/**
+	 * Posts a text comment, optionally as a reply that quotes {@code replyToId}
+	 * (WhatsApp-style). A dangling/foreign reply target is silently ignored so the
+	 * comment is still posted.
+	 */
+	public IssueComment addComment(String issueId, String text, String replyToId, User author) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
-		IssueComment comment = IssueComment.builder()
+		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
-				.text(text)
-				.build();
-		IssueComment saved = comments.save(comment);
+				.text(text);
+		applyReplyTo(builder, issue.getId(), replyToId);
+		IssueComment saved = comments.save(builder.build());
 		// Notifications are best-effort: a failure in the mail/push fan-out (e.g.
 		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
 		// the already-saved comment by bubbling a 500 back to the author.
@@ -546,7 +556,35 @@ public class IssueService {
 			LOGGER.warn("comment notification failed for issue {} (comment kept)",
 					issue.getId(), ex);
 		}
+		commentEvents.publishChanged(issue.getId());
 		return saved;
+	}
+
+	/** Copies a denormalised quote snapshot of the reply target onto the builder. */
+	private void applyReplyTo(IssueComment.IssueCommentBuilder builder, String issueId,
+			String replyToId) {
+		if (replyToId == null || replyToId.isBlank()) {
+			return;
+		}
+		IssueComment parent = comments.findById(replyToId)
+				.filter(c -> c.getIssueId().equals(issueId))
+				.orElse(null);
+		if (parent == null) {
+			return;
+		}
+		builder.replyToId(parent.getId())
+				.replyToAuthorId(parent.getAuthorId())
+				.replyToPreview(previewOf(parent));
+	}
+
+	/** Compact one-line quote preview ("🎤" for voice) for a reply snapshot. */
+	private String previewOf(IssueComment comment) {
+		if (comment.resolvedType() == IssueComment.Type.VOICE) {
+			return "🎤";
+		}
+		String text = comment.getText() == null ? "" : comment.getText().strip();
+		text = text.replaceAll("\\s+", " ");
+		return text.length() > 140 ? text.substring(0, 140) + "…" : text;
 	}
 
 	public Page<IssueComment> commentsOf(String issueId, int page, int size, User user) {
@@ -563,6 +601,11 @@ public class IssueService {
 	 */
 	public IssueComment addVoiceComment(String issueId, MultipartFile file, int durationMs,
 			List<Integer> peaks, User author) {
+		return addVoiceComment(issueId, file, durationMs, peaks, null, author);
+	}
+
+	public IssueComment addVoiceComment(String issueId, MultipartFile file, int durationMs,
+			List<Integer> peaks, String replyToId, User author) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
 		if (file == null || file.isEmpty()) {
@@ -601,13 +644,13 @@ public class IssueService {
 				.size(file.getSize())
 				.contentType(contentType)
 				.build();
-		IssueComment comment = IssueComment.builder()
+		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
 				.type(IssueComment.Type.VOICE)
-				.voice(voice)
-				.build();
-		IssueComment saved = comments.save(comment);
+				.voice(voice);
+		applyReplyTo(builder, issue.getId(), replyToId);
+		IssueComment saved = comments.save(builder.build());
 		// Blank text → notifyComment falls back to a "commented on <title>" body.
 		// Best-effort (see addComment): never fail a saved voice comment on it.
 		try {
@@ -617,6 +660,7 @@ public class IssueService {
 			LOGGER.warn("voice-comment notification failed for issue {} (comment kept)",
 					issue.getId(), ex);
 		}
+		commentEvents.publishChanged(issue.getId());
 		return saved;
 	}
 
@@ -640,7 +684,10 @@ public class IssueService {
 			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
 		comment.setText(text);
-		return comments.save(comment);
+		comment.setEditedAt(Instant.now());
+		IssueComment saved = comments.save(comment);
+		commentEvents.publishChanged(comment.getIssueId());
+		return saved;
 	}
 
 	/** Delete a comment. The author may delete their own; admins may moderate any. */
@@ -654,6 +701,57 @@ public class IssueService {
 		if (comment.resolvedType() == IssueComment.Type.VOICE && comment.getVoice() != null) {
 			storage.delete(comment.getVoice().getObjectKey());
 		}
+		commentEvents.publishChanged(comment.getIssueId());
+	}
+
+	/**
+	 * Toggles the caller's emoji reaction on a comment (WhatsApp-style: one per
+	 * user — a new emoji replaces theirs, the same emoji removes it). Any project
+	 * member may react.
+	 */
+	public IssueComment reactToComment(String issueId, String commentId, String emoji, User user) {
+		IssueComment comment = requireComment(issueId, commentId, user);
+		String normalized = emoji == null ? "" : emoji.strip();
+		if (normalized.isEmpty() || normalized.length() > 32) {
+			throw ApiException.badRequest("error.comment.invalidReaction");
+		}
+		List<IssueComment.Reaction> reactions = comment.getReactions();
+		if (reactions == null) {
+			reactions = new ArrayList<>();
+			comment.setReactions(reactions);
+		}
+		IssueComment.Reaction mine = reactions.stream()
+				.filter(r -> user.getId().equals(r.getUserId()))
+				.findFirst()
+				.orElse(null);
+		boolean sameEmoji = mine != null && normalized.equals(mine.getEmoji());
+		reactions.removeIf(r -> user.getId().equals(r.getUserId()));
+		if (!sameEmoji) {
+			reactions.add(IssueComment.Reaction.builder()
+					.emoji(normalized)
+					.userId(user.getId())
+					.createdAt(Instant.now())
+					.build());
+		}
+		IssueComment saved = comments.save(comment);
+		commentEvents.publishChanged(comment.getIssueId());
+		return saved;
+	}
+
+	/** Pins/unpins a comment. Any project member may pin and unpin. */
+	public IssueComment setPinned(String issueId, String commentId, boolean pinned, User user) {
+		IssueComment comment = requireComment(issueId, commentId, user);
+		comment.setPinned(pinned);
+		comment.setPinnedAt(pinned ? Instant.now() : null);
+		IssueComment saved = comments.save(comment);
+		commentEvents.publishChanged(comment.getIssueId());
+		return saved;
+	}
+
+	/** Pinned comments of a thread, in pin order — surfaced above the feed. */
+	public List<IssueComment> pinnedComments(String issueId, User user) {
+		String id = getForUser(issueId, user).getId();
+		return comments.findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(id);
 	}
 
 	private IssueComment requireComment(String issueId, String commentId, User user) {
