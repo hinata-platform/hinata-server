@@ -250,7 +250,9 @@ public class SprintService {
 	public SprintReport report(String id, User user) {
 		Sprint sprint = accessibleSprint(id, user);
 		Map<String, Set<String>> resolvedCache = new HashMap<>();
-		List<Issue> inSprint = issues.findBySprintId(sprint.getId());
+		// Archived issues are soft-deleted and must not distort the report.
+		List<Issue> inSprint = issues.findBySprintId(sprint.getId()).stream()
+				.filter(i -> !i.isArchived()).toList();
 
 		int committed = inSprint.stream().mapToInt(SprintService::points).sum();
 		List<Issue> doneIssues = inSprint.stream().filter(i -> resolvedIn(i, resolvedCache)).toList();

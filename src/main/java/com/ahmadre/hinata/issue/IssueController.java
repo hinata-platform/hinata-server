@@ -87,10 +87,11 @@ public class IssueController {
 			@RequestParam(required = false) String type,
 			@RequestParam(required = false) String query,
 			@RequestParam(defaultValue = "false") boolean noSprint,
+			@RequestParam(defaultValue = "false") boolean archived,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
 		return issueService.search(projectId, state, assigneeId, sprintId, type, query, noSprint,
-				page, size, currentUser.require());
+				archived, page, size, currentUser.require());
 	}
 
 	@GetMapping("/{id}")
@@ -170,6 +171,24 @@ public class IssueController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String id) {
 		issueService.delete(id, currentUser.require());
+	}
+
+	/** Soft delete — any project member may archive an issue. */
+	@PostMapping("/{id}/archive")
+	public Issue archive(@PathVariable String id) {
+		return issueService.setArchived(id, true, currentUser.require());
+	}
+
+	/** Restores an archived issue (and its archived sub-tasks). */
+	@PostMapping("/{id}/unarchive")
+	public Issue unarchive(@PathVariable String id) {
+		return issueService.setArchived(id, false, currentUser.require());
+	}
+
+	/** The caller's capabilities on this issue (drives archive-vs-delete UI). */
+	@GetMapping("/{id}/permissions")
+	public IssueService.Permissions permissions(@PathVariable String id) {
+		return issueService.permissionsOf(id, currentUser.require());
 	}
 
 	@GetMapping("/{id}/activity")

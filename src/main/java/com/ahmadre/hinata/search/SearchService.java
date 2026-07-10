@@ -74,33 +74,66 @@ public class SearchService {
 	private final IssueRepository issues;
 
 	public SearchResponse search(String rawQuery, String scope) {
+		return search(rawQuery, scope, false);
+	}
+
+	/**
+	 * @param archived search the archive instead: archived (soft-deleted)
+	 *                 issues and archived projects, badged by the client. Only
+	 *                 those two categories exist in the archive; the rest stay
+	 *                 empty. An empty query suggests the latest archived items.
+	 */
+	public SearchResponse search(String rawQuery, String scope, boolean archived) {
 		String q = rawQuery == null ? "" : rawQuery.trim();
 		SearchCategory only = SearchCategory.parse(scope);
 		int cap = only == null ? CAP_ALL : CAP_SCOPED;
 
 		// Empty query + a specific entity scope → suggest the latest entities.
-		// Empty + "all" (or Commands) → no groups (the client shows recents).
+		// Empty + "all" (or Commands) → no groups (the client shows recents) —
+		// except in archive mode, where the bare keyword should already reveal
+		// the latest archived items.
 		final List<SearchGroup> groups;
 		if (!q.isBlank()) {
-			groups = queryGroups(q, only, cap);
-		} else if (only != null) {
-			groups = groupOf(only, suggest(only));
+			groups = queryGroups(q, only, cap, archived);
+		} else if (only != null || archived) {
+			groups = suggestGroups(only, archived);
 		} else {
 			groups = List.of();
 		}
 		return new SearchResponse(groups, counts());
 	}
 
-	private List<SearchGroup> queryGroups(String q, SearchCategory only, int cap) {
+	private List<SearchGroup> queryGroups(String q, SearchCategory only, int cap,
+			boolean archived) {
 		List<SearchGroup> groups = new ArrayList<>();
 		for (SearchCategory cat : SearchCategory.values()) {
 			if (only != null && cat != only) continue;
 			List<SearchHit> hits = switch (cat) {
-				case ISSUES -> mapIssues(searchIssues(q, cap));
-				case PROJECTS -> mapProjects(searchProjects(q, cap));
-				case PEOPLE -> mapPeople(searchPeople(q, cap));
-				case BOARDS -> searchBoards(q, cap);
-				case DOCS -> mapDocs(searchDocs(q, cap));
+				case ISSUES -> mapIssues(searchIssues(q, cap, archived), archived);
+				case PROJECTS -> mapProjects(searchProjects(q, cap, archived), archived);
+				// People, boards and docs have no archive — hidden in archive mode.
+				case PEOPLE -> archived ? List.<SearchHit>of() : mapPeople(searchPeople(q, cap));
+				case BOARDS -> archived ? List.<SearchHit>of() : searchBoards(q, cap);
+				case DOCS -> archived ? List.<SearchHit>of() : mapDocs(searchDocs(q, cap));
+			};
+			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
+		}
+		return groups;
+	}
+
+	/** Empty-query suggestions: latest entities of one scope, or — in archive
+	 * mode — the latest archived issues and projects across both categories. */
+	private List<SearchGroup> suggestGroups(SearchCategory only, boolean archived) {
+		if (!archived) return groupOf(only, suggest(only));
+		List<SearchGroup> groups = new ArrayList<>();
+		for (SearchCategory cat : List.of(SearchCategory.ISSUES, SearchCategory.PROJECTS)) {
+			if (only != null && cat != only) continue;
+			List<SearchHit> hits = switch (cat) {
+				case ISSUES -> mapIssues(
+						latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, archivedIs(true)), true);
+				case PROJECTS -> mapProjects(
+						latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedTrue()), true);
+				default -> List.<SearchHit>of();
 			};
 			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
 		}
@@ -115,9 +148,9 @@ public class SearchService {
 	private List<SearchHit> suggest(SearchCategory cat) {
 		return switch (cat) {
 			case ISSUES -> mapIssues(
-					latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, null));
+					latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, archivedIs(false)), false);
 			case PROJECTS -> mapProjects(
-					latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedFalse()));
+					latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedFalse()), false);
 			case PEOPLE -> mapPeople(
 					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)));
 			case BOARDS -> suggestBoards();
@@ -128,10 +161,10 @@ public class SearchService {
 
 	// ─────────────────────────── per-category ─────────────────────────────
 
-	private List<Issue> searchIssues(String q, int cap) {
+	private List<Issue> searchIssues(String q, int cap, boolean archived) {
 		return hybrid(Issue.class, q, cap,
 				List.of(contains(F_TITLE, q), prefix("readableId", q), contains(F_TAGS, q)),
-				F_UPDATED, Issue::getId, Issue::getTitle);
+				archivedIs(archived), F_UPDATED, Issue::getId, Issue::getTitle);
 	}
 
 	/** Ids of active (non-archived) projects — archived projects are hidden
@@ -141,7 +174,7 @@ public class SearchService {
 				.map(Project::getId).collect(Collectors.toSet());
 	}
 
-	private List<SearchHit> mapIssues(List<Issue> rawHits) {
+	private List<SearchHit> mapIssues(List<Issue> rawHits, boolean archived) {
 		Set<String> active = activeProjectIds();
 		List<Issue> hits = rawHits.stream()
 				.filter(it -> active.contains(it.getProjectId())).toList();
@@ -154,6 +187,7 @@ public class SearchService {
 					.category(SearchCategory.ISSUES.name())
 					.id(it.getId())
 					.route("/issues/" + it.getId())
+					.archived(archived ? Boolean.TRUE : null)
 					.title(it.getTitle())
 					.readableId(it.getReadableId())
 					.type(it.getType() != null ? it.getType().name() : "TASK")
@@ -164,14 +198,15 @@ public class SearchService {
 		}).toList();
 	}
 
-	private List<Project> searchProjects(String q, int cap) {
+	private List<Project> searchProjects(String q, int cap, boolean archived) {
 		return hybrid(Project.class, q, cap,
 				List.of(contains(F_NAME, q), prefix("key", q)),
+				Criteria.where("archived").is(archived),
 				F_UPDATED, Project::getId, Project::getName);
 	}
 
-	private List<SearchHit> mapProjects(List<Project> rawHits) {
-		List<Project> hits = rawHits.stream().filter(p -> !p.isArchived()).toList();
+	private List<SearchHit> mapProjects(List<Project> rawHits, boolean archived) {
+		List<Project> hits = rawHits.stream().filter(p -> p.isArchived() == archived).toList();
 		Map<String, User> byId = userMap(hits.stream()
 				.flatMap(p -> p.getMemberIds().stream()).collect(Collectors.toSet()));
 
@@ -187,6 +222,7 @@ public class SearchService {
 					.category(SearchCategory.PROJECTS.name())
 					.id(p.getId())
 					.route("/projects")
+					.archived(archived ? Boolean.TRUE : null)
 					.title(p.getName())
 					.projectKey(p.getKey())
 					.projectColor(p.getColor())
@@ -294,10 +330,19 @@ public class SearchService {
 	 */
 	private <T> List<T> hybrid(Class<T> type, String q, int cap, List<Criteria> regexOrs,
 			String sortField, Function<T, String> idFn, Function<T, String> labelFn) {
+		return hybrid(type, q, cap, regexOrs, null, sortField, idFn, labelFn);
+	}
+
+	/** Variant with an extra AND [filter] (e.g. the archived flag) applied to
+	 * both the regex and the $text query. */
+	private <T> List<T> hybrid(Class<T> type, String q, int cap, List<Criteria> regexOrs,
+			Criteria filter, String sortField, Function<T, String> idFn,
+			Function<T, String> labelFn) {
 		int candidates = cap * CANDIDATE_FACTOR;
 
 		Query regexQuery = new Query(new Criteria()
 				.orOperator(regexOrs.toArray(Criteria[]::new))).limit(candidates);
+		if (filter != null) regexQuery.addCriteria(filter);
 		if (sortField != null) regexQuery.with(Sort.by(Sort.Direction.DESC, sortField));
 		List<T> regexHits = mongo.find(regexQuery, type);
 
@@ -306,6 +351,7 @@ public class SearchService {
 			try {
 				TextCriteria tc = TextCriteria.forDefaultLanguage().matchingAny(q.split("\\s+"));
 				TextQuery textQuery = TextQuery.queryText(tc).sortByScore();
+				if (filter != null) textQuery.addCriteria(filter);
 				textQuery.limit(candidates);
 				textHits = mongo.find(textQuery, type);
 			} catch (RuntimeException ignored) {
@@ -352,6 +398,18 @@ public class SearchService {
 
 	private static Criteria archivedFalse() {
 		return Criteria.where("archived").is(false);
+	}
+
+	private static Criteria archivedTrue() {
+		return Criteria.where("archived").is(true);
+	}
+
+	/** Issue archived filter — {@code ne(true)} keeps matching pre-migration
+	 * documents that lack the flag. */
+	private static Criteria archivedIs(boolean archived) {
+		return archived
+				? Criteria.where("archived").is(true)
+				: Criteria.where("archived").ne(true);
 	}
 
 	/** The most-recent [limit] entities by [sortField] (optional [filter]). */

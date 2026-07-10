@@ -31,6 +31,10 @@ public class SearchHit {
 	/** Pre-resolved subtitle for people (job title) and boards (descriptor). */
 	private String subtitle;
 
+	/** True for archived (soft-deleted) issues / archived projects, so the
+	 * palette can badge them; omitted (null) for active entities. */
+	private Boolean archived;
+
 	// ---- issues ----
 	private String readableId;
 	private String type;

@@ -21,14 +21,18 @@ public class SearchController {
 	/**
 	 * Unified search across issues, projects, people, boards and knowledge.
 	 *
-	 * @param q     free-text query; blank returns just the category counts
-	 * @param scope {@code all} (default) or a single category name
+	 * @param q        free-text query; blank returns just the category counts
+	 * @param scope    {@code all} (default) or a single category name
+	 * @param archived search archived (soft-deleted) issues and archived
+	 *                 projects instead of active ones — triggered by the
+	 *                 palette's locale-aware "archived"/"archiviert" keyword
 	 */
 	@GetMapping
 	public SearchResponse search(
 			@RequestParam(required = false) String q,
-			@RequestParam(required = false) String scope) {
+			@RequestParam(required = false) String scope,
+			@RequestParam(defaultValue = "false") boolean archived) {
 		currentUser.require();
-		return searchService.search(q, scope);
+		return searchService.search(q, scope, archived);
 	}
 }

@@ -52,6 +52,9 @@ public enum AuditAction {
 
 	// --- Data / privacy ------------------------------------------------------
 	DATA_EXPORT_REQUESTED(DATA, NOTICE, true),
+	ISSUE_DELETED(DATA, WARNING, true),
+	ISSUE_ARCHIVED(DATA, INFO, true),
+	ISSUE_UNARCHIVED(DATA, INFO, true),
 
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),

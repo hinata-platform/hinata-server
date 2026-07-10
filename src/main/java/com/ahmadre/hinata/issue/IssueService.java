@@ -1,10 +1,13 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.timetracking.WorkItemRepository;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -49,6 +52,8 @@ public class IssueService {
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final StorageService storage;
+	private final WorkItemRepository workItems;
+	private final AuditService audit;
 	private final MongoTemplate mongo;
 
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
@@ -291,9 +296,18 @@ public class IssueService {
 		}
 	}
 
+	/**
+	 * Hard delete — restricted to platform admins, project leads and Team-Admins
+	 * of a team owning the project (see {@link ProjectService#canDeleteIssues}).
+	 * Regular members must archive instead.
+	 */
 	public void delete(String id, User user) {
 		Issue issue = get(id);
-		assertAccess(issue, user);
+		Project project = projects.get(issue.getProjectId());
+		projects.assertMember(project, user);
+		if (!projects.canDeleteIssues(project, user)) {
+			throw ApiException.forbidden("error.issue.deleteForbidden");
+		}
 		if (issue.getType().isEpic()) {
 			// Standard children survive as top-level issues — just drop the epic link.
 			mongo.updateMulti(new Query(Criteria.where("parentId").is(issue.getId())),
@@ -304,14 +318,56 @@ public class IssueService {
 			for (Issue child : issues.findByParentId(issue.getId())) {
 				comments.deleteByIssueId(child.getId());
 				activities.deleteByIssueId(child.getId());
+				workItems.deleteByIssueId(child.getId());
 				deleteLinksOf(child.getId());
 				issues.delete(child);
 			}
 		}
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
+		workItems.deleteByIssueId(issue.getId());
 		deleteLinksOf(issue.getId());
 		issues.delete(issue);
+		audit.event(AuditAction.ISSUE_DELETED).actor(user)
+				.meta("issue", issue.getReadableId()).log();
+	}
+
+	/**
+	 * Archives or restores an issue (soft delete). Open to every project member
+	 * — the safe alternative to the role-gated hard {@link #delete}. Sub-tasks
+	 * can't stand alone, so a standard issue takes its sub-tasks along.
+	 */
+	public Issue setArchived(String id, boolean archived, User user) {
+		Issue issue = get(id);
+		assertAccess(issue, user);
+		if (issue.isArchived() == archived) return issue;
+		Instant at = archived ? Instant.now() : null;
+		if (issue.getType().isStandard()) {
+			for (Issue child : issues.findByParentId(issue.getId())) {
+				if (child.isArchived() != archived) {
+					child.setArchived(archived);
+					child.setArchivedAt(at);
+					issues.save(child);
+				}
+			}
+		}
+		issue.setArchived(archived);
+		issue.setArchivedAt(at);
+		Issue saved = issues.save(issue);
+		audit.event(archived ? AuditAction.ISSUE_ARCHIVED : AuditAction.ISSUE_UNARCHIVED)
+				.actor(user).meta("issue", saved.getReadableId()).log();
+		return saved;
+	}
+
+	/** Per-user capabilities on an issue, for the client's archive/delete UI. */
+	public record Permissions(boolean canDelete) {
+	}
+
+	public Permissions permissionsOf(String id, User user) {
+		Issue issue = get(id);
+		Project project = projects.get(issue.getProjectId());
+		projects.assertMember(project, user);
+		return new Permissions(projects.canDeleteIssues(project, user));
 	}
 
 	/**
@@ -486,7 +542,20 @@ public class IssueService {
 	/** Filtered, paginated search. Free-text is regex-escaped (NoSQL injection safe). */
 	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
 			String type, String text, boolean noSprint, int page, int size, User user) {
+		return search(projectId, state, assigneeId, sprintId, type, text, noSprint, false,
+				page, size, user);
+	}
+
+	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
+			String type, String text, boolean noSprint, boolean archived, int page, int size,
+			User user) {
 		Query query = new Query();
+		// Archived issues are soft-deleted: hidden everywhere by default, listed
+		// only when explicitly requested (the "Archived" view). `ne(true)` keeps
+		// matching pre-migration documents that lack the flag.
+		query.addCriteria(archived
+				? Criteria.where("archived").is(true)
+				: Criteria.where("archived").ne(true));
 		// Everyone is limited to active (non-archived) projects — an archived
 		// project is deactivated, so its issues never surface anywhere. Non-admins
 		// are further limited to projects they belong to (A01). visibleTo already

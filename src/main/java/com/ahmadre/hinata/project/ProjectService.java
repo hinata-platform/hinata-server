@@ -183,6 +183,23 @@ public class ProjectService {
 	}
 
 	/**
+	 * Whether {@code user} may hard-delete issues of this project: platform
+	 * admins, project leads, and Team-Admins of a team that owns the project.
+	 * Everyone else may only archive issues.
+	 */
+	public boolean canDeleteIssues(Project project, User user) {
+		if (user.isAdmin()) return true;
+		List<String> leads = project.getLeadIds();
+		if (leads != null && leads.contains(user.getId())) return true;
+		if (user.getId().equals(project.getLeadId())) return true; // legacy single lead
+		return teams.findByMembersUserId(user.getId()).stream().anyMatch(team -> {
+			var membership = team.membership(user.getId());
+			return membership != null && membership.isAdmin()
+					&& team.getProjectIds().contains(project.getId());
+		});
+	}
+
+	/**
 	 * Validates and atomically commits a settings update. Only non-null request
 	 * fields are touched. Enforces every invariant from the spec (name/key,
 	 * >=1 lead, >=2 states, >=1 resolved) and cascades workflow/label renames and

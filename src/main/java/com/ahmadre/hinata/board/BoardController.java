@@ -176,6 +176,8 @@ public class BoardController {
 						org.springframework.data.domain.PageRequest.of(0, 500)).getContent());
 			}
 		}
+		// Archived issues are soft-deleted — they never appear on the board.
+		candidates.removeIf(Issue::isArchived);
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
 
 		Map<String, Integer> wipByName = new HashMap<>();

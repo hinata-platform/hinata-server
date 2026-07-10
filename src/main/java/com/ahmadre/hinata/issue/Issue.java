@@ -1,7 +1,11 @@
 package com.ahmadre.hinata.issue;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -136,6 +140,31 @@ public class Issue {
 	private double rank = 0;
 
 	private Instant resolvedAt;
+
+	/**
+	 * Soft-delete: an archived issue is hidden from every default listing
+	 * (search, board, backlog, sprints) but keeps all its data and can be
+	 * restored. Any project member may archive; hard delete is role-gated.
+	 *
+	 * <p>Stored as a wrapper because pre-migration documents lack the field —
+	 * a primitive would make Spring Data's constructor mapping reject them
+	 * (null → boolean). The manual accessors keep the boolean API.
+	 */
+	@Getter(AccessLevel.NONE)
+	@Setter(AccessLevel.NONE)
+	@Indexed
+	private Boolean archived;
+
+	private Instant archivedAt;
+
+	@JsonProperty("archived")
+	public boolean isArchived() {
+		return Boolean.TRUE.equals(archived);
+	}
+
+	public void setArchived(boolean archived) {
+		this.archived = archived;
+	}
 
 	@CreatedDate
 	private Instant createdAt;
