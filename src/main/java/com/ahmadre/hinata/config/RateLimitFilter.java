@@ -41,6 +41,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
 		}
 		String ip = clientIpResolver.resolve(request);
 		String uri = request.getRequestURI();
+		// Long-lived SSE streams (…/stream) are opened once per view and then
+		// transparently reconnect; metering them like discrete API calls would let
+		// a single viewer's streams + reconnects drain the shared per-IP budget.
+		// Worse, a 429 on an event-stream reconnect is indistinguishable from a
+		// normal disconnect, so the client just reconnects and burns another token
+		// — a self-amplifying loop. Never rate-limit the stream endpoints.
+		if (uri.endsWith("/stream")) {
+			chain.doFilter(request, response);
+			return;
+		}
 		Bucket bucket;
 		if (uri.startsWith("/mcp")) {
 			bucket = mcpBuckets.computeIfAbsent(ip,

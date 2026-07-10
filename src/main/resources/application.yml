@@ -62,6 +62,17 @@ spring:
 server:
   port: ${HINATA_PORT:8080}
   forward-headers-strategy: framework
+  tomcat:
+    # Keep-alive tuning so the SERVER never closes a pooled socket out from under
+    # a client mid-burst. A single view fires ~12–15 GETs and every comment
+    # pin/react leaves more keep-alive sockets idling; with Tomcat's defaults
+    # (max-keep-alive-requests=100, keep-alive-timeout≈20s) the server would close
+    # them, and the client's next reuse of a now-dead socket throws "connection
+    # closed before full header was received" → a spurious app-wide error. Let the
+    # CLIENT (which drops idle sockets after 5s) decide when to retire a
+    # connection; never close on request count, and hold idle sockets generously.
+    max-keep-alive-requests: -1
+    keep-alive-timeout: 120000
   error:
     include-stacktrace: never
     include-message: never
