@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.project;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
@@ -38,7 +39,8 @@ class ProjectServiceTest {
 		TeamRepository teams = mock(TeamRepository.class);
 		when(teams.findByMembersUserId(any())).thenReturn(List.of());
 		when(projects.save(any(Project.class))).thenAnswer(i -> i.getArgument(0));
-		service = new ProjectService(projects, mongo, teams);
+		NotificationService notifications = mock(NotificationService.class);
+		service = new ProjectService(projects, mongo, teams, notifications);
 	}
 
 	private User user(String id, Role... roles) {
