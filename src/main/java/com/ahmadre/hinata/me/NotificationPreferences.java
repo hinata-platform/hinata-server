@@ -22,7 +22,7 @@ public class NotificationPreferences {
 
 	/** Stable event ids — mirror the reference {@code account_data.js → NOTIF_EVENTS}. */
 	public static final String[] EVENTS = {
-			"mentions", "assigned", "comments", "status", "sprint", "invites", "digest", "security"
+			"mentions", "assigned", "comments", "status", "ingest", "sprint", "invites", "digest", "security"
 	};
 
 	/** Events that can never be turned off (transactional / security mail). */
@@ -47,6 +47,7 @@ public class NotificationPreferences {
 		events.put("assigned", new Channel(true, true));
 		events.put("comments", new Channel(true, false));
 		events.put("status", new Channel(false, true));
+		events.put("ingest", new Channel(false, true)); // new issue ingested via e-mail — push on, e-mail off
 		events.put("sprint", new Channel(true, true));
 		events.put("invites", new Channel(true, false));
 		events.put("digest", new Channel(true, false));

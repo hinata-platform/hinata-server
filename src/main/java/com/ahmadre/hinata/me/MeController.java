@@ -47,13 +47,17 @@ public class MeController {
 			NotificationPreferences notificationPreferences) {
 
 		static MeResponse from(User u) {
+			NotificationPreferences prefs = u.getNotificationPreferences();
+			// Fill in any events added since the account's prefs were last saved (e.g.
+			// "ingest"), so the client always sees each event with its proper default.
+			prefs = (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
 			return new MeResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
 					u.isEmailVerified(), u.getPendingEmail(), u.getTitle(), u.getLocale(),
 					u.getOrigin().name(), u.getRoles().stream().map(Enum::name).sorted().toList(),
 					u.isActive(), u.getAvatarUrl(), u.getCreatedAt(), u.getPasswordChangedAt(),
 					new TwoFactorDto(u.isTotpEnabled(), "TOTP", u.recoveryCodesRemaining(),
 							u.getTotpEnabledAt()),
-					u.getNotificationPreferences());
+					prefs);
 		}
 	}
 

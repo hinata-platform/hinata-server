@@ -2,6 +2,9 @@ package com.ahmadre.hinata.mailingest;
 
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.notification.NotificationService;
+import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.AttachmentStore;
@@ -39,6 +42,8 @@ public class EmailIngestService {
 
 	private final SettingsService settings;
 	private final IssueService issues;
+	private final ProjectService projects;
+	private final NotificationService notifications;
 	private final StorageService storage;
 	private final AttachmentStore attachments;
 
@@ -105,7 +110,23 @@ public class EmailIngestService {
 				.build();
 		Issue created = issues.create(issue, null);
 		log.info("Created {} from e-mail by {}", created.getReadableId(), from);
+		notifyMembers(created, projectId, from);
 		attachFiles(message, created.getId());
+	}
+
+	/**
+	 * Tells the project's members that an issue arrived by e-mail. Best-effort:
+	 * a lookup or delivery failure is logged and never aborts ticket creation.
+	 */
+	private void notifyMembers(Issue created, String projectId, String from) {
+		try {
+			Project project = projects.get(projectId);
+			notifications.notifyIssueIngested(created, project.getMemberIds(), from);
+		}
+		catch (Exception ex) {
+			log.warn("Notifying members of ingested issue {} failed: {}",
+					created.getReadableId(), ex.getMessage());
+		}
 	}
 
 	/**

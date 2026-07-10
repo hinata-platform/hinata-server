@@ -44,6 +44,27 @@ public class NotificationService {
 				issueLink(issue));
 	}
 
+	/**
+	 * Notifies a project's members that a new issue landed via inbound e-mail
+	 * ingestion. There is no human actor — the sender is an external e-mail
+	 * address — so every active member is a recipient. Delivery is gated by each
+	 * member's {@code ingest} channel preference (default: push on, e-mail off).
+	 */
+	public void notifyIssueIngested(Issue issue, java.util.Collection<String> memberIds, String senderEmail) {
+		Set<String> recipients = new HashSet<>(memberIds != null ? memberIds : Set.of());
+		if (recipients.isEmpty()) return;
+		boolean hasSender = senderEmail != null && !senderEmail.isBlank()
+				&& !"unknown".equalsIgnoreCase(senderEmail);
+		deliver(recipients, Notification.Type.ISSUE_INGESTED,
+				de -> de ? "Neue Aufgabe per E-Mail: " + issue.getReadableId()
+						: "New issue via e-mail: " + issue.getReadableId(),
+				de -> hasSender
+						? (de ? "Von " + senderEmail + ": \"" + issue.getTitle() + "\""
+								: "From " + senderEmail + ": \"" + issue.getTitle() + "\"")
+						: issue.getTitle(),
+				issueLink(issue));
+	}
+
 	/** Notify the issue's watchers that its workflow state changed. */
 	public void notifyStateChanged(Issue issue, User editor, String newState) {
 		deliver(watchersWithout(issue, editor), Notification.Type.ISSUE_UPDATED,
@@ -429,6 +450,7 @@ public class NotificationService {
 			case ISSUE_ASSIGNED -> "assigned";
 			case ISSUE_COMMENTED -> "comments";
 			case ISSUE_UPDATED -> "status";
+			case ISSUE_INGESTED -> "ingest";
 			case SPRINT_STARTED -> "sprint";
 			default -> NotificationPreferences.LOCKED;
 		};

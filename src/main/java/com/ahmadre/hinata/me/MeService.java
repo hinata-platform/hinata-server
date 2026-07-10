@@ -165,7 +165,9 @@ public class MeService {
 
 	public NotificationPreferences notificationPreferences(User user) {
 		NotificationPreferences prefs = user.getNotificationPreferences();
-		return prefs == null ? NotificationPreferences.defaults() : prefs;
+		// Sanitize on read so events added after the prefs were last saved (e.g.
+		// "ingest") surface with their defaults instead of being silently absent.
+		return (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
 	}
 
 	public NotificationPreferences saveNotificationPreferences(User user, NotificationPreferences incoming) {
