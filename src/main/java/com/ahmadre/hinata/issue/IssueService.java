@@ -23,9 +23,11 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -43,6 +45,7 @@ public class IssueService {
 	private final IssueActivityRepository activities;
 	private final IssueLinkRepository links;
 	private final IssueLinkEvents linkEvents;
+	private final CommentEvents commentEvents;
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final StorageService storage;
@@ -528,14 +531,23 @@ public class IssueService {
 	}
 
 	public IssueComment addComment(String issueId, String text, User author) {
+		return addComment(issueId, text, null, author);
+	}
+
+	/**
+	 * Posts a text comment, optionally as a reply that quotes {@code replyToId}
+	 * (WhatsApp-style). A dangling/foreign reply target is silently ignored so the
+	 * comment is still posted.
+	 */
+	public IssueComment addComment(String issueId, String text, String replyToId, User author) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
-		IssueComment comment = IssueComment.builder()
+		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
-				.text(text)
-				.build();
-		IssueComment saved = comments.save(comment);
+				.text(text);
+		applyReplyTo(builder, issue.getId(), replyToId);
+		IssueComment saved = comments.save(builder.build());
 		// Notifications are best-effort: a failure in the mail/push fan-out (e.g.
 		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
 		// the already-saved comment by bubbling a 500 back to the author.
@@ -546,13 +558,95 @@ public class IssueService {
 			LOGGER.warn("comment notification failed for issue {} (comment kept)",
 					issue.getId(), ex);
 		}
+		commentEvents.publishChanged(issue.getId());
 		return saved;
 	}
 
+	/**
+	 * Attaches the reply target to the builder, normalising to the thread ROOT:
+	 * flat one-level threading means a reply to a reply shares the same
+	 * {@code replyToId} (the root), so a thread stays a single flat list. The
+	 * denormalised quote snapshot still records the DIRECT target. A dangling or
+	 * foreign target is silently ignored (the comment posts as top-level).
+	 */
+	private void applyReplyTo(IssueComment.IssueCommentBuilder builder, String issueId,
+			String replyToId) {
+		if (replyToId == null || replyToId.isBlank()) {
+			return;
+		}
+		IssueComment target = comments.findById(replyToId)
+				.filter(c -> c.getIssueId().equals(issueId))
+				.orElse(null);
+		if (target == null) {
+			return;
+		}
+		String rootId = (target.getReplyToId() != null && !target.getReplyToId().isBlank())
+				? target.getReplyToId()
+				: target.getId();
+		builder.replyToId(rootId)
+				.replyToAuthorId(target.getAuthorId())
+				.replyToPreview(previewOf(target));
+	}
+
+	/** Compact one-line quote preview ("🎤" for voice) for a reply snapshot. */
+	private String previewOf(IssueComment comment) {
+		if (comment.resolvedType() == IssueComment.Type.VOICE) {
+			return "🎤";
+		}
+		String text = comment.getText() == null ? "" : comment.getText().strip();
+		text = text.replaceAll("\\s+", " ");
+		return text.length() > 140 ? text.substring(0, 140) + "…" : text;
+	}
+
 	public Page<IssueComment> commentsOf(String issueId, int page, int size, User user) {
+		return commentsOf(issueId, page, size, "newest", user);
+	}
+
+	/**
+	 * One page of a thread's TOP-LEVEL comments (replies excluded), ordered by
+	 * {@code sort} ("oldest" → oldest-first, else newest-first). Each comment's
+	 * transient {@code replyCount} is populated in one batched aggregation.
+	 */
+	public Page<IssueComment> commentsOf(String issueId, int page, int size, String sort,
+			User user) {
 		String id = getForUser(issueId, user).getId();
-		return comments.findByIssueIdOrderByCreatedAtDesc(id,
-				PageRequest.of(page, Math.min(size, 100)));
+		Sort.Direction dir = "oldest".equalsIgnoreCase(sort)
+				? Sort.Direction.ASC
+				: Sort.Direction.DESC;
+		Page<IssueComment> result = comments.findByIssueIdAndReplyToIdIsNull(id,
+				PageRequest.of(page, Math.min(size, 100), Sort.by(dir, "createdAt")));
+		attachReplyCounts(result.getContent());
+		return result;
+	}
+
+	/** One page of a root comment's replies, oldest-first (flat, one level). */
+	public Page<IssueComment> repliesOf(String issueId, String rootId, int page, int size,
+			User user) {
+		IssueComment root = requireComment(issueId, rootId, user);
+		return comments.findByReplyToId(root.getId(),
+				PageRequest.of(page, Math.min(size, 100),
+						Sort.by(Sort.Direction.ASC, "createdAt")));
+	}
+
+	/** Populates the transient {@code replyCount} on a page of top-level comments. */
+	private void attachReplyCounts(List<IssueComment> roots) {
+		if (roots.isEmpty()) {
+			return;
+		}
+		List<String> ids = roots.stream().map(IssueComment::getId).toList();
+		Map<String, Long> counts = new HashMap<>();
+		// Never let a count hiccup break the comment list — default to 0 instead.
+		try {
+			for (IssueCommentRepository.ReplyCount rc : comments.countRepliesGrouped(ids)) {
+				counts.put(rc.rootId(), rc.count());
+			}
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("reply-count aggregation failed (counts default to 0)", ex);
+		}
+		for (IssueComment c : roots) {
+			c.setReplyCount(counts.getOrDefault(c.getId(), 0L).intValue());
+		}
 	}
 
 	/**
@@ -563,6 +657,11 @@ public class IssueService {
 	 */
 	public IssueComment addVoiceComment(String issueId, MultipartFile file, int durationMs,
 			List<Integer> peaks, User author) {
+		return addVoiceComment(issueId, file, durationMs, peaks, null, author);
+	}
+
+	public IssueComment addVoiceComment(String issueId, MultipartFile file, int durationMs,
+			List<Integer> peaks, String replyToId, User author) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
 		if (file == null || file.isEmpty()) {
@@ -601,13 +700,13 @@ public class IssueService {
 				.size(file.getSize())
 				.contentType(contentType)
 				.build();
-		IssueComment comment = IssueComment.builder()
+		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
 				.type(IssueComment.Type.VOICE)
-				.voice(voice)
-				.build();
-		IssueComment saved = comments.save(comment);
+				.voice(voice);
+		applyReplyTo(builder, issue.getId(), replyToId);
+		IssueComment saved = comments.save(builder.build());
 		// Blank text → notifyComment falls back to a "commented on <title>" body.
 		// Best-effort (see addComment): never fail a saved voice comment on it.
 		try {
@@ -617,6 +716,7 @@ public class IssueService {
 			LOGGER.warn("voice-comment notification failed for issue {} (comment kept)",
 					issue.getId(), ex);
 		}
+		commentEvents.publishChanged(issue.getId());
 		return saved;
 	}
 
@@ -640,20 +740,98 @@ public class IssueService {
 			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
 		comment.setText(text);
-		return comments.save(comment);
+		comment.setEditedAt(Instant.now());
+		IssueComment saved = comments.save(comment);
+		commentEvents.publishChanged(comment.getIssueId());
+		return withReplyCount(saved);
 	}
 
-	/** Delete a comment. The author may delete their own; admins may moderate any. */
+	/**
+	 * Delete a comment. The author may delete their own; admins may moderate any.
+	 * Deleting a ROOT cascades its whole reply thread (and frees each reply's blob).
+	 */
 	public void deleteComment(String issueId, String commentId, User user) {
 		IssueComment comment = requireComment(issueId, commentId, user);
 		if (!user.isAdmin() && !comment.getAuthorId().equals(user.getId())) {
 			throw ApiException.forbidden("error.comment.deleteOwnOnly");
+		}
+		// A top-level comment owns a flat reply thread — remove it too so replies
+		// don't orphan, freeing any voice blobs they hold (best-effort).
+		if (comment.getReplyToId() == null) {
+			for (IssueComment reply : comments.findByReplyToId(comment.getId())) {
+				if (reply.resolvedType() == IssueComment.Type.VOICE && reply.getVoice() != null) {
+					storage.delete(reply.getVoice().getObjectKey());
+				}
+			}
+			comments.deleteByReplyToId(comment.getId());
 		}
 		comments.delete(comment);
 		// Free the audio blob backing a voice message (best-effort; delete() logs).
 		if (comment.resolvedType() == IssueComment.Type.VOICE && comment.getVoice() != null) {
 			storage.delete(comment.getVoice().getObjectKey());
 		}
+		commentEvents.publishChanged(comment.getIssueId());
+	}
+
+	/**
+	 * Toggles the caller's emoji reaction on a comment (WhatsApp-style: one per
+	 * user — a new emoji replaces theirs, the same emoji removes it). Any project
+	 * member may react.
+	 */
+	public IssueComment reactToComment(String issueId, String commentId, String emoji, User user) {
+		IssueComment comment = requireComment(issueId, commentId, user);
+		String normalized = emoji == null ? "" : emoji.strip();
+		if (normalized.isEmpty() || normalized.length() > 32) {
+			throw ApiException.badRequest("error.comment.invalidReaction");
+		}
+		List<IssueComment.Reaction> reactions = comment.getReactions();
+		if (reactions == null) {
+			reactions = new ArrayList<>();
+			comment.setReactions(reactions);
+		}
+		IssueComment.Reaction mine = reactions.stream()
+				.filter(r -> user.getId().equals(r.getUserId()))
+				.findFirst()
+				.orElse(null);
+		boolean sameEmoji = mine != null && normalized.equals(mine.getEmoji());
+		reactions.removeIf(r -> user.getId().equals(r.getUserId()));
+		if (!sameEmoji) {
+			reactions.add(IssueComment.Reaction.builder()
+					.emoji(normalized)
+					.userId(user.getId())
+					.createdAt(Instant.now())
+					.build());
+		}
+		IssueComment saved = comments.save(comment);
+		commentEvents.publishChanged(comment.getIssueId());
+		return withReplyCount(saved);
+	}
+
+	/** Pins/unpins a comment. Any project member may pin and unpin. */
+	public IssueComment setPinned(String issueId, String commentId, boolean pinned, User user) {
+		IssueComment comment = requireComment(issueId, commentId, user);
+		comment.setPinned(pinned);
+		comment.setPinnedAt(pinned ? Instant.now() : null);
+		IssueComment saved = comments.save(comment);
+		commentEvents.publishChanged(comment.getIssueId());
+		return withReplyCount(saved);
+	}
+
+	/** Pinned TOP-LEVEL comments of a thread, in pin order — surfaced above the feed. */
+	public List<IssueComment> pinnedComments(String issueId, User user) {
+		String id = getForUser(issueId, user).getId();
+		List<IssueComment> pinned = comments.findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(id)
+				.stream()
+				.filter(c -> c.getReplyToId() == null)
+				.toList();
+		attachReplyCounts(pinned);
+		return pinned;
+	}
+
+	/** Sets the read-time reply count on a single comment (0 for a reply). */
+	private IssueComment withReplyCount(IssueComment comment) {
+		comment.setReplyCount((int) comments.countByReplyToId(comment.getId()));
+		return comment;
 	}
 
 	private IssueComment requireComment(String issueId, String commentId, User user) {

@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -23,6 +24,7 @@ import java.util.List;
 public class IssueController {
 
 	private final IssueService issueService;
+	private final CommentEvents commentEvents;
 	private final CurrentUser currentUser;
 
 	public record CreateIssueRequest(
@@ -67,7 +69,13 @@ public class IssueController {
 			Boolean clearStoryPoints) {
 	}
 
-	public record CommentRequest(@NotBlank @Size(max = 10000) String text) {
+	public record CommentRequest(@NotBlank @Size(max = 10000) String text, String replyToId) {
+	}
+
+	public record ReactionRequest(@NotBlank @Size(max = 32) String emoji) {
+	}
+
+	public record PinRequest(boolean pinned) {
 	}
 
 	@GetMapping
@@ -180,14 +188,23 @@ public class IssueController {
 	@GetMapping("/{id}/comments")
 	public Page<IssueComment> comments(@PathVariable String id,
 			@RequestParam(defaultValue = "0") int page,
-			@RequestParam(defaultValue = "30") int size) {
-		return issueService.commentsOf(id, page, size, currentUser.require());
+			@RequestParam(defaultValue = "30") int size,
+			@RequestParam(defaultValue = "newest") String sort) {
+		return issueService.commentsOf(id, page, size, sort, currentUser.require());
+	}
+
+	/** One page of a root comment's replies, oldest-first (flat, lazily loaded). */
+	@GetMapping("/{id}/comments/{rootId}/replies")
+	public Page<IssueComment> replies(@PathVariable String id, @PathVariable String rootId,
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "10") int size) {
+		return issueService.repliesOf(id, rootId, page, size, currentUser.require());
 	}
 
 	@PostMapping("/{id}/comments")
 	@ResponseStatus(HttpStatus.CREATED)
 	public IssueComment comment(@PathVariable String id, @RequestBody @Valid CommentRequest request) {
-		return issueService.addComment(id, request.text(), currentUser.require());
+		return issueService.addComment(id, request.text(), request.replyToId(), currentUser.require());
 	}
 
 	@PatchMapping("/{id}/comments/{commentId}")
@@ -202,6 +219,36 @@ public class IssueController {
 		issueService.deleteComment(id, commentId, currentUser.require());
 	}
 
+	/** Toggle the caller's emoji reaction (WhatsApp-style: one per user). */
+	@PutMapping("/{id}/comments/{commentId}/reactions")
+	public IssueComment react(@PathVariable String id, @PathVariable String commentId,
+			@RequestBody @Valid ReactionRequest request) {
+		return issueService.reactToComment(id, commentId, request.emoji(), currentUser.require());
+	}
+
+	/** Pin/unpin a comment to the top of the thread. Any project member may do so. */
+	@PutMapping("/{id}/comments/{commentId}/pin")
+	public IssueComment pin(@PathVariable String id, @PathVariable String commentId,
+			@RequestBody @Valid PinRequest request) {
+		return issueService.setPinned(id, commentId, request.pinned(), currentUser.require());
+	}
+
+	/** Pinned comments of the thread, in pin order (surfaced above the feed). */
+	@GetMapping("/{id}/comments/pinned")
+	public List<IssueComment> pinnedComments(@PathVariable String id) {
+		return issueService.pinnedComments(id, currentUser.require());
+	}
+
+	/**
+	 * Live stream of comment-thread changes for an issue, so comments added,
+	 * edited, deleted, reacted-to or pinned by anyone show up in real time.
+	 */
+	@GetMapping(value = "/{id}/comments/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+	public SseEmitter commentStream(@PathVariable String id) {
+		Issue issue = issueService.getForUser(id, currentUser.require());
+		return commentEvents.subscribe(issue.getId());
+	}
+
 	/**
 	 * Posts a recorded voice message as a comment. The audio blob is multipart;
 	 * {@code durationMs} and {@code peaks} (comma-separated 0–100 amplitudes)
@@ -212,7 +259,8 @@ public class IssueController {
 	public IssueComment voiceComment(@PathVariable String id,
 			@RequestParam("file") org.springframework.web.multipart.MultipartFile file,
 			@RequestParam(defaultValue = "0") int durationMs,
-			@RequestParam(required = false) String peaks) {
+			@RequestParam(required = false) String peaks,
+			@RequestParam(required = false) String replyToId) {
 		List<Integer> parsedPeaks = new java.util.ArrayList<>();
 		if (peaks != null && !peaks.isBlank()) {
 			for (String part : peaks.split(",")) {
@@ -227,7 +275,8 @@ public class IssueController {
 				}
 			}
 		}
-		return issueService.addVoiceComment(id, file, durationMs, parsedPeaks, currentUser.require());
+		return issueService.addVoiceComment(id, file, durationMs, parsedPeaks, replyToId,
+				currentUser.require());
 	}
 
 	/**
