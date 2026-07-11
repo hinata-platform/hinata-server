@@ -5,8 +5,6 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
-import com.ahmadre.hinata.setup.ServerSettings;
-import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.AttachmentStore;
 import com.ahmadre.hinata.storage.StorageService;
 import jakarta.mail.Flags;
@@ -27,48 +25,53 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * E-mail-to-ticket: polls the IMAP mailbox configured in the admin area and
- * turns unseen messages into issues in the configured default project.
+ * E-mail-to-ticket: polls every enabled managed IMAP connection and turns
+ * unseen messages into issues in each connection's linked project.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class EmailIngestService {
 
-	private final SettingsService settings;
+	private final IngestConnectionRepository connections;
 	private final IssueService issues;
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final StorageService storage;
 	private final AttachmentStore attachments;
 
-	private final AtomicLong lastRun = new AtomicLong(0);
+	/** Per-connection epoch seconds of the last poll (the 15s tick is the beat). */
+	private final Map<String, Long> lastRun = new ConcurrentHashMap<>();
 
 	@Scheduled(fixedDelay = 15000)
 	public void poll() {
-		ServerSettings.EmailIngest config = settings.get().getEmailIngest();
-		if (!config.isEnabled() || config.getHost() == null || config.getDefaultProjectId() == null) {
-			return;
-		}
 		long now = Instant.now().getEpochSecond();
-		if (now - lastRun.get() < config.getPollSeconds()) {
-			return;
-		}
-		lastRun.set(now);
-		try {
-			ingest(config);
-		}
-		catch (Exception ex) {
-			log.warn("E-mail ingestion failed: {}", ex.getMessage());
+		for (IngestConnection config : connections.findByEnabledTrue()) {
+			if (config.getHost() == null || config.getProjectId() == null) {
+				continue;
+			}
+			long last = lastRun.getOrDefault(config.getId(), 0L);
+			if (now - last < config.getPollSeconds()) {
+				continue;
+			}
+			lastRun.put(config.getId(), now);
+			try {
+				ingest(config);
+			}
+			catch (Exception ex) {
+				log.warn("E-mail ingestion for {}@{} failed: {}",
+						config.getUsername(), config.getHost(), ex.getMessage());
+			}
 		}
 	}
 
-	private void ingest(ServerSettings.EmailIngest config) throws Exception {
+	private void ingest(IngestConnection config) throws Exception {
 		Properties props = new Properties();
 		String protocol = config.isSsl() ? "imaps" : "imap";
 		props.put("mail.store.protocol", protocol);
@@ -85,7 +88,7 @@ public class EmailIngestService {
 			try {
 				for (Message message : folder.search(
 						new jakarta.mail.search.FlagTerm(new Flags(Flags.Flag.SEEN), false))) {
-					createIssueFrom(message, config.getDefaultProjectId());
+					createIssueFrom(message, config.getProjectId());
 					message.setFlag(Flags.Flag.SEEN, true);
 				}
 			}
