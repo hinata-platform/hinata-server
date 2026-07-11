@@ -197,9 +197,9 @@ class ProjectServiceTest {
 	void defaultWorkflowMatchesSpec() {
 		List<Project.WorkflowState> wf = Project.defaultWorkflow();
 		assertThat(wf).extracting(Project.WorkflowState::getName)
-				.containsExactly("Backlog", "Open", "In Progress", "In Review", "Done");
+				.containsExactly("Open", "In Progress", "In Parking", "In Review", "Done");
 		assertThat(wf).extracting(Project.WorkflowState::getHue)
-				.containsExactly(255, 250, 70, 300, 155);
+				.containsExactly(250, 70, 255, 300, 155);
 		assertThat(wf).allSatisfy(s -> assertThat(s.getId()).isNotBlank());
 	}
 }
