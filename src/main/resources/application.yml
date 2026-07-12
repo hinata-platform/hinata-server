@@ -150,6 +150,9 @@ hinata:
     min-version: ${HINATA_APP_MIN_VERSION:1.0.0}
     privacy-policy-url: ${HINATA_PRIVACY_POLICY_URL:}
     callback-scheme: ${HINATA_APP_CALLBACK_SCHEME:hinata}
+    feature-flags:
+      # Allows replying by e-mail to the sender of issues created via email-to-ticket.
+      emailReply: ${HINATA_FEATURE_EMAIL_REPLY:true}
   mail:
     from: ${HINATA_MAIL_FROM:hinata@localhost}
   storage:
