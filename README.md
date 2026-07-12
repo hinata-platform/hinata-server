@@ -31,6 +31,7 @@
   <a href="#-local-development">Development</a> ·
   <a href="#-configuration">Configuration</a> ·
   <a href="#-api">API</a> ·
+  <a href="#-ai--mcp-server">AI / MCP</a> ·
   <a href="#-git-integration">Git integration</a> ·
   <a href="#-license">License</a>
 </p>
@@ -42,18 +43,21 @@
 | Feature | Details |
 | --- | --- |
 | 📁 **Projects** | per-project workflows, issue numbering (`ASTA-42`), reusable project labels |
-| 🐛 **Issues** | types, priorities, tags/labels, subtasks, dependencies, attachments (S3), comments |
-| 📋 **Agile boards** | columns mapped to workflow states, WIP limits, backlog |
+| 🐛 **Issues** | types, priorities, labels, **3-level hierarchy** (epic → story/task/bug → subtask), dependencies, attachments (S3), **soft-delete archiving** with role-gated hard delete |
+| 💬 **Comments** | threaded replies with reply counts &amp; sorting, emoji **reactions**, pinning, **voice notes** (S3 audio), real-time (SSE) updates |
+| 📋 **Agile boards** | columns mapped to workflow states, WIP limits, backlog, swimlanes (epic / assignee / subtask) |
 | 🏃 **Sprints** | plan / start / complete, capacity &amp; story points, burndown report |
 | ⏱️ **Time tracking** | work items with activity types + weekly timesheets |
 | 📈 **Gantt** | read model (start/due dates, dependencies, progress) |
 | 📑 **Reports** | burndown, velocity, cycle time; state/priority/assignee distributions, created vs. resolved |
 | 📊 **Dashboard** | today's tasks, completion, ranking, tracker |
-| 📚 **Knowledge base** | hierarchical Markdown articles, global or per project |
+| 📚 **Knowledge base** | hierarchical Markdown articles, global or per project, team/project access control, smart links |
 | 📎 **Attachments** | S3/MinIO storage, presigned downloads, **live (SSE)** add/remove events |
-| 🔔 **Notifications** | in-app + e-mail (SMTP), push-ready (FCM) |
-| 📨 **E-mail → ticket** | IMAP polling turns inbound mail into issues |
+| 🔔 **Notifications** | in-app + e-mail (SMTP); **push via the [Hinata Connect gateway](#-hinata-connect-gateway)** (no per-server Firebase); sprint lifecycle, due-date reminders, mentions &amp; e-mail ingest |
+| 📨 **E-mail → ticket** | multi-connection **IMAP** ingest (managed at runtime) with attachments; **reply** to e-mail-created issues straight from the app |
+| 🔐 **Auth** | local credentials, **self-registration + e-mail verification**, forgot-password, optional admin approval, **2FA (TOTP)**, session management, GDPR export/delete |
 | 🔑 **SSO** | OpenID Connect, OAuth 2.0, SAML 2.0, LDAP — configured at runtime |
+| 🤖 **AI / MCP server** | built-in **Model Context Protocol** endpoint (`/mcp`) — see [AI / MCP](#-ai--mcp-server) |
 | 🧙 **Setup wizard** | first-run flow, or fully automated via `HINATA_SETUP_*` |
 
 ---
@@ -63,9 +67,10 @@
 > Hardened by default and mapped to the OWASP Top 10.
 
 - 🔐 Stateless **JWT (HS512)** with short-lived access + refresh tokens; refresh tokens are rejected for API access
+- 📱 Optional **two-factor auth (TOTP)** with a login challenge, plus per-user **session management** (revocable, `sid`-claimed)
 - 🔑 **BCrypt** (strength 12) password hashes, minimum 10-character passwords
-- 🚧 Database-backed login blocking (survives restarts) + **bucket4j** rate limiting per client IP (strict budget on `/auth/**`)
-- 🛂 Strict authorization by default; `/api/v1/admin/**` requires `ADMIN`
+- 🚧 Database-backed login blocking (survives restarts) + **bucket4j** rate limiting per client IP (strict budget on `/auth/**`, dedicated budget on `/mcp`)
+- 🛂 Strict authorization by default; `/api/v1/admin/**` requires `ADMIN`, and the `/mcp` chain is isolated (a Personal Access Token can never reach the REST API)
 - 🧱 Hardened headers (HSTS, CSP, no-referrer), **localized** stable JSON errors without stack traces, regex-escaped search input
 - 📎 Content-type &amp; size-validated uploads with randomized S3 object keys, presigned downloads
 - 🙈 Secrets are write-only in the admin API (never echoed back)
@@ -140,7 +145,9 @@ the app's admin area; changes apply **without restart**.
 | `HINATA_APP_MIN_VERSION` | Force-update gate for the app |
 | `HINATA_PRIVACY_POLICY_URL` | Privacy policy link served to the app |
 | `HINATA_SETUP_*` | Optional non-interactive first-run setup |
-| `HINATA_RATE_LIMIT_*` | Rate limiting &amp; brute-force thresholds |
+| `HINATA_RATE_LIMIT_*` | Rate limiting &amp; brute-force thresholds (incl. `…_MCP`) |
+| `HINATA_MCP_ENABLED` | Master switch for the built-in MCP server — see [AI / MCP](#-ai--mcp-server) |
+| `HINATA_GATEWAY_BASE_URL` | Hinata Connect gateway for push + universal links (defaults to the shared gateway) |
 | `HINATA_GIT_*` | Git integration OAuth apps, public API base &amp; token-encryption secret — see [Git integration](#-git-integration) |
 
 </details>
@@ -157,7 +164,42 @@ REST under `/api/v1`. Public endpoints:
 ```
 
 Everything else requires a bearer token. Attachment changes stream in real time
-over **Server-Sent Events** at `/api/v1/issues/{issueId}/attachments/stream`.
+over **Server-Sent Events** at `/api/v1/issues/{issueId}/attachments/stream`;
+comment threads (new comments, edits, reactions, deletes) stream likewise.
+
+---
+
+## 🤖 AI / MCP server
+
+Hinata embeds a **Model Context Protocol** server so AI assistants (Claude,
+editors, agents) can work with your tracker directly. It's a Spring AI
+**Streamable-HTTP** endpoint at `/mcp` exposing ~40 tools across projects,
+issues &amp; hierarchy, comments, boards &amp; sprints, time tracking, the knowledge
+base, people/teams, notifications and search — plus higher-level prompts
+(`triage_issue`, `sprint_standup`). Every tool runs **as the authenticated user
+and through the same ACLs** as the REST API, so it can never see or change more
+than that user could.
+
+Two auth methods, both confined to the `/mcp` security chain:
+
+| Method | For | How |
+| --- | --- | --- |
+| **Personal Access Token** | scripts, a single user's client | issue a scoped `hn_pat_…` token (hashed at rest) and send it as a bearer |
+| **OAuth 2.1** | MCP clients that self-register | dynamic client registration + authorize/token, advertised via RFC 9728/8414 `/.well-known/…` metadata and a consent screen |
+
+Toggle the whole feature with `HINATA_MCP_ENABLED`; the `/mcp` transport is rate
+limited independently (`HINATA_RATE_LIMIT_MCP`, default 120/min).
+
+---
+
+## 🛰️ Hinata Connect gateway
+
+Push notifications and universal links are relayed through a central **Hinata
+Connect gateway**, so a single published white-label app can serve many servers
+and self-hosters need **no Firebase of their own**. The server registers itself
+with the gateway on boot; per-server FCM/firebase-admin lives in the gateway,
+not in each server. Override the gateway with `HINATA_GATEWAY_BASE_URL` (default
+`https://connect.hinata.ahmadre.com`) to run your own.
 
 ---
 
