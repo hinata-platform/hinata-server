@@ -88,7 +88,7 @@ public class EmailIngestService {
 			try {
 				for (Message message : folder.search(
 						new jakarta.mail.search.FlagTerm(new Flags(Flags.Flag.SEEN), false))) {
-					createIssueFrom(message, config.getProjectId());
+					createIssueFrom(message, config);
 					message.setFlag(Flags.Flag.SEEN, true);
 				}
 			}
@@ -98,11 +98,14 @@ public class EmailIngestService {
 		}
 	}
 
-	private void createIssueFrom(Message message, String projectId) throws Exception {
+	private void createIssueFrom(Message message, IngestConnection config) throws Exception {
+		String projectId = config.getProjectId();
 		String subject = message.getSubject() != null ? message.getSubject() : "(no subject)";
 		String from = message.getFrom() != null && message.getFrom().length > 0
 				? ((InternetAddress) message.getFrom()[0]).getAddress()
 				: "unknown";
+		String[] messageIds = message.getHeader("Message-ID");
+		String messageId = messageIds != null && messageIds.length > 0 ? messageIds[0] : null;
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(truncate(subject, 300))
@@ -110,6 +113,9 @@ public class EmailIngestService {
 						+ truncate(textOf(message), 20000))
 				.type(Issue.Type.TASK)
 				.reporterEmail(from)
+				.inboundMessageId(messageId)
+				.inboundSubject(truncate(subject, 300))
+				.ingestConnectionId(config.getId())
 				.build();
 		Issue created = issues.create(issue, null);
 		log.info("Created {} from e-mail by {}", created.getReadableId(), from);

@@ -61,13 +61,16 @@ public class MetaController {
 		ServerSettings.App app = current.getApp();
 		HinataProperties.App appDefaults = properties.getApp();
 		HinataProperties.Storage storage = properties.getStorage();
-		Map<String, Boolean> baseFlags = app.getFeatureFlags() != null && !app.getFeatureFlags().isEmpty()
-				? app.getFeatureFlags()
-				: appDefaults.getFeatureFlags();
-		// Copy so we never mutate the shared DB/env source map, then surface the
-		// effective MCP toggle (admin DB override, else env default) as a flag the
-		// app uses to show/hide the Personal Access Token UI.
-		Map<String, Boolean> featureFlags = new java.util.LinkedHashMap<>(baseFlags);
+		// Start from the env defaults, then let any admin DB override win per-key —
+		// NOT "DB wins entirely once non-empty", which would permanently hide any
+		// new default flag (e.g. a freshly shipped feature) the moment an admin
+		// has toggled anything else. Then surface the effective MCP toggle (admin
+		// DB override, else env default) as a flag the app uses to show/hide the
+		// Personal Access Token UI.
+		Map<String, Boolean> featureFlags = new java.util.LinkedHashMap<>(appDefaults.getFeatureFlags());
+		if (app.getFeatureFlags() != null) {
+			featureFlags.putAll(app.getFeatureFlags());
+		}
 		featureFlags.put("mcp", mcpSettings.enabled());
 		return new Meta(
 				serverVersion,

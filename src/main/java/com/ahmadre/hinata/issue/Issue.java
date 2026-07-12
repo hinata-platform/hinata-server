@@ -95,6 +95,15 @@ public class Issue {
 	/** Set when the issue was created from an inbound e-mail. */
 	private String reporterEmail;
 
+	/** Message-ID header of the inbound e-mail; used to thread replies (In-Reply-To/References). */
+	private String inboundMessageId;
+
+	/** Original subject line of the inbound e-mail; used to prefill "Re: ..." on replies. */
+	private String inboundSubject;
+
+	/** The {@link com.ahmadre.hinata.mailingest.IngestConnection} that ingested this issue; resolves the Reply-To mailbox. */
+	private String ingestConnectionId;
+
 	@Builder.Default
 	@TextIndexed(weight = 5)
 	private List<String> tags = new ArrayList<>();

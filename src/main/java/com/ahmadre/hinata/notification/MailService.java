@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.notification;
 
 import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -13,6 +14,9 @@ import org.springframework.web.util.HtmlUtils;
 import org.thymeleaf.context.Context;
 import org.thymeleaf.spring6.SpringTemplateEngine;
 
+import org.springframework.core.io.ByteArrayResource;
+
+import java.util.List;
 import java.util.Map;
 
 /** Sends transactional HTML mails via the configured SMTP server (Mailpit in dev). */
@@ -27,6 +31,58 @@ public class MailService {
 
 	@Value("${hinata.mail.from:hinata@localhost}")
 	private String from;
+
+	/** A file to attach to an outbound reply. */
+	public record Attachment(String fileName, String contentType, byte[] data) {}
+
+	/** Outcome of an outbound reply so callers can surface an accurate error. */
+	public enum SendResult { SENT, NO_SMTP, SEND_FAILED }
+
+	/**
+	 * Sends a user-authored reply to the original sender of an ingested e-mail.
+	 * {@code replyTo} (the project's ingest mailbox) and threading headers are set
+	 * so a customer reply loops back into ingest and threads in their client.
+	 */
+	public SendResult sendReply(String to, String replyTo, String subject, String htmlBody,
+			String inReplyToMessageId, List<Attachment> attachments) {
+		JavaMailSender sender = smtp.sender();
+		if (sender == null) sender = mailSender.getIfAvailable();
+		if (sender == null) {
+			log.warn("No SMTP server configured; cannot send e-mail reply to {}", to);
+			return SendResult.NO_SMTP;
+		}
+		try {
+			boolean multipart = attachments != null && !attachments.isEmpty();
+			MimeMessage message = sender.createMimeMessage();
+			MimeMessageHelper helper = new MimeMessageHelper(message, multipart, "UTF-8");
+			String fromAddress = smtp.fromAddress() != null ? smtp.fromAddress() : from;
+			String fromName = smtp.fromName();
+			helper.setFrom(fromName != null
+					? new InternetAddress(fromAddress, fromName)
+					: new InternetAddress(fromAddress));
+			helper.setTo(to);
+			if (replyTo != null && !replyTo.isBlank()) helper.setReplyTo(replyTo);
+			helper.setSubject(subject);
+			helper.setText(htmlBody, true);
+			if (inReplyToMessageId != null && !inReplyToMessageId.isBlank()) {
+				message.setHeader("In-Reply-To", inReplyToMessageId);
+				message.setHeader("References", inReplyToMessageId);
+			}
+			if (multipart) {
+				for (Attachment a : attachments) {
+					helper.addAttachment(a.fileName(), new ByteArrayResource(a.data()),
+							a.contentType());
+				}
+			}
+			sender.send(message);
+			log.info("E-mail reply sent to {} (subject: {})", to, subject);
+			return SendResult.SENT;
+		}
+		catch (Exception ex) {
+			log.warn("Sending e-mail reply to {} failed: {}", to, ex.getMessage());
+			return SendResult.SEND_FAILED;
+		}
+	}
 
 	@Async
 	public void send(String to, String subject, String headline, String body, String link) {

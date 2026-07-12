@@ -51,9 +51,15 @@ public class AdminSettingsController {
 		if (isBlank(app.getMacosStoreUrl())) {
 			app.setMacosStoreUrl(defaults.getMacosStoreUrl());
 		}
-		if (app.getFeatureFlags() == null || app.getFeatureFlags().isEmpty()) {
-			app.setFeatureFlags(new java.util.LinkedHashMap<>(defaults.getFeatureFlags()));
+		// Merge env defaults with any admin overrides (override wins per-key) so a
+		// newly shipped default flag (e.g. a fresh feature) surfaces in the editor
+		// even after admins have already toggled other, unrelated flags — matching
+		// the effective-flags merge in MetaController#meta().
+		java.util.Map<String, Boolean> mergedFlags = new java.util.LinkedHashMap<>(defaults.getFeatureFlags());
+		if (app.getFeatureFlags() != null) {
+			mergedFlags.putAll(app.getFeatureFlags());
 		}
+		app.setFeatureFlags(mergedFlags);
 		// Surface the effective auth toggles so the switches reflect the value
 		// currently in force (env default until an admin overrides it).
 		if (app.getLocalAuthEnabled() == null) {
