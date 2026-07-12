@@ -36,7 +36,6 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 
 import java.util.Arrays;
 import org.springframework.security.web.header.writers.CrossOriginResourcePolicyHeaderWriter;
@@ -109,7 +108,7 @@ public class SecurityConfig {
 		// out). Without this an already-issued access token would keep working
 		// until it expired (up to its full lifetime), so revocation would not take
 		// effect in real time. Session-less legacy/service tokens (null sid) pass.
-		OAuth2Error revoked = new OAuth2Error("invalid_token", "Session has been revoked", null);
+		OAuth2Error revoked = new OAuth2Error("invalid_token", "error.auth.sessionRevoked", null);
 		OAuth2TokenValidator<Jwt> sessionAlive = jwt -> {
 			String sid = jwt.getClaimAsString(TokenService.CLAIM_SID);
 			return (sid == null || sessions.isActive(sid))
@@ -314,7 +313,8 @@ public class SecurityConfig {
 	public SecurityFilterChain securityFilterChain(HttpSecurity http,
 			RateLimitFilter rateLimitFilter, SsoLoginSuccessHandler ssoSuccessHandler,
 			com.ahmadre.hinata.auth.sso.SsoLoginFailureHandler ssoFailureHandler,
-			MongoAuthorizationRequestRepository authorizationRequestRepository)
+			MongoAuthorizationRequestRepository authorizationRequestRepository,
+			LocalizedAuthenticationEntryPoint authenticationEntryPoint)
 			throws Exception {
 		http
 			.csrf(csrf -> csrf.disable()) // stateless bearer-token API, no cookies
@@ -359,6 +359,7 @@ public class SecurityConfig {
 				.requestMatchers("/actuator/**").hasRole("ADMIN")
 				.anyRequest().authenticated())
 			.oauth2ResourceServer(oauth2 -> oauth2
+				.authenticationEntryPoint(authenticationEntryPoint)
 				// RFC 9728: customize Spring Security's built-in metadata endpoint
 				// (/.well-known/oauth-protected-resource) so it advertises the /mcp
 				// resource and this server as its authorization server, letting an
@@ -380,7 +381,7 @@ public class SecurityConfig {
 				.successHandler(ssoSuccessHandler)
 				.failureHandler(ssoFailureHandler))
 			.exceptionHandling(handling -> handling
-				.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+				.authenticationEntryPoint(authenticationEntryPoint))
 			.addFilterBefore(rateLimitFilter,
 					org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
 		return http.build();

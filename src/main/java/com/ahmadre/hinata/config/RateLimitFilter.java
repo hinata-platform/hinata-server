@@ -7,6 +7,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
+import org.springframework.context.MessageSource;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -23,13 +24,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
 	private final HinataProperties properties;
 	private final ClientIpResolver clientIpResolver;
+	private final MessageSource messages;
 	private final Map<String, Bucket> apiBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> authBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> mcpBuckets = new ConcurrentHashMap<>();
 
-	public RateLimitFilter(HinataProperties properties, ClientIpResolver clientIpResolver) {
+	public RateLimitFilter(HinataProperties properties, ClientIpResolver clientIpResolver,
+			MessageSource messages) {
 		this.properties = properties;
 		this.clientIpResolver = clientIpResolver;
+		this.messages = messages;
 	}
 
 	@Override
@@ -68,9 +72,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
 			chain.doFilter(request, response);
 		}
 		else {
-			response.setStatus(429);
-			response.setContentType("application/json");
-			response.getWriter().write("{\"status\":429,\"message\":\"Too many requests\"}");
+			LocalizedErrorResponse.write(response,
+					org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+					messages.getMessage("error.rateLimited", null, "error.rateLimited",
+							request.getLocale()));
 		}
 	}
 
