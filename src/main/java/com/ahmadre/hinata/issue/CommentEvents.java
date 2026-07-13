@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.issue;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -45,6 +46,32 @@ public class CommentEvents {
 			remove(issueId, emitter);
 		}
 		return emitter;
+	}
+
+	/**
+	 * Keep-alive heartbeat. Without periodic bytes an idle SSE connection is
+	 * silently dropped by proxies / mobile networks (a half-open socket the
+	 * client's TCP stack never reports as closed), and a live-but-quiet stream
+	 * is indistinguishable from a dead one. A comment line every ~15s keeps the
+	 * connection flowing, flushes any buffering proxy, and — paired with the
+	 * client's idle watchdog — lets a genuinely dead stream be detected and
+	 * reconnected instead of leaving the thread stale until a manual reload.
+	 *
+	 * <p>The client ignores {@code :} comment lines, so heartbeats never trigger
+	 * a spurious re-sync.
+	 */
+	@Scheduled(fixedDelay = 15_000L)
+	public void heartbeat() {
+		for (Map.Entry<String, List<SseEmitter>> entry : byIssue.entrySet()) {
+			for (SseEmitter emitter : entry.getValue()) {
+				try {
+					emitter.send(SseEmitter.event().comment("hb"));
+				}
+				catch (Exception ex) {
+					remove(entry.getKey(), emitter);
+				}
+			}
+		}
 	}
 
 	/** Notifies every viewer of {@code issueId} that its comment thread changed. */
