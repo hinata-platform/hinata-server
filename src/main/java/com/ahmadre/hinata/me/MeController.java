@@ -98,7 +98,13 @@ public class MeController {
 	@Operation(summary = "Get my account")
 	@GetMapping
 	public MeResponse get() {
-		return MeResponse.from(currentUser.require());
+		// Keep the stored locale in step with the client's Accept-Language so
+		// async e-mails/push (which have no request context) localize to the
+		// language the user actually runs the app in. The app re-fetches /me on
+		// every start-up, so this self-heals accounts left on the sign-up default.
+		User user = me.syncLocale(currentUser.require(),
+				org.springframework.context.i18n.LocaleContextHolder.getLocale().getLanguage());
+		return MeResponse.from(user);
 	}
 
 	@Operation(summary = "Update my profile (display name, title, locale)")

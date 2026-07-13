@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Business logic behind the self-service {@code /me} surface: profile edits,
@@ -64,6 +65,30 @@ public class MeService {
 		if (displayName != null) user.setDisplayName(displayName.trim());
 		if (title != null) user.setTitle(title.trim());
 		if (locale != null) user.setLocale(locale);
+		return users.save(user);
+	}
+
+	/** Locales we ship translations for; anything else is ignored on auto-sync. */
+	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de");
+
+	/**
+	 * Reconciles the stored {@link User#getLocale() locale} with the language the
+	 * client is actually using ({@code requestLang}, from the request's
+	 * {@code Accept-Language}). E-mails and push notifications are produced
+	 * asynchronously with no request context, so they localize purely from
+	 * {@code User.locale}; if a user runs the app in German but their account was
+	 * created with the {@code "en"} sign-up default, they'd keep getting English
+	 * notifications despite a German UI. The app sends its effective language on
+	 * every request (and re-fetches the account on each start-up), so syncing here
+	 * self-heals such accounts. A no-op when unchanged, unsupported, or null.
+	 */
+	public User syncLocale(User user, String requestLang) {
+		if (requestLang == null) return user;
+		String lang = requestLang.toLowerCase(Locale.ROOT);
+		if (!SUPPORTED_LOCALES.contains(lang) || lang.equals(user.getLocale())) {
+			return user;
+		}
+		user.setLocale(lang);
 		return users.save(user);
 	}
 
