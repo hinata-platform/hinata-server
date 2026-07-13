@@ -621,7 +621,7 @@ public class IssueService {
 		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
 		// the already-saved comment by bubbling a 500 back to the author.
 		try {
-			notifications.notifyComment(issue, author, text);
+			notifications.notifyComment(issue, author, text, saved);
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("comment notification failed for issue {} (comment kept)",
@@ -779,7 +779,7 @@ public class IssueService {
 		// Blank text → notifyComment falls back to a "commented on <title>" body.
 		// Best-effort (see addComment): never fail a saved voice comment on it.
 		try {
-			notifications.notifyComment(issue, author, "");
+			notifications.notifyComment(issue, author, "", saved);
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("voice-comment notification failed for issue {} (comment kept)",

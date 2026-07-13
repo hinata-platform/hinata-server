@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
@@ -80,18 +81,24 @@ public class NotificationService {
 
 	/**
 	 * Fan-out for a new comment. Users named with an {@code @}-mention get a
-	 * direct {@code MENTION} notification; the issue's watchers get the broader
-	 * {@code ISSUE_COMMENTED} notice. A mention supersedes the comment notice, so
-	 * a mentioned watcher is not pinged twice. The comment author never notifies
-	 * themselves.
+	 * direct {@code MENTION} notification; the author of the comment a reply
+	 * answers gets a {@code COMMENT_REPLY} notification; the issue's watchers get
+	 * the broader {@code ISSUE_COMMENTED} notice. Each stronger notice supersedes
+	 * the weaker one for the same recipient (mention &gt; reply &gt; watcher), so
+	 * nobody is pinged twice. The comment author never notifies themselves.
 	 */
-	public void notifyComment(Issue issue, User author, String text) {
+	public void notifyComment(Issue issue, User author, String text, IssueComment comment) {
 		String preview = preview(text);
 		Set<String> mentioned = parseUserMentions(text);
 		mentioned.remove(author.getId());
 		notifyMentions(issue, author, mentioned, preview);
+		// Everyone already directly notified about this comment — start with the
+		// mentioned users, then add the reply target so the watcher notice below
+		// skips them too.
+		Set<String> notified = new HashSet<>(mentioned);
+		notifyReply(issue, author, comment, preview, notified);
 		Set<String> watchers = watchersWithout(issue, author);
-		watchers.removeAll(mentioned);
+		watchers.removeAll(notified);
 		if (!watchers.isEmpty()) {
 			// Lead with a teaser of the comment itself so the recipient can triage
 			// straight from the push/e-mail; fall back to the issue title when the
@@ -106,6 +113,38 @@ public class NotificationService {
 									+ preview + "\"",
 					issueLink(issue));
 		}
+	}
+
+	/**
+	 * Notifies the author of the comment a reply answers ({@code COMMENT_REPLY}),
+	 * deep-linking straight to the new reply. No-op for a top-level comment, a
+	 * self-reply, or when that author was already {@code @}-mentioned in the same
+	 * reply (the mention supersedes). The recipient is added to {@code notified}
+	 * so the broader watcher notice skips them. Shares the {@code mentions}
+	 * preference event — the setting already reads "mentions you or replies to
+	 * your comment", so replies honour the same toggle.
+	 */
+	private void notifyReply(Issue issue, User actor, IssueComment comment, String preview,
+			Set<String> notified) {
+		if (comment == null) return;
+		String recipient = comment.getReplyToAuthorId();
+		if (recipient == null || recipient.isBlank()) return; // top-level comment
+		if (recipient.equals(actor.getId())) return; // replying to oneself
+		if (!notified.add(recipient)) return; // already mentioned — don't double-ping
+		boolean hasPreview = preview != null && !preview.isBlank();
+		deliver(Set.of(recipient), Notification.Type.COMMENT_REPLY,
+				de -> de
+						? actor.getDisplayName() + " hat auf deinen Kommentar in "
+								+ issue.getReadableId() + " geantwortet"
+						: actor.getDisplayName() + " replied to your comment on "
+								+ issue.getReadableId(),
+				de -> hasPreview
+						? actor.getDisplayName() + ": \"" + preview + "\""
+						: (de ? actor.getDisplayName() + " hat auf deinen Kommentar zu \""
+								+ issue.getTitle() + "\" geantwortet"
+								: actor.getDisplayName() + " replied to your comment on \""
+										+ issue.getTitle() + "\""),
+				commentLink(issue, comment.getId()));
 	}
 
 	/**
@@ -576,7 +615,7 @@ public class NotificationService {
 	 */
 	private static String eventId(Notification.Type type) {
 		return switch (type) {
-			case MENTION -> "mentions";
+			case MENTION, COMMENT_REPLY -> "mentions";
 			case ISSUE_ASSIGNED -> "assigned";
 			case ISSUE_COMMENTED -> "comments";
 			case ISSUE_UPDATED -> "status";
@@ -590,5 +629,15 @@ public class NotificationService {
 
 	private String issueLink(Issue issue) {
 		return "/issues/" + issue.getReadableId();
+	}
+
+	/**
+	 * Deep link to a specific comment within its issue — the app's router honours
+	 * {@code ?comment=<id>} and scrolls to (and highlights) that comment.
+	 */
+	private String commentLink(Issue issue, String commentId) {
+		return (commentId == null || commentId.isBlank())
+				? issueLink(issue)
+				: issueLink(issue) + "?comment=" + commentId;
 	}
 }
