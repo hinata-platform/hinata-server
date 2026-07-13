@@ -13,6 +13,7 @@ description = "Hinata - open source, self-hosted project management server"
 // --- Pinned versions for dependencies not governed by the Spring Boot BOM ---
 val bucket4jVersion = "8.10.1"
 val minioVersion = "8.6.0"
+val azureStorageBlobVersion = "12.31.3"
 val openpdfVersion = "2.0.3"
 val springdocScalarVersion = "3.0.3"
 // Spring AI provides the MCP (Model Context Protocol) server: it embeds the
@@ -88,8 +89,10 @@ dependencies {
     // Rate limiting
     implementation("com.bucket4j:bucket4j-core:$bucket4jVersion")
 
-    // S3 object storage (MinIO or any S3-compatible)
+    // Object storage: S3 protocol (MinIO, AWS S3, GCS interop, R2, Spaces, …)
     implementation("io.minio:minio:$minioVersion")
+    // Object storage: Azure Blob Storage (native API — Azure does not speak S3)
+    implementation("com.azure:azure-storage-blob:$azureStorageBlobVersion")
 
     // API documentation: OpenAPI 3.1 spec + Scalar UI
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-scalar:$springdocScalarVersion")

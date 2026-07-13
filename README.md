@@ -141,7 +141,9 @@ the app's admin area; changes apply **without restart**.
 | `HINATA_JWT_SECRET` | HS512 secret, ≥ 64 chars (required in production) |
 | `HINATA_MONGODB_URI` | Mongo connection string |
 | `HINATA_SMTP_*` | Outbound mail (Mailpit in dev) |
-| `HINATA_S3_*` | S3-compatible storage (MinIO in dev) |
+| `HINATA_STORAGE_PROVIDER` | Object storage backend: `s3` (default) or `azure` — see [Object storage](#️-object-storage) |
+| `HINATA_S3_*` | S3-compatible storage: endpoint, keys, bucket, region, addressing style |
+| `HINATA_AZURE_CONNECTION_STRING` | Azure Blob Storage connection string (with `provider=azure`) |
 | `HINATA_APP_MIN_VERSION` | Force-update gate for the app |
 | `HINATA_PRIVACY_POLICY_URL` | Privacy policy link served to the app |
 | `HINATA_SETUP_*` | Optional non-interactive first-run setup |
@@ -151,6 +153,32 @@ the app's admin area; changes apply **without restart**.
 | `HINATA_GIT_*` | Git integration OAuth apps, public API base &amp; token-encryption secret — see [Git integration](#-git-integration) |
 
 </details>
+
+---
+
+## 🗄️ Object storage
+
+Attachments, avatars, voice notes and inline images live in an object store.
+Hinata supports two backends, selected with `HINATA_STORAGE_PROVIDER`:
+
+- **`s3`** (default) — any S3-compatible store: the **bundled MinIO**,
+  **AWS S3**, **Google Cloud Storage** (S3-interoperable XML API with HMAC
+  keys), **Cloudflare R2**, **DigitalOcean Spaces**, Hetzner Object Storage, …
+- **`azure`** — **Azure Blob Storage** via its native API (Azure does not speak
+  the S3 protocol). Configure `HINATA_AZURE_CONNECTION_STRING` with an
+  account-key connection string; `HINATA_S3_BUCKET` is used as the container
+  name.
+
+The bundled MinIO container is attached to the compose `local-storage` profile
+(`COMPOSE_PROFILES=local-storage`, the default in `.env.example`). To use an
+external store, clear `COMPOSE_PROFILES` and set the provider variables —
+ready-to-copy examples for AWS, GCS and Azure are in
+[.env.example](.env.example). The bucket/container is created automatically on
+first upload; presigned/SAS download URLs expire after 10 minutes.
+
+> ⚠️ Switching providers does not migrate existing objects. Copy the bucket
+> contents first (`mc mirror`, `aws s3 sync`, `azcopy`) if the instance already
+> holds data.
 
 ---
 

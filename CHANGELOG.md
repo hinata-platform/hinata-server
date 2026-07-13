@@ -4,6 +4,22 @@ All notable changes to Hinata Server are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Pluggable object-storage backends behind `HINATA_STORAGE_PROVIDER`:
+  `s3` (bundled MinIO, AWS S3, Google Cloud Storage interop, Cloudflare R2,
+  DigitalOcean Spaces, …) and `azure` (Azure Blob Storage via its native API,
+  configured with `HINATA_AZURE_CONNECTION_STRING`; presigned downloads are
+  SAS URLs)
+- `HINATA_S3_ADDRESSING_STYLE` (`auto` | `virtual-host` | `path`) for
+  providers that need an explicit S3 URL addressing style
+- The bundled MinIO service now sits behind the compose `local-storage`
+  profile. **Deployment note:** existing stacks must add
+  `COMPOSE_PROFILES=local-storage` to `.env` (as `.env.example` now does)
+  to keep running the bundled MinIO; all `HINATA_S3_*` variables are
+  overridable in compose instead of the endpoint being fixed to `minio:9000`
+
 ## [1.0.0] - 2026-06-11
 
 ### Added

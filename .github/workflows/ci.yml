@@ -63,28 +63,29 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, astasrv01]
     steps:
-      - name: Surgical redeploy of hinata-server (asta + bear)
+      - name: Surgical redeploy of hinata-server + minio (asta + bear)
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Both instances run the SAME ghcr server image (:latest) — the backend
           # URL is runtime env, not baked — so each stack just pulls + recreates
-          # ONLY its server container (--no-deps keeps mongo1/mongo2/mongo-arbiter/
-          # minio online). Compose runs in a docker:cli sidecar against the host
-          # socket. Stack dirs on ASTASRV01:
+          # its server + minio containers (--no-deps keeps mongo1/mongo2/
+          # mongo-arbiter online; minio's named volume is untouched by a
+          # container recreate, so object data survives). Compose runs in a
+          # docker:cli sidecar against the host socket. Stack dirs on ASTASRV01:
           #   asta -> /opt/stacks/hinata       (project "hinata",      inline values)
           #   bear -> /opt/stacks/hinata-bear  (project "hinata-bear", loads its .env)
           for STACK in hinata hinata-bear; do
-            echo "::group::redeploy $STACK (server)"
+            echo "::group::redeploy $STACK (server + minio)"
             docker run --rm \
               -e GHCR_USER -e GHCR_TOKEN -e STACK="$STACK" \
               -v /var/run/docker.sock:/var/run/docker.sock \
               -v "/opt/stacks/$STACK:/work" -w /work \
               docker:cli sh -euc '
                 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-                docker compose -p "$STACK" pull hinata-server
-                docker compose -p "$STACK" up -d --no-deps --force-recreate hinata-server
+                docker compose -p "$STACK" pull hinata-server minio
+                docker compose -p "$STACK" up -d --no-deps --force-recreate hinata-server minio
                 docker logout ghcr.io'
             echo "::endgroup::"
           done

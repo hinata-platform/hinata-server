@@ -299,11 +299,29 @@ public class HinataProperties {
 	@Getter
 	@Setter
 	public static class Storage {
+		/**
+		 * Object-storage backend: {@code s3} (MinIO, AWS S3, Google Cloud Storage
+		 * via its S3-interoperable XML API, Cloudflare R2, DigitalOcean Spaces, …)
+		 * or {@code azure} (Azure Blob Storage via its native API).
+		 */
+		private String provider = "s3";
 		private String endpoint = "http://localhost:9000";
 		private String accessKey = "";
 		private String secretKey = "";
 		private String bucket = "hinata";
 		private String region = "us-east-1";
+		/**
+		 * S3 URL addressing: {@code auto} (virtual-host style for AWS endpoints,
+		 * path style otherwise — right for almost everyone), {@code virtual-host},
+		 * or {@code path}.
+		 */
+		private String addressingStyle = "auto";
+		/**
+		 * Azure Blob Storage connection string (from the storage account's
+		 * "Access keys" blade). Only read when {@code provider=azure}; the
+		 * {@code bucket} property doubles as the blob container name.
+		 */
+		private String azureConnectionString = "";
 		/** Max size of a single uploaded file in megabytes. */
 		@Min(1)
 		private int maxUploadMb = 25;

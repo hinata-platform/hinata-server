@@ -53,3 +53,6 @@ deploy/x509/bear/
 
 # macOS Finder metadata files
 .DS_Store
+
+# bear
+docker-compose.bear.yml

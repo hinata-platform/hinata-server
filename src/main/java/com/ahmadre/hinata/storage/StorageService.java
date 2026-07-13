@@ -2,55 +2,49 @@ package com.ahmadre.hinata.storage;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
-import io.minio.BucketExistsArgs;
-import io.minio.GetObjectArgs;
-import io.minio.GetObjectResponse;
-import io.minio.GetPresignedObjectUrlArgs;
-import io.minio.ListObjectsArgs;
-import io.minio.MakeBucketArgs;
-import io.minio.MinioClient;
-import io.minio.PutObjectArgs;
-import io.minio.RemoveObjectArgs;
-import io.minio.Result;
-import io.minio.errors.ErrorResponseException;
-import io.minio.http.Method;
-import io.minio.messages.Item;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 /**
- * S3-compatible object storage (MinIO in dev). Object keys are random UUIDs –
- * user-supplied file names never reach the file system or bucket layout.
+ * Object storage behind a pluggable {@link StorageBackend}: any S3-compatible
+ * store (MinIO in dev, AWS S3, Google Cloud Storage interop, R2, Spaces, …) or
+ * Azure Blob Storage, selected by {@code hivora.storage.provider}. Object keys
+ * are random UUIDs – user-supplied file names never reach the file system or
+ * bucket layout. This service owns all validation and error mapping; backends
+ * only move bytes.
  */
 @Slf4j
 @Service
 public class StorageService {
 
 	private final HinataProperties properties;
-	private final MinioClient client;
+	private final StorageBackend backend;
 
 	public StorageService(HinataProperties properties) {
 		this.properties = properties;
-		HinataProperties.Storage storage = properties.getStorage();
-		this.client = storage.getAccessKey().isBlank() ? null
-				: MinioClient.builder()
-						.endpoint(storage.getEndpoint())
-						.credentials(storage.getAccessKey(), storage.getSecretKey())
-						.region(storage.getRegion())
-						.build();
+		this.backend = createBackend(properties.getStorage());
+	}
+
+	private static StorageBackend createBackend(HinataProperties.Storage storage) {
+		return switch (storage.getProvider()) {
+			case "azure" -> storage.getAzureConnectionString().isBlank() ? null
+					: new AzureBlobStorageBackend(storage);
+			case "s3" -> storage.getAccessKey().isBlank() ? null
+					: new S3StorageBackend(storage);
+			default -> throw new IllegalStateException(
+					"Unknown hivora.storage.provider '" + storage.getProvider() + "' (expected s3 or azure)");
+		};
 	}
 
 	public boolean isConfigured() {
-		return client != null;
+		return backend != null;
 	}
 
 	/** Maximum accepted upload size in bytes (mirrors the multipart limit). */
@@ -84,13 +78,7 @@ public class StorageService {
 		verifyMagicBytes(file, contentType);
 		String objectKey = keyPrefix + UUID.randomUUID();
 		try (var stream = file.getInputStream()) {
-			ensureBucket();
-			client.putObject(PutObjectArgs.builder()
-					.bucket(storage.getBucket())
-					.object(objectKey)
-					.contentType(contentType)
-					.stream(stream, file.getSize(), -1)
-					.build());
+			backend.put(objectKey, stream, file.getSize(), contentType);
 			return objectKey;
 		}
 		catch (Exception ex) {
@@ -112,13 +100,7 @@ public class StorageService {
 	public void putObject(String objectKey, byte[] data, String contentType) {
 		requireConfigured();
 		try {
-			ensureBucket();
-			client.putObject(PutObjectArgs.builder()
-					.bucket(properties.getStorage().getBucket())
-					.object(objectKey)
-					.contentType(contentType)
-					.stream(new ByteArrayInputStream(data), data.length, -1)
-					.build());
+			backend.put(objectKey, new ByteArrayInputStream(data), data.length, contentType);
 		}
 		catch (Exception ex) {
 			log.error("Put object {} failed: {}", objectKey, ex.getMessage());
@@ -130,22 +112,11 @@ public class StorageService {
 	/** Reads an object's bytes + content type, or empty when it doesn't exist. */
 	public Optional<StoredObject> getObject(String objectKey) {
 		requireConfigured();
-		try (GetObjectResponse response = client.getObject(GetObjectArgs.builder()
-				.bucket(properties.getStorage().getBucket())
-				.object(objectKey)
-				.build())) {
-			String contentType = response.headers().get("Content-Type");
-			return Optional.of(new StoredObject(response.readAllBytes(),
-					contentType != null ? contentType : "application/octet-stream"));
-		}
-		catch (ErrorResponseException ex) {
-			if ("NoSuchKey".equals(ex.errorResponse().code())) {
-				return Optional.empty();
-			}
-			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY,
-					"error.storage.unavailable");
+		try {
+			return backend.get(objectKey);
 		}
 		catch (Exception ex) {
+			log.error("Reading object {} failed: {}", objectKey, ex.getMessage());
 			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY,
 					"error.storage.unavailable");
 		}
@@ -154,16 +125,10 @@ public class StorageService {
 	public String presignedDownloadUrl(String objectKey, String fileName) {
 		requireConfigured();
 		try {
-			return client.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
-					.method(Method.GET)
-					.bucket(properties.getStorage().getBucket())
-					.object(objectKey)
-					.expiry(10, TimeUnit.MINUTES)
-					.extraQueryParams(java.util.Map.of("response-content-disposition",
-							"attachment; filename=\"" + fileName.replaceAll("[\"\\\\]", "_") + "\""))
-					.build());
+			return backend.presignedDownloadUrl(objectKey, fileName.replaceAll("[\"\\\\]", "_"));
 		}
 		catch (Exception ex) {
+			log.error("Presigning object {} failed: {}", objectKey, ex.getMessage());
 			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
 		}
 	}
@@ -180,19 +145,8 @@ public class StorageService {
 	 */
 	public List<ObjectInfo> list(String keyPrefix) {
 		requireConfigured();
-		List<ObjectInfo> objects = new ArrayList<>();
 		try {
-			Iterable<Result<Item>> results = client.listObjects(ListObjectsArgs.builder()
-					.bucket(properties.getStorage().getBucket())
-					.prefix(keyPrefix)
-					.recursive(true)
-					.build());
-			for (Result<Item> result : results) {
-				Item item = result.get();
-				Instant modified = item.lastModified() != null ? item.lastModified().toInstant() : null;
-				objects.add(new ObjectInfo(item.objectName(), modified));
-			}
-			return objects;
+			return backend.list(keyPrefix);
 		}
 		catch (Exception ex) {
 			log.error("Listing objects under {} failed: {}", keyPrefix, ex.getMessage());
@@ -203,8 +157,7 @@ public class StorageService {
 	public void delete(String objectKey) {
 		requireConfigured();
 		try {
-			client.removeObject(RemoveObjectArgs.builder()
-					.bucket(properties.getStorage().getBucket()).object(objectKey).build());
+			backend.delete(objectKey);
 		}
 		catch (Exception ex) {
 			log.warn("Deleting object {} failed: {}", objectKey, ex.getMessage());
@@ -259,15 +212,8 @@ public class StorageService {
 		return true;
 	}
 
-	private void ensureBucket() throws Exception {
-		String bucket = properties.getStorage().getBucket();
-		if (!client.bucketExists(BucketExistsArgs.builder().bucket(bucket).build())) {
-			client.makeBucket(MakeBucketArgs.builder().bucket(bucket).build());
-		}
-	}
-
 	private void requireConfigured() {
-		if (client == null) {
+		if (backend == null) {
 			throw new ApiException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
 					"error.storage.notConfigured");
 		}
