@@ -2,6 +2,7 @@ package com.ahmadre.hinata.storage;
 
 import com.ahmadre.hinata.issue.Issue;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -47,6 +48,28 @@ public class AttachmentEvents {
 			remove(issueId, emitter);
 		}
 		return emitter;
+	}
+
+	/**
+	 * Keep-alive heartbeat every ~15s. Without periodic bytes an idle SSE
+	 * connection is silently dropped by proxies / mobile networks (a half-open
+	 * socket the client's TCP stack never reports as closed); the comment line
+	 * keeps it flowing, flushes buffering proxies, and — with the client's idle
+	 * watchdog — lets a dead stream be detected and reconnected. The client
+	 * ignores {@code :} comment lines, so it never triggers a spurious refresh.
+	 */
+	@Scheduled(fixedDelay = 15_000L)
+	public void heartbeat() {
+		for (Map.Entry<String, List<SseEmitter>> entry : byIssue.entrySet()) {
+			for (SseEmitter emitter : entry.getValue()) {
+				try {
+					emitter.send(SseEmitter.event().comment("hb"));
+				}
+				catch (Exception ex) {
+					remove(entry.getKey(), emitter);
+				}
+			}
+		}
 	}
 
 	public void publishAdded(String issueId, Issue.Attachment attachment) {

@@ -18,6 +18,14 @@ spring:
   # Use the dev profile unless one is explicitly selected (SPRING_PROFILES_ACTIVE).
   profiles:
     default: dev
+  # A small scheduler pool so the SSE keep-alive heartbeats (one @Scheduled per
+  # event stream, every 15s) can't serialize behind — or be delayed by — the
+  # other scheduled jobs (email ingest, digests, retention). Default is a single
+  # thread, which would make one slow emitter write stall unrelated jobs.
+  task:
+    scheduling:
+      pool:
+        size: 4
   # Spring Boot 4: connection settings live under spring.mongodb (not spring.data.mongodb)
   mongodb:
     uri: ${HINATA_MONGODB_URI:mongodb://localhost:27017/hinata}

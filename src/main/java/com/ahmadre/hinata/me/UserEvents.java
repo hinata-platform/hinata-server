@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.me;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -59,6 +60,28 @@ public class UserEvents {
 			remove(userId, subscriber);
 		}
 		return emitter;
+	}
+
+	/**
+	 * Keep-alive heartbeat every ~15s. This sign-out stream is long-lived and
+	 * almost always idle, so without periodic bytes a half-open socket (proxy /
+	 * mobile network) would silently swallow a future {@code logout} — the device
+	 * would never sign out in real time. The comment line keeps it flowing and,
+	 * with the client's idle watchdog, lets a dead stream be reconnected. The
+	 * client ignores {@code :} comment lines.
+	 */
+	@Scheduled(fixedDelay = 15_000L)
+	public void heartbeat() {
+		for (Map.Entry<String, List<Subscriber>> entry : byUser.entrySet()) {
+			for (Subscriber subscriber : entry.getValue()) {
+				try {
+					subscriber.emitter().send(SseEmitter.event().comment("hb"));
+				}
+				catch (Exception ex) {
+					remove(entry.getKey(), subscriber);
+				}
+			}
+		}
 	}
 
 	/** Signs out the device on a single revoked session. */
