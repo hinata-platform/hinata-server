@@ -353,6 +353,31 @@ public class NotificationService {
 	}
 
 	/**
+	 * Delivers the weekly summary: an in-app (bell) notice linking to the in-app
+	 * Weekly Summary page, and — gated by the {@code digest} channel preference — a
+	 * rich templated e-mail ({@code email/weekly-summary}) built from {@code model}
+	 * and a push. Mirrors {@link #deliverGated} but swaps the plain inline mail for
+	 * the summary template so the e-mail matches the in-app page. The CTA deep link
+	 * is injected here so the caller need not know about the gateway relay.
+	 */
+	public void notifyWeeklySummary(User user, String title, String body,
+			java.util.Map<String, Object> model) {
+		if (user == null || !user.isActive()) return;
+		String link = "/weekly-summary";
+		notifications.save(Notification.builder()
+				.userId(user.getId()).type(Notification.Type.DIGEST)
+				.title(title).body(body).link(link).build());
+		NotificationPreferences prefs = prefsOf(user);
+		if (prefs.deliversEmail(eventId(Notification.Type.DIGEST))) {
+			model.put("ctaLink", appLink(link));
+			mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + title, "email/weekly-summary", model);
+		}
+		if (prefs.deliversPush(eventId(Notification.Type.DIGEST))) {
+			push.sendToUser(user.getId(), title, body, link);
+		}
+	}
+
+	/**
 	 * Security alert (new sign-in, password / e-mail change, 2FA change). Maps to
 	 * the locked {@code security} event, so it always reaches the user on every
 	 * channel — in-app, e-mail and push. Title/body are pre-localized by the caller.

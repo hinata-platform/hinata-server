@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${locale}">
+<head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#F2F1F8">
+  <div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F2F1F8;padding:32px">
+    <div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #E7E5F0">
+
+      <!-- Header -->
+      <div style="height:4px;background:#D9A032"></div>
+      <div style="background:#2D2B55;padding:28px 32px">
+        <div style="font-weight:800;font-size:16px;color:#ffffff;letter-spacing:0.5px">Hinata</div>
+        <h1 style="color:#ffffff;font-size:24px;margin:14px 0 4px;font-weight:800;letter-spacing:-0.3px">
+          <span th:if="${locale == 'de'}">Deine Wochenübersicht</span>
+          <span th:unless="${locale == 'de'}">Your Weekly Summary</span>
+        </h1>
+        <div style="color:#C9C7E0;font-size:13px" th:text="${weekRange}">Jun 30 – Jul 7</div>
+      </div>
+
+      <div style="padding:28px 32px">
+        <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0 0 22px">
+          <span th:if="${locale == 'de'}">Hallo <strong th:text="${displayName}">Name</strong>, hier ist, was in der letzten Woche passiert ist — und was als Nächstes ansteht.</span>
+          <span th:unless="${locale == 'de'}">Hi <strong th:text="${displayName}">Name</strong>, here's what happened over the past week — and what's coming up next.</span>
+        </p>
+
+        <!-- The week behind -->
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;color:#9794AE;text-transform:uppercase;margin:0 0 12px">
+          <span th:if="${locale == 'de'}">Die Woche hinter uns</span>
+          <span th:unless="${locale == 'de'}">The week behind</span>
+        </div>
+
+        <!-- Stat tiles -->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0 0;margin:0 0 8px">
+          <tr>
+            <td width="33%" style="padding:0 6px 0 0;vertical-align:top">
+              <div style="background:#F7F6FB;border:1px solid #EDECF4;border-radius:16px;padding:16px">
+                <div style="font-size:30px;font-weight:800;color:#2E8B62;line-height:1" th:text="${completed}">12</div>
+                <div style="font-size:12px;color:#6B6A85;margin-top:5px">
+                  <span th:if="${locale == 'de'}">Abgeschlossen</span>
+                  <span th:unless="${locale == 'de'}">Completed</span>
+                </div>
+              </div>
+            </td>
+            <td width="33%" style="padding:0 6px;vertical-align:top">
+              <div style="background:#F7F6FB;border:1px solid #EDECF4;border-radius:16px;padding:16px">
+                <div style="font-size:30px;font-weight:800;color:#4E6FD0;line-height:1" th:text="${created}">8</div>
+                <div style="font-size:12px;color:#6B6A85;margin-top:5px">
+                  <span th:if="${locale == 'de'}">Erstellt</span>
+                  <span th:unless="${locale == 'de'}">Created</span>
+                </div>
+              </div>
+            </td>
+            <td width="33%" style="padding:0 0 0 6px;vertical-align:top">
+              <div style="background:#F7F6FB;border:1px solid #EDECF4;border-radius:16px;padding:16px">
+                <div style="font-size:30px;font-weight:800;color:#B9831F;line-height:1" th:text="${focusLabel}">3h</div>
+                <div style="font-size:12px;color:#6B6A85;margin-top:5px">
+                  <span th:if="${locale == 'de'}">Deine Fokuszeit</span>
+                  <span th:unless="${locale == 'de'}">Your focus time</span>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Active sprint -->
+        <div th:if="${sprint != null}" style="background:#F3EEDF;border:1px solid #E9DEBE;border-radius:16px;padding:16px;margin:16px 0 0">
+          <div style="font-size:11px;font-weight:700;letter-spacing:0.5px;color:#B9831F;text-transform:uppercase;margin-bottom:6px">
+            <span th:if="${locale == 'de'}">Aktiver Sprint</span>
+            <span th:unless="${locale == 'de'}">Active sprint</span>
+          </div>
+          <div style="font-size:16px;font-weight:700;color:#2D2B55" th:text="${sprint.name}">Sprint 4</div>
+          <div style="font-size:13px;color:#6B6A85;margin-top:4px">
+            <span th:if="${sprint.days > 0}" th:text="${'Day ' + sprint.day + ' / ' + sprint.days + ' · '}">Day 3 / 10 · </span>
+            <span th:text="${sprint.issuesDone + ' / ' + sprint.issuesTotal + ' '}">6 / 14 </span>
+            <span th:if="${locale == 'de'}">Vorgänge erledigt</span>
+            <span th:unless="${locale == 'de'}">issues done</span>
+          </div>
+        </div>
+
+        <!-- Top contributors -->
+        <div th:if="${!contributors.isEmpty()}" style="margin:24px 0 0">
+          <div style="font-size:13px;font-weight:700;color:#2D2B55;margin-bottom:10px">
+            <span th:if="${locale == 'de'}">Top-Mitwirkende</span>
+            <span th:unless="${locale == 'de'}">Top contributors</span>
+          </div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr th:each="c : ${contributors}">
+              <td style="padding:6px 0;border-bottom:1px solid #F1F0F7">
+                <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#2D2B55;color:#fff;border-radius:50%;font-size:12px;font-weight:700" th:text="${c.initials}">AB</span>
+                <span style="font-size:14px;color:#33314F;margin-left:10px;font-weight:600" th:text="${c.displayName}">Alex Beck</span>
+              </td>
+              <td align="right" style="padding:6px 0;border-bottom:1px solid #F1F0F7;font-size:13px;color:#6B6A85;white-space:nowrap">
+                <span th:text="${c.completed}">5</span>
+                <span th:if="${locale == 'de'}"> erledigt</span>
+                <span th:unless="${locale == 'de'}"> done</span>
+              </td>
+            </tr>
+          </table>
+        </div>
+
+        <!-- Highlights -->
+        <div th:if="${!highlights.isEmpty()}" style="margin:24px 0 0">
+          <div style="font-size:13px;font-weight:700;color:#2D2B55;margin-bottom:10px">
+            <span th:if="${locale == 'de'}">Erledigte Highlights</span>
+            <span th:unless="${locale == 'de'}">Completed highlights</span>
+          </div>
+          <div th:each="h : ${highlights}" style="padding:10px 0;border-bottom:1px solid #F1F0F7">
+            <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#B9831F;font-weight:600" th:text="${h.readableId}">ASTA-42</span>
+            <span style="font-size:14px;color:#33314F;margin-left:8px" th:text="${h.title}">Ship the thing</span>
+          </div>
+        </div>
+
+        <!-- The week ahead -->
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;color:#9794AE;text-transform:uppercase;margin:28px 0 12px">
+          <span th:if="${locale == 'de'}">Deine anstehenden To-Dos</span>
+          <span th:unless="${locale == 'de'}">Your upcoming to-dos</span>
+        </div>
+
+        <div th:if="${upcoming.isEmpty()}" style="background:#F1F7F3;border:1px solid #D8EADF;border-radius:16px;padding:18px;text-align:center;color:#2E8B62;font-size:14px">
+          <span th:if="${locale == 'de'}">🎉 Nichts Offenes — du bist auf dem neuesten Stand!</span>
+          <span th:unless="${locale == 'de'}">🎉 Nothing on your plate — you're all caught up!</span>
+        </div>
+
+        <div th:unless="${upcoming.isEmpty()}">
+          <div th:if="${overdueCount > 0}" style="display:inline-block;background:#FBE9E7;color:#C0392B;font-size:12px;font-weight:700;padding:5px 12px;border-radius:999px;margin-bottom:12px">
+            <span th:text="${overdueCount}">2</span>
+            <span th:if="${locale == 'de'}"> überfällig</span>
+            <span th:unless="${locale == 'de'}"> overdue</span>
+          </div>
+          <div th:each="t : ${upcoming}" style="padding:11px 14px;border:1px solid #EDECF4;border-radius:14px;margin-bottom:8px">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+              <td style="vertical-align:middle">
+                <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8886A2;font-weight:600" th:text="${t.readableId}">ASTA-51</span>
+                <div style="font-size:14px;color:#33314F;margin-top:3px" th:text="${t.title}">Review the pull request</div>
+              </td>
+              <td align="right" style="vertical-align:middle;white-space:nowrap">
+                <span th:if="${t.due != null}"
+                      th:styleappend="${t.overdue} ? 'color:#C0392B' : 'color:#6B6A85'"
+                      style="font-size:12px;font-weight:600" th:text="${t.due}">Jul 9</span>
+              </td>
+            </tr></table>
+          </div>
+          <div style="font-size:12px;color:#9794AE;margin-top:4px" th:if="${upcomingTotal > upcomingShown}">
+            <span th:if="${locale == 'de'}">+ <span th:text="${upcomingTotal - upcomingShown}">3</span> weitere in der App</span>
+            <span th:unless="${locale == 'de'}">+ <span th:text="${upcomingTotal - upcomingShown}">3</span> more in the app</span>
+          </div>
+        </div>
+
+        <!-- CTA -->
+        <p style="margin:28px 0 0;text-align:center">
+          <a th:href="${ctaLink}"
+             style="display:inline-block;background:#2D2B55;color:#ffffff;padding:14px 32px;border-radius:999px;text-decoration:none;font-weight:700;font-size:15px">
+            <span th:if="${locale == 'de'}">Vollständige Übersicht öffnen</span>
+            <span th:unless="${locale == 'de'}">Open full summary</span>
+          </a>
+        </p>
+
+        <p style="color:#9794AE;font-size:12px;line-height:1.6;margin:28px 0 0;border-top:1px solid #EFEEF5;padding-top:16px;text-align:center">
+          <span th:if="${locale == 'de'}">Diese Zusammenfassung wird wöchentlich von Hinata gesendet. Du kannst sie in deinen Benachrichtigungseinstellungen anpassen.</span>
+          <span th:unless="${locale == 'de'}">This summary is sent weekly by Hinata. You can adjust it in your notification settings.</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
