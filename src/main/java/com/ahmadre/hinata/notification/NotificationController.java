@@ -32,11 +32,29 @@ public class NotificationController {
 
 	@PostMapping("/{id}/read")
 	public Notification markRead(@PathVariable String id) {
-		String userId = currentUser.requireId();
-		Notification notification = notifications.findById(id)
-				.filter(n -> n.getUserId().equals(userId))
-				.orElseThrow(() -> com.ahmadre.hinata.common.ApiException.notFound("notification"));
+		Notification notification = owned(id);
 		notification.setRead(true);
 		return notifications.save(notification);
+	}
+
+	@PostMapping("/{id}/unread")
+	public Notification markUnread(@PathVariable String id) {
+		Notification notification = owned(id);
+		notification.setRead(false);
+		return notifications.save(notification);
+	}
+
+	@DeleteMapping("/{id}")
+	@ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+	public void delete(@PathVariable String id) {
+		notifications.delete(owned(id));
+	}
+
+	/** The caller's own notification, or 404 — never another user's. */
+	private Notification owned(String id) {
+		String userId = currentUser.requireId();
+		return notifications.findById(id)
+				.filter(n -> n.getUserId().equals(userId))
+				.orElseThrow(() -> com.ahmadre.hinata.common.ApiException.notFound("notification"));
 	}
 }
