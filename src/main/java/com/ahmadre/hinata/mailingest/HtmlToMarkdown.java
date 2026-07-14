@@ -36,10 +36,10 @@ final class HtmlToMarkdown {
 			Document doc = Jsoup.parse(html);
 			// Drop non-content nodes whose text would otherwise leak into the body.
 			doc.select("style, script, head, title, meta, link, noscript").remove();
+			flattenLayoutTables(doc);
 			String source = doc.body() != null ? doc.body().outerHtml() : doc.outerHtml();
 			String markdown = CONVERTER.convert(source);
-			// Collapse the runs of blank lines flexmark emits for table/div-heavy mail.
-			return markdown.replaceAll("\n{3,}", "\n\n").strip();
+			return tidy(markdown);
 		}
 		catch (Exception ex) {
 			try {
@@ -51,5 +51,40 @@ final class HtmlToMarkdown {
 				return html;
 			}
 		}
+	}
+
+	/**
+	 * HTML mails — newsletters and transactional templates especially — build their
+	 * layout out of nested {@code <table>}s used purely for spacing. Converting those
+	 * to Markdown tables yields walls of {@code | --- | --- |} delimiter rows that
+	 * render as endless horizontal lines. We unwrap the table scaffolding and turn
+	 * each cell into a block ({@code div}) so the content becomes linear, readable
+	 * text. Genuine data tables are rare in support mail and degrade gracefully to
+	 * stacked lines rather than a dash wall.
+	 */
+	private static void flattenLayoutTables(Document doc) {
+		doc.select("td, th, caption").forEach(cell -> cell.tagName("div"));
+		doc.select("table, thead, tbody, tfoot, tr, colgroup, col").forEach(el -> el.unwrap());
+	}
+
+	/**
+	 * Drops leftover rule/table-delimiter lines (composed only of {@code - | :} and
+	 * spaces) and collapses the blank-line runs a div-heavy template produces.
+	 */
+	private static String tidy(String markdown) {
+		StringBuilder out = new StringBuilder();
+		for (String line : markdown.split("\n", -1)) {
+			if (!isRuleNoise(line)) {
+				out.append(line).append('\n');
+			}
+		}
+		return out.toString().replaceAll("\n{3,}", "\n\n").strip();
+	}
+
+	/** A line of only {@code - | :} and spaces (>=3 chars) is layout noise, not content. */
+	private static boolean isRuleNoise(String line) {
+		String trimmed = line.strip();
+		return trimmed.length() >= 3
+				&& trimmed.chars().allMatch(c -> c == '-' || c == '|' || c == ':' || c == ' ');
 	}
 }
