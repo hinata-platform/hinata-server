@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.mailingest;
 
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.notification.NotificationService;
@@ -97,22 +98,23 @@ public class EmailIngestService {
 		}
 	}
 
+	/**
+	 * Prefix every ingested description carries. Also the guard the reprocess repair
+	 * uses to avoid overwriting a description a human has since edited.
+	 */
+	private static final String DESCRIPTION_HEADER = "Created from e-mail by ";
+
 	private void createIssueFrom(Message message, IngestConnection config) throws Exception {
 		String projectId = config.getProjectId();
 		String subject = message.getSubject() != null ? message.getSubject() : "(no subject)";
-		String from = message.getFrom() != null && message.getFrom().length > 0
-				? ((InternetAddress) message.getFrom()[0]).getAddress()
-				: "unknown";
-		String[] messageIds = message.getHeader("Message-ID");
-		String messageId = messageIds != null && messageIds.length > 0 ? messageIds[0] : null;
+		String from = senderOf(message);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(truncate(subject, 300))
-				.description("Created from e-mail by **" + from + "**\n\n---\n\n"
-						+ truncate(textOf(message), 20000))
+				.description(buildDescription(from, message))
 				.type(Issue.Type.TASK)
 				.reporterEmail(from)
-				.inboundMessageId(messageId)
+				.inboundMessageId(messageIdOf(message))
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
 				.build();
@@ -120,6 +122,107 @@ public class EmailIngestService {
 		log.info("Created {} from e-mail by {}", created.getReadableId(), from);
 		notifyMembers(created, projectId, from);
 		attachFiles(message, created.getId());
+	}
+
+	/** The description body written for an ingested message: an attribution header
+	 * plus the parsed (plain or HTML→Markdown) mail body. */
+	private String buildDescription(String from, Message message) throws Exception {
+		return DESCRIPTION_HEADER + "**" + from + "**\n\n---\n\n" + truncate(textOf(message), 20000);
+	}
+
+	private String senderOf(Message message) throws Exception {
+		return message.getFrom() != null && message.getFrom().length > 0
+				? ((InternetAddress) message.getFrom()[0]).getAddress()
+				: "unknown";
+	}
+
+	private String messageIdOf(Message message) throws Exception {
+		String[] ids = message.getHeader("Message-ID");
+		return ids != null && ids.length > 0 ? ids[0] : null;
+	}
+
+	/**
+	 * Re-reads a connection's mailbox (read-only — seen flags are left untouched) and
+	 * rebuilds the description of every ticket whose source message is still present,
+	 * using the current body parser. This is the repair path for tickets ingested
+	 * while HTML handling was still broken. Only auto-generated descriptions are
+	 * rewritten, so manual edits survive, and no new tickets are ever created. A
+	 * single unreadable message is logged and skipped, never aborting the run.
+	 *
+	 * @return how many messages were scanned and how many ticket descriptions changed
+	 */
+	public ReprocessResult reprocess(IngestConnection config) {
+		Properties props = new Properties();
+		String protocol = config.isSsl() ? "imaps" : "imap";
+		props.put("mail.store.protocol", protocol);
+		props.put("mail." + protocol + ".host", config.getHost());
+		props.put("mail." + protocol + ".port", String.valueOf(config.getPort()));
+		props.put("mail." + protocol + ".connectiontimeout", "10000");
+		props.put("mail." + protocol + ".timeout", "15000");
+		Session session = Session.getInstance(props);
+		int scanned = 0;
+		int updated = 0;
+		try (Store store = session.getStore(protocol)) {
+			store.connect(config.getHost(), config.getPort(), config.getUsername(), config.getPassword());
+			Folder folder = store.getFolder(config.getFolder());
+			folder.open(Folder.READ_ONLY);
+			try {
+				for (Message message : folder.getMessages()) {
+					scanned++;
+					if (rebuildFrom(message, config)) {
+						updated++;
+					}
+				}
+			}
+			finally {
+				folder.close(false);
+			}
+		}
+		catch (Exception ex) {
+			log.info("IMAP reprocess for {}@{} failed: {}",
+					config.getUsername(), config.getHost(), ex.getMessage());
+			throw ApiException.badRequest("error.ingest.connectionFailed", ex.getMessage());
+		}
+		log.info("Reprocessed mailbox {}@{}: rebuilt {}/{} ticket description(s)",
+				config.getUsername(), config.getHost(), updated, scanned);
+		return new ReprocessResult(scanned, updated);
+	}
+
+	/**
+	 * Rebuilds a single ticket from its source message when it still exists, belongs
+	 * to this connection's project, and its description is still the auto-generated
+	 * one. Returns whether the description actually changed. Best-effort: a broken
+	 * message is skipped, not fatal.
+	 */
+	private boolean rebuildFrom(Message message, IngestConnection config) {
+		try {
+			String messageId = messageIdOf(message);
+			if (messageId == null) {
+				return false;
+			}
+			Issue issue = issues.findByInboundMessageId(messageId).orElse(null);
+			if (issue == null
+					|| !config.getProjectId().equals(issue.getProjectId())
+					|| issue.getDescription() == null
+					|| !issue.getDescription().startsWith(DESCRIPTION_HEADER)) {
+				return false;
+			}
+			String rebuilt = buildDescription(senderOf(message), message);
+			if (rebuilt.equals(issue.getDescription())) {
+				return false; // already current — nothing to write
+			}
+			issues.replaceIngestedDescription(issue.getId(), rebuilt);
+			return true;
+		}
+		catch (Exception ex) {
+			log.warn("Reprocessing a message in folder {} failed: {}",
+					config.getFolder(), ex.getMessage());
+			return false;
+		}
+	}
+
+	/** Outcome of a {@link #reprocess} run. */
+	public record ReprocessResult(int scanned, int updated) {
 	}
 
 	/**

@@ -34,6 +34,7 @@ import java.util.Locale;
 public class AdminIngestController {
 
 	private final IngestConnectionService service;
+	private final EmailIngestService emailIngest;
 	private final ProjectRepository projects;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
@@ -64,6 +65,20 @@ public class AdminIngestController {
 		IngestConnection connection = service.get(id);
 		service.delete(id);
 		auditChange("deleted", connection);
+	}
+
+	/**
+	 * Re-reads this connection's mailbox now and rebuilds the description of every
+	 * ticket whose source e-mail is still present, using the current body parser.
+	 * The repair path for tickets ingested while HTML handling was broken: seen flags
+	 * are untouched, manual edits are preserved, and no new tickets are created.
+	 */
+	@PostMapping("/{id}/reprocess")
+	public EmailIngestService.ReprocessResult reprocess(@PathVariable String id) {
+		IngestConnection connection = service.get(id);
+		EmailIngestService.ReprocessResult result = emailIngest.reprocess(connection);
+		auditChange("reprocessed", connection);
+		return result;
 	}
 
 	public record ProbeFoldersRequest(String connectionId, String host, Integer port, Boolean ssl,

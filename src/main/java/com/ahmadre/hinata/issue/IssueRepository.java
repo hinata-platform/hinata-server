@@ -11,6 +11,10 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 	Optional<Issue> findByReadableIdIgnoreCase(String readableId);
 
+	/** The ticket created from a given inbound e-mail — used to reprocess a mailbox
+	 * without creating duplicates. */
+	Optional<Issue> findByInboundMessageId(String inboundMessageId);
+
 	/** Issues a user reported — for the GDPR self-service data export. */
 	List<Issue> findByReporterIdOrderByCreatedAtDesc(String reporterId);
 

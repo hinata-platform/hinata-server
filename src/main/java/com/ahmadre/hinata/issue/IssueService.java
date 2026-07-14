@@ -32,6 +32,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -136,6 +137,23 @@ public class IssueService {
 		// Ping anyone @-mentioned in the freshly written description.
 		notifications.notifyNewMentions(saved, author, null, saved.getDescription());
 		return saved;
+	}
+
+	/** The ticket an inbound e-mail created, if any — for mailbox reprocessing. */
+	public Optional<Issue> findByInboundMessageId(String inboundMessageId) {
+		return issues.findByInboundMessageId(inboundMessageId);
+	}
+
+	/**
+	 * Overwrites an e-mail-ingested issue's description with a freshly parsed body,
+	 * used by the mailbox reprocess repair. Deliberately bypasses the {@link #update}
+	 * pipeline: this is a mechanical re-derivation of existing content, not a user
+	 * edit, so it records no activity and fires no mention/assignment notifications.
+	 */
+	public Issue replaceIngestedDescription(String id, String description) {
+		Issue issue = get(id);
+		issue.setDescription(description);
+		return issues.save(issue);
 	}
 
 	/** Reserves the next project-scoped number and sets the readable id. */
