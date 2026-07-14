@@ -88,10 +88,11 @@ public class IssueController {
 			@RequestParam(required = false) String query,
 			@RequestParam(defaultValue = "false") boolean noSprint,
 			@RequestParam(defaultValue = "false") boolean archived,
+			@RequestParam(required = false) String sort,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
 		return issueService.search(projectId, state, assigneeId, sprintId, type, query, noSprint,
-				archived, page, size, currentUser.require());
+				archived, sort, page, size, currentUser.require());
 	}
 
 	@GetMapping("/{id}")

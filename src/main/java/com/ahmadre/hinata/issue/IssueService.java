@@ -542,13 +542,39 @@ public class IssueService {
 	/** Filtered, paginated search. Free-text is regex-escaped (NoSQL injection safe). */
 	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
 			String type, String text, boolean noSprint, int page, int size, User user) {
-		return search(projectId, state, assigneeId, sprintId, type, text, noSprint, false,
+		return search(projectId, state, assigneeId, sprintId, type, text, noSprint, false, null,
 				page, size, user);
 	}
 
 	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
 			String type, String text, boolean noSprint, boolean archived, int page, int size,
 			User user) {
+		return search(projectId, state, assigneeId, sprintId, type, text, noSprint, archived, null,
+				page, size, user);
+	}
+
+	/**
+	 * Maps a client sort key to a Mongo {@link Sort}. Only a whitelisted set of
+	 * fields is sortable (no arbitrary field injection). A stable {@code _id}
+	 * tiebreaker is appended so pagination stays deterministic when the primary
+	 * key ties (e.g. many issues touched in the same bulk update share an
+	 * {@code updatedAt}) — without it a row could repeat or vanish across page
+	 * boundaries. Unknown/blank keys fall back to newest-modified-first, the
+	 * historical default.
+	 */
+	private static Sort sortFor(String sort) {
+		Sort primary = switch (sort == null ? "" : sort) {
+			case "created" -> Sort.by(Sort.Direction.DESC, "createdAt");
+			case "created_asc" -> Sort.by(Sort.Direction.ASC, "createdAt");
+			case "updated_asc" -> Sort.by(Sort.Direction.ASC, "updatedAt");
+			default -> Sort.by(Sort.Direction.DESC, "updatedAt");
+		};
+		return primary.and(Sort.by(Sort.Direction.DESC, "_id"));
+	}
+
+	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
+			String type, String text, boolean noSprint, boolean archived, String sort, int page,
+			int size, User user) {
 		Query query = new Query();
 		// Archived issues are soft-deleted: hidden everywhere by default, listed
 		// only when explicitly requested (the "Archived" view). `ne(true)` keeps
@@ -592,8 +618,7 @@ public class IssueService {
 					Criteria.where("title").regex(quoted, "i"),
 					Criteria.where("readableId").regex("^" + quoted, "i")));
 		}
-		Pageable pageable = PageRequest.of(page, Math.min(size, 100),
-				Sort.by(Sort.Direction.DESC, "updatedAt"));
+		Pageable pageable = PageRequest.of(page, Math.min(size, 100), sortFor(sort));
 		long total = mongo.count(query, Issue.class);
 		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
 		return new org.springframework.data.domain.PageImpl<>(content, pageable, total);
