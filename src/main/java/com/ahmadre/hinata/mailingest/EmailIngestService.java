@@ -16,7 +16,6 @@ import jakarta.mail.Session;
 import jakarta.mail.Store;
 import jakarta.mail.internet.ContentType;
 import jakarta.mail.internet.InternetAddress;
-import jakarta.mail.internet.MimeMultipart;
 import jakarta.mail.internet.MimeUtility;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -243,26 +242,60 @@ public class EmailIngestService {
 		}
 	}
 
+	/**
+	 * Extracts a message body suitable for a Markdown description. Prefers the
+	 * {@code text/plain} alternative; when a mail carries only {@code text/html}
+	 * (single-part or multipart) the HTML is converted to clean Markdown rather than
+	 * dumped raw or naively de-tagged. Walks the full MIME tree so a body nested in
+	 * {@code multipart/mixed > multipart/alternative} is still found.
+	 */
 	private String textOf(Message message) throws Exception {
-		Object content = message.getContent();
-		if (content instanceof String text) {
-			return text;
+		BodyParts body = new BodyParts();
+		collectBody(message, body);
+		if (body.plain != null && !body.plain.isBlank()) {
+			return body.plain;
 		}
-		if (content instanceof MimeMultipart multipart) {
-			for (int i = 0; i < multipart.getCount(); i++) {
-				var part = multipart.getBodyPart(i);
-				if (part.isMimeType("text/plain")) {
-					return String.valueOf(part.getContent());
-				}
-			}
-			for (int i = 0; i < multipart.getCount(); i++) {
-				var part = multipart.getBodyPart(i);
-				if (part.isMimeType("text/html")) {
-					return String.valueOf(part.getContent()).replaceAll("<[^>]+>", " ");
-				}
-			}
+		if (body.html != null && !body.html.isBlank()) {
+			return HtmlToMarkdown.convert(body.html);
 		}
 		return "";
+	}
+
+	/**
+	 * Depth-first walk capturing the first text/plain and first text/html body parts.
+	 * Attachment-disposition parts are skipped so a {@code .txt}/{@code .html} file
+	 * attachment is never mistaken for the message body.
+	 */
+	private void collectBody(Part part, BodyParts out) throws Exception {
+		if (isAttachment(part)) {
+			return;
+		}
+		Object content;
+		try {
+			content = part.getContent();
+		}
+		catch (Exception ex) {
+			// Unparseable part (e.g. unknown encoding) — skip rather than fail.
+			return;
+		}
+		if (content instanceof Multipart multipart) {
+			for (int i = 0; i < multipart.getCount(); i++) {
+				collectBody(multipart.getBodyPart(i), out);
+			}
+			return;
+		}
+		if (out.plain == null && part.isMimeType("text/plain")) {
+			out.plain = String.valueOf(content);
+		}
+		else if (out.html == null && part.isMimeType("text/html")) {
+			out.html = String.valueOf(content);
+		}
+	}
+
+	/** Mutable accumulator for the body parts found while walking the MIME tree. */
+	private static final class BodyParts {
+		private String plain;
+		private String html;
 	}
 
 	private String truncate(String value, int max) {

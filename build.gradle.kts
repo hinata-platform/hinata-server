@@ -23,6 +23,13 @@ val springdocScalarVersion = "3.0.3"
 // are NOT governed by the Spring Boot BOM, so its own BOM is imported below —
 // exactly the pattern already used for the Testcontainers BOM.
 val springAiVersion = "2.0.0"
+// Inbound e-mail ingest: convert HTML mail bodies into clean Markdown (the format
+// Issue.description stores and the app renders). flexmark-html2md-converter brings
+// jsoup transitively (used to strip <style>/<script>/<head> before conversion).
+val flexmarkVersion = "0.64.8"
+// flexmark 0.64.8 resolves jsoup 1.15.x; force a current release to clear known
+// jsoup parser CVEs (we never render the HTML, but keep the transitive graph clean).
+val jsoupVersion = "1.18.3"
 // Override the Bouncy Castle version pulled in transitively by
 // spring-security-saml2 / OpenSAML. The BOM pins 1.78.1, which is affected by a
 // covert timing channel (GHSA-p93r-85wp-75v3) and an LDAP injection
@@ -74,6 +81,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-mail")
     // HTML e-mail templating (transactional account & notification mails)
     implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
+    // Inbound e-mail ingest: HTML mail body -> Markdown (brings jsoup transitively)
+    implementation("com.vladsch.flexmark:flexmark-html2md-converter:$flexmarkVersion")
 
     // PDF generation: GDPR (Art. 15) self-service data report
     implementation("com.github.librepdf:openpdf:$openpdfVersion")
@@ -137,6 +146,10 @@ dependencies {
                 version { strictly(bouncyCastleVersion) }
                 because("BOM pins vulnerable BC 1.78.1 (GHSA-p93r-85wp-75v3, GHSA-c3fc-8qff-9hwx); 1.84 fixes both")
             }
+        }
+        implementation("org.jsoup:jsoup") {
+            version { strictly(jsoupVersion) }
+            because("flexmark-html2md-converter drags in an older jsoup; force a current release")
         }
     }
 }
