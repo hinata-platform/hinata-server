@@ -81,6 +81,63 @@ class HtmlToMarkdownTest {
 	}
 
 	@Test
+	void stripsElementIdAttributeNoise() {
+		// Newsletter markup ids like id="Eio" would surface as "{#Eio}" tokens.
+		String md = HtmlToMarkdown.convert("<p id=\"Eio\">Kundennummer: 12345</p>");
+
+		assertThat(md).contains("Kundennummer: 12345");
+		assertThat(md).doesNotContain("{#");
+		assertThat(md).doesNotContain("Eio");
+	}
+
+	@Test
+	void dropsTrackingPixelsAndSpacerImages() {
+		String html = "<p>Hallo</p>"
+				+ "<img src=\"https://track.example.com/o?em=dm9yc3RhbmQ=\" width=\"1\" height=\"1\">"
+				+ "<img src=\"https://track.example.com/spacer.gif\" style=\"display:none\">";
+
+		String md = HtmlToMarkdown.convert(html);
+
+		assertThat(md).contains("Hallo");
+		assertThat(md).doesNotContain("track.example.com");
+		assertThat(md).doesNotContain("image");
+	}
+
+	@Test
+	void dropsEmptyTrackingAnchorsInsteadOfBareLinks() {
+		String html = "<a href=\"https://track.example.com/o?em=dm9yc3RhbmQ=\"></a>"
+				+ "<p>Kundennummer: 42</p>";
+
+		String md = HtmlToMarkdown.convert(html);
+
+		assertThat(md).contains("Kundennummer: 42");
+		assertThat(md).doesNotContain("track.example.com");
+		assertThat(md).doesNotContain("[]("); // no empty-label link
+	}
+
+	@Test
+	void keepsGenuineContentImages() {
+		String html = "<p>Logo:</p>"
+				+ "<img src=\"https://cdn.example.com/logo.png\" alt=\"Firmenlogo\" width=\"320\">";
+
+		String md = HtmlToMarkdown.convert(html);
+
+		assertThat(md).contains("https://cdn.example.com/logo.png");
+		assertThat(md).contains("![Firmenlogo]");
+	}
+
+	@Test
+	void keepsLinkedContentImage() {
+		String html = "<a href=\"https://example.com\">"
+				+ "<img src=\"https://cdn.example.com/banner.png\" alt=\"Banner\" width=\"600\"></a>";
+
+		String md = HtmlToMarkdown.convert(html);
+
+		assertThat(md).contains("https://cdn.example.com/banner.png");
+		assertThat(md).contains("https://example.com");
+	}
+
+	@Test
 	void returnsEmptyForBlankInput() {
 		assertThat(HtmlToMarkdown.convert(null)).isEmpty();
 		assertThat(HtmlToMarkdown.convert("   ")).isEmpty();

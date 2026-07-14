@@ -70,14 +70,17 @@ public class AdminIngestController {
 	/**
 	 * Re-reads this connection's mailbox now and rebuilds the description of every
 	 * ticket whose source e-mail is still present, using the current body parser.
-	 * The repair path for tickets ingested while HTML handling was broken: seen flags
-	 * are untouched, manual edits are preserved, and no new tickets are created.
+	 * Seen flags are untouched and manual edits are preserved. With
+	 * {@code createMissing=true} the admin also opts into (re-)creating tickets for
+	 * e-mails that currently have none — otherwise missing tickets stay missing, so
+	 * intentionally deleted ones never silently reappear.
 	 */
 	@PostMapping("/{id}/reprocess")
-	public EmailIngestService.ReprocessResult reprocess(@PathVariable String id) {
+	public EmailIngestService.ReprocessResult reprocess(@PathVariable String id,
+			@RequestParam(defaultValue = "false") boolean createMissing) {
 		IngestConnection connection = service.get(id);
-		EmailIngestService.ReprocessResult result = emailIngest.reprocess(connection);
-		auditChange("reprocessed", connection);
+		EmailIngestService.ReprocessResult result = emailIngest.reprocess(connection, createMissing);
+		auditChange(createMissing ? "reprocessed-full" : "reprocessed", connection);
 		return result;
 	}
 

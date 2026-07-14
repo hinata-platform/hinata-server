@@ -3,6 +3,9 @@ package com.ahmadre.hinata.mailingest;
 import com.vladsch.flexmark.html2md.converter.FlexmarkHtmlConverter;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+
+import java.util.Locale;
 
 /**
  * Converts an HTML e-mail body into clean Markdown so it renders correctly in an
@@ -36,6 +39,7 @@ final class HtmlToMarkdown {
 			Document doc = Jsoup.parse(html);
 			// Drop non-content nodes whose text would otherwise leak into the body.
 			doc.select("style, script, head, title, meta, link, noscript").remove();
+			stripNoise(doc);
 			flattenLayoutTables(doc);
 			String source = doc.body() != null ? doc.body().outerHtml() : doc.outerHtml();
 			String markdown = CONVERTER.convert(source);
@@ -50,6 +54,63 @@ final class HtmlToMarkdown {
 			catch (Exception inner) {
 				return html;
 			}
+		}
+	}
+
+	/**
+	 * Removes the noise a Markdown reader can't use and that would otherwise render
+	 * as garbage: element {@code id}s (flexmark emits them as {@code {#id}} tokens),
+	 * tracking pixels / spacer images (they become broken image boxes and phone home
+	 * with the recipient encoded in the URL), and the now-empty anchors that wrapped
+	 * them (which would convert to a bare {@code [](url)}). Real content images and
+	 * links are left intact.
+	 */
+	private static void stripNoise(Document doc) {
+		doc.select("[id]").forEach(el -> el.removeAttr("id"));
+		doc.select("img").forEach(img -> {
+			if (isNoiseImage(img)) {
+				img.remove();
+			}
+		});
+		doc.select("a").forEach(a -> {
+			if (a.text().isBlank() && a.selectFirst("img") == null) {
+				a.unwrap();
+			}
+		});
+	}
+
+	/** A {@code <img>} that carries no content: no source, a 1–2px tracking pixel,
+	 * or one hidden via inline style. */
+	private static boolean isNoiseImage(Element img) {
+		if (img.attr("src").isBlank()) {
+			return true;
+		}
+		if (isTiny(img.attr("width")) || isTiny(img.attr("height"))) {
+			return true;
+		}
+		String style = img.attr("style").toLowerCase(Locale.ROOT).replace(" ", "");
+		return style.contains("display:none")
+				|| style.contains("visibility:hidden")
+				|| style.contains("width:0") || style.contains("height:0")
+				|| style.contains("width:1px") || style.contains("height:1px")
+				|| style.contains("width:2px") || style.contains("height:2px");
+	}
+
+	/** Parses a leading pixel dimension (e.g. {@code "1"}, {@code "2px"}) and reports
+	 * whether it is a 0–2px spacer/tracking size. */
+	private static boolean isTiny(String dimension) {
+		if (dimension == null || dimension.isBlank()) {
+			return false;
+		}
+		String digits = dimension.strip().replaceAll("[^0-9].*$", "");
+		if (digits.isBlank()) {
+			return false;
+		}
+		try {
+			return Integer.parseInt(digits) <= 2;
+		}
+		catch (NumberFormatException ex) {
+			return false;
 		}
 	}
 

@@ -143,15 +143,21 @@ public class EmailIngestService {
 
 	/**
 	 * Re-reads a connection's mailbox (read-only — seen flags are left untouched) and
-	 * rebuilds the description of every ticket whose source message is still present,
-	 * using the current body parser. This is the repair path for tickets ingested
-	 * while HTML handling was still broken. Only auto-generated descriptions are
-	 * rewritten, so manual edits survive, and no new tickets are ever created. A
-	 * single unreadable message is logged and skipped, never aborting the run.
+	 * reconciles it against existing tickets, using the current body parser.
 	 *
-	 * @return how many messages were scanned and how many ticket descriptions changed
+	 * <p>Every scanned message whose ticket still exists has its description rebuilt
+	 * (only auto-generated descriptions are rewritten, so manual edits survive).
+	 * Messages with <em>no</em> matching ticket are only turned into new tickets when
+	 * {@code createMissing} is true — the caller's explicit opt-in — because a missing
+	 * ticket may well have been deleted on purpose and must not silently reappear.
+	 * Messages without a {@code Message-ID} are never re-created (they cannot be
+	 * de-duplicated, so a re-run would keep duplicating them). A single unreadable
+	 * message is logged and skipped, never aborting the run.
+	 *
+	 * @param createMissing whether to (re-)create tickets for e-mails that have none
+	 * @return how many messages were scanned, rebuilt, and newly created
 	 */
-	public ReprocessResult reprocess(IngestConnection config) {
+	public ReprocessResult reprocess(IngestConnection config, boolean createMissing) {
 		Properties props = new Properties();
 		String protocol = config.isSsl() ? "imaps" : "imap";
 		props.put("mail.store.protocol", protocol);
@@ -162,6 +168,7 @@ public class EmailIngestService {
 		Session session = Session.getInstance(props);
 		int scanned = 0;
 		int updated = 0;
+		int created = 0;
 		try (Store store = session.getStore(protocol)) {
 			store.connect(config.getHost(), config.getPort(), config.getUsername(), config.getPassword());
 			Folder folder = store.getFolder(config.getFolder());
@@ -169,8 +176,10 @@ public class EmailIngestService {
 			try {
 				for (Message message : folder.getMessages()) {
 					scanned++;
-					if (rebuildFrom(message, config)) {
-						updated++;
+					switch (reprocessOne(message, config, createMissing)) {
+						case UPDATED -> updated++;
+						case CREATED -> created++;
+						case SKIPPED -> { /* left as-is */ }
 					}
 				}
 			}
@@ -183,46 +192,55 @@ public class EmailIngestService {
 					config.getUsername(), config.getHost(), ex.getMessage());
 			throw ApiException.badRequest("error.ingest.connectionFailed", ex.getMessage());
 		}
-		log.info("Reprocessed mailbox {}@{}: rebuilt {}/{} ticket description(s)",
-				config.getUsername(), config.getHost(), updated, scanned);
-		return new ReprocessResult(scanned, updated);
+		log.info("Reprocessed mailbox {}@{} (createMissing={}): {} scanned, {} rebuilt, {} created",
+				config.getUsername(), config.getHost(), createMissing, scanned, updated, created);
+		return new ReprocessResult(scanned, updated, created);
 	}
 
+	private enum Outcome { UPDATED, CREATED, SKIPPED }
+
 	/**
-	 * Rebuilds a single ticket from its source message when it still exists, belongs
-	 * to this connection's project, and its description is still the auto-generated
-	 * one. Returns whether the description actually changed. Best-effort: a broken
+	 * Reconciles a single message against the tickets. Rebuilds the matching ticket's
+	 * description when it still exists (and is still auto-generated), or creates a new
+	 * ticket when none exists and {@code createMissing} is set. Best-effort: a broken
 	 * message is skipped, not fatal.
 	 */
-	private boolean rebuildFrom(Message message, IngestConnection config) {
+	private Outcome reprocessOne(Message message, IngestConnection config, boolean createMissing) {
 		try {
 			String messageId = messageIdOf(message);
-			if (messageId == null) {
-				return false;
+			Issue issue = messageId != null
+					? issues.findByInboundMessageId(messageId).orElse(null)
+					: null;
+			if (issue != null) {
+				if (!config.getProjectId().equals(issue.getProjectId())
+						|| issue.getDescription() == null
+						|| !issue.getDescription().startsWith(DESCRIPTION_HEADER)) {
+					return Outcome.SKIPPED; // foreign project or a manually edited body
+				}
+				String rebuilt = buildDescription(senderOf(message), message);
+				if (rebuilt.equals(issue.getDescription())) {
+					return Outcome.SKIPPED; // already current
+				}
+				issues.replaceIngestedDescription(issue.getId(), rebuilt);
+				return Outcome.UPDATED;
 			}
-			Issue issue = issues.findByInboundMessageId(messageId).orElse(null);
-			if (issue == null
-					|| !config.getProjectId().equals(issue.getProjectId())
-					|| issue.getDescription() == null
-					|| !issue.getDescription().startsWith(DESCRIPTION_HEADER)) {
-				return false;
+			// No ticket for this message. Only (re-)create on explicit opt-in, and
+			// never for messages we cannot de-duplicate by Message-ID.
+			if (createMissing && messageId != null) {
+				createIssueFrom(message, config);
+				return Outcome.CREATED;
 			}
-			String rebuilt = buildDescription(senderOf(message), message);
-			if (rebuilt.equals(issue.getDescription())) {
-				return false; // already current — nothing to write
-			}
-			issues.replaceIngestedDescription(issue.getId(), rebuilt);
-			return true;
+			return Outcome.SKIPPED;
 		}
 		catch (Exception ex) {
 			log.warn("Reprocessing a message in folder {} failed: {}",
 					config.getFolder(), ex.getMessage());
-			return false;
+			return Outcome.SKIPPED;
 		}
 	}
 
 	/** Outcome of a {@link #reprocess} run. */
-	public record ReprocessResult(int scanned, int updated) {
+	public record ReprocessResult(int scanned, int updated, int created) {
 	}
 
 	/**
