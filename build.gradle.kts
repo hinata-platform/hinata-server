@@ -10,6 +10,14 @@ group = "com.ahmadre"
 version = "1.0.0"
 description = "Hinata - open source, self-hosted project management server"
 
+// Pin the main class explicitly so it never depends on classpath-scan timing.
+// With the configuration cache enabled, auto-detection can cache an empty result
+// when the classes dir is momentarily missing HinataServerApplication.class,
+// causing bootRun to fail with "Main class name has not been configured".
+springBoot {
+    mainClass.set("com.ahmadre.hinata.HinataServerApplication")
+}
+
 // --- Pinned versions for dependencies not governed by the Spring Boot BOM ---
 val bucket4jVersion = "8.10.1"
 val minioVersion = "8.6.0"
