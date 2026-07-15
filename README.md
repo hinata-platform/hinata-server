@@ -223,7 +223,7 @@ limited independently (`HINATA_RATE_LIMIT_MCP`, default 120/min).
 ## 🛰️ Hinata Connect gateway
 
 Push notifications and universal links are relayed through a central **Hinata
-Connect gateway**, so a single published white-label app can serve many servers
+Connect gateway**, so the single published client app can serve many self-hosted servers
 and self-hosters need **no Firebase of their own**. The server registers itself
 with the gateway on boot; per-server FCM/firebase-admin lives in the gateway,
 not in each server. Override the gateway with `HINATA_GATEWAY_BASE_URL` (default

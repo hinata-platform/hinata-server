@@ -22,7 +22,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Client for Hinata Connect, the single central service that the white-label app
+ * Client for Hinata Connect, the single central service that the published client app
  * depends on (see {@link HinataProperties.Gateway}). The server registers once on
  * boot (idempotent by API base URL) and then uses the returned {@code serverId} +
  * {@code secret} to:

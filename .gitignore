@@ -56,3 +56,9 @@ deploy/x509/bear/
 
 # bear
 docker-compose.bear.yml
+bin/main/application-dev.yml
+bin/main/application-prod.yml
+bin/main/application.yml
+bin/main/messages_de.properties
+bin/main/messages.properties
+bin/*

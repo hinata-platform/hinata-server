@@ -71,7 +71,7 @@ public class HinataProperties {
 
 	/**
 	 * Hinata Connect — the single central service every Hinata server uses for the
-	 * white-label app: push fan-out (it owns the published app's FCM credentials)
+	 * published client app: push fan-out (it owns the published app's FCM credentials)
 	 * and the verified universal-link relay (invite/reset deep links). The URL is a
 	 * constant shared by all self-hosted servers; only override for testing. Push
 	 * is no longer configured per-server (no Firebase needed on a self-hoster).
