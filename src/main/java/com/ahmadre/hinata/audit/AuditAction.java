@@ -49,6 +49,7 @@ public enum AuditAction {
 
 	// --- Configuration -------------------------------------------------------
 	SETTINGS_CHANGED(CONFIGURATION, WARNING, true),
+	LEGAL_DOCUMENT_UPDATED(CONFIGURATION, WARNING, true),
 
 	// --- Data / privacy ------------------------------------------------------
 	DATA_EXPORT_REQUESTED(DATA, NOTICE, true),
