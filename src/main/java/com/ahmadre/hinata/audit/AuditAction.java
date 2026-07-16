@@ -49,6 +49,8 @@ public enum AuditAction {
 
 	// --- Configuration -------------------------------------------------------
 	SETTINGS_CHANGED(CONFIGURATION, WARNING, true),
+	CONNECT_ENROLLED(CONFIGURATION, NOTICE, true),
+	CONNECT_DISCONNECTED(CONFIGURATION, WARNING, true),
 
 	// --- Data / privacy ------------------------------------------------------
 	DATA_EXPORT_REQUESTED(DATA, NOTICE, true),

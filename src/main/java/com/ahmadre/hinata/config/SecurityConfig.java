@@ -352,6 +352,8 @@ public class SecurityConfig {
 						"/.well-known/oauth-protected-resource",
 						"/.well-known/oauth-protected-resource/**",
 						"/.well-known/oauth-authorization-server",
+						// Hinata Connect domain-control proof (fetched by the gateway).
+						"/.well-known/hinata-connect-challenge",
 						"/oauth/register", "/oauth/authorize", "/oauth/token",
 						"/login/**", "/oauth2/**", "/saml2/**", "/error")
 				.permitAll()
