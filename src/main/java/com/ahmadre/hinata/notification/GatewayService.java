@@ -2,6 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.config.HinataProperties;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,10 +16,16 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -46,21 +53,44 @@ public class GatewayService {
 
 	private static final Logger log = LoggerFactory.getLogger(GatewayService.class);
 	private static final Base64.Encoder B64 = Base64.getUrlEncoder().withoutPadding();
+	private static final SecureRandom RANDOM = new SecureRandom();
 	private static final long LINK_TTL_SECONDS = 7L * 24 * 3600;
+	/** Grace after a handshake's declared expiry before the local poller gives up. */
+	private static final long HANDSHAKE_GRACE_MS = 5_000L;
 
 	private final HinataProperties props;
 	private final ConnectEnrollmentRepository enrollments;
+	private final ConnectHandshakeRepository handshakes;
 	private final HttpClient http = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10)).build();
 
+	/** Single daemon thread that polls the gateway while a handshake is pending. */
+	private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(r -> {
+		Thread t = new Thread(r, "connect-handshake-poll");
+		t.setDaemon(true);
+		return t;
+	});
+
 	/** Cached copy of the persisted enrolment (volatile — read on hot paths). */
 	private volatile ConnectEnrollment enrollment;
+	/** The in-flight "Jetzt verbinden" handshake, if any (volatile — touched by the poller). */
+	private volatile ConnectHandshake pendingHandshake;
+	private volatile ScheduledFuture<?> pollFuture;
 
 	public enum PushResult { SENT, DEAD, FAILED, DISABLED }
 
-	/** Status view consumed by the Adminbereich. */
+	/**
+	 * Status view consumed by the Adminbereich. Besides the enrolment state it
+	 * carries any in-flight handshake so the "Jetzt verbinden" UI can show a
+	 * "waiting for approval" state and re-open the portal URL.
+	 */
 	public record ConnectStatus(boolean enabled, boolean enrolled, String gatewayBaseUrl,
-			String serverId, String challenge, boolean domainVerified, long enrolledAt) {
+			String serverId, String challenge, boolean domainVerified, long enrolledAt,
+			boolean handshakePending, String handshakePortalUrl, long handshakeExpiresAt) {
+	}
+
+	/** Result of starting a handshake — what the app needs to open the portal. */
+	public record HandshakeStart(String portalUrl, long expiresAt) {
 	}
 
 	@PostConstruct
@@ -74,6 +104,29 @@ public class GatewayService {
 		} else {
 			log.info("Hinata Connect enrolment loaded (server {}).", enrollment.getServerId());
 		}
+		resumePendingHandshake();
+	}
+
+	/** Resume (or discard) a handshake that was in flight when the server restarted. */
+	private void resumePendingHandshake() {
+		ConnectHandshake h = handshakes.findById(ConnectHandshake.SINGLETON_ID).orElse(null);
+		if (h == null) {
+			return;
+		}
+		boolean dead = enrollment != null || !props.getGateway().isEnabled()
+				|| Instant.now().toEpochMilli() > h.getExpiresAt() + HANDSHAKE_GRACE_MS;
+		if (dead) {
+			handshakes.deleteById(ConnectHandshake.SINGLETON_ID);
+			return;
+		}
+		pendingHandshake = h;
+		schedulePoll();
+		log.info("Resuming pending Hinata Connect handshake ({}).", h.getHandshakeId());
+	}
+
+	@PreDestroy
+	void shutdown() {
+		poller.shutdownNow();
 	}
 
 	public boolean registered() {
@@ -93,10 +146,13 @@ public class GatewayService {
 		ConnectEnrollment e = enrollment;
 		boolean enabled = props.getGateway().isEnabled();
 		if (e == null) {
-			return new ConnectStatus(enabled, false, gw(), null, null, false, 0);
+			ConnectHandshake h = pendingHandshake;
+			boolean pending = h != null;
+			return new ConnectStatus(enabled, false, gw(), null, null, false, 0,
+					pending, pending ? h.getPortalUrl() : null, pending ? h.getExpiresAt() : 0);
 		}
 		return new ConnectStatus(enabled, true, gw(), e.getServerId(), e.getChallenge(),
-				e.isDomainVerified(), e.getEnrolledAt());
+				e.isDomainVerified(), e.getEnrolledAt(), false, null, 0);
 	}
 
 	/**
@@ -189,6 +245,162 @@ public class GatewayService {
 		enrollments.deleteById(ConnectEnrollment.SINGLETON_ID);
 		enrollment = null;
 		log.info("Hinata Connect enrolment removed locally.");
+	}
+
+	// --- Browser-mediated "Jetzt verbinden" handshake ---
+
+	/**
+	 * Starts the automated enrolment flow: registers a handshake with the gateway
+	 * (declaring this server's origins + the hash of a locally-kept verifier) and
+	 * returns the portal URL the admin opens to approve it. A background poller
+	 * then collects the minted credentials over the back channel and promotes them
+	 * to an enrolment — the app only has to watch {@link #status()} flip.
+	 *
+	 * @throws IllegalStateException    when Connect is disabled or the gateway is unreachable
+	 * @throws IllegalArgumentException when the gateway refuses the request
+	 */
+	public HandshakeStart startHandshake() {
+		if (!props.getGateway().isEnabled()) {
+			throw new IllegalStateException("connect disabled");
+		}
+		String verifier = randomToken(32);
+		String verifierHash = sha256Hex(verifier);
+		String body = "{\"apiBaseUrl\":" + jstr(props.getBaseUrl())
+				+ ",\"webBaseUrl\":" + jstr(props.webBase())
+				+ ",\"verifierHash\":" + jstr(verifierHash) + "}";
+		HttpResponse<String> r;
+		try {
+			r = http.send(HttpRequest.newBuilder(URI.create(gw() + "/register/handshake/start"))
+					.timeout(Duration.ofSeconds(10))
+					.header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+					HttpResponse.BodyHandlers.ofString());
+		} catch (Exception e) {
+			throw new IllegalStateException("gateway unreachable", e);
+		}
+		if (r.statusCode() / 100 != 2) {
+			log.warn("Hinata Connect handshake start refused: HTTP {}", r.statusCode());
+			throw new IllegalArgumentException("handshake rejected");
+		}
+		String handshakeId = extract(r.body(), "handshakeId");
+		String portalUrl = extract(r.body(), "portalUrl");
+		long expiresAt = extractLong(r.body(), "expiresAt");
+		if (handshakeId == null) {
+			throw new IllegalStateException("gateway returned no handshake");
+		}
+		ConnectHandshake h = new ConnectHandshake();
+		h.setHandshakeId(handshakeId);
+		h.setVerifier(verifier);
+		h.setPortalUrl(portalUrl);
+		h.setExpiresAt(expiresAt);
+		h.setStartedAt(Instant.now().toEpochMilli());
+		handshakes.save(h);
+		pendingHandshake = h;
+		schedulePoll();
+		log.info("Hinata Connect handshake started ({}).", handshakeId);
+		return new HandshakeStart(portalUrl, expiresAt);
+	}
+
+	/** Cancels an in-flight handshake (admin abandoned the flow). */
+	public ConnectStatus cancelHandshake() {
+		clearHandshake();
+		return status();
+	}
+
+	private synchronized void schedulePoll() {
+		cancelPoll();
+		// Small initial delay (the operator needs a moment) then a steady cadence.
+		pollFuture = poller.scheduleWithFixedDelay(this::pollHandshakeSafe, 2, 3, TimeUnit.SECONDS);
+	}
+
+	private synchronized void cancelPoll() {
+		if (pollFuture != null) {
+			pollFuture.cancel(false);
+			pollFuture = null;
+		}
+	}
+
+	private void clearHandshake() {
+		pendingHandshake = null;
+		cancelPoll();
+		try {
+			handshakes.deleteById(ConnectHandshake.SINGLETON_ID);
+		} catch (Exception ex) {
+			log.debug("Handshake cleanup failed: {}", ex.getMessage());
+		}
+	}
+
+	/** Never lets a background exception kill the scheduled task. */
+	private void pollHandshakeSafe() {
+		try {
+			pollHandshakeOnce();
+		} catch (Exception e) {
+			log.debug("Connect handshake poll error: {}", e.getMessage());
+		}
+	}
+
+	private void pollHandshakeOnce() {
+		ConnectHandshake h = pendingHandshake;
+		if (h == null) {
+			cancelPoll();
+			return;
+		}
+		if (Instant.now().toEpochMilli() > h.getExpiresAt() + HANDSHAKE_GRACE_MS) {
+			log.info("Hinata Connect handshake expired — cancelling.");
+			clearHandshake();
+			return;
+		}
+		String body = "{\"handshakeId\":" + jstr(h.getHandshakeId())
+				+ ",\"verifier\":" + jstr(h.getVerifier()) + "}";
+		HttpResponse<String> r;
+		try {
+			r = http.send(HttpRequest.newBuilder(URI.create(gw() + "/register/handshake/poll"))
+					.timeout(Duration.ofSeconds(10))
+					.header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+					HttpResponse.BodyHandlers.ofString());
+		} catch (Exception ex) {
+			return; // transient network blip — try again next tick
+		}
+		if (r.statusCode() / 100 != 2) {
+			// 401 (bad verifier) or 404 (gone) mean this handshake can never succeed.
+			if (r.statusCode() == 401 || r.statusCode() == 404) {
+				log.warn("Hinata Connect handshake no longer valid (HTTP {}) — cancelling.", r.statusCode());
+				clearHandshake();
+			}
+			return;
+		}
+		String state = extract(r.body(), "status");
+		if ("APPROVED".equals(state)) {
+			applyHandshakeEnrollment(r.body());
+		} else if ("DENIED".equals(state) || "EXPIRED".equals(state)) {
+			log.info("Hinata Connect handshake {} — cancelling.", state);
+			clearHandshake();
+		}
+		// "PENDING" → keep waiting.
+	}
+
+	/** Promotes an approved handshake's collected credentials to a persisted enrolment. */
+	private void applyHandshakeEnrollment(String bodyJson) {
+		String serverId = extract(bodyJson, "serverId");
+		String secret = extract(bodyJson, "secret");
+		if (serverId == null || secret == null) {
+			log.warn("Handshake approved but the gateway returned no credentials — will retry.");
+			return;
+		}
+		ConnectEnrollment e = new ConnectEnrollment();
+		e.setGatewayBaseUrl(gw());
+		e.setServerId(serverId);
+		e.setSecret(secret);
+		e.setChallenge(extract(bodyJson, "challenge"));
+		e.setDomainVerified(extractBool(bodyJson, "domainVerified"));
+		e.setApiBaseUrl(props.getBaseUrl());
+		e.setWebBaseUrl(props.webBase());
+		e.setEnrolledAt(Instant.now().toEpochMilli());
+		enrollments.save(e);
+		enrollment = e;
+		clearHandshake();
+		log.info("Enrolled with Hinata Connect via handshake as server {}.", serverId);
 	}
 
 	/**
@@ -298,5 +510,31 @@ public class GatewayService {
 	private static boolean extractBool(String json, String key) {
 		Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*(true|false)").matcher(json == null ? "" : json);
 		return m.find() && Boolean.parseBoolean(m.group(1));
+	}
+
+	private static long extractLong(String json, String key) {
+		Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*(\\d+)").matcher(json == null ? "" : json);
+		return m.find() ? Long.parseLong(m.group(1)) : 0L;
+	}
+
+	/** URL-safe, high-entropy opaque token from {@code bytes} of randomness (the PKCE verifier). */
+	private static String randomToken(int bytes) {
+		byte[] buf = new byte[bytes];
+		RANDOM.nextBytes(buf);
+		return B64.encodeToString(buf);
+	}
+
+	/** Lowercase hex SHA-256 — the PKCE {@code verifierHash} sent to the gateway. */
+	private static String sha256Hex(String value) {
+		try {
+			byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+			StringBuilder sb = new StringBuilder(digest.length * 2);
+			for (byte b : digest) {
+				sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+			}
+			return sb.toString();
+		} catch (Exception e) {
+			throw new IllegalStateException("SHA-256 unavailable", e);
+		}
 	}
 }

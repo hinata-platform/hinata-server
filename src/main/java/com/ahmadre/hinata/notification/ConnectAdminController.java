@@ -70,4 +70,34 @@ public class ConnectAdminController {
 				.log();
 		return gateway.status();
 	}
+
+	/** What the app needs to open the operator portal for the automated flow. */
+	public record HandshakeStartResponse(String portalUrl, long expiresAt) {
+	}
+
+	/**
+	 * Starts the automated "Jetzt verbinden" flow: returns the portal URL the
+	 * admin opens to approve enrolment. The server then collects the credentials
+	 * over the back channel; the app watches {@code GET /connect} until enrolled.
+	 */
+	@PostMapping("/handshake/start")
+	public HandshakeStartResponse handshakeStart() {
+		try {
+			GatewayService.HandshakeStart started = gateway.startHandshake();
+			audit.event(AuditAction.CONNECT_HANDSHAKE_STARTED)
+					.actor(currentUser.require())
+					.log();
+			return new HandshakeStartResponse(started.portalUrl(), started.expiresAt());
+		} catch (IllegalArgumentException e) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "handshake rejected");
+		} catch (IllegalStateException e) {
+			throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "gateway unavailable");
+		}
+	}
+
+	/** Cancels an in-flight handshake (admin abandoned the flow). */
+	@DeleteMapping("/handshake")
+	public GatewayService.ConnectStatus handshakeCancel() {
+		return gateway.cancelHandshake();
+	}
 }
