@@ -188,3 +188,14 @@ tasks.named<Jar>("jar") {
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
+
+// Local debugging: when BOOTRUN_DEBUG_PORT is set, attach a JDWP agent to the
+// forked application JVM ONLY (not the Gradle daemon), on that port. Env-gated,
+// so CI/normal builds are unaffected. Used by the mono-repo "Full Stack — Local"
+// debug tasks — more reliable than `--debug-jvm`, whose fixed default port
+// (5005) collides when server + gateway run at once.
+System.getenv("BOOTRUN_DEBUG_PORT")?.takeIf { it.isNotBlank() }?.let { port ->
+    tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
+        jvmArgs("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:$port")
+    }
+}
