@@ -71,7 +71,10 @@ public class ArticleController {
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public Article create(@RequestBody @Valid ArticleRequest request) {
-		String userId = currentUser.requireId();
+		User user = currentUser.require();
+		// Write-side ACL: the caller must be able to see the target project/team,
+		// otherwise they could plant KB content into a space they can't access.
+		assertCanTarget(request.projectId(), request.teamId(), user);
 		return articles.save(Article.builder()
 				.title(request.title())
 				.content(request.content())
@@ -93,6 +96,9 @@ public class ArticleController {
 		if (!canSee(article, user)) {
 			throw ApiException.notFound("article");
 		}
+		// The caller must also be able to see the TARGET project/team — otherwise
+		// an article could be relocated into a space the caller can't access.
+		assertCanTarget(request.projectId(), request.teamId(), user);
 		article.setTitle(request.title());
 		if (request.content() != null) article.setContent(request.content());
 		article.setProjectId(request.projectId());
@@ -142,6 +148,25 @@ public class ArticleController {
 		return base.stream()
 				.filter(a -> canSee(a, projectIds, teamIds))
 				.toList();
+	}
+
+	/**
+	 * Guards the write-side target scope: a non-admin caller may only create/move
+	 * an article into a project or team they can actually see. Global articles
+	 * (null project + null team) stay creatable by any authenticated user.
+	 */
+	private void assertCanTarget(String projectId, String teamId, User user) {
+		if (user.isAdmin()) {
+			return;
+		}
+		if (projectId != null && projectService.visibleTo(user).stream()
+				.noneMatch(p -> p.getId().equals(projectId))) {
+			throw ApiException.forbidden("error.accessDenied");
+		}
+		if (teamId != null && teamService.visibleTo(user).stream()
+				.noneMatch(t -> t.getId().equals(teamId))) {
+			throw ApiException.forbidden("error.accessDenied");
+		}
 	}
 
 	private boolean canSee(Article article, User user) {

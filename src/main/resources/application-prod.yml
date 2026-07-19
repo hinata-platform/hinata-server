@@ -11,6 +11,9 @@ spring:
 
 hinata:
   mongodb:
+    # Prod runs a replica set, so real multi-document transactions are available
+    # (registers MongoTransactionManager → @Transactional becomes atomic).
+    transactions-enabled: ${HINATA_MONGO_TRANSACTIONS:true}
     tls:
       enabled: ${HINATA_MONGO_TLS_ENABLED:true}
       key-store: ${HINATA_MONGO_TLS_KEYSTORE:/etc/hinata/x509/hinata-app.p12}

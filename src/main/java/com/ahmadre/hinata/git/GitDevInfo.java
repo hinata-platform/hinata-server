@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -33,6 +34,15 @@ public class GitDevInfo {
 
 	@Id
 	private String id;
+
+	/**
+	 * Optimistic-lock version — concurrent provider webhooks (push, PR,
+	 * workflow_run) target the same dev-info document, so a whole-document save
+	 * would let the later writer clobber the earlier's commit/PR/build. The
+	 * version makes such a conflict fail loudly so the upsert can retry.
+	 */
+	@Version
+	private Long version;
 
 	/** Issue readable id, e.g. {@code HIN-42} — the linking key (case-insensitive). */
 	@Indexed(unique = true)

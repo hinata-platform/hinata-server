@@ -127,7 +127,17 @@ public class BoardController {
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public AgileBoard create(@RequestBody @Valid CreateBoardRequest request) {
-		String userId = currentUser.requireId();
+		User user = currentUser.require();
+		String userId = user.getId();
+		// Membership check on EVERY spanned project: without this a member of one
+		// project could craft a board spanning a victim project and read its full
+		// backlog through view() (cross-project IDOR). Admins are unrestricted.
+		if (!user.isAdmin()) {
+			Set<String> visible = visibleProjectIds(user);
+			for (String pid : request.projectIds()) {
+				if (!visible.contains(pid)) throw ApiException.forbidden("error.accessDenied");
+			}
+		}
 		// Default columns mirror the first project's workflow.
 		Project first = projects.get(request.projectIds().get(0));
 		List<AgileBoard.Column> columns = new ArrayList<>();
@@ -153,6 +163,11 @@ public class BoardController {
 
 		List<Issue> candidates = new ArrayList<>();
 		Set<String> active = projects.activeProjectIds();
+		// A board may legitimately span several projects, but a given viewer must
+		// only ever see issues from the projects THEY can access — otherwise a
+		// shared multi-project board leaks a foreign project's backlog. Admins see
+		// everything.
+		Set<String> visibleToViewer = user.isAdmin() ? null : visibleProjectIds(user);
 		// Columns are derived live from the board's active projects' *current*
 		// workflow states (in order, deduped) — never the stale snapshot stored on
 		// the board — so renames/additions/deletions in project settings are
@@ -162,6 +177,8 @@ public class BoardController {
 		Map<String, Integer> hueByName = new HashMap<>();
 		for (String projectId : board.getProjectIds()) {
 			if (!active.contains(projectId)) continue; // skip archived projects
+			// Never aggregate issues from a project this viewer cannot see.
+			if (visibleToViewer != null && !visibleToViewer.contains(projectId)) continue;
 			projects.findOptional(projectId).ifPresent(p -> {
 				for (Project.WorkflowState s : p.getWorkflowStates()) {
 					stateNames.add(s.getName());

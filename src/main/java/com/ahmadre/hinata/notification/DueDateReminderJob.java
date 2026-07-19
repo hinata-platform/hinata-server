@@ -1,12 +1,12 @@
 package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.issue.Issue;
-import com.ahmadre.hinata.issue.IssueRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -29,7 +29,6 @@ public class DueDateReminderJob {
 	private static final int HORIZON_DAYS = 2;
 
 	private final MongoTemplate mongo;
-	private final IssueRepository issues;
 	private final NotificationService notifications;
 
 	@Scheduled(cron = "0 0 7 * * *")
@@ -54,9 +53,13 @@ public class DueDateReminderJob {
 				notifications.notifyDueSoon(issue, assignees);
 				sent++;
 			}
-			// Mark handled regardless of recipients so unassigned issues aren't rescanned daily.
+			// Mark handled regardless of recipients so unassigned issues aren't
+			// rescanned daily. Targeted $set (not a full save from the possibly-stale
+			// candidate loaded at the top of the run) so a concurrent user edit
+			// during the scan isn't clobbered.
 			issue.setDueReminderFor(due);
-			issues.save(issue);
+			mongo.updateFirst(new Query(Criteria.where("_id").is(issue.getId())),
+					new Update().set("dueReminderFor", due), Issue.class);
 		}
 		if (sent > 0) {
 			log.info("Sent due-soon reminders for {} issue(s)", sent);

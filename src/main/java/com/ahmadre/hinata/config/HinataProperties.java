@@ -153,6 +153,15 @@ public class HinataProperties {
 		private Tls tls = new Tls();
 
 		/**
+		 * Enables real multi-document transactions by registering a
+		 * {@code MongoTransactionManager} (see {@code MongoTxConfig}). Requires the
+		 * database to be a replica set / mongos — prod is a replica set, so it is on
+		 * there; local/standalone dev leaves it {@code false} (a standalone mongod
+		 * rejects transactions).
+		 */
+		private boolean transactionsEnabled = false;
+
+		/**
 		 * Mutual-TLS / X.509 settings for the MongoDB connection. When enabled,
 		 * the driver presents the configured client certificate (keystore) and
 		 * verifies the server against the CA (truststore); combine with

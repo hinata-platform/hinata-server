@@ -108,13 +108,22 @@ public class EmailIngestService {
 		String projectId = config.getProjectId();
 		String subject = message.getSubject() != null ? message.getSubject() : "(no subject)";
 		String from = senderOf(message);
+		// Message-ID dedupe is the PRIMARY guard, the SEEN flag only secondary: if
+		// the flag write failed or the process died between create and flag (or two
+		// instances poll the same mailbox), the message stays UNSEEN and would
+		// otherwise become a duplicate ticket on the next tick.
+		String messageId = messageIdOf(message);
+		if (messageId != null && issues.findByInboundMessageId(messageId).isPresent()) {
+			log.info("Skipping already-ingested message {}", messageId);
+			return; // caller still sets SEEN
+		}
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(truncate(subject, 300))
 				.description(buildDescription(from, message))
 				.type(Issue.Type.TASK)
 				.reporterEmail(from)
-				.inboundMessageId(messageIdOf(message))
+				.inboundMessageId(messageId)
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
 				.build();

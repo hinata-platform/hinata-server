@@ -250,9 +250,16 @@ public class SprintService {
 	public SprintReport report(String id, User user) {
 		Sprint sprint = accessibleSprint(id, user);
 		Map<String, Set<String>> resolvedCache = new HashMap<>();
+		// A board can span several projects; a viewer must only see sprint issues
+		// from projects THEY can access — otherwise a shared multi-project board's
+		// report leaks a foreign project's issues (same class as the board IDOR).
+		Set<String> visible = user.isAdmin() ? null
+				: projects.visibleTo(user).stream().map(Project::getId).collect(Collectors.toSet());
 		// Archived issues are soft-deleted and must not distort the report.
 		List<Issue> inSprint = issues.findBySprintId(sprint.getId()).stream()
-				.filter(i -> !i.isArchived()).toList();
+				.filter(i -> !i.isArchived())
+				.filter(i -> visible == null || visible.contains(i.getProjectId()))
+				.toList();
 
 		int committed = inSprint.stream().mapToInt(SprintService::points).sum();
 		List<Issue> doneIssues = inSprint.stream().filter(i -> resolvedIn(i, resolvedCache)).toList();
