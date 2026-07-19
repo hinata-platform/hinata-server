@@ -20,6 +20,12 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class UserService {
 
+	/**
+	 * Baseline default password length (used by the demo seeder and mirrored by the
+	 * {@code hinata.security.password-min-length} env default). NOT the enforcement
+	 * value — {@link #validatePassword} reads the effective minimum from
+	 * {@link com.ahmadre.hinata.auth.SecurityPolicy}, which an admin can raise.
+	 */
 	public static final int MIN_PASSWORD_LENGTH = 10;
 
 	private final UserRepository users;
@@ -27,6 +33,7 @@ public class UserService {
 	private final MongoTemplate mongo;
 	private final com.ahmadre.hinata.audit.AuditService audit;
 	private final com.ahmadre.hinata.notification.NotificationService notifications;
+	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 
 	public User get(String id) {
 		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
@@ -166,10 +173,16 @@ public class UserService {
 						: "Your account password was changed. If this wasn't you, change it immediately.");
 	}
 
+	/**
+	 * Validates a raw password against the <em>effective</em> minimum length, which
+	 * an admin can raise at runtime via the Security panel ({@link
+	 * com.ahmadre.hinata.auth.SecurityPolicy} resolves DB-over-env). Never uses a
+	 * hardcoded constant, so this is the single enforcement point for the policy.
+	 */
 	public void validatePassword(String rawPassword) {
-		if (rawPassword == null || rawPassword.length() < MIN_PASSWORD_LENGTH) {
-			throw ApiException.badRequest(
-					"error.user.passwordTooShort", MIN_PASSWORD_LENGTH);
+		int min = securityPolicy.passwordMinLength();
+		if (rawPassword == null || rawPassword.length() < min) {
+			throw ApiException.badRequest("error.user.passwordTooShort", min);
 		}
 	}
 

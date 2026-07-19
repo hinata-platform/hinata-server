@@ -1,7 +1,6 @@
 package com.ahmadre.hinata.auth;
 
 import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.config.HinataProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -21,7 +20,7 @@ import java.time.Instant;
 public class LoginAttemptService {
 
 	private final MongoTemplate mongo;
-	private final HinataProperties properties;
+	private final SecurityPolicy securityPolicy;
 
 	public void assertNotBlocked(String identifier, String ip) {
 		// Block if EITHER the (identifier, ip) pair OR the account as a whole is
@@ -58,9 +57,11 @@ public class LoginAttemptService {
 		attempt.setFailures(attempt.getFailures() + 1);
 		attempt.setLastFailureAt(Instant.now());
 		attempt.setExpiresAt(Instant.now().plus(Duration.ofDays(2)));
-		HinataProperties.RateLimit limits = properties.getRateLimit();
-		if (attempt.getFailures() >= limits.getMaxLoginFailures()) {
-			attempt.setBlockedUntil(Instant.now().plus(Duration.ofMinutes(limits.getLoginBlockMinutes())));
+		// Effective thresholds resolved by SecurityPolicy: the admin Security panel
+		// (DB) wins over the env defaults — never a hardcoded value.
+		if (attempt.getFailures() >= securityPolicy.maxLoginAttempts()) {
+			attempt.setBlockedUntil(
+					Instant.now().plus(Duration.ofMinutes(securityPolicy.lockoutMinutes())));
 			log.warn("Login blocked key={} until={}", id, attempt.getBlockedUntil());
 		}
 		mongo.save(attempt);

@@ -36,6 +36,7 @@ public class MeController {
 	private final UserEvents userEvents;
 	private final DataExportPdfService dataExportPdf;
 	private final com.ahmadre.hinata.user.UserService users;
+	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
 
 	// --- DTOs -----------------------------------------------------------------
@@ -354,6 +355,7 @@ public class MeController {
 	}
 
 	private String passwordFormPage(String token) {
+		int min = securityPolicy.passwordMinLength();
 		return """
 				<!doctype html><html><head><meta charset="utf-8"/>
 				<meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -366,13 +368,13 @@ public class MeController {
 				<h1 style="color:#23223F;font-size:20px;margin:0 0 16px">Choose a new password</h1>
 				<form method="post" action="/api/v1/me/password-reset/confirm">
 				<input type="hidden" name="token" value="%s"/>
-				<input type="password" name="password" minlength="10" required placeholder="New password (min. 10 chars)"
+				<input type="password" name="password" minlength="%d" required placeholder="New password (min. %d chars)"
 				  style="width:100%%;box-sizing:border-box;padding:13px;border:1px solid #E7E5DE;border-radius:10px;font-size:15px;margin-bottom:14px"/>
 				<button type="submit"
 				  style="width:100%%;padding:13px;background:#2D2B55;color:#fff;border:0;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">
 				  Update password</button>
 				</form></div></div></body></html>
-				""".formatted(escape(token));
+				""".formatted(escape(token), min, min);
 	}
 
 	private String escape(String value) {

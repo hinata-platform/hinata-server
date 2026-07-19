@@ -36,6 +36,7 @@ public class MetaController {
 	private final HinataProperties properties;
 	private final SettingsService settings;
 	private final com.ahmadre.hinata.auth.AuthPolicy authPolicy;
+	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final com.ahmadre.hinata.mcp.McpSettings mcpSettings;
 
 	@Value("${hinata.version:1.0.0}")
@@ -45,7 +46,8 @@ public class MetaController {
 			String logoUrl, boolean setupCompleted, String privacyPolicyUrl,
 			String iosStoreUrl, String androidStoreUrl, String macosStoreUrl,
 			Map<String, Boolean> featureFlags, boolean localAuthEnabled,
-			boolean registrationEnabled, boolean adminApprovalRequired, UploadLimits uploadLimits) {
+			boolean registrationEnabled, boolean adminApprovalRequired, UploadLimits uploadLimits,
+			int passwordMinLength) {
 	}
 
 	/** Attachment upload constraints so the client can validate before sending. */
@@ -87,7 +89,8 @@ public class MetaController {
 				authPolicy.registrationEnabled(),
 				authPolicy.requireAdminApproval(),
 				new UploadLimits(storage.getMaxUploadMb(), storage.getMaxFilesPerRequest(),
-						storage.getMaxRequestMb(), storage.getAllowedContentTypes()));
+						storage.getMaxRequestMb(), storage.getAllowedContentTypes()),
+				securityPolicy.passwordMinLength());
 	}
 
 	@Operation(summary = "Organization logo", description = "Proxies the configured logo URL so clients (incl. the web app and the PDF export) can load it same-origin without CORS restrictions.")

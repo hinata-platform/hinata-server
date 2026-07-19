@@ -61,7 +61,9 @@ public class AdminUserController {
 			@NotBlank @Email String email,
 			@NotBlank @Pattern(regexp = "[a-zA-Z0-9._-]{3,40}") String username,
 			@NotBlank @Size(max = 120) String displayName,
-			@NotBlank @Size(min = 10, max = 128) String password,
+			// Min length is enforced dynamically by UserService#validatePassword
+			// (SecurityPolicy, admin-configurable); only the hard upper bound is static.
+			@NotBlank @Size(max = 128) String password,
 			boolean admin) {
 	}
 

@@ -36,10 +36,13 @@ public class TokenService {
 
 	private final JwtEncoder encoder;
 	private final HinataProperties properties;
+	private final SecurityPolicy securityPolicy;
 
-	public TokenService(JwtEncoder encoder, HinataProperties properties) {
+	public TokenService(JwtEncoder encoder, HinataProperties properties,
+			SecurityPolicy securityPolicy) {
 		this.encoder = encoder;
 		this.properties = properties;
+		this.securityPolicy = securityPolicy;
 	}
 
 	public record TokenPair(String accessToken, String refreshToken, long expiresInSeconds) {
@@ -55,10 +58,14 @@ public class TokenService {
 	 * the token session-less (legacy / service tokens).
 	 */
 	public TokenPair issue(User user, String sessionId) {
+		// Access token stays a short env-driven rotation; the refresh token carries
+		// the session lifetime, which the admin "Session policy" (SecurityPolicy,
+		// DB-over-env) is the source of truth for.
+		long accessSeconds = properties.getJwt().getAccessTokenSeconds();
 		return new TokenPair(
-				encode(user, TYPE_ACCESS, properties.getJwt().getAccessTokenSeconds(), sessionId),
-				encode(user, TYPE_REFRESH, properties.getJwt().getRefreshTokenSeconds(), sessionId),
-				properties.getJwt().getAccessTokenSeconds());
+				encode(user, TYPE_ACCESS, accessSeconds, sessionId),
+				encode(user, TYPE_REFRESH, securityPolicy.sessionLifetimeSeconds(), sessionId),
+				accessSeconds);
 	}
 
 	/** A short-lived token proving a password was accepted, pending a 2FA code. */

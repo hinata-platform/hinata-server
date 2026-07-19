@@ -28,6 +28,7 @@ public class AdminSettingsController {
 	private final GitIntegrationSettings gitConfig;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
+	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 
 	@GetMapping
 	public ServerSettings get() {
@@ -73,7 +74,37 @@ public class AdminSettingsController {
 		}
 		prefillGitIntegration(current);
 		prefillMcp(current);
+		prefillSecurity(current);
 		return current;
+	}
+
+	/**
+	 * Pre-fill the security policy from the effective values so the admin form shows
+	 * the values currently in force (env default until an admin overrides them). The
+	 * source of truth is {@link com.ahmadre.hinata.auth.SecurityPolicy}, so a blank
+	 * field always displays exactly what enforcement uses.
+	 */
+	private void prefillSecurity(ServerSettings current) {
+		ServerSettings.Security sec = current.getSecurity();
+		if (sec == null) {
+			sec = new ServerSettings.Security();
+			current.setSecurity(sec);
+		}
+		if (sec.getPasswordMinLength() == null) {
+			sec.setPasswordMinLength(securityPolicy.passwordMinLength());
+		}
+		if (sec.getMaxLoginAttempts() == null) {
+			sec.setMaxLoginAttempts(securityPolicy.maxLoginAttempts());
+		}
+		if (sec.getLockoutMinutes() == null) {
+			sec.setLockoutMinutes(securityPolicy.lockoutMinutes());
+		}
+		if (sec.getSessionLifetimeHours() == null) {
+			sec.setSessionLifetimeHours(securityPolicy.sessionLifetimeHours());
+		}
+		if (sec.getRateLimitEnabled() == null) {
+			sec.setRateLimitEnabled(securityPolicy.rateLimitEnabled());
+		}
 	}
 
 	/**

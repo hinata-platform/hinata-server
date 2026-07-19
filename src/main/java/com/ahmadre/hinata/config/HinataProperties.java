@@ -137,6 +137,14 @@ public class HinataProperties {
 		 * e.g. {@code 127.0.0.1/32} for a local ngrok agent.
 		 */
 		private List<String> trustedProxies = List.of();
+		/**
+		 * Default minimum length for user passwords. This is only the fallback:
+		 * an admin can raise it at runtime via the Security settings panel, and
+		 * {@link com.ahmadre.hinata.auth.SecurityPolicy} resolves the effective
+		 * value (DB override wins over this env default).
+		 */
+		@Min(8)
+		private int passwordMinLength = 10;
 	}
 
 	@Getter

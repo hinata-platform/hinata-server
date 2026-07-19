@@ -102,14 +102,26 @@ public class ServerSettings {
 		private String fromName = "Hinata";
 	}
 
-	/** Basic security hardening knobs configurable at runtime. */
+	/**
+	 * Basic security hardening knobs, admin-configurable at runtime. Nullable
+	 * wrappers so an unset field falls back to the env-driven defaults — the
+	 * effective value is resolved by {@link com.ahmadre.hinata.auth.SecurityPolicy}
+	 * (DB override wins over env). This block is the single source of truth for the
+	 * password/lockout/session/rate-limit policy: every enforcement point reads
+	 * through {@code SecurityPolicy}, never a hardcoded constant.
+	 */
 	@Data
 	public static class Security {
-		private int passwordMinLength = 10;
-		private int maxLoginAttempts = 5;
-		private int lockoutMinutes = 15;
-		private int sessionLifetimeHours = 168;
-		private boolean rateLimitEnabled = true;
+		/** Minimum password length; null ⇒ {@code hinata.security.password-min-length}. */
+		private Integer passwordMinLength;
+		/** Failed logins before a temporary block; null ⇒ {@code hinata.rate-limit.max-login-failures}. */
+		private Integer maxLoginAttempts;
+		/** Minutes an account stays locked; null ⇒ {@code hinata.rate-limit.login-block-minutes}. */
+		private Integer lockoutMinutes;
+		/** Session (refresh-token) lifetime in hours; null ⇒ {@code hinata.jwt.refresh-token-seconds}. */
+		private Integer sessionLifetimeHours;
+		/** Per-IP API rate limiting on/off; null ⇒ {@code hinata.rate-limit.enabled}. */
+		private Boolean rateLimitEnabled;
 	}
 
 	/** OpenID Connect (e.g. Synology SSO, Keycloak, Authentik). */

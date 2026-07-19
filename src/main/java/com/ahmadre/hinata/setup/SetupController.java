@@ -38,7 +38,9 @@ public class SetupController {
 			@NotBlank @Email String adminEmail,
 			@NotBlank @Pattern(regexp = "[a-zA-Z0-9._-]{3,40}") String adminUsername,
 			@NotBlank @Size(max = 120) String adminDisplayName,
-			@NotBlank @Size(min = 10, max = 128) String adminPassword) {
+			// Min length is enforced dynamically by UserService#validatePassword
+			// (SecurityPolicy, admin-configurable); only the hard upper bound is static.
+			@NotBlank @Size(max = 128) String adminPassword) {
 	}
 
 	@Operation(summary = "Setup status", description = "Returns whether first-run setup has been completed.")

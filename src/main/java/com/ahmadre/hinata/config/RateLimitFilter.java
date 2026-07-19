@@ -23,15 +23,18 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RateLimitFilter extends OncePerRequestFilter {
 
 	private final HinataProperties properties;
+	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final ClientIpResolver clientIpResolver;
 	private final MessageSource messages;
 	private final Map<String, Bucket> apiBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> authBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> mcpBuckets = new ConcurrentHashMap<>();
 
-	public RateLimitFilter(HinataProperties properties, ClientIpResolver clientIpResolver,
-			MessageSource messages) {
+	public RateLimitFilter(HinataProperties properties,
+			com.ahmadre.hinata.auth.SecurityPolicy securityPolicy,
+			ClientIpResolver clientIpResolver, MessageSource messages) {
 		this.properties = properties;
+		this.securityPolicy = securityPolicy;
 		this.clientIpResolver = clientIpResolver;
 		this.messages = messages;
 	}
@@ -39,7 +42,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
 			FilterChain chain) throws ServletException, IOException {
-		if (!properties.getRateLimit().isEnabled()) {
+		// Master switch resolved by SecurityPolicy: the admin "Rate-Limiting"
+		// toggle (DB) wins over the env default. Cached + event-refreshed, so this
+		// per-request check never hits Mongo.
+		if (!securityPolicy.rateLimitEnabled()) {
 			chain.doFilter(request, response);
 			return;
 		}
