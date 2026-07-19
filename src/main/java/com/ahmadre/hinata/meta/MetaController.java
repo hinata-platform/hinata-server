@@ -1,8 +1,10 @@
 package com.ahmadre.hinata.meta;
 
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.setup.OrganizationLogoService;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.storage.StorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -21,6 +23,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 
 @Tag(name = "Public", description = "Unauthenticated server metadata")
 @RestController
@@ -38,6 +41,7 @@ public class MetaController {
 	private final com.ahmadre.hinata.auth.AuthPolicy authPolicy;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final com.ahmadre.hinata.mcp.McpSettings mcpSettings;
+	private final OrganizationLogoService logoService;
 
 	@Value("${hinata.version:1.0.0}")
 	private String serverVersion;
@@ -93,13 +97,29 @@ public class MetaController {
 				securityPolicy.passwordMinLength());
 	}
 
-	@Operation(summary = "Organization logo", description = "Proxies the configured logo URL so clients (incl. the web app and the PDF export) can load it same-origin without CORS restrictions.")
+	@Operation(summary = "Organization logo", description = "Serves the organization logo same-origin so clients (incl. the web app and the PDF export) load it without CORS restrictions. An uploaded logo is streamed from object storage; a configured external URL is proxied.")
 	@SecurityRequirements
 	@GetMapping("/api/v1/meta/logo")
 	public ResponseEntity<byte[]> logo() {
 		String url = settings.get().getGeneral().getLogoUrl();
 		if (url == null || url.isBlank()) {
 			return ResponseEntity.notFound().build();
+		}
+		// An uploaded logo lives in object storage and logoUrl holds our internal
+		// proxy path (not an absolute URL) — stream those bytes straight back.
+		if (OrganizationLogoService.isInternal(url)) {
+			Optional<StorageService.StoredObject> stored = logoService.load();
+			if (stored.isEmpty()) {
+				return ResponseEntity.notFound().build();
+			}
+			StorageService.StoredObject obj = stored.get();
+			MediaType contentType = obj.contentType() != null
+					? parseMediaType(obj.contentType())
+					: MediaType.APPLICATION_OCTET_STREAM;
+			return ResponseEntity.ok()
+					.contentType(contentType)
+					.cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
+					.body(obj.data());
 		}
 		try {
 			HttpRequest request = HttpRequest.newBuilder(URI.create(url.trim()))

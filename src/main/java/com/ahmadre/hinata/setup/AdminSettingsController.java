@@ -7,11 +7,20 @@ import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.util.Map;
 
 /**
  * Admin area: read and update runtime server settings (SSO, e-mail ingest,
@@ -29,6 +38,7 @@ public class AdminSettingsController {
 	private final AuditService audit;
 	private final CurrentUser currentUser;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
+	private final OrganizationLogoService logoService;
 
 	@GetMapping
 	public ServerSettings get() {
@@ -163,6 +173,13 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
+		// A settings PUT that carries an external/blank logo URL means the admin is
+		// no longer using an uploaded logo — drop the stored object so it can't
+		// shadow the URL in the /meta/logo proxy and doesn't linger as an orphan.
+		if (updated.getGeneral() == null
+				|| !OrganizationLogoService.isInternal(updated.getGeneral().getLogoUrl())) {
+			logoService.deleteStoredObject();
+		}
 		// Recorded before the save so that disabling audit logging itself is still
 		// captured (the check reads the pre-save, still-enabled settings).
 		audit.event(AuditAction.SETTINGS_CHANGED)
@@ -214,6 +231,32 @@ public class AdminSettingsController {
 		if (isBlank(git.getTokenSecret())) {
 			git.setTokenSecret(curGit.getTokenSecret());
 		}
+	}
+
+	/**
+	 * Uploads an organization logo into object storage and points
+	 * {@code General.logoUrl} at the internal proxy. The alternative to typing a
+	 * URL — either way {@code /meta/logo} serves the image same-origin.
+	 */
+	@PostMapping(value = "/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+	public Map<String, String> uploadLogo(@RequestParam("file") MultipartFile file) {
+		String url = logoService.store(file);
+		audit.event(AuditAction.SETTINGS_CHANGED)
+				.actor(currentUser.require())
+				.meta("logo", "uploaded")
+				.log();
+		return Map.of("logoUrl", url);
+	}
+
+	/** Removes an uploaded logo (deletes the object, clears the internal URL). */
+	@DeleteMapping("/logo")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void deleteLogo() {
+		logoService.remove();
+		audit.event(AuditAction.SETTINGS_CHANGED)
+				.actor(currentUser.require())
+				.meta("logo", "removed")
+				.log();
 	}
 
 	private boolean isBlank(String value) {

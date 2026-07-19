@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.user;
 
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,8 +28,10 @@ class UserServiceTest {
 	void setUp() {
 		users = mock(UserRepository.class);
 		when(users.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		SecurityPolicy securityPolicy = mock(SecurityPolicy.class);
+		when(securityPolicy.passwordMinLength()).thenReturn(10);
 		service = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class),
-				mock(AuditService.class), mock(NotificationService.class));
+				mock(AuditService.class), mock(NotificationService.class), securityPolicy);
 	}
 
 	@Test
