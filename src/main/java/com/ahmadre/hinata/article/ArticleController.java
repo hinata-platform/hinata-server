@@ -52,7 +52,7 @@ public class ArticleController {
 			String space, String icon, String title, String content, List<String> tags,
 			String authorId, int sortOrder, java.time.Instant createdAt, java.time.Instant updatedAt) {
 
-		static ArticleResponse from(Article a) {
+		public static ArticleResponse from(Article a) {
 			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.getParentId(),
 					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getTags(),
 					a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt());
