@@ -721,8 +721,11 @@ public class IssueService {
 		return list != null && !list.isEmpty();
 	}
 
-	/** Minimal issue summary for the @-mention menu and {{issue:KEY}} chips. */
-	public record IssueRef(String id, String readableId, String title) {
+	/**
+	 * Minimal issue summary for the @-mention menu dropdown rows: just enough to
+	 * render a row (readable id, title) and pick the type glyph ([type]).
+	 */
+	public record IssueRef(String id, String readableId, String title, String type) {
 	}
 
 	/** Cap on mention-search / batch-resolve results (bounds the query + payload). */
@@ -736,15 +739,19 @@ public class IssueService {
 		Page<Issue> page = search(new SearchParams(projectId, null, null, null, null, null, null,
 				null, null, q, false, false, null, null, null, null, null, 0, MENTION_LIMIT), user);
 		return page.getContent().stream()
-				.map(i -> new IssueRef(i.getId(), i.getReadableId(), i.getTitle()))
+				.map(i -> new IssueRef(i.getId(), i.getReadableId(), i.getTitle(),
+						i.getType() != null ? i.getType().name() : null))
 				.toList();
 	}
 
 	/**
-	 * Resolves readable ids (e.g. {@code HIN-1}) to minimal summaries for chip
-	 * rendering. Scoped to the caller's visible projects and capped.
+	 * Resolves readable ids (e.g. {@code HIN-1}) to the full issues for
+	 * {@code {{issue:KEY}}} chip + hover-card rendering (which needs state,
+	 * assignee, priority and labels). Scoped to the caller's visible projects and
+	 * capped, so the client resolves only the keys actually referenced instead of
+	 * draining the whole project issue set.
 	 */
-	public List<IssueRef> resolveRefs(List<String> keys, User user) {
+	public List<Issue> resolveIssues(List<String> keys, User user) {
 		if (keys == null || keys.isEmpty()) {
 			return List.of();
 		}
@@ -757,9 +764,7 @@ public class IssueService {
 		}
 		Query query = Query.query(Criteria.where("readableId").in(capped)
 				.and("projectId").in(scope));
-		return mongo.find(query, Issue.class).stream()
-				.map(i -> new IssueRef(i.getId(), i.getReadableId(), i.getTitle()))
-				.toList();
+		return mongo.find(query, Issue.class);
 	}
 
 	public IssueComment addComment(String issueId, String text, User author) {

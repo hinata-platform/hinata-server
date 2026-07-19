@@ -117,12 +117,12 @@ public class IssueController {
 	}
 
 	/**
-	 * Resolves a batch of readable ids (e.g. {@code HIN-1,HIN-2}) to minimal issue
-	 * summaries for {{issue:KEY}} chip rendering — ACL-scoped, capped.
+	 * Resolves a batch of readable ids (e.g. {@code HIN-1,HIN-2}) to the full
+	 * issues for {{issue:KEY}} chip + hover-card rendering — ACL-scoped, capped.
 	 */
 	@GetMapping("/resolve")
-	public List<IssueService.IssueRef> resolve(@RequestParam List<String> keys) {
-		return issueService.resolveRefs(keys, currentUser.require());
+	public List<Issue> resolve(@RequestParam List<String> keys) {
+		return issueService.resolveIssues(keys, currentUser.require());
 	}
 
 	@GetMapping("/{id}")

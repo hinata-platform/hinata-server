@@ -155,7 +155,7 @@ class ApiContractE2EIntegrationTest {
 	// --- mention-search + resolve --------------------------------------
 
 	@Test
-	@DisplayName("mention-search returns capped lightweight refs")
+	@DisplayName("mention-search returns capped lightweight refs with a type glyph")
 	void mentionSearchReturnsRefs() {
 		String token = login();
 		JsonNode refs = getOk("/api/v1/issues/mention-search?q=HIN", token);
@@ -165,17 +165,23 @@ class ApiContractE2EIntegrationTest {
 		assertThat(first.path("id").asText()).isNotBlank();
 		assertThat(first.path("readableId").asText()).isNotBlank();
 		assertThat(first.has("title")).isTrue();
+		// The dropdown row picks its glyph from the issue type.
+		assertThat(first.path("type").asText()).isNotBlank();
 	}
 
 	@Test
-	@DisplayName("resolve maps readable keys to summaries")
-	void resolveKeysReturnsSummaries() {
+	@DisplayName("resolve returns full issues for chip + hover-card rendering")
+	void resolveKeysReturnsFullIssues() {
 		String token = login();
-		JsonNode refs = getOk("/api/v1/issues/resolve?keys=HIN-1&keys=HIN-2", token);
-		assertThat(refs.isArray()).isTrue();
-		assertThat(refs.size()).isGreaterThan(0);
-		for (JsonNode ref : refs) {
-			assertThat(ref.path("readableId").asText()).startsWith("HIN-");
+		JsonNode issues = getOk("/api/v1/issues/resolve?keys=HIN-1&keys=HIN-2", token);
+		assertThat(issues.isArray()).isTrue();
+		assertThat(issues.size()).isGreaterThan(0);
+		for (JsonNode issue : issues) {
+			assertThat(issue.path("readableId").asText()).startsWith("HIN-");
+			// Full issue, not a lightweight ref: the hover card needs these.
+			assertThat(issue.has("state")).isTrue();
+			assertThat(issue.has("priority")).isTrue();
+			assertThat(issue.has("type")).isTrue();
 		}
 	}
 
