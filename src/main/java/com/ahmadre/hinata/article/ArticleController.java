@@ -42,10 +42,45 @@ public class ArticleController {
 			Integer sortOrder) {
 	}
 
+	/**
+	 * Client-facing article shape. Decouples the HTTP contract from the
+	 * {@code @Document} entity (layered-architecture rule) while remaining a
+	 * byte-for-byte match of the entity's current JSON, so the client
+	 * {@code Article.fromJson} is unchanged.
+	 */
+	public record ArticleResponse(String id, String projectId, String teamId, String parentId,
+			String space, String icon, String title, String content, List<String> tags,
+			String authorId, int sortOrder, java.time.Instant createdAt, java.time.Instant updatedAt) {
+
+		static ArticleResponse from(Article a) {
+			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.getParentId(),
+					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getTags(),
+					a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt());
+		}
+
+		static List<ArticleResponse> from(List<Article> articles) {
+			return articles.stream().map(ArticleResponse::from).toList();
+		}
+	}
+
+	/** Hard ceiling on the array-shaped corpus load so the KB can never stream an
+	 * unbounded set of (potentially 100k-char) bodies to the client. */
+	private static final int LIST_CAP = 1000;
+
 	@GetMapping
-	public List<Article> list(@RequestParam(required = false) String projectId,
-			@RequestParam(defaultValue = "false") boolean all) {
+	public List<ArticleResponse> list(@RequestParam(required = false) String projectId,
+			@RequestParam(defaultValue = "false") boolean all,
+			@RequestParam(required = false) String referencesIssue) {
 		User user = currentUser.require();
+		// Server-side issue⇄article backlink resolution: instead of the client
+		// draining the whole corpus and regex-scanning every body for
+		// {{issue:KEY}}, the server runs the (injection-safe, literal) token
+		// query and returns only the referencing articles the caller may see.
+		if (referencesIssue != null && referencesIssue.matches("[A-Za-z]+-\\d+")) {
+			String token = "\\{\\{issue:" + referencesIssue.toUpperCase() + "\\}\\}";
+			return ArticleResponse.from(filterVisible(articles.findByContentRegex(token), user)
+					.stream().limit(LIST_CAP).toList());
+		}
 		final List<Article> base;
 		if (all) {
 			base = articles.findAllByOrderBySortOrderAsc();
@@ -54,28 +89,28 @@ public class ArticleController {
 		} else {
 			base = articles.findByProjectIdIsNullOrderBySortOrderAsc();
 		}
-		return filterVisible(base, user);
+		return ArticleResponse.from(filterVisible(base, user).stream().limit(LIST_CAP).toList());
 	}
 
 	@GetMapping("/{id}")
-	public Article get(@PathVariable String id) {
+	public ArticleResponse get(@PathVariable String id) {
 		User user = currentUser.require();
 		Article article = articles.findById(id).orElseThrow(() -> ApiException.notFound("article"));
 		if (!canSee(article, user)) {
 			// Don't leak existence of articles the user has no access to.
 			throw ApiException.notFound("article");
 		}
-		return article;
+		return ArticleResponse.from(article);
 	}
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
-	public Article create(@RequestBody @Valid ArticleRequest request) {
+	public ArticleResponse create(@RequestBody @Valid ArticleRequest request) {
 		User user = currentUser.require();
 		// Write-side ACL: the caller must be able to see the target project/team,
 		// otherwise they could plant KB content into a space they can't access.
 		assertCanTarget(request.projectId(), request.teamId(), user);
-		return articles.save(Article.builder()
+		return ArticleResponse.from(articles.save(Article.builder()
 				.title(request.title())
 				.content(request.content())
 				.projectId(request.projectId())
@@ -85,12 +120,12 @@ public class ArticleController {
 				.icon(request.icon())
 				.tags(request.tags() != null ? request.tags() : List.of())
 				.sortOrder(request.sortOrder() != null ? request.sortOrder() : 0)
-				.authorId(userId)
-				.build());
+				.authorId(user.getId())
+				.build()));
 	}
 
 	@PatchMapping("/{id}")
-	public Article update(@PathVariable String id, @RequestBody @Valid ArticleRequest request) {
+	public ArticleResponse update(@PathVariable String id, @RequestBody @Valid ArticleRequest request) {
 		User user = currentUser.require();
 		Article article = articles.findById(id).orElseThrow(() -> ApiException.notFound("article"));
 		if (!canSee(article, user)) {
@@ -108,7 +143,7 @@ public class ArticleController {
 		if (request.icon() != null) article.setIcon(request.icon());
 		if (request.tags() != null) article.setTags(request.tags());
 		if (request.sortOrder() != null) article.setSortOrder(request.sortOrder());
-		return articles.save(article);
+		return ArticleResponse.from(articles.save(article));
 	}
 
 	@DeleteMapping("/{id}")

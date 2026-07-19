@@ -78,8 +78,13 @@ public class BoardController {
 		Set<String> visible = visibleProjectIds(user);
 		return all.stream()
 				.filter(b -> b.getProjectIds().stream().anyMatch(visible::contains))
+				.limit(LIST_CAP)
 				.toList();
 	}
+
+	/** Backstop ceiling on the array-shaped board list (visibility already scopes
+	 * it; this only guards a pathological org's unfiltered findAll path). */
+	private static final int LIST_CAP = 500;
 
 	/** Ids of the projects the user may see (deduped, archived excluded). */
 	private Set<String> visibleProjectIds(User user) {

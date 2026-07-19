@@ -37,11 +37,27 @@ public class ProjectController {
 			String leadId) {
 	}
 
+	/**
+	 * Hard ceiling on the array-shaped list so a pathological org can never stream
+	 * an unbounded collection. The visible set is already membership-scoped, so
+	 * this is a backstop, not the primary bound.
+	 */
+	private static final int LIST_CAP = 500;
+
 	@GetMapping
 	public List<Project> list(
-			@RequestParam(required = false, defaultValue = "false") boolean archived) {
+			@RequestParam(required = false, defaultValue = "false") boolean archived,
+			@RequestParam(required = false) String q) {
 		User user = currentUser.require();
-		return archived ? projectService.archivedVisibleTo(user) : projectService.visibleTo(user);
+		List<Project> visible = archived ? projectService.archivedVisibleTo(user)
+				: projectService.visibleTo(user);
+		String needle = q == null ? null : q.trim().toLowerCase();
+		return visible.stream()
+				.filter(p -> needle == null || needle.isEmpty()
+						|| (p.getName() != null && p.getName().toLowerCase().contains(needle))
+						|| (p.getKey() != null && p.getKey().toLowerCase().contains(needle)))
+				.limit(LIST_CAP)
+				.toList();
 	}
 
 	@GetMapping("/{id}")

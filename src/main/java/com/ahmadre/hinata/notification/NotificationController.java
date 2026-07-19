@@ -23,11 +23,28 @@ public class NotificationController {
 	private final CurrentUser currentUser;
 	private final MongoTemplate mongo;
 
+	/**
+	 * Client-facing notification shape. Decouples the HTTP contract from the
+	 * {@code @Document} entity (layered-architecture rule) while remaining a
+	 * byte-for-byte match of the entity's current JSON, so no client change is
+	 * required. Enum {@code type} serializes to its {@code name()} exactly as the
+	 * entity did.
+	 */
+	public record NotificationResponse(String id, String userId, Notification.Type type,
+			String title, String body, String link, boolean read, java.time.Instant createdAt) {
+
+		public static NotificationResponse from(Notification n) {
+			return new NotificationResponse(n.getId(), n.getUserId(), n.getType(), n.getTitle(),
+					n.getBody(), n.getLink(), n.isRead(), n.getCreatedAt());
+		}
+	}
+
 	@GetMapping
-	public Page<Notification> list(@RequestParam(defaultValue = "0") int page,
+	public Page<NotificationResponse> list(@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
 		return notifications.findByUserIdOrderByCreatedAtDesc(
-				currentUser.requireId(), PageRequest.of(page, Math.min(size, 100)));
+				currentUser.requireId(), PageRequest.of(page, Math.min(size, 100)))
+				.map(NotificationResponse::from);
 	}
 
 	@GetMapping("/unread-count")
@@ -36,17 +53,17 @@ public class NotificationController {
 	}
 
 	@PostMapping("/{id}/read")
-	public Notification markRead(@PathVariable String id) {
+	public NotificationResponse markRead(@PathVariable String id) {
 		Notification notification = owned(id);
 		notification.setRead(true);
-		return notifications.save(notification);
+		return NotificationResponse.from(notifications.save(notification));
 	}
 
 	@PostMapping("/{id}/unread")
-	public Notification markUnread(@PathVariable String id) {
+	public NotificationResponse markUnread(@PathVariable String id) {
 		Notification notification = owned(id);
 		notification.setRead(false);
-		return notifications.save(notification);
+		return NotificationResponse.from(notifications.save(notification));
 	}
 
 	/**

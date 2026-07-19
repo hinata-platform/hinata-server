@@ -662,8 +662,15 @@ public class IssueService {
 			}
 			query.addCriteria(Criteria.where("projectId").in(scope));
 		}
-		// State: multi-select wins over the single legacy param.
-		if (nonEmpty(p.states())) query.addCriteria(Criteria.where("state").in(p.states()));
+		// State: multi-select wins over the single legacy param. Workflow-state
+		// names are free-form, mixed-case strings ("In Progress"); the client sends
+		// UPPER-CASE facet codes ("IN PROGRESS"), so the multi-select match is
+		// anchored + case-insensitive (regex, term quoted so it is injection-safe).
+		if (nonEmpty(p.states())) {
+			query.addCriteria(new Criteria().orOperator(p.states().stream()
+					.map(s -> Criteria.where("state").regex("^" + Pattern.quote(s) + "$", "i"))
+					.toArray(Criteria[]::new)));
+		}
 		else if (p.state() != null) query.addCriteria(Criteria.where("state").is(p.state()));
 		// Assignee: membership in the list (primary + secondary), legacy field too.
 		if (nonEmpty(p.assigneeIds())) {

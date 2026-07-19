@@ -40,10 +40,14 @@ public class SpaceController {
 			Integer sortOrder) {
 	}
 
+	/** Backstop ceiling on the KB-space list (spaces are a small org-wide
+	 * taxonomy; this only guards against unbounded growth). */
+	private static final int LIST_CAP = 500;
+
 	@GetMapping
 	public List<Space> list() {
 		currentUser.require();
-		return spaces.findAllByOrderBySortOrderAscNameAsc();
+		return spaces.findAllByOrderBySortOrderAscNameAsc().stream().limit(LIST_CAP).toList();
 	}
 
 	@PostMapping
