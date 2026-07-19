@@ -75,9 +75,19 @@ public class TeamController {
 
 	// --- Reads ---------------------------------------------------------------
 
+	/** Backstop ceiling on the array-shaped list (the visible set is already
+	 * membership-scoped, so this only guards a pathological org). */
+	private static final int LIST_CAP = 500;
+
 	@GetMapping
-	public List<Team> list() {
-		return teamService.visibleTo(currentUser.require());
+	public List<Team> list(@RequestParam(required = false) String q) {
+		List<Team> visible = teamService.visibleTo(currentUser.require());
+		String needle = q == null ? null : q.trim().toLowerCase();
+		return visible.stream()
+				.filter(t -> needle == null || needle.isEmpty()
+						|| (t.getName() != null && t.getName().toLowerCase().contains(needle)))
+				.limit(LIST_CAP)
+				.toList();
 	}
 
 	@GetMapping("/{id}")

@@ -23,6 +23,11 @@ import java.util.List;
 @Builder
 @Document("issues")
 @CompoundIndex(name = "project_number", def = "{'projectId': 1, 'numberInProject': 1}", unique = true)
+// Back the scoped filter+sort of the paginated issue list (ESR order: equality on
+// projectId+archived, then the sort key, then _id tiebreaker) so Mongo uses an
+// IXSCAN instead of an in-memory SORT that risks the 32MB limit at scale.
+@CompoundIndex(name = "proj_arch_updated", def = "{'projectId': 1, 'archived': 1, 'updatedAt': -1, '_id': -1}")
+@CompoundIndex(name = "proj_arch_created", def = "{'projectId': 1, 'archived': 1, 'createdAt': -1, '_id': -1}")
 public class Issue {
 
 	public enum Type {
@@ -95,7 +100,10 @@ public class Issue {
 	/** Set when the issue was created from an inbound e-mail. */
 	private String reporterEmail;
 
-	/** Message-ID header of the inbound e-mail; used to thread replies (In-Reply-To/References). */
+	/** Message-ID header of the inbound e-mail; used to thread replies (In-Reply-To/References)
+	 * and to dedupe ingest so a re-polled message never becomes a second ticket. Sparse: most
+	 * issues have none. */
+	@Indexed(sparse = true)
 	private String inboundMessageId;
 
 	/** Original subject line of the inbound e-mail; used to prefill "Re: ..." on replies. */

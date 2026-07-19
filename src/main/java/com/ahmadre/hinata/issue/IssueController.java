@@ -82,17 +82,47 @@ public class IssueController {
 	public Page<Issue> search(
 			@RequestParam(required = false) String projectId,
 			@RequestParam(required = false) String state,
+			@RequestParam(required = false) List<String> states,
 			@RequestParam(required = false) String assigneeId,
+			@RequestParam(required = false) List<String> assigneeIds,
 			@RequestParam(required = false) String sprintId,
 			@RequestParam(required = false) String type,
+			@RequestParam(required = false) List<String> types,
+			@RequestParam(required = false) List<String> priorities,
 			@RequestParam(required = false) String query,
 			@RequestParam(defaultValue = "false") boolean noSprint,
 			@RequestParam(defaultValue = "false") boolean archived,
+			@RequestParam(required = false) LocalDate createdFrom,
+			@RequestParam(required = false) LocalDate createdTo,
+			@RequestParam(required = false) LocalDate dueFrom,
+			@RequestParam(required = false) LocalDate dueTo,
 			@RequestParam(required = false) String sort,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
-		return issueService.search(projectId, state, assigneeId, sprintId, type, query, noSprint,
-				archived, sort, page, size, currentUser.require());
+		return issueService.search(new IssueService.SearchParams(projectId, state, states, assigneeId,
+				assigneeIds, sprintId, type, types, priorities, query, noSprint, archived, createdFrom,
+				createdTo, dueFrom, dueTo, sort, page, size), currentUser.require());
+	}
+
+	/**
+	 * Lightweight type-ahead for the comment @-mention menu / {{issue:KEY}} chip
+	 * previews — a small capped list of {id, readableId, title} instead of the
+	 * client draining the whole project issue set.
+	 */
+	@GetMapping("/mention-search")
+	public List<IssueService.IssueRef> mentionSearch(
+			@RequestParam(required = false) String projectId,
+			@RequestParam(required = false) String q) {
+		return issueService.mentionSearch(projectId, q, currentUser.require());
+	}
+
+	/**
+	 * Resolves a batch of readable ids (e.g. {@code HIN-1,HIN-2}) to the full
+	 * issues for {{issue:KEY}} chip + hover-card rendering — ACL-scoped, capped.
+	 */
+	@GetMapping("/resolve")
+	public List<Issue> resolve(@RequestParam List<String> keys) {
+		return issueService.resolveIssues(keys, currentUser.require());
 	}
 
 	@GetMapping("/{id}")

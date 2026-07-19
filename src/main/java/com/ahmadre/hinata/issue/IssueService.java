@@ -334,6 +334,7 @@ public class IssueService {
 		else if (issue.getType().isStandard()) {
 			// Sub-tasks can't exist without their parent → cascade-delete them.
 			for (Issue child : issues.findByParentId(issue.getId())) {
+				freeVoiceBlobs(child.getId());
 				comments.deleteByIssueId(child.getId());
 				activities.deleteByIssueId(child.getId());
 				workItems.deleteByIssueId(child.getId());
@@ -341,6 +342,7 @@ public class IssueService {
 				issues.delete(child);
 			}
 		}
+		freeVoiceBlobs(issue.getId());
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
 		workItems.deleteByIssueId(issue.getId());
@@ -402,6 +404,26 @@ public class IssueService {
 			linkEvents.publishChanged(other);
 		}
 		links.deleteAll(touching);
+	}
+
+	/**
+	 * Frees the audio blobs backing an issue's voice comments before the bulk
+	 * {@code deleteByIssueId} drops those rows — otherwise the S3/MinIO objects
+	 * orphan forever. Best-effort (storage.delete logs on failure).
+	 */
+	private void freeVoiceBlobs(String issueId) {
+		if (!storage.isConfigured()) {
+			return;
+		}
+		List<IssueComment> voice = mongo.find(
+				Query.query(Criteria.where("issueId").is(issueId)
+						.and("voice.objectKey").exists(true).ne(null)),
+				IssueComment.class);
+		for (IssueComment c : voice) {
+			if (c.getVoice() != null && c.getVoice().getObjectKey() != null) {
+				storage.delete(c.getVoice().getObjectKey());
+			}
+		}
 	}
 
 	// ── hierarchy ───────────────────────────────────────────────────────────
@@ -590,14 +612,34 @@ public class IssueService {
 		return primary.and(Sort.by(Sort.Direction.DESC, "_id"));
 	}
 
+	/**
+	 * Multi-select + range facets for the issue list, so a filtered page comes
+	 * back already reduced by the server (instead of the client draining every
+	 * page and filtering in Dart). All list fields may be null/empty and every
+	 * single-value field stays supported for backward compatibility.
+	 */
+	public record SearchParams(String projectId, String state, List<String> states,
+			String assigneeId, List<String> assigneeIds, String sprintId,
+			String type, List<String> types, List<String> priorities, String text,
+			boolean noSprint, boolean archived, java.time.LocalDate createdFrom,
+			java.time.LocalDate createdTo, java.time.LocalDate dueFrom, java.time.LocalDate dueTo,
+			String sort, int page, int size) {
+	}
+
+	/** Backward-compatible single-value search (MCP / legacy callers). */
 	public Page<Issue> search(String projectId, String state, String assigneeId, String sprintId,
 			String type, String text, boolean noSprint, boolean archived, String sort, int page,
 			int size, User user) {
+		return search(new SearchParams(projectId, state, null, assigneeId, null, sprintId, type,
+				null, null, text, noSprint, archived, null, null, null, null, sort, page, size), user);
+	}
+
+	public Page<Issue> search(SearchParams p, User user) {
 		Query query = new Query();
 		// Archived issues are soft-deleted: hidden everywhere by default, listed
 		// only when explicitly requested (the "Archived" view). `ne(true)` keeps
 		// matching pre-migration documents that lack the flag.
-		query.addCriteria(archived
+		query.addCriteria(p.archived()
 				? Criteria.where("archived").is(true)
 				: Criteria.where("archived").ne(true));
 		// Everyone is limited to active (non-archived) projects — an archived
@@ -607,39 +649,122 @@ public class IssueService {
 		List<String> scope = user.isAdmin()
 				? List.copyOf(projects.activeProjectIds())
 				: projects.visibleTo(user).stream().map(Project::getId).toList();
-		if (projectId != null) {
-			if (!scope.contains(projectId)) {
-				return Page.empty(PageRequest.of(page, Math.min(size, 100)));
+		Pageable pageable = PageRequest.of(p.page(), Math.min(p.size(), 100), sortFor(p.sort()));
+		if (p.projectId() != null) {
+			if (!scope.contains(p.projectId())) {
+				return Page.empty(pageable);
 			}
-			query.addCriteria(Criteria.where("projectId").is(projectId));
+			query.addCriteria(Criteria.where("projectId").is(p.projectId()));
 		}
 		else {
 			if (scope.isEmpty()) {
-				return Page.empty(PageRequest.of(page, Math.min(size, 100)));
+				return Page.empty(pageable);
 			}
 			query.addCriteria(Criteria.where("projectId").in(scope));
 		}
-		if (state != null) query.addCriteria(Criteria.where("state").is(state));
-		// Match on membership in the assignee list (covers primary + secondary
-		// assignees); the legacy single field is included for un-migrated docs.
-		if (assigneeId != null) {
-			query.addCriteria(new Criteria().orOperator(
-					Criteria.where("assigneeIds").is(assigneeId),
-					Criteria.where("assigneeId").is(assigneeId)));
+		// State: multi-select wins over the single legacy param. Workflow-state
+		// names are free-form, mixed-case strings ("In Progress"); the client sends
+		// UPPER-CASE facet codes ("IN PROGRESS"), so the multi-select match is
+		// anchored + case-insensitive (regex, term quoted so it is injection-safe).
+		if (nonEmpty(p.states())) {
+			query.addCriteria(new Criteria().orOperator(p.states().stream()
+					.map(s -> Criteria.where("state").regex("^" + Pattern.quote(s) + "$", "i"))
+					.toArray(Criteria[]::new)));
 		}
-		if (sprintId != null) query.addCriteria(Criteria.where("sprintId").is(sprintId));
-		else if (noSprint) query.addCriteria(Criteria.where("sprintId").is(null));
-		if (type != null) query.addCriteria(Criteria.where("type").is(type));
-		if (text != null && !text.isBlank()) {
-			String quoted = Pattern.quote(text.trim());
+		else if (p.state() != null) query.addCriteria(Criteria.where("state").is(p.state()));
+		// Assignee: membership in the list (primary + secondary), legacy field too.
+		if (nonEmpty(p.assigneeIds())) {
+			query.addCriteria(new Criteria().orOperator(
+					Criteria.where("assigneeIds").in(p.assigneeIds()),
+					Criteria.where("assigneeId").in(p.assigneeIds())));
+		}
+		else if (p.assigneeId() != null) {
+			query.addCriteria(new Criteria().orOperator(
+					Criteria.where("assigneeIds").is(p.assigneeId()),
+					Criteria.where("assigneeId").is(p.assigneeId())));
+		}
+		if (p.sprintId() != null) query.addCriteria(Criteria.where("sprintId").is(p.sprintId()));
+		else if (p.noSprint()) query.addCriteria(Criteria.where("sprintId").is(null));
+		if (nonEmpty(p.types())) query.addCriteria(Criteria.where("type").in(p.types()));
+		else if (p.type() != null) query.addCriteria(Criteria.where("type").is(p.type()));
+		if (nonEmpty(p.priorities())) query.addCriteria(Criteria.where("priority").in(p.priorities()));
+		if (p.dueFrom() != null || p.dueTo() != null) {
+			Criteria due = Criteria.where("dueDate");
+			if (p.dueFrom() != null) due = due.gte(p.dueFrom());
+			if (p.dueTo() != null) due = due.lte(p.dueTo());
+			query.addCriteria(due);
+		}
+		if (p.createdFrom() != null || p.createdTo() != null) {
+			Criteria created = Criteria.where("createdAt");
+			if (p.createdFrom() != null) {
+				created = created.gte(p.createdFrom().atStartOfDay(java.time.ZoneOffset.UTC).toInstant());
+			}
+			if (p.createdTo() != null) {
+				// Inclusive of the whole 'to' day → exclusive start of the next day.
+				created = created.lt(p.createdTo().plusDays(1)
+						.atStartOfDay(java.time.ZoneOffset.UTC).toInstant());
+			}
+			query.addCriteria(created);
+		}
+		if (p.text() != null && !p.text().isBlank()) {
+			String quoted = Pattern.quote(p.text().trim());
 			query.addCriteria(new Criteria().orOperator(
 					Criteria.where("title").regex(quoted, "i"),
 					Criteria.where("readableId").regex("^" + quoted, "i")));
 		}
-		Pageable pageable = PageRequest.of(page, Math.min(size, 100), sortFor(sort));
 		long total = mongo.count(query, Issue.class);
 		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
 		return new org.springframework.data.domain.PageImpl<>(content, pageable, total);
+	}
+
+	private static boolean nonEmpty(List<String> list) {
+		return list != null && !list.isEmpty();
+	}
+
+	/**
+	 * Minimal issue summary for the @-mention menu dropdown rows: just enough to
+	 * render a row (readable id, title) and pick the type glyph ([type]).
+	 */
+	public record IssueRef(String id, String readableId, String title, String type) {
+	}
+
+	/** Cap on mention-search / batch-resolve results (bounds the query + payload). */
+	private static final int MENTION_LIMIT = 20;
+
+	/**
+	 * Type-ahead for the comment @-mention menu — a small capped list, ACL-scoped,
+	 * so the client never drains the whole project issue set to power the menu.
+	 */
+	public List<IssueRef> mentionSearch(String projectId, String q, User user) {
+		Page<Issue> page = search(new SearchParams(projectId, null, null, null, null, null, null,
+				null, null, q, false, false, null, null, null, null, null, 0, MENTION_LIMIT), user);
+		return page.getContent().stream()
+				.map(i -> new IssueRef(i.getId(), i.getReadableId(), i.getTitle(),
+						i.getType() != null ? i.getType().name() : null))
+				.toList();
+	}
+
+	/**
+	 * Resolves readable ids (e.g. {@code HIN-1}) to the full issues for
+	 * {@code {{issue:KEY}}} chip + hover-card rendering (which needs state,
+	 * assignee, priority and labels). Scoped to the caller's visible projects and
+	 * capped, so the client resolves only the keys actually referenced instead of
+	 * draining the whole project issue set.
+	 */
+	public List<Issue> resolveIssues(List<String> keys, User user) {
+		if (keys == null || keys.isEmpty()) {
+			return List.of();
+		}
+		List<String> capped = keys.stream().distinct().limit(MENTION_LIMIT).toList();
+		List<String> scope = user.isAdmin()
+				? List.copyOf(projects.activeProjectIds())
+				: projects.visibleTo(user).stream().map(Project::getId).toList();
+		if (scope.isEmpty()) {
+			return List.of();
+		}
+		Query query = Query.query(Criteria.where("readableId").in(capped)
+				.and("projectId").in(scope));
+		return mongo.find(query, Issue.class);
 	}
 
 	public IssueComment addComment(String issueId, String text, User author) {
@@ -851,9 +976,17 @@ public class IssueService {
 		if (comment.resolvedType() == IssueComment.Type.VOICE) {
 			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
-		comment.setText(text);
-		comment.setEditedAt(Instant.now());
-		IssueComment saved = comments.save(comment);
+		// Atomic single-field $set (not a whole-document save) so a concurrent
+		// reaction/pin on the same comment isn't clobbered by a stale edit copy.
+		Instant editedAt = Instant.now();
+		IssueComment saved = mongo.findAndModify(
+				Query.query(Criteria.where("_id").is(commentId).and("authorId").is(editor.getId())),
+				new Update().set("text", text).set("editedAt", editedAt),
+				org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
+				IssueComment.class);
+		if (saved == null) {
+			saved = comment;
+		}
 		commentEvents.publishChanged(comment.getIssueId());
 		return withReplyCount(saved);
 	}
@@ -896,25 +1029,31 @@ public class IssueService {
 		if (normalized.isEmpty() || normalized.length() > 32) {
 			throw ApiException.badRequest("error.comment.invalidReaction");
 		}
+		// Toggle intent from the loaded snapshot: same emoji → remove.
 		List<IssueComment.Reaction> reactions = comment.getReactions();
-		if (reactions == null) {
-			reactions = new ArrayList<>();
-			comment.setReactions(reactions);
-		}
-		IssueComment.Reaction mine = reactions.stream()
+		IssueComment.Reaction mine = reactions == null ? null : reactions.stream()
 				.filter(r -> user.getId().equals(r.getUserId()))
 				.findFirst()
 				.orElse(null);
 		boolean sameEmoji = mine != null && normalized.equals(mine.getEmoji());
-		reactions.removeIf(r -> user.getId().equals(r.getUserId()));
+		// Atomic $pull-then-$push (each op is server-side atomic) instead of a
+		// whole-document read-modify-write, so two users reacting concurrently on
+		// the same comment can't lose each other's reaction (last-writer-wins).
+		Query q = Query.query(Criteria.where("_id").is(commentId)
+				.and("issueId").is(comment.getIssueId()));
+		mongo.updateFirst(q,
+				new Update().pull("reactions", new org.bson.Document("userId", user.getId())),
+				IssueComment.class);
 		if (!sameEmoji) {
-			reactions.add(IssueComment.Reaction.builder()
-					.emoji(normalized)
-					.userId(user.getId())
-					.createdAt(Instant.now())
-					.build());
+			mongo.updateFirst(q,
+					new Update().push("reactions", IssueComment.Reaction.builder()
+							.emoji(normalized)
+							.userId(user.getId())
+							.createdAt(Instant.now())
+							.build()),
+					IssueComment.class);
 		}
-		IssueComment saved = comments.save(comment);
+		IssueComment saved = comments.findById(commentId).orElse(comment);
 		commentEvents.publishChanged(comment.getIssueId());
 		return withReplyCount(saved);
 	}
@@ -922,9 +1061,16 @@ public class IssueService {
 	/** Pins/unpins a comment. Any project member may pin and unpin. */
 	public IssueComment setPinned(String issueId, String commentId, boolean pinned, User user) {
 		IssueComment comment = requireComment(issueId, commentId, user);
-		comment.setPinned(pinned);
-		comment.setPinnedAt(pinned ? Instant.now() : null);
-		IssueComment saved = comments.save(comment);
+		// Atomic $set of just the pin fields, so pinning doesn't overwrite a
+		// concurrent reaction/edit on the same comment.
+		IssueComment saved = mongo.findAndModify(
+				Query.query(Criteria.where("_id").is(commentId)),
+				new Update().set("pinned", pinned).set("pinnedAt", pinned ? Instant.now() : null),
+				org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
+				IssueComment.class);
+		if (saved == null) {
+			saved = comment;
+		}
 		commentEvents.publishChanged(comment.getIssueId());
 		return withReplyCount(saved);
 	}

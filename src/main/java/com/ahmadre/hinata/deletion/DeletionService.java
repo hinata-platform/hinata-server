@@ -342,11 +342,37 @@ public class DeletionService {
 		}
 		if (!issueIds.isEmpty()) {
 			Query byIssue = new Query(Criteria.where("issueId").in(issueIds));
+			// Free voice-comment audio blobs before the bulk row delete — a plain
+			// deleteByIssueId would drop the comments and orphan every S3/MinIO
+			// object they reference (best-effort; storage.delete logs on failure).
+			freeVoiceBlobs(issueIds);
 			mongo.remove(byIssue, IssueComment.class);
 			mongo.remove(byIssue, IssueActivity.class);
+			// Remove IssueLink rows referencing these issues so no dangling link
+			// survives the project deletion (mirrors IssueService.deleteLinksOf).
+			mongo.remove(new Query(new Criteria().orOperator(
+					Criteria.where("sourceId").in(issueIds),
+					Criteria.where("targetId").in(issueIds))),
+					com.ahmadre.hinata.issue.IssueLink.class);
 		}
+		// Reclaim git dev-info documents keyed by this project.
+		mongo.remove(byProjectId(pid), com.ahmadre.hinata.git.GitDevInfo.class);
 		mongo.remove(byProjectId(pid), WorkItem.class);
 		mongo.remove(byProjectId(pid), Issue.class);
+	}
+
+	/** Best-effort delete of every voice blob held by the given issues' comments. */
+	private void freeVoiceBlobs(List<String> issueIds) {
+		if (!storage.isConfigured()) {
+			return;
+		}
+		Query voiceComments = new Query(Criteria.where("issueId").in(issueIds)
+				.and("voice.objectKey").exists(true).ne(null));
+		for (IssueComment c : mongo.find(voiceComments, IssueComment.class)) {
+			if (c.getVoice() != null && c.getVoice().getObjectKey() != null) {
+				storage.delete(c.getVoice().getObjectKey());
+			}
+		}
 	}
 
 	private void migrateIssues(List<Issue> projectIssues, Project target, DeletionStream progress) {

@@ -408,14 +408,29 @@ public class GitWebhookService {
 		if (!project.getId().equals(issue.getProjectId())) {
 			return; // key belongs to a different project than this repo
 		}
-		GitDevInfo dev = devInfos.findByIssueKeyIgnoreCase(issue.getReadableId())
-				.orElseGet(() -> GitDevInfo.builder()
-						.issueKey(issue.getReadableId())
-						.projectId(project.getId())
-						.build());
-		mutation.accept(dev);
-		dev.setUpdatedAt(Instant.now());
-		devInfos.save(dev);
+		// Concurrent webhooks (push + PR + workflow_run) hit the same dev-info doc;
+		// @Version turns a racing whole-document save into an optimistic-lock
+		// failure, so re-read + re-apply the mutation instead of silently dropping
+		// the other writer's activity. Bounded to avoid an unbounded spin.
+		for (int attempt = 0; attempt < 5; attempt++) {
+			GitDevInfo dev = devInfos.findByIssueKeyIgnoreCase(issue.getReadableId())
+					.orElseGet(() -> GitDevInfo.builder()
+							.issueKey(issue.getReadableId())
+							.projectId(project.getId())
+							.build());
+			mutation.accept(dev);
+			dev.setUpdatedAt(Instant.now());
+			try {
+				devInfos.save(dev);
+				return;
+			}
+			catch (org.springframework.dao.OptimisticLockingFailureException
+					| org.springframework.dao.DuplicateKeyException retry) {
+				// Another delivery won the race (version bump, or concurrent insert
+				// of the first document) — reload and re-apply on the next attempt.
+			}
+		}
+		log.warn("Gave up upserting git dev-info for {} after contention", issue.getReadableId());
 	}
 
 	private void applyPrAutomation(Project project, Set<String> keys, boolean openEvent,

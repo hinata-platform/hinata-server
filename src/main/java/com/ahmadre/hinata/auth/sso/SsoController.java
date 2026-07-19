@@ -4,14 +4,19 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.auth.TokenService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -51,8 +56,36 @@ public class SsoController {
 
 	private final SettingsService settings;
 	private final HinataProperties properties;
+	private final SsoHandoffService handoff;
 
 	public record SsoProvider(String id, String displayName, String loginUrl) {
+	}
+
+	public record ExchangeRequest(@NotBlank String code) {
+	}
+
+	public record ExchangeResponse(String accessToken, String refreshToken, long expiresIn) {
+	}
+
+	/**
+	 * Redeems the single-use handoff code delivered to {@code /auth-callback?code=}
+	 * for the actual token pair. Unauthenticated by design (the user is mid-login);
+	 * security comes from the code being high-entropy, short-lived and single-use.
+	 * Keeps bearer tokens out of URLs / logs (they only ever travel in this POST
+	 * response body over TLS).
+	 */
+	@Operation(summary = "Exchange an SSO handoff code for tokens",
+			description = "Redeems the single-use code from the SSO callback redirect for the "
+					+ "access/refresh token pair. No authentication required.")
+	@SecurityRequirements
+	@PostMapping("/exchange")
+	public ExchangeResponse exchange(@RequestBody @Valid ExchangeRequest request) {
+		TokenService.TokenPair pair = handoff.redeem(request.code());
+		if (pair == null) {
+			throw ApiException.badRequest("error.sso.invalidCode");
+		}
+		return new ExchangeResponse(pair.accessToken(), pair.refreshToken(),
+				pair.expiresInSeconds());
 	}
 
 	@Operation(summary = "List enabled SSO providers", description = "Used by the app to render SSO login buttons. No authentication required.")

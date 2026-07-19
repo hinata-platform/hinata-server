@@ -37,6 +37,7 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 	private final com.ahmadre.hinata.me.SessionService sessions;
 	private final com.ahmadre.hinata.config.ClientIpResolver clientIpResolver;
 	private final com.ahmadre.hinata.audit.AuditService audit;
+	private final SsoHandoffService handoff;
 
 	@Override
 	public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
@@ -52,8 +53,13 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 		TokenService.TokenPair pair = tokens.issue(user, session.getId());
 		audit.event(com.ahmadre.hinata.audit.AuditAction.SSO_LOGIN).actor(user)
 				.meta("provider", user.getOrigin().name()).log();
-		String query = "access_token=" + URLEncoder.encode(pair.accessToken(), StandardCharsets.UTF_8)
-				+ "&refresh_token=" + URLEncoder.encode(pair.refreshToken(), StandardCharsets.UTF_8);
+		// The token pair never travels in the URL: it is stashed behind a
+		// short-lived, single-use handoff code the app POSTs to
+		// /api/v1/auth/sso/exchange to redeem. A code in the query is safe to log
+		// (useless after one redemption, TTL-expired otherwise) whereas bearer
+		// tokens are not.
+		String code = handoff.issue(pair);
+		String query = "code=" + URLEncoder.encode(code, StandardCharsets.UTF_8);
 
 		String webOrigin = SsoController.consumeReturnOrigin(request, response,
 				properties.getCors().getAllowedOrigins());
