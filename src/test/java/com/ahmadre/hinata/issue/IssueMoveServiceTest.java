@@ -12,6 +12,7 @@ import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.util.ArrayList;
@@ -24,9 +25,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -333,6 +339,56 @@ class IssueMoveServiceTest {
 				Map.of("Open", "Neu"), false, true, user);
 
 		assertThat(moved.get(0).getParentId()).isNull();
+	}
+
+	// --- issue numbering -----------------------------------------------------
+
+	@Test
+	void raisesAStaleTargetCounterBeforeReservingAnyNumber() {
+		issue("i1", "Open");
+		// The target's counter lags behind its real data — a restored dump, an
+		// import. Reserving from it would collide with an existing issue.
+		when(issues.findTopByProjectIdOrderByNumberInProjectDesc(ERSTI))
+				.thenReturn(Optional.of(Issue.builder().id("x").projectId(ERSTI)
+						.numberInProject(99).readableId("ERSTI-99").build()));
+
+		service.move(List.of("i1"), ERSTI, Map.of("Open", "Neu"), false, true, user);
+
+		// Order is the whole point: healing after the write is impossible, because
+		// a failed write aborts the move's transaction.
+		InOrder order = inOrder(projects, issues);
+		order.verify(projects).ensureIssueCounterAtLeast(ERSTI, 99);
+		order.verify(projects).nextIssueNumber(ERSTI);
+		order.verify(issues).save(any(Issue.class));
+	}
+
+	@Test
+	void leavesTheCounterAloneWhenItIsAlreadyAhead() {
+		issue("i1", "Open");
+		when(issues.findTopByProjectIdOrderByNumberInProjectDesc(ERSTI))
+				.thenReturn(Optional.of(Issue.builder().id("x").projectId(ERSTI)
+						.numberInProject(3).readableId("ERSTI-3").build()));
+
+		service.move(List.of("i1"), ERSTI, Map.of("Open", "Neu"), false, true, user);
+
+		verify(projects, never()).ensureIssueCounterAtLeast(anyString(), anyLong());
+	}
+
+	@Test
+	void reportsACollisionInsteadOfWorkingOnAnAbortedTransaction() {
+		issue("i1", "Open");
+		when(issues.save(any(Issue.class)))
+				.thenThrow(new org.springframework.dao.DuplicateKeyException("number taken"));
+
+		assertThatThrownBy(() -> service.move(List.of("i1"), ERSTI,
+				Map.of("Open", "Neu"), false, true, user))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.issue.moveNumberTaken");
+
+		// Exactly the one up-front reconciliation read: retrying after the failed
+		// write would run inside a transaction the server has already aborted, and
+		// every statement in it comes back NoSuchTransaction.
+		verify(issues, times(1)).findTopByProjectIdOrderByNumberInProjectDesc(ERSTI);
 	}
 
 	@Test

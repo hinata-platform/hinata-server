@@ -12,6 +12,7 @@ import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.project.WorkflowMapping;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -57,6 +58,7 @@ import java.util.Set;
  *       actually want.</li>
  * </ul>
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class IssueMoveService {
@@ -181,6 +183,11 @@ public class IssueMoveService {
 		Plan plan = plan(issueIds, target, includeEpicChildren, user);
 		Set<String> moving = plan.movingIds();
 
+		// Before the first write: make sure the numbers we are about to reserve are
+		// actually free. See reconcileIssueCounter — inside a transaction there is
+		// no second chance to heal this.
+		reconcileIssueCounter(target);
+
 		List<Issue> moved = new ArrayList<>();
 		for (Issue issue : plan.ordered()) {
 			Project source = plan.projectOf(issue);
@@ -227,7 +234,7 @@ public class IssueMoveService {
 		rememberFormerId(issue, previousReadableId);
 		assignNumber(issue, target);
 
-		Issue saved = saveWithNumberRetry(issue, target);
+		Issue saved = save(issue);
 		issueService.mergeProjectLabels(target, saved.getTags());
 		reKeyDevInfo(previousReadableId, saved.getReadableId(), target.getId());
 
@@ -378,22 +385,41 @@ public class IssueMoveService {
 	}
 
 	/**
-	 * Same self-healing as {@code IssueService.saveWithNumberRetry}: if the unique
-	 * {@code (projectId, numberInProject)} index rejects the write because the
-	 * target's counter had fallen behind its real data, the counter is raised to
-	 * the actual maximum and a fresh number assigned once.
+	 * Lifts the target's {@code issueCounter} to the highest number its issues
+	 * actually carry, so every number handed out below is free.
+	 *
+	 * <p>A counter can lag behind the real data whenever issues arrived without
+	 * going through it — a restored dump, an import. {@code IssueService.create}
+	 * heals that lazily: it lets the unique {@code (projectId, numberInProject)}
+	 * index reject the insert, then raises the counter and retries. A move cannot
+	 * do that. It runs in a transaction, and on a replica set a <em>failed write
+	 * aborts the whole transaction</em> — every later operation in it, including
+	 * the healing read itself, comes back {@code NoSuchTransaction (251)}. So the
+	 * counter is reconciled here, before the first write, where it still can be.
 	 */
-	private Issue saveWithNumberRetry(Issue issue, Project target) {
+	private void reconcileIssueCounter(Project target) {
+		long maxExisting = issues.findTopByProjectIdOrderByNumberInProjectDesc(target.getId())
+				.map(Issue::getNumberInProject)
+				.orElse(0L);
+		if (maxExisting > target.getIssueCounter()) {
+			projects.ensureIssueCounterAtLeast(target.getId(), maxExisting);
+		}
+	}
+
+	/**
+	 * Saves inside the move's transaction. With the counter reconciled up front, a
+	 * collision here can only be a concurrent create that reserved the same number
+	 * in between — nothing this transaction can repair, so it is reported as a
+	 * conflict the caller may simply retry rather than as a server error.
+	 */
+	private Issue save(Issue issue) {
 		try {
 			return issues.save(issue);
 		}
 		catch (org.springframework.dao.DuplicateKeyException collision) {
-			long maxExisting = issues.findTopByProjectIdOrderByNumberInProjectDesc(target.getId())
-					.map(Issue::getNumberInProject)
-					.orElse(0L);
-			projects.ensureIssueCounterAtLeast(target.getId(), maxExisting);
-			assignNumber(issue, target);
-			return issues.save(issue);
+			log.warn("Issue number {} was taken while moving {}", issue.getNumberInProject(),
+					issue.getId(), collision);
+			throw ApiException.conflict("error.issue.moveNumberTaken");
 		}
 	}
 
