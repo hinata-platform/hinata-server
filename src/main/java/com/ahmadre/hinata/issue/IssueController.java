@@ -99,9 +99,13 @@ public class IssueController {
 			@RequestParam(required = false) String sort,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
-		return issueService.search(new IssueService.SearchParams(projectId, state, states, assigneeId,
-				assigneeIds, sprintId, type, types, priorities, query, noSprint, archived, createdFrom,
-				createdTo, dueFrom, dueTo, sort, page, size), currentUser.require());
+		Page<Issue> result = issueService.search(new IssueService.SearchParams(projectId, state, states,
+				assigneeId, assigneeIds, sprintId, type, types, priorities, query, noSprint, archived,
+				createdFrom, createdTo, dueFrom, dueTo, sort, page, size), currentUser.require());
+		// Stamp each row with its direct-child count so the list can show a
+		// sub-task indicator without a per-row lookup.
+		issueService.enrichSubtaskCounts(result.getContent());
+		return result;
 	}
 
 	/**

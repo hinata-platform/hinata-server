@@ -31,6 +31,10 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 	List<Issue> findByParentId(String parentId);
 
+	/** Direct children of a batch of parents — one index-backed ({@code parent_number})
+	 * query to compute sub-task counts for a whole board or issue-list page. */
+	List<Issue> findByParentIdIn(List<String> parentIds);
+
 	/** Highest issue number currently used in a project — used to repair a
 	 * project's issueCounter if it ever falls behind the real data. */
 	Optional<Issue> findTopByProjectIdOrderByNumberInProjectDesc(String projectId);

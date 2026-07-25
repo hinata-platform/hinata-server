@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.issue;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -9,6 +10,7 @@ import lombok.Setter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.index.TextIndexed;
@@ -192,6 +194,23 @@ public class Issue {
 
 	@LastModifiedDate
 	private Instant updatedAt;
+
+	/**
+	 * Number of DIRECT children (an epic's standard issues, or a standard issue's
+	 * sub-tasks). Not persisted — computed per request only for the board and
+	 * issue-list responses (see {@link IssueService#enrichSubtaskCounts}) so cards
+	 * and rows can show a sub-task indicator without a follow-up round-trip. Left
+	 * {@code null} (and omitted from JSON) everywhere it isn't enriched.
+	 */
+	@Transient
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	private Integer subtaskCount;
+
+	/** How many of {@link #subtaskCount} are in a resolved state — drives the
+	 * "done / total" progress on the sub-task indicator. */
+	@Transient
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	private Integer subtaskDoneCount;
 
 	/**
 	 * Sets the full assignee list (multi-assignee mode), de-duplicated and blank-

@@ -4,6 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.deletion.DeletionService;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -39,6 +40,7 @@ public class BoardController {
 	private final AgileBoardRepository boards;
 	private final SprintRepository sprints;
 	private final IssueRepository issues;
+	private final IssueService issueService;
 	private final ProjectService projects;
 	private final DeletionService deletion;
 	private final CurrentUser currentUser;
@@ -201,6 +203,10 @@ public class BoardController {
 		// Archived issues are soft-deleted — they never appear on the board.
 		candidates.removeIf(Issue::isArchived);
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
+		// Stamp each card with its direct-child (sub-task) count/progress so the
+		// board can show the indicator + expander without a per-card lookup. The
+		// column views below hold the same Issue instances, so this reaches them.
+		issueService.enrichSubtaskCounts(candidates);
 
 		Map<String, Integer> wipByName = new HashMap<>();
 		for (AgileBoard.Column column : board.getColumns()) {

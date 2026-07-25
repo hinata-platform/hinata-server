@@ -461,6 +461,47 @@ public class IssueService {
 		return new Hierarchy(ancestors, children);
 	}
 
+	/**
+	 * Populate the transient {@link Issue#getSubtaskCount()} /
+	 * {@link Issue#getSubtaskDoneCount()} on each given issue with a count of its
+	 * DIRECT children, so board cards and issue-list rows can show a sub-task
+	 * indicator (and done/total progress) without a per-card follow-up request.
+	 *
+	 * <p>One index-backed {@code parentId $in} query covers the whole batch.
+	 * "Done" mirrors the client's {@code _childDone}: the child's state is one of
+	 * its project's {@code resolvedStates}, or it carries a {@code resolvedAt}.
+	 * Every listed issue is stamped (0/0 when it has no children) so the client
+	 * can rely on the field's presence. This performs no authorization — call it
+	 * only on issue sets the caller has already access-filtered.
+	 */
+	public void enrichSubtaskCounts(List<Issue> parents) {
+		if (parents == null || parents.isEmpty()) return;
+		List<String> parentIds = parents.stream()
+				.map(Issue::getId).filter(Objects::nonNull).distinct().toList();
+		if (parentIds.isEmpty()) return;
+
+		List<Issue> children = issues.findByParentIdIn(parentIds);
+		Map<String, int[]> byParent = new HashMap<>(); // parentId -> [total, done]
+		Map<String, Set<String>> resolvedByProject = new HashMap<>();
+		for (Issue child : children) {
+			int[] tally = byParent.computeIfAbsent(child.getParentId(), k -> new int[2]);
+			tally[0]++;
+			Set<String> resolved = resolvedByProject.computeIfAbsent(
+					child.getProjectId(),
+					pid -> projects.findOptional(pid)
+							.map(p -> new HashSet<>(p.getResolvedStates()))
+							.orElseGet(HashSet::new));
+			boolean done = (child.getState() != null && resolved.contains(child.getState()))
+					|| child.getResolvedAt() != null;
+			if (done) tally[1]++;
+		}
+		for (Issue parent : parents) {
+			int[] tally = byParent.get(parent.getId());
+			parent.setSubtaskCount(tally == null ? 0 : tally[0]);
+			parent.setSubtaskDoneCount(tally == null ? 0 : tally[1]);
+		}
+	}
+
 	// ── aggregate detail (first-paint bootstrap) ─────────────────────────────
 
 	/**
