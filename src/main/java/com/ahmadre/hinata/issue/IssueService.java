@@ -81,10 +81,16 @@ public class IssueService {
 	/** Waveform bar count bounds — a malformed client can't flood the document. */
 	private static final int VOICE_MAX_PEAKS = 96;
 
-	/** Internal lookup with no authorization check. */
+	/**
+	 * Internal lookup with no authorization check. Falls back to the ids the
+	 * issue carried before it was moved to another project, so a link shared
+	 * under the old key (commit message, e-mail, chat) still resolves.
+	 */
 	public Issue get(String idOrReadableId) {
 		return issues.findById(idOrReadableId)
 				.or(() -> issues.findByReadableIdIgnoreCase(idOrReadableId))
+				.or(() -> issues.findByFormerReadableIdsContains(
+						idOrReadableId == null ? null : idOrReadableId.toUpperCase(java.util.Locale.ROOT)))
 				.orElseThrow(() -> ApiException.notFound("issue"));
 	}
 
@@ -628,8 +634,10 @@ public class IssueService {
 	}
 
 	/** Adds any new issue tags to the project's reusable label vocabulary so
-	 * they can be suggested when tagging other issues in the same project. */
-	private void mergeProjectLabels(Project project, List<String> tags) {
+	 * they can be suggested when tagging other issues in the same project.
+	 * Public because a cross-project move carries an issue's tags into the target
+	 * project's vocabulary too (see {@link IssueMoveService}). */
+	public void mergeProjectLabels(Project project, List<String> tags) {
 		if (tags == null || tags.isEmpty()) return;
 		List<Project.Label> labels = project.getLabels();
 		if (labels == null) {
@@ -926,8 +934,19 @@ public class IssueService {
 		if (scope.isEmpty()) {
 			return List.of();
 		}
-		Query query = Query.query(Criteria.where("readableId").in(capped)
-				.and("projectId").in(scope));
+		// Match the ids an issue carries *now* or carried before it was moved to
+		// another project, so a {{issue:…}} chip written under the old key keeps
+		// resolving — the same redirect the single-issue lookup performs. Without
+		// this a moved issue would still open via /browse/<old key> but render as
+		// a broken chip everywhere it was referenced.
+		List<String> normalized = capped.stream()
+				.map(key -> key.toUpperCase(java.util.Locale.ROOT))
+				.toList();
+		Query query = Query.query(new Criteria().andOperator(
+				Criteria.where("projectId").in(scope),
+				new Criteria().orOperator(
+						Criteria.where("readableId").in(capped),
+						Criteria.where("formerReadableIds").in(normalized))));
 		return mongo.find(query, Issue.class);
 	}
 

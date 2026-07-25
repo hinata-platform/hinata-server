@@ -10,6 +10,10 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -44,6 +48,9 @@ public class ProjectController {
 	 */
 	private static final int LIST_CAP = 500;
 
+	/** Largest page {@link #search} will hand out, whatever a client asks for. */
+	private static final int PAGE_CAP = 100;
+
 	@GetMapping
 	public List<Project> list(
 			@RequestParam(required = false, defaultValue = "false") boolean archived,
@@ -58,6 +65,33 @@ public class ProjectController {
 						|| (p.getKey() != null && p.getKey().toLowerCase().contains(needle)))
 				.limit(LIST_CAP)
 				.toList();
+	}
+
+	/**
+	 * Paged, searchable slice of the visible projects — what every project picker
+	 * reads. {@link #list} stays for the surfaces that legitimately want the whole
+	 * set at once (filter dropdowns, the boards overview); anything that a growing
+	 * org would turn into a long scroll pages through here instead.
+	 */
+	@GetMapping("/search")
+	public Page<Project> search(
+			@RequestParam(required = false) String q,
+			@RequestParam(required = false, defaultValue = "false") boolean archived,
+			@RequestParam(required = false, defaultValue = "0") int page,
+			@RequestParam(required = false, defaultValue = "25") int size) {
+		Pageable pageable = PageRequest.of(Math.max(page, 0),
+				Math.clamp(size, 1, PAGE_CAP), Sort.by(Sort.Direction.ASC, "name"));
+		return projectService.searchVisible(currentUser.require(), q, archived, pageable);
+	}
+
+	/**
+	 * The named projects, filtered to the ones the caller may see. Lets a picker
+	 * put a name on an id it already holds — a board's current span, say — without
+	 * paging until that project happens to come up.
+	 */
+	@GetMapping("/resolve")
+	public List<Project> resolve(@RequestParam List<String> ids) {
+		return projectService.resolveVisible(currentUser.require(), ids);
 	}
 
 	@GetMapping("/{id}")

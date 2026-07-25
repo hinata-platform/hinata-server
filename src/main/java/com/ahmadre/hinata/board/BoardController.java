@@ -52,7 +52,7 @@ public class BoardController {
 
 	/** Partial board update — every field is optional (null = no change). */
 	public record UpdateBoardRequest(@Size(max = 120) String name, AgileBoard.Type type,
-			String activeSprintId) {
+			String activeSprintId, List<String> projectIds) {
 	}
 
 	public record SprintRequest(@NotBlank @Size(max = 120) String name, String goal,
@@ -91,6 +91,47 @@ public class BoardController {
 	/** Ids of the projects the user may see (deduped, archived excluded). */
 	private Set<String> visibleProjectIds(User user) {
 		return projects.visibleTo(user).stream().map(Project::getId).collect(Collectors.toSet());
+	}
+
+	/** The spanned projects that still exist, in the board's own order. */
+	private List<Project> spannedProjects(List<String> projectIds) {
+		List<Project> spanned = new ArrayList<>();
+		for (String projectId : projectIds) {
+			projects.findOptional(projectId).ifPresent(spanned::add);
+		}
+		return spanned;
+	}
+
+	/**
+	 * The spanned projects a given viewer may actually work with: existing, not
+	 * archived, and visible to them. A board may legitimately span several
+	 * projects, but a viewer must never see issues — or even columns — of a
+	 * project they cannot access, otherwise a shared cross-project board leaks a
+	 * foreign backlog.
+	 */
+	private List<Project> viewableProjects(AgileBoard board, User user) {
+		Set<String> active = projects.activeProjectIds();
+		Set<String> visibleToViewer = user.isAdmin() ? null : visibleProjectIds(user);
+		List<Project> viewable = new ArrayList<>();
+		for (Project project : spannedProjects(board.getProjectIds())) {
+			if (!active.contains(project.getId())) continue;
+			if (visibleToViewer != null && !visibleToViewer.contains(project.getId())) continue;
+			viewable.add(project);
+		}
+		return viewable;
+	}
+
+	/**
+	 * Membership check on EVERY spanned project: without this a member of one
+	 * project could craft (or widen) a board spanning a victim project and read
+	 * its full backlog through {@link #view}. Admins are unrestricted.
+	 */
+	private void assertMemberOfAll(List<String> projectIds, User user) {
+		if (user.isAdmin()) return;
+		Set<String> visible = visibleProjectIds(user);
+		for (String projectId : projectIds) {
+			if (!visible.contains(projectId)) throw ApiException.forbidden("error.accessDenied");
+		}
 	}
 
 	/** A board is accessible if it spans at least one project the user may see. */
@@ -136,21 +177,11 @@ public class BoardController {
 	public AgileBoard create(@RequestBody @Valid CreateBoardRequest request) {
 		User user = currentUser.require();
 		String userId = user.getId();
-		// Membership check on EVERY spanned project: without this a member of one
-		// project could craft a board spanning a victim project and read its full
-		// backlog through view() (cross-project IDOR). Admins are unrestricted.
-		if (!user.isAdmin()) {
-			Set<String> visible = visibleProjectIds(user);
-			for (String pid : request.projectIds()) {
-				if (!visible.contains(pid)) throw ApiException.forbidden("error.accessDenied");
-			}
-		}
-		// Default columns mirror the first project's workflow.
-		Project first = projects.get(request.projectIds().get(0));
-		List<AgileBoard.Column> columns = new ArrayList<>();
-		for (String state : first.workflowStateNames()) {
-			columns.add(AgileBoard.Column.builder().name(state).states(List.of(state)).build());
-		}
+		assertMemberOfAll(request.projectIds(), user);
+		// Default columns merge every spanned project's workflow: one column per
+		// state for a single project (unchanged), and equivalent states of
+		// different projects folded together for a cross-project board.
+		List<AgileBoard.Column> columns = BoardColumns.merge(spannedProjects(request.projectIds()));
 		return boards.save(AgileBoard.builder()
 				.name(request.name())
 				.type(request.type() != null ? request.type() : AgileBoard.Type.KANBAN)
@@ -168,35 +199,17 @@ public class BoardController {
 		List<Sprint> boardSprints = sprints.findByBoardIdOrderByStartDateDesc(id);
 		String effectiveSprint = sprintId != null ? sprintId : board.getActiveSprintId();
 
+		// Only the projects this viewer may actually work with — a shared
+		// cross-project board must never leak a foreign project's backlog.
+		List<Project> viewable = viewableProjects(board, user);
+
 		List<Issue> candidates = new ArrayList<>();
-		Set<String> active = projects.activeProjectIds();
-		// A board may legitimately span several projects, but a given viewer must
-		// only ever see issues from the projects THEY can access — otherwise a
-		// shared multi-project board leaks a foreign project's backlog. Admins see
-		// everything.
-		Set<String> visibleToViewer = user.isAdmin() ? null : visibleProjectIds(user);
-		// Columns are derived live from the board's active projects' *current*
-		// workflow states (in order, deduped) — never the stale snapshot stored on
-		// the board — so renames/additions/deletions in project settings are
-		// always reflected here. WIP limits from the stored columns are carried
-		// over by matching column name.
-		LinkedHashSet<String> stateNames = new LinkedHashSet<>();
-		Map<String, Integer> hueByName = new HashMap<>();
-		for (String projectId : board.getProjectIds()) {
-			if (!active.contains(projectId)) continue; // skip archived projects
-			// Never aggregate issues from a project this viewer cannot see.
-			if (visibleToViewer != null && !visibleToViewer.contains(projectId)) continue;
-			projects.findOptional(projectId).ifPresent(p -> {
-				for (Project.WorkflowState s : p.getWorkflowStates()) {
-					stateNames.add(s.getName());
-					hueByName.putIfAbsent(s.getName(), s.getHue());
-				}
-			});
+		for (Project project : viewable) {
 			if (effectiveSprint != null) {
-				candidates.addAll(issues.findByProjectIdAndSprintId(projectId, effectiveSprint));
+				candidates.addAll(issues.findByProjectIdAndSprintId(project.getId(), effectiveSprint));
 			}
 			else {
-				candidates.addAll(issues.findByProjectId(projectId,
+				candidates.addAll(issues.findByProjectId(project.getId(),
 						org.springframework.data.domain.PageRequest.of(0, 500)).getContent());
 			}
 		}
@@ -208,18 +221,34 @@ public class BoardController {
 		// column views below hold the same Issue instances, so this reaches them.
 		issueService.enrichSubtaskCounts(candidates);
 
+		// Columns are derived live from the viewable projects' *current* workflow
+		// states — never the stale snapshot stored on the board — so renames /
+		// additions / deletions in project settings are always reflected here. For
+		// a single-project board this is one column per state, exactly as before;
+		// across projects, equivalent states are merged into one column so the
+		// board stays readable and a drop always has a state the card's own
+		// project knows. WIP limits are carried over from the stored columns by
+		// matching column name.
+		List<AgileBoard.Column> columns = BoardColumns.merge(viewable);
+		Map<String, Integer> hueByColumn = BoardColumns.hues(columns, viewable);
+
 		Map<String, Integer> wipByName = new HashMap<>();
 		for (AgileBoard.Column column : board.getColumns()) {
 			if (column.getWipLimit() != null) wipByName.put(column.getName(), column.getWipLimit());
 		}
 
 		List<BoardColumnView> columnViews = new ArrayList<>();
-		for (String name : stateNames) {
+		for (AgileBoard.Column column : columns) {
+			Set<String> states = column.getStates().stream()
+					.map(state -> state.toLowerCase(java.util.Locale.ROOT))
+					.collect(Collectors.toSet());
 			List<Issue> inColumn = candidates.stream()
-					.filter(issue -> name.equals(issue.getState()))
+					.filter(issue -> issue.getState() != null
+							&& states.contains(issue.getState().toLowerCase(java.util.Locale.ROOT)))
 					.toList();
-			columnViews.add(new BoardColumnView(name, List.of(name), wipByName.get(name),
-					hueByName.getOrDefault(name, 250), inColumn));
+			columnViews.add(new BoardColumnView(column.getName(), column.getStates(),
+					wipByName.get(column.getName()),
+					hueByColumn.getOrDefault(column.getName(), 250), inColumn));
 		}
 		return new BoardView(board, boardSprints, columnViews);
 	}
@@ -238,6 +267,30 @@ public class BoardController {
 		if (req.type() != null) board.setType(req.type());
 		// Only set when provided, so a rename doesn't wipe the active sprint.
 		if (req.activeSprintId() != null) board.setActiveSprintId(req.activeSprintId());
+		// Changing which projects a board spans is a management action, and the
+		// caller must be a member of every project in the NEW set — otherwise
+		// widening a board would be a way to read a foreign project's backlog.
+		if (req.projectIds() != null) {
+			if (req.projectIds().isEmpty()) {
+				throw ApiException.badRequest("error.board.noProjects");
+			}
+			assertBoardManage(board, user);
+			assertMemberOfAll(req.projectIds(), user);
+			board.setProjectIds(new ArrayList<>(new LinkedHashSet<>(req.projectIds())));
+			// Re-merge the stored column snapshot for the new span. The view derives
+			// columns live anyway; this keeps the stored WIP-limit carrier in step
+			// so a limit isn't orphaned on a column that no longer exists — limits
+			// on columns that survive the re-merge are preserved by name.
+			Map<String, Integer> wip = new HashMap<>();
+			for (AgileBoard.Column column : board.getColumns()) {
+				if (column.getWipLimit() != null) wip.put(column.getName(), column.getWipLimit());
+			}
+			List<AgileBoard.Column> merged = BoardColumns.merge(spannedProjects(board.getProjectIds()));
+			for (AgileBoard.Column column : merged) {
+				column.setWipLimit(wip.get(column.getName()));
+			}
+			board.setColumns(merged);
+		}
 		return boards.save(board);
 	}
 

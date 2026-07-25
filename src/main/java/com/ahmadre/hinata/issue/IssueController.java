@@ -3,6 +3,7 @@ package com.ahmadre.hinata.issue;
 import com.ahmadre.hinata.auth.CurrentUser;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -16,6 +17,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 @Tag(name = "Issues")
 @RestController
@@ -24,6 +26,7 @@ import java.util.List;
 public class IssueController {
 
 	private final IssueService issueService;
+	private final IssueMoveService issueMoveService;
 	private final CommentEvents commentEvents;
 	private final CurrentUser currentUser;
 
@@ -67,6 +70,23 @@ public class IssueController {
 			Boolean clearStartDate,
 			Boolean clearDueDate,
 			Boolean clearStoryPoints) {
+	}
+
+	/**
+	 * Asks what a move to {@code targetProjectId} would do, without doing it —
+	 * the input to the move wizard's status-mapping step.
+	 */
+	public record MovePreflightRequest(@NotEmpty List<String> issueIds,
+			@NotBlank String targetProjectId, boolean includeEpicChildren) {
+	}
+
+	/**
+	 * Executes a move. {@code stateMap} maps each source status to a status of the
+	 * target workflow, as confirmed by the user; unmapped statuses fall back to
+	 * the preflight's suggestion.
+	 */
+	public record MoveRequest(@NotEmpty List<String> issueIds, @NotBlank String targetProjectId,
+			Map<String, String> stateMap, boolean includeEpicChildren, Boolean keepSprint) {
 	}
 
 	public record CommentRequest(@NotBlank @Size(max = 10000) String text, String replyToId) {
@@ -234,6 +254,25 @@ public class IssueController {
 	@PostMapping("/{id}/unarchive")
 	public Issue unarchive(@PathVariable String id) {
 		return issueService.setArchived(id, false, currentUser.require());
+	}
+
+	/**
+	 * Analyses a prospective move to another project — which issues travel, how
+	 * each source status maps onto the target workflow, and what the user should
+	 * know (sprint / parent detaching, non-member assignees). Changes nothing.
+	 */
+	@PostMapping("/move/preflight")
+	public IssueMoveService.Preflight movePreflight(@RequestBody @Valid MovePreflightRequest request) {
+		return issueMoveService.preflight(request.issueIds(), request.targetProjectId(),
+				request.includeEpicChildren(), currentUser.require());
+	}
+
+	/** Executes the move confirmed in the wizard. */
+	@PostMapping("/move")
+	public List<Issue> move(@RequestBody @Valid MoveRequest request) {
+		return issueMoveService.move(request.issueIds(), request.targetProjectId(),
+				request.stateMap(), request.includeEpicChildren(),
+				request.keepSprint() == null || request.keepSprint(), currentUser.require());
 	}
 
 	/** The caller's capabilities on this issue (drives archive-vs-delete UI). */

@@ -11,6 +11,12 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 	Optional<Issue> findByReadableIdIgnoreCase(String readableId);
 
+	/** The issue that once carried this readable id before being moved to another
+	 * project — lets an old key (in a commit message, an e-mail, a chat link)
+	 * still resolve. Only consulted after the current-id lookup misses. Readable
+	 * ids are always stored upper-cased, so callers must normalise first. */
+	Optional<Issue> findByFormerReadableIdsContains(String readableId);
+
 	/** The ticket created from a given inbound e-mail — used to reprocess a mailbox
 	 * without creating duplicates. */
 	Optional<Issue> findByInboundMessageId(String inboundMessageId);

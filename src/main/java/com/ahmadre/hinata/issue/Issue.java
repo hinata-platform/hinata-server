@@ -70,6 +70,22 @@ public class Issue {
 	@Indexed
 	private String readableId;
 
+	/**
+	 * Every readable id this issue carried before it was moved to another
+	 * project, oldest first. Moving re-keys the issue into the target project's
+	 * numbering, which would otherwise break every link ever shared — a commit
+	 * message, an e-mail, a chat message. Keeping the history lets
+	 * {@code /browse/<key>} and the API resolve an old key to the current issue,
+	 * the same way Jira redirects moved issues.
+	 *
+	 * <p>Defaults to an empty list rather than a primitive/absent value so
+	 * pre-migration documents (which lack the field entirely) still map — see the
+	 * {@link #archived} note above for the failure mode this avoids.
+	 */
+	@Builder.Default
+	@Indexed
+	private List<String> formerReadableIds = new ArrayList<>();
+
 	@TextIndexed(weight = 10)
 	private String title;
 
