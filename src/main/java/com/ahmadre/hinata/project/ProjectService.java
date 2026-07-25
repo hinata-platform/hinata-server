@@ -7,11 +7,14 @@ import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.data.support.PageableExecutionUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -23,14 +26,20 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProjectService {
+
+	/** Ceiling on a single {@link #resolveVisible} lookup — a picker labels a
+	 * handful of held ids, never an unbounded list handed in by a caller. */
+	private static final int RESOLVE_CAP = 100;
 
 	private static final String ISSUES = "issues";
 	private static final String GIT_DEV_INFO = "git_dev_info";
@@ -90,6 +99,66 @@ public class ProjectService {
 			if (project.isArchived() == archived && seen.add(project.getId())) result.add(project);
 		}
 		return result;
+	}
+
+	/**
+	 * One page of the projects the user may see, narrowed by a free-text needle
+	 * over name and key.
+	 *
+	 * <p>Unlike {@link #visibleTo(User)} this never materialises the full visible
+	 * set: access, needle and paging all travel into a single query, so a picker
+	 * costs one page no matter how many projects the org runs. The access branch
+	 * is an {@code AND} — widening the search must never widen what may be seen.
+	 */
+	public Page<Project> searchVisible(User user, String query, boolean archived, Pageable pageable) {
+		Criteria criteria = searchCriteria(user, query, archived);
+		List<Project> page = mongo.find(Query.query(criteria).with(pageable), Project.class);
+		return PageableExecutionUtils.getPage(page, pageable,
+				() -> mongo.count(Query.query(criteria), Project.class));
+	}
+
+	/**
+	 * The named projects, restricted to the ones the user may see. A picker uses
+	 * this to label ids it holds but has not paged in — a board's current span,
+	 * say. Archived projects are included on purpose: a selection that already
+	 * points at one must still render with its name rather than silently blank.
+	 */
+	public List<Project> resolveVisible(User user, List<String> ids) {
+		if (ids == null || ids.isEmpty()) return List.of();
+		List<String> capped = ids.stream().filter(Objects::nonNull).distinct().limit(RESOLVE_CAP).toList();
+		if (capped.isEmpty()) return List.of();
+		Criteria byId = Criteria.where("id").in(capped);
+		Criteria reach = reachOf(user);
+		Criteria criteria = reach == null ? byId : new Criteria().andOperator(byId, reach);
+		return mongo.find(Query.query(criteria), Project.class);
+	}
+
+	private Criteria searchCriteria(User user, String query, boolean archived) {
+		List<Criteria> parts = new ArrayList<>();
+		parts.add(Criteria.where("archived").is(archived));
+		Criteria reach = reachOf(user);
+		if (reach != null) parts.add(reach);
+		String needle = query == null ? null : query.trim();
+		if (needle != null && !needle.isEmpty()) {
+			String quoted = Pattern.quote(needle);
+			parts.add(new Criteria().orOperator(
+					Criteria.where("name").regex(quoted, "i"),
+					Criteria.where("key").regex(quoted, "i")));
+		}
+		return parts.size() == 1 ? parts.getFirst() : new Criteria().andOperator(parts);
+	}
+
+	/**
+	 * Query form of {@link #visible}: the projects this user may reach, either as
+	 * a direct member or through a team grant. Null for platform admins, who
+	 * reach everything — a caller must then add no access branch at all.
+	 */
+	private Criteria reachOf(User user) {
+		if (user.isAdmin()) return null;
+		Criteria direct = Criteria.where("memberIds").is(user.getId());
+		Set<String> granted = teamGrantedProjectIds(user);
+		if (granted.isEmpty()) return direct;
+		return new Criteria().orOperator(direct, Criteria.where("id").in(granted));
 	}
 
 	/**
