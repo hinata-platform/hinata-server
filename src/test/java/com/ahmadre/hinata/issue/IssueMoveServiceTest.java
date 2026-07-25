@@ -17,15 +17,18 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.inOrder;
@@ -372,6 +375,43 @@ class IssueMoveServiceTest {
 		service.move(List.of("i1"), ERSTI, Map.of("Open", "Neu"), false, true, user);
 
 		verify(projects, never()).ensureIssueCounterAtLeast(anyString(), anyLong());
+	}
+
+	@Test
+	void stepsOverANumberThatIsAlreadyTaken() {
+		issue("i1", "Open");
+		// The number the counter hands out is in use — a counter that lagged, or an
+		// issue this very transaction has just re-numbered.
+		when(issues.existsByProjectIdAndNumberInProject(ERSTI, 7L)).thenReturn(true);
+
+		List<Issue> moved = service.move(List.of("i1"), ERSTI,
+				Map.of("Open", "Neu"), false, true, user);
+
+		assertThat(moved.get(0).getReadableId()).isEqualTo("ERSTI-8");
+	}
+
+	@Test
+	void neverGivesTwoIssuesOfOneBatchTheSameNumber() {
+		issue("i1", "Open");
+		issue("i2", "Open");
+		// A counter that repeats itself — what a rolled-back or lagging counter
+		// looks like from here. Only the collection knows the truth, so the
+		// reservation is verified against it.
+		when(projects.nextIssueNumber(ERSTI)).thenReturn(7L, 7L, 8L);
+		Set<Long> taken = new HashSet<>();
+		when(issues.existsByProjectIdAndNumberInProject(eq(ERSTI), anyLong()))
+				.thenAnswer(i -> taken.contains(i.getArgument(1, Long.class)));
+		when(issues.save(any(Issue.class))).thenAnswer(i -> {
+			Issue saved = i.getArgument(0, Issue.class);
+			taken.add(saved.getNumberInProject());
+			return saved;
+		});
+
+		List<Issue> moved = service.move(List.of("i1", "i2"), ERSTI,
+				Map.of("Open", "Neu"), false, true, user);
+
+		assertThat(moved).extracting(Issue::getReadableId)
+				.containsExactly("ERSTI-7", "ERSTI-8");
 	}
 
 	@Test

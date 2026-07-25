@@ -69,6 +69,9 @@ public class IssueMoveService {
 	/** How many former ids an issue keeps; long enough for any real move history. */
 	private static final int MAX_FORMER_IDS = 20;
 
+	/** How many numbers one reservation may skip before giving up on the project. */
+	private static final int MAX_NUMBER_PROBES = 50;
+
 	private static final String GIT_DEV_INFO = "git_dev_info";
 
 	private final IssueRepository issues;
@@ -150,9 +153,9 @@ public class IssueMoveService {
 		}
 
 		// The id preview is indicative only: the real numbers are reserved at move
-		// time, so a concurrent create can shift them. Numbering from the current
-		// counter keeps the preview stable and monotonic.
-		long nextNumber = target.getIssueCounter();
+		// time, so a concurrent create can shift them. Previewing from the higher of
+		// counter and real data keeps it honest even where the counter lags.
+		long nextNumber = Math.max(target.getIssueCounter(), highestNumber(target.getId()));
 		List<MovePreview> previews = new ArrayList<>();
 		for (Issue issue : plan.ordered()) {
 			nextNumber++;
@@ -377,11 +380,39 @@ public class IssueMoveService {
 		return sprints.findById(sprintId).map(Sprint::getName).orElse(null);
 	}
 
-	/** Reserves the next number in the target project and rewrites the readable id. */
+	/** Reserves the next free number in the target project and rewrites the readable id. */
 	private void assignNumber(Issue issue, Project target) {
-		long number = projects.nextIssueNumber(target.getId());
+		long number = nextFreeNumber(target);
 		issue.setNumberInProject(number);
 		issue.setReadableId(target.getKey() + "-" + number);
+	}
+
+	/**
+	 * A number that is demonstrably free in the target project.
+	 *
+	 * <p>The project's counter alone is not trustworthy enough here. It can lag
+	 * behind the real data (restored dump, import), and it is not the only thing
+	 * that hands out numbers — so every reservation is verified against the
+	 * collection before it is written. That check also covers the issues this very
+	 * transaction has already re-numbered, which a counter cannot: reads inside a
+	 * transaction see its own uncommitted writes.
+	 *
+	 * <p>Verifying beats reacting: a rejected write would abort the whole
+	 * transaction ({@code NoSuchTransaction}), leaving no chance to recover.
+	 */
+	private long nextFreeNumber(Project target) {
+		for (int attempt = 0; attempt < MAX_NUMBER_PROBES; attempt++) {
+			long number = projects.nextIssueNumber(target.getId());
+			if (!issues.existsByProjectIdAndNumberInProject(target.getId(), number)) {
+				return number;
+			}
+			log.warn("Issue number {} is already taken in project {} — the counter is behind",
+					number, target.getKey());
+			// Jump straight past everything that exists rather than walking the
+			// gap one number at a time; the loop stays as the backstop.
+			if (attempt == 0) reconcileIssueCounter(target);
+		}
+		throw ApiException.conflict("error.issue.moveNumberTaken");
 	}
 
 	/**
@@ -398,12 +429,17 @@ public class IssueMoveService {
 	 * counter is reconciled here, before the first write, where it still can be.
 	 */
 	private void reconcileIssueCounter(Project target) {
-		long maxExisting = issues.findTopByProjectIdOrderByNumberInProjectDesc(target.getId())
-				.map(Issue::getNumberInProject)
-				.orElse(0L);
+		long maxExisting = highestNumber(target.getId());
 		if (maxExisting > target.getIssueCounter()) {
 			projects.ensureIssueCounterAtLeast(target.getId(), maxExisting);
 		}
+	}
+
+	/** Highest number any issue of the project carries, 0 when it has none. */
+	private long highestNumber(String projectId) {
+		return issues.findTopByProjectIdOrderByNumberInProjectDesc(projectId)
+				.map(Issue::getNumberInProject)
+				.orElse(0L);
 	}
 
 	/**

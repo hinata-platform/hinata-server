@@ -54,6 +54,11 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 	 * project's issueCounter if it ever falls behind the real data. */
 	Optional<Issue> findTopByProjectIdOrderByNumberInProjectDesc(String projectId);
 
+	/** Whether a number is already taken in a project — the check that keeps a
+	 * move from walking into the unique {@code project_number} index. Sees writes
+	 * made earlier in the same transaction, which a counter cannot. */
+	boolean existsByProjectIdAndNumberInProject(String projectId, long numberInProject);
+
 	long countByProjectId(String projectId);
 
 	long countByProjectIdAndStateIn(String projectId, List<String> states);
