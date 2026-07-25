@@ -25,7 +25,9 @@ public class IssueActivity {
 
 	public enum Field {
 		CREATED, TITLE, DESCRIPTION, STATE, ASSIGNEE, PRIORITY, TYPE, SPRINT,
-		START_DATE, DUE_DATE, ESTIMATE, STORY_POINTS, TAGS, PARENT
+		START_DATE, DUE_DATE, ESTIMATE, STORY_POINTS, TAGS, PARENT,
+		/** Moved to another project; from/to hold the readable ids, e.g. VOR-42 → ERSTI-7. */
+		PROJECT
 	}
 
 	@Id
