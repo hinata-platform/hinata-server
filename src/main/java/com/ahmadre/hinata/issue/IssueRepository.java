@@ -3,6 +3,7 @@ package com.ahmadre.hinata.issue;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
 
 import java.util.List;
 import java.util.Optional;
@@ -34,6 +35,14 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 	List<Issue> findBySprintId(String sprintId);
 
 	List<Issue> findByProjectIdAndStartDateNotNull(String projectId);
+
+	/** Everything that belongs on the timeline: non-archived issues carrying a start
+	 * date, a due date, or both. A due-date-only issue is a deadline/milestone and
+	 * must not be dropped, which is why this replaces the start-date-only query. */
+	@Query("{ 'projectId': ?0, 'archived': { $ne: true }, "
+			+ "$or: [ { 'startDate': { $ne: null } }, { 'dueDate': { $ne: null } } ] }")
+	List<Issue> findScheduled(String projectId);
+
 
 	List<Issue> findByParentId(String parentId);
 

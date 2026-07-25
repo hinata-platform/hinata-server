@@ -171,13 +171,15 @@ public class DemoSeeder {
 		// commits, pull/merge requests and builds on a spread of its issues.
 		seedGitIntegration(hin, mob, inf, admin, everyone);
 
-		// Give a slice of HIN issues real start/due dates (+ a dependency chain)
-		// so the Gantt / Timeline surface renders bars instead of an empty state.
-		scheduleTimeline(hin);
-
-		// Wire a spread of Jira-style issue links so the "Verknüpfte Vorgänge"
-		// panel renders real relationships out of the box.
+		// Wire a spread of issue links so the "Verknüpfte Vorgänge" panel renders
+		// real relationships out of the box — and so the timeline has a dependency
+		// chain to draw connectors along.
 		seedIssueLinks(hin);
+
+		// Give a slice of HIN issues real start/due dates, arranged so the Gantt /
+		// Timeline surface shows a critical path, a scheduling conflict and a
+		// milestone rather than just bars.
+		scheduleTimeline(hin);
 
 		// --- this week's tracked work for the admin ------------------------
 		seedTracker(admin, hin);
@@ -789,26 +791,70 @@ public class DemoSeeder {
 		return saved;
 	}
 
-	/** Stagger start/due dates across ~3 weeks for the first dozen HIN issues,
-	 * chaining a few dependencies so the timeline shows links. */
+	/** Stagger start/due dates across ~3 weeks for the first dozen HIN issues, then
+	 * shape the linked ones into a timeline that shows off every Gantt state —
+	 * see {@link #showcaseTimeline}. */
 	private void scheduleTimeline(Project p) {
 		List<Issue> list = mongo.find(Query.query(Criteria.where("projectId").is(p.getId()))
 				.with(Sort.by("numberInProject")).limit(12), Issue.class);
 		LocalDate base = LocalDate.now(ZoneOffset.UTC).minusDays(6);
-		String prev = null;
 		int offset = 0;
 		for (Issue i : list) {
 			LocalDate start = base.plusDays(offset);
 			int points = i.getStoryPoints() == null ? 2 : i.getStoryPoints();
-			LocalDate due = start.plusDays(Math.clamp(points, 2, 6));
-			Update u = new Update().set("startDate", start).set("dueDate", due);
-			if (prev != null && offset % 4 == 0) {
-				u.set("dependsOnIds", List.of(prev));
-			}
-			mongo.updateFirst(Query.query(Criteria.where("_id").is(i.getId())), u, Issue.class);
-			prev = i.getId();
+			schedule(i, start, start.plusDays(Math.clamp(points, 2, 6)));
 			offset += 2;
 		}
+		showcaseTimeline(p, base);
+	}
+
+	/**
+	 * Arranges the linked issues so the Gantt chart demonstrates each of its
+	 * states out of the box:
+	 *
+	 * <ul>
+	 * <li>a clean finish-to-start chain (issues 1→2→3 of {@link #standardIssues})
+	 * which is also the <b>critical path</b> — the longest run of dependencies;
+	 * <li>one deliberate <b>scheduling conflict</b>: the fourth issue starts
+	 * before the issue blocking it is finished, so its bar and connector go red;
+	 * <li>a <b>milestone</b> — a due-date-only issue, drawn as a diamond;
+	 * <li>one legacy {@code dependsOnIds} dependency (no {@link IssueLink}
+	 * document), which the chart folds into the same connector layer.
+	 * </ul>
+	 */
+	private void showcaseTimeline(Project p, LocalDate base) {
+		List<Issue> chain = standardIssues(p);
+		if (chain.size() < 5) return;
+		// Finish-to-start: each successor opens the day after its blocker closes.
+		schedule(chain.get(0), base, base.plusDays(3));
+		schedule(chain.get(1), base.plusDays(4), base.plusDays(8));
+		schedule(chain.get(2), base.plusDays(9), base.plusDays(13));
+		// …except this one, which overlaps its blocker — the conflict case.
+		schedule(chain.get(3), base.plusDays(11), base.plusDays(15));
+		// Legacy dependency field, still written by the API and the MCP tools.
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(chain.get(4).getId())),
+				new Update().set("dependsOnIds", List.of(chain.get(2).getId()))
+						.set("startDate", base.plusDays(14))
+						.set("dueDate", base.plusDays(18)),
+				Issue.class);
+		// A deadline rather than a stretch of work: no start date at all.
+		Issue milestone = chain.get(Math.min(8, chain.size() - 1));
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(milestone.getId())),
+				new Update().unset("startDate").set("dueDate", base.plusDays(21)), Issue.class);
+	}
+
+	private void schedule(Issue issue, LocalDate start, LocalDate due) {
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(issue.getId())),
+				new Update().set("startDate", start).set("dueDate", due), Issue.class);
+	}
+
+	/** The project's ordinary issues (no epics, no sub-tasks) by issue number —
+	 * the basis both the link seeding and the timeline showcase index into. */
+	private List<Issue> standardIssues(Project p) {
+		return mongo.find(Query.query(Criteria.where("projectId").is(p.getId())
+						.and("type").in(Issue.Type.TASK, Issue.Type.STORY, Issue.Type.BUG,
+								Issue.Type.FEATURE))
+				.with(Sort.by("numberInProject")), Issue.class);
 	}
 
 	/**
@@ -817,13 +863,13 @@ public class DemoSeeder {
 	 * its grouped inward/outward verbs render real data on first run.
 	 */
 	private void seedIssueLinks(Project p) {
-		List<Issue> standard = mongo.find(Query.query(Criteria.where("projectId").is(p.getId())
-						.and("type").in(Issue.Type.TASK, Issue.Type.STORY, Issue.Type.BUG,
-								Issue.Type.FEATURE))
-				.with(Sort.by("numberInProject")), Issue.class);
+		List<Issue> standard = standardIssues(p);
 		if (standard.size() < 6) return;
 		// source "verb" target — stored once, rendered from both ends.
+		// 0 → 1 → 2 → 3 is one unbroken chain of blockers, which is what makes the
+		// Gantt chart's critical path (and its one conflict) worth looking at.
 		link(IssueLinkType.BLOCKS, standard.get(0), standard.get(1));
+		link(IssueLinkType.BLOCKS, standard.get(1), standard.get(2));
 		link(IssueLinkType.BLOCKS, standard.get(2), standard.get(3));
 		link(IssueLinkType.RELATES, standard.get(1), standard.get(4));
 		link(IssueLinkType.DUPLICATES, standard.get(5), standard.get(2));
