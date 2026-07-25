@@ -25,7 +25,7 @@ public class UserController {
 	public record DirectoryUser(String id, String username, String displayName, String avatarUrl,
 			String title) {
 
-		static DirectoryUser from(User user) {
+		public static DirectoryUser from(User user) {
 			return new DirectoryUser(user.getId(), user.getUsername(), user.getDisplayName(),
 					user.getAvatarUrl(), user.getTitle());
 		}

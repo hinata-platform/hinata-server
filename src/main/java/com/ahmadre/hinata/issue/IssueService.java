@@ -2,13 +2,20 @@ package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.board.AgileBoard;
+import com.ahmadre.hinata.board.AgileBoardRepository;
+import com.ahmadre.hinata.board.Sprint;
+import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.timetracking.WorkItemRepository;
 import com.ahmadre.hinata.user.User;
+import com.ahmadre.hinata.user.UserController;
+import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +63,12 @@ public class IssueService {
 	private final WorkItemRepository workItems;
 	private final AuditService audit;
 	private final MongoTemplate mongo;
+	// Read-only repos used only by the aggregate detail() bootstrap below (sprint
+	// picker + minimal referenced-user directory), collapsing the client's
+	// issue-open fan-out into one round-trip.
+	private final AgileBoardRepository boardRepo;
+	private final SprintRepository sprintRepo;
+	private final UserRepository userRepo;
 
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
@@ -446,6 +459,116 @@ public class IssueService {
 		List<Issue> children = new ArrayList<>(issues.findByParentId(issue.getId()));
 		children.sort(Comparator.comparingLong(Issue::getNumberInProject));
 		return new Hierarchy(ancestors, children);
+	}
+
+	// ── aggregate detail (first-paint bootstrap) ─────────────────────────────
+
+	/**
+	 * Everything the issue-detail view needs for first paint, composed in ONE
+	 * server round-trip instead of the client firing ~13 separate GETs (issue,
+	 * comments, pinned, activity, work items, project, hierarchy, permissions,
+	 * sprints and the full user directory). Native apps (HTTP/1.1, no
+	 * multiplexing, WAN latency) paid a TLS handshake per fanned-out request,
+	 * which is what made issue-open slow and intermittently fail; the web build
+	 * hid it behind HTTP/2 multiplexing on the LAN.
+	 *
+	 * <p>Every sub-part reuses the standalone service methods, so the SAME
+	 * per-resource authorization applies (defense in depth). Comments/activity
+	 * carry only page 0 — "load more" keeps using the paged endpoints. The
+	 * returned users are the minimal set the view actually references (assignees,
+	 * reporters, comment authors + reactors, activity actors, hierarchy people),
+	 * not the whole organization directory.
+	 */
+	public record IssueDetail(
+			Issue issue,
+			Project project,
+			PageSlice<IssueComment> comments,
+			List<IssueComment> pinnedComments,
+			PageSlice<IssueActivity> activity,
+			List<WorkItem> workItems,
+			Hierarchy hierarchy,
+			List<Sprint> sprints,
+			List<UserController.DirectoryUser> users,
+			boolean canDelete) {
+
+		/**
+		 * Slim {@code {content, totalElements}} slice mirroring Spring Data's
+		 * {@code Page} JSON so the client's existing page parsers work unchanged.
+		 */
+		public record PageSlice<T>(List<T> content, long totalElements) {
+			static <T> PageSlice<T> of(Page<T> page) {
+				return new PageSlice<>(page.getContent(), page.getTotalElements());
+			}
+		}
+	}
+
+	public IssueDetail detail(String idOrReadableId, int commentSize, String commentSort,
+			int activitySize, User user) {
+		Issue issue = getForUser(idOrReadableId, user); // primary ACL assert
+		String id = issue.getId();
+		Project project = projects.get(issue.getProjectId());
+		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort, user);
+		List<IssueComment> pinned = pinnedComments(id, user);
+		Page<IssueActivity> activityPage = activityOf(id, 0, activitySize, user);
+		List<WorkItem> items = workItems.findByIssueIdOrderByDateDesc(id);
+		Hierarchy hierarchy = hierarchyOf(id, user);
+		List<Sprint> sprintList = sprintsForProject(project.getId());
+		boolean canDelete = projects.canDeleteIssues(project, user);
+		List<UserController.DirectoryUser> dirUsers = referencedUsers(
+				issue, commentPage.getContent(), pinned, activityPage.getContent(), hierarchy);
+		return new IssueDetail(issue, project, IssueDetail.PageSlice.of(commentPage), pinned,
+				IssueDetail.PageSlice.of(activityPage), items, hierarchy, sprintList, dirUsers,
+				canDelete);
+	}
+
+	/**
+	 * Non-archived sprints across every board spanning the project, de-duplicated
+	 * — mirrors the client's old boards→sprints fan-out in a single call. The
+	 * caller has already been asserted a member of {@code project}.
+	 */
+	private List<Sprint> sprintsForProject(String projectId) {
+		List<Sprint> out = new ArrayList<>();
+		Set<String> seen = new HashSet<>();
+		for (AgileBoard board : boardRepo.findByProjectIdsContains(projectId)) {
+			for (Sprint sprint : sprintRepo.findByBoardIdOrderByStartDateDesc(board.getId())) {
+				if (!sprint.isArchived() && seen.add(sprint.getId())) out.add(sprint);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The minimal user directory the detail view references, so an issue open
+	 * never ships the whole org over the wire.
+	 */
+	private List<UserController.DirectoryUser> referencedUsers(Issue issue,
+			List<IssueComment> commentPage, List<IssueComment> pinned,
+			List<IssueActivity> activityPage, Hierarchy hierarchy) {
+		Set<String> ids = new HashSet<>();
+		if (issue.getAssigneeIds() != null) ids.addAll(issue.getAssigneeIds());
+		ids.add(issue.getReporterId());
+		List<IssueComment> allComments = new ArrayList<>(commentPage);
+		allComments.addAll(pinned);
+		for (IssueComment c : allComments) {
+			ids.add(c.getAuthorId());
+			if (c.getReactions() != null) {
+				for (IssueComment.Reaction r : c.getReactions()) ids.add(r.getUserId());
+			}
+		}
+		for (IssueActivity a : activityPage) ids.add(a.getActorId());
+		List<Issue> related = new ArrayList<>(hierarchy.ancestors());
+		related.addAll(hierarchy.children());
+		for (Issue h : related) {
+			if (h.getAssigneeIds() != null) ids.addAll(h.getAssigneeIds());
+			ids.add(h.getReporterId());
+		}
+		ids.remove(null);
+		if (ids.isEmpty()) return List.of();
+		List<UserController.DirectoryUser> out = new ArrayList<>();
+		for (User u : userRepo.findAllById(ids)) {
+			if (u.isActive()) out.add(UserController.DirectoryUser.from(u));
+		}
+		return out;
 	}
 
 	/** Permanently deletes a label from a project: removes it from the project's

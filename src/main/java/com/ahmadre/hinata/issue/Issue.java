@@ -28,6 +28,10 @@ import java.util.List;
 // IXSCAN instead of an in-memory SORT that risks the 32MB limit at scale.
 @CompoundIndex(name = "proj_arch_updated", def = "{'projectId': 1, 'archived': 1, 'updatedAt': -1, '_id': -1}")
 @CompoundIndex(name = "proj_arch_created", def = "{'projectId': 1, 'archived': 1, 'createdAt': -1, '_id': -1}")
+// Hierarchy lookups (findByParentId, sorted by numberInProject) run on every
+// issue open. Without this a parent-id fetch COLLSCANs the whole collection;
+// the compound also satisfies the children sort, turning it into an IXSCAN.
+@CompoundIndex(name = "parent_number", def = "{'parentId': 1, 'numberInProject': 1}")
 public class Issue {
 
 	public enum Type {

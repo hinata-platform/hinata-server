@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -17,6 +18,9 @@ import java.time.Instant;
 @Data
 @Builder
 @Document("issue_activities")
+// The activity feed filters by issueId and sorts by createdAt desc on every
+// issue open; this compound serves filter+sort as an IXSCAN.
+@CompoundIndex(name = "issue_created", def = "{'issueId': 1, 'createdAt': -1}")
 public class IssueActivity {
 
 	public enum Field {

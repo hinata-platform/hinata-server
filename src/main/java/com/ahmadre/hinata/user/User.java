@@ -6,6 +6,7 @@ import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -21,6 +22,10 @@ import java.util.Set;
 @Data
 @Builder
 @Document("users")
+// The user directory (active users, sorted by displayName) is fetched on every
+// issue open; this compound serves the common empty-query path as a pre-sorted
+// IXSCAN instead of a COLLSCAN + in-memory sort.
+@CompoundIndex(name = "active_displayName", def = "{'active': 1, 'displayName': 1}")
 public class User {
 
 	public enum Origin { LOCAL, OIDC, SAML, LDAP }

@@ -5,6 +5,7 @@ import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -37,6 +38,9 @@ public class AgileBoard {
 	private Type type = Type.KANBAN;
 
 	/** Boards can span multiple projects, like YouTrack agile boards. */
+	// Multikey index: findByProjectIdsContains runs on every issue open (sprint
+	// picker) and every board list.
+	@Indexed
 	@Builder.Default
 	private List<String> projectIds = new ArrayList<>();
 

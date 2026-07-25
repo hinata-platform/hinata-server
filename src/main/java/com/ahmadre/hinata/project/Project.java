@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -20,6 +21,11 @@ import java.util.UUID;
 @Data
 @Builder
 @Document("projects")
+// visibleTo(user) filters projects by membership + non-archived on every issue
+// open (and every list); these serve those queries as IXSCANs instead of
+// COLLSCANs over the whole projects collection.
+@CompoundIndex(name = "member_archived", def = "{'memberIds': 1, 'archived': 1}")
+@CompoundIndex(name = "archived_idx", def = "{'archived': 1}")
 public class Project {
 
 	@Id

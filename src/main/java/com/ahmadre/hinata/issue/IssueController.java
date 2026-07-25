@@ -130,6 +130,22 @@ public class IssueController {
 		return issueService.getForUser(id, currentUser.require());
 	}
 
+	/**
+	 * First-paint bootstrap: everything the issue-detail view needs (issue,
+	 * project, page 0 of comments + pinned + activity, work items, hierarchy,
+	 * sprints, referenced users, delete capability) in ONE response, so native
+	 * clients no longer fan out ~13 round-trips to open an issue. "Load more"
+	 * for comments/activity still uses the paged endpoints below.
+	 */
+	@GetMapping("/{id}/detail")
+	public IssueService.IssueDetail detail(@PathVariable String id,
+			@RequestParam(defaultValue = "30") int commentSize,
+			@RequestParam(defaultValue = "newest") String commentSort,
+			@RequestParam(defaultValue = "30") int activitySize) {
+		return issueService.detail(id, Math.min(commentSize, 100), commentSort,
+				Math.min(activitySize, 100), currentUser.require());
+	}
+
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public Issue create(@RequestBody @Valid CreateIssueRequest request) {

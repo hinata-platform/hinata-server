@@ -6,6 +6,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.annotation.Transient;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -15,6 +16,10 @@ import java.util.List;
 @Data
 @Builder
 @Document("issue_comments")
+// Thread reads filter by issueId (+ replyToId null for top-level) and sort by
+// createdAt on every issue open; this compound satisfies filter+sort as an
+// IXSCAN instead of an in-memory sort.
+@CompoundIndex(name = "issue_reply_created", def = "{'issueId': 1, 'replyToId': 1, 'createdAt': -1}")
 public class IssueComment {
 
 	/**
