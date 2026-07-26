@@ -52,7 +52,13 @@ public class BoardController {
 
 	/** Partial board update — every field is optional (null = no change). */
 	public record UpdateBoardRequest(@Size(max = 120) String name, AgileBoard.Type type,
-			String activeSprintId, List<String> projectIds) {
+			String activeSprintId, List<String> projectIds, List<ColumnRequest> columns,
+			Boolean resetColumns) {
+	}
+
+	/** One column of a hand-made layout: its title, the states it collects, its limit. */
+	public record ColumnRequest(@NotBlank @Size(max = 60) String name, List<String> states,
+			Integer wipLimit) {
 	}
 
 	public record SprintRequest(@NotBlank @Size(max = 120) String name, String goal,
@@ -229,7 +235,12 @@ public class BoardController {
 		// board stays readable and a drop always has a state the card's own
 		// project knows. WIP limits are carried over from the stored columns by
 		// matching column name.
-		List<AgileBoard.Column> columns = BoardColumns.merge(viewable);
+		// …unless a manager arranged the columns by hand, in which case that layout
+		// is the truth and only gets narrowed to what this viewer may see, plus any
+		// state that has appeared since and would otherwise have no home.
+		List<AgileBoard.Column> columns = board.hasCustomColumns()
+				? BoardColumns.reconcile(board.getColumns(), viewable)
+				: BoardColumns.merge(viewable);
 		Map<String, Integer> hueByColumn = BoardColumns.hues(columns, viewable);
 
 		Map<String, Integer> wipByName = new HashMap<>();
@@ -277,21 +288,50 @@ public class BoardController {
 			assertBoardManage(board, user);
 			assertMemberOfAll(req.projectIds(), user);
 			board.setProjectIds(new ArrayList<>(new LinkedHashSet<>(req.projectIds())));
-			// Re-merge the stored column snapshot for the new span. The view derives
-			// columns live anyway; this keeps the stored WIP-limit carrier in step
-			// so a limit isn't orphaned on a column that no longer exists — limits
-			// on columns that survive the re-merge are preserved by name.
-			Map<String, Integer> wip = new HashMap<>();
-			for (AgileBoard.Column column : board.getColumns()) {
-				if (column.getWipLimit() != null) wip.put(column.getName(), column.getWipLimit());
+			// A hand-made layout survives a change of span: the view reconciles it
+			// against the new set, adding a column for anything that has no home yet.
+			// A derived one is re-merged here so the stored WIP-limit carrier stays
+			// in step — limits on columns that survive are preserved by name.
+			if (!board.hasCustomColumns()) {
+				board.setColumns(remerged(board));
 			}
-			List<AgileBoard.Column> merged = BoardColumns.merge(spannedProjects(board.getProjectIds()));
-			for (AgileBoard.Column column : merged) {
-				column.setWipLimit(wip.get(column.getName()));
+		}
+		if (Boolean.TRUE.equals(req.resetColumns())) {
+			assertBoardManage(board, user);
+			board.setColumnsCustomized(false);
+			board.setColumns(remerged(board));
+		}
+		else if (req.columns() != null) {
+			assertBoardManage(board, user);
+			// Editing the layout means deciding where every spanned project's states
+			// go — so the caller has to be able to see all of them.
+			assertMemberOfAll(board.getProjectIds(), user);
+			List<AgileBoard.Column> custom = new ArrayList<>();
+			for (ColumnRequest column : req.columns()) {
+				custom.add(AgileBoard.Column.builder()
+						.name(column.name() == null ? null : column.name().trim())
+						.states(new ArrayList<>(column.states() == null ? List.of() : column.states()))
+						.wipLimit(column.wipLimit())
+						.build());
 			}
-			board.setColumns(merged);
+			BoardColumns.validate(custom, spannedProjects(board.getProjectIds()));
+			board.setColumns(custom);
+			board.setColumnsCustomized(true);
 		}
 		return boards.save(board);
+	}
+
+	/** The automatic layout for the board's current span, keeping WIP limits by name. */
+	private List<AgileBoard.Column> remerged(AgileBoard board) {
+		Map<String, Integer> wip = new HashMap<>();
+		for (AgileBoard.Column column : board.getColumns()) {
+			if (column.getWipLimit() != null) wip.put(column.getName(), column.getWipLimit());
+		}
+		List<AgileBoard.Column> merged = BoardColumns.merge(spannedProjects(board.getProjectIds()));
+		for (AgileBoard.Column column : merged) {
+			column.setWipLimit(wip.get(column.getName()));
+		}
+		return merged;
 	}
 
 	@DeleteMapping("/{id}")

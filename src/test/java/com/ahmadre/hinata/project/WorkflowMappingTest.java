@@ -71,6 +71,20 @@ class WorkflowMappingTest {
 	}
 
 	@Test
+	void ignoresAHueSeveralStatesOfOneWorkflowShare() {
+		// A status added in project settings keeps the neutral default hue, so the
+		// colour stops identifying anything. Matching on it anyway moved a finished
+		// issue into the target's first step — the resolved-stays-resolved rung is
+		// the honest answer once the hue has nothing left to say.
+		Project source = project("A", List.of("Open", "In Progress", "Done", "Signed Off"),
+				List.of(250, 70, 155, 250), List.of("Done", "Signed Off"));
+		Project target = project("B", List.of("Intake", "Open", "In Progress", "Done"),
+				List.of(250, 250, 70, 155), List.of("Done"));
+
+		assertThat(WorkflowMapping.suggest(source, "Signed Off", target)).isEqualTo("Done");
+	}
+
+	@Test
 	void keepsAResolvedStatusResolvedWhenNothingElseMatches() {
 		Project source = english();
 		Project target = project("X", List.of("Todo", "Doing", "Shipped"),

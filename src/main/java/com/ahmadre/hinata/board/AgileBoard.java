@@ -48,6 +48,17 @@ public class AgileBoard {
 	@Builder.Default
 	private List<Column> columns = new ArrayList<>();
 
+	/**
+	 * Whether a manager arranged {@link #columns} by hand. While false the board
+	 * derives its columns from the spanned workflows on every view, so renames and
+	 * new states show up by themselves; once true the stored layout is the truth
+	 * and the automatic merge only fills in states that have no column yet.
+	 *
+	 * <p>Wrapper type on purpose: boards written before this existed have no such
+	 * field, and a primitive would make Spring Data fail to map them.
+	 */
+	private Boolean columnsCustomized;
+
 	/** Currently active sprint shown by default. */
 	private String activeSprintId;
 
@@ -58,6 +69,11 @@ public class AgileBoard {
 
 	@LastModifiedDate
 	private Instant updatedAt;
+
+	/** Whether {@link #columns} is a hand-made layout rather than a derived one. */
+	public boolean hasCustomColumns() {
+		return Boolean.TRUE.equals(columnsCustomized);
+	}
 
 	@Data
 	@Builder

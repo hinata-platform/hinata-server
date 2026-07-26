@@ -23,7 +23,9 @@ import java.util.Objects;
  *   <li><b>Hue</b> — {@link Project.WorkflowState#getHue()} is assigned
  *       semantically (see {@link Project#defaultWorkflow()}), so a project whose
  *       states were merely renamed to another language still matches:
- *       "In Progress"(70) → "In Arbeit"(70).</li>
+ *       "In Progress"(70) → "In Arbeit"(70). Only counts while the hue belongs to
+ *       exactly one state on each side: a status added in project settings keeps
+ *       the neutral default, and a colour two states share identifies neither.</li>
  *   <li><b>Class</b> — resolved → the target's first resolved state, backlog →
  *       the target's backlog state.</li>
  *   <li><b>Position</b> — same index in the workflow, but only when both
@@ -52,9 +54,10 @@ public final class WorkflowMapping {
 		String byName = findByName(targetNames, fromState);
 		if (byName != null) return byName;
 
-		// 2. Same hue — survives a pure rename (incl. translation) of the workflow.
+		// 2. Same hue — survives a pure rename (incl. translation) of the workflow,
+		// but only while the hue still identifies exactly one state on each side.
 		Integer hue = hueOf(source, fromState);
-		if (hue != null) {
+		if (hue != null && countByHue(source, hue) == 1 && countByHue(target, hue) == 1) {
 			for (Project.WorkflowState state : states(target)) {
 				if (state.getHue() == hue) return state.getName();
 			}
@@ -132,6 +135,15 @@ public final class WorkflowMapping {
 			if (name != null && name.trim().equalsIgnoreCase(needle)) return i;
 		}
 		return -1;
+	}
+
+	/** How many of {@code project}'s states carry {@code hue}. */
+	private static int countByHue(Project project, int hue) {
+		int count = 0;
+		for (Project.WorkflowState state : states(project)) {
+			if (state.getHue() == hue) count++;
+		}
+		return count;
 	}
 
 	private static Integer hueOf(Project project, String state) {
