@@ -107,7 +107,37 @@ class RichTextCorpusTest {
 					.isNotEmpty();
 		}
 
-		assertThat(Files.list(out).filter(p -> p.toString().endsWith(".json")).count())
+		// `_`-prefixed files are the corpus's own metadata, not documents; counting
+		// them here would make this assertion depend on test ordering.
+		assertThat(Files.list(out)
+				.filter(p -> p.getFileName().toString().endsWith(".json"))
+				.filter(p -> !p.getFileName().toString().startsWith("_"))
+				.count())
+				.isEqualTo(CORPUS.size());
+	}
+
+	/**
+	 * Writes the markdown the corpus was produced from, next to the documents.
+	 *
+	 * <p>The app converts markdown too — the comment composer previews a draft,
+	 * and a row the migration skipped is converted on read. That conversion has to
+	 * land on the same document this one does, or the preview promises something
+	 * the save does not keep.
+	 *
+	 * <p>Shipping the inputs rather than transcribing them into the Dart test is
+	 * the point: a transcribed string drifts silently from the one that produced
+	 * the fixture, and then the comparison passes while comparing the wrong
+	 * things. A case added here becomes an obligation on the app for free.
+	 */
+	@Test
+	void writesTheMarkdownEachDocumentWasProducedFrom() throws IOException {
+		Path out = Path.of("build", "richtext-corpus");
+		Files.createDirectories(out);
+		Files.writeString(out.resolve("_sources.json"),
+				mapper.writerWithDefaultPrettyPrinter().writeValueAsString(CORPUS) + "\n",
+				StandardCharsets.UTF_8);
+
+		assertThat(mapper.readTree(out.resolve("_sources.json").toFile()).size())
 				.isEqualTo(CORPUS.size());
 	}
 
