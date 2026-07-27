@@ -91,6 +91,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
     // Inbound e-mail ingest: HTML mail body -> Markdown (brings jsoup transitively)
     implementation("com.vladsch.flexmark:flexmark-html2md-converter:$flexmarkVersion")
+    // Markdown -> Lexical JSON (RichTextService): tables and strikethrough already
+    // arrive with the converter above; task lists are their own extension.
+    implementation("com.vladsch.flexmark:flexmark-ext-gfm-tasklist:$flexmarkVersion")
 
     // PDF generation: GDPR (Art. 15) self-service data report
     implementation("com.github.librepdf:openpdf:$openpdfVersion")
@@ -198,4 +201,9 @@ System.getenv("BOOTRUN_DEBUG_PORT")?.takeIf { it.isNotBlank() }?.let { port ->
     tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
         jvmArgs("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:$port")
     }
+}
+
+// temporary: dump the test runtime classpath
+tasks.register("printTestCp") {
+    doLast { println(sourceSets["test"].runtimeClasspath.asPath) }
 }

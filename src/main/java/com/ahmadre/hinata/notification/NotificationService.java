@@ -3,6 +3,7 @@ package com.ahmadre.hinata.notification;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.me.NotificationPreferences;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -30,6 +31,7 @@ public class NotificationService {
 	private final MailService mail;
 	private final PushService push;
 	private final GatewayService gateway;
+	private final RichTextService richText;
 
 	private static final String SUBJECT_PREFIX = "[Hinata] ";
 
@@ -76,9 +78,6 @@ public class NotificationService {
 				issueLink(issue));
 	}
 
-	/** Matches the inline mention token the editor emits: {@code {{user:<id>}}}. */
-	private static final Pattern USER_MENTION = Pattern.compile("\\{\\{user:([^}]+)}}");
-
 	/**
 	 * Fan-out for a new comment. Users named with an {@code @}-mention get a
 	 * direct {@code MENTION} notification; the author of the comment a reply
@@ -87,9 +86,10 @@ public class NotificationService {
 	 * the weaker one for the same recipient (mention &gt; reply &gt; watcher), so
 	 * nobody is pinged twice. The comment author never notifies themselves.
 	 */
-	public void notifyComment(Issue issue, User author, String text, IssueComment comment) {
-		String preview = preview(text);
-		Set<String> mentioned = parseUserMentions(text);
+	public void notifyComment(Issue issue, User author, IssueComment comment) {
+		String doc = comment == null ? null : comment.getTextDoc();
+		String preview = preview(doc);
+		Set<String> mentioned = new HashSet<>(richText.mentionedUsers(doc));
 		mentioned.remove(author.getId());
 		notifyMentions(issue, author, mentioned, preview);
 		// Everyone already directly notified about this comment — start with the
@@ -185,8 +185,8 @@ public class NotificationService {
 	 * the newly added mentions, never re-pinging existing ones on unrelated edits.
 	 */
 	public void notifyNewMentions(Issue issue, User actor, String before, String after) {
-		Set<String> added = parseUserMentions(after);
-		added.removeAll(parseUserMentions(before));
+		Set<String> added = new HashSet<>(richText.mentionedUsers(after));
+		added.removeAll(richText.mentionedUsers(before));
 		if (added.isEmpty()) return;
 		notifyMentions(issue, actor, added, preview(after));
 	}
@@ -195,37 +195,28 @@ public class NotificationService {
 	private static final int PREVIEW_MAX = 160;
 
 	/**
-	 * Renders raw editor text (mention tokens + markdown) into a short, single-line
-	 * plain-text teaser fit for a push body, e-mail and bell entry: mention tokens
-	 * become {@code @DisplayName}, markdown formatting is reduced to its visible
-	 * text, whitespace is collapsed and the result is truncated with an ellipsis.
+	 * Renders a stored Lexical document into a short, single-line plain-text teaser
+	 * fit for a push body, e-mail and bell entry: a user mention becomes
+	 * {@code @DisplayName}, everything else contributes the words a reader would
+	 * see, whitespace is collapsed and the result is truncated with an ellipsis.
 	 * Never returns {@code null}. The output is consumed only as plain text — the
 	 * e-mail layer HTML-escapes it and the push layer JSON-escapes it — so this is
 	 * about readability, not sanitisation.
+	 *
+	 * <p>Reading the document rather than a markdown string is what keeps the
+	 * teaser free of syntax characters without a pile of stripping regexes: there
+	 * is no syntax in the document to strip.
 	 */
-	String preview(String text) {
-		if (text == null) return "";
-		// Resolve mention tokens to @DisplayName before stripping; the replacement
-		// is treated literally, so a name with '$' or '\\' can't corrupt the regex.
-		String s = USER_MENTION.matcher(text)
-				.replaceAll(m -> Matcher.quoteReplacement("@" + mentionName(m.group(1).trim())));
-		s = stripMarkdown(s).replaceAll("\\s+", " ").trim();
+	String preview(String doc) {
+		String s = richText.plainText(doc, (type, node) -> {
+			if (!"smartlink".equals(type)) return null;
+			if (!"user".equals(node.path("kind").asText(""))) return null;
+			return "@" + mentionName(node.path("targetId").asText("").trim());
+		});
+		s = s.replaceAll("\\s+", " ").trim();
 		if (s.length() > PREVIEW_MAX) {
 			s = s.substring(0, PREVIEW_MAX - 1).trim() + "…";
 		}
-		return s;
-	}
-
-	/** Reduces common markdown syntax to its visible text for a plain-text teaser. */
-	private static String stripMarkdown(String s) {
-		s = s.replaceAll("(?s)```.*?```", " ");             // fenced code blocks
-		s = s.replaceAll("`([^`]*)`", "$1");                 // inline code
-		s = s.replaceAll("!\\[([^\\]]*)\\]\\([^)]*\\)", "$1"); // images -> alt text
-		s = s.replaceAll("\\[([^\\]]*)\\]\\([^)]*\\)", "$1");   // links -> link text
-		s = s.replaceAll("(?m)^\\s{0,3}>+\\s?", "");         // blockquote markers
-		s = s.replaceAll("(?m)^\\s{0,3}#{1,6}\\s+", "");     // ATX headings
-		s = s.replaceAll("(?m)^\\s{0,3}(?:[-*+]|\\d+\\.)\\s+", ""); // list markers
-		s = s.replaceAll("[*~]{1,3}", "");                   // bold/italic/strike
 		return s;
 	}
 
@@ -233,18 +224,6 @@ public class NotificationService {
 	private String mentionName(String userId) {
 		if (userId.isEmpty()) return "someone";
 		return users.findById(userId).map(User::getDisplayName).orElse("someone");
-	}
-
-	/** Extracts the distinct user ids referenced by {@code {{user:<id>}}} tokens. */
-	static Set<String> parseUserMentions(String text) {
-		Set<String> ids = new HashSet<>();
-		if (text == null) return ids;
-		Matcher m = USER_MENTION.matcher(text);
-		while (m.find()) {
-			String id = m.group(1).trim();
-			if (!id.isEmpty()) ids.add(id);
-		}
-		return ids;
 	}
 
 	// --- Team membership events ----------------------------------------------

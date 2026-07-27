@@ -44,9 +44,27 @@ public class Article {
 	@TextIndexed(weight = 10)
 	private String title;
 
-	/** Markdown. */
+	/**
+	 * Plain text of {@link #contentDoc}, derived on every write by
+	 * {@link com.ahmadre.hinata.richtext.RichTextService} — never set directly.
+	 * Keeps the field name so this collection's text index is unchanged.
+	 */
 	@TextIndexed(weight = 2)
 	private String content;
+
+	/** The Lexical document — the source of truth for the article body. */
+	private String contentDoc;
+
+	/**
+	 * Readable issue ids ({@code HIN-42}) this article links to, derived from
+	 * {@link #contentDoc} on every write. Backlinks used to be found by scanning
+	 * every article body for a {@code {{issue:KEY}}} token; a link is a node now,
+	 * so the references are data and this index answers the question directly
+	 * instead of a regex reading the whole collection.
+	 */
+	@Builder.Default
+	@Indexed
+	private List<String> referencedIssueKeys = new ArrayList<>();
 
 	@Builder.Default
 	@TextIndexed(weight = 5)

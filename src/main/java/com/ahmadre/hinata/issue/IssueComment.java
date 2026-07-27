@@ -79,8 +79,15 @@ public class IssueComment {
 
 	private Type type;
 
-	/** Markdown for {@link Type#TEXT}; null/absent for voice comments. */
+	/**
+	 * Plain text of {@link #textDoc} for {@link Type#TEXT}; null/absent for voice
+	 * comments. Derived on every write by
+	 * {@link com.ahmadre.hinata.richtext.RichTextService} — never set directly.
+	 */
 	private String text;
+
+	/** The Lexical document — the source of truth for a text comment. */
+	private String textDoc;
 
 	/** Present only for {@link Type#VOICE}. */
 	private Voice voice;

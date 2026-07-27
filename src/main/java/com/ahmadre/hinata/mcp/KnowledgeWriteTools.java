@@ -2,6 +2,8 @@ package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
@@ -27,6 +29,7 @@ import java.util.List;
 public class KnowledgeWriteTools {
 
 	private final ArticleRepository articles;
+	private final RichTextService richText;
 	private final CurrentUser currentUser;
 	private final ScopeGuard scopeGuard;
 	private final AuditService audit;
@@ -62,9 +65,13 @@ public class KnowledgeWriteTools {
 			@McpToolParam(required = false, description = "Labels / tags") List<String> tags) {
 		scopeGuard.require(Scopes.KB_WRITE);
 		User me = currentUser.require();
+		// An agent writes markdown; storage is Lexical.
+		RichText body = richText.fromMarkdown(content);
 		Article saved = articles.save(Article.builder()
 				.title(title)
-				.content(content)
+				.content(body.text())
+				.contentDoc(body.doc())
+				.referencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()))
 				.projectId(projectId)
 				.teamId(teamId)
 				.parentId(parentId)
@@ -93,7 +100,12 @@ public class KnowledgeWriteTools {
 		User me = currentUser.require();
 		Article article = knowledgeReadTools.requireVisible(id, me);
 		if (title != null && !title.isBlank()) article.setTitle(title);
-		if (content != null) article.setContent(content);
+		if (content != null) {
+			RichText body = richText.fromMarkdown(content);
+			article.setContent(body.text());
+			article.setContentDoc(body.doc());
+			article.setReferencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()));
+		}
 		if (parentId != null) article.setParentId(parentId.isBlank() ? null : parentId);
 		if (space != null) article.setSpace(space);
 		if (tags != null) article.setTags(tags);

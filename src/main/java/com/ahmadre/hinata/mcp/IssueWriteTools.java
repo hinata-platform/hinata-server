@@ -6,6 +6,8 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +30,7 @@ import java.util.List;
 public class IssueWriteTools {
 
 	private final IssueService issueService;
+	private final RichTextService richText;
 	private final CurrentUser currentUser;
 	private final ScopeGuard scopeGuard;
 	private final AuditService audit;
@@ -53,10 +56,14 @@ public class IssueWriteTools {
 			@McpToolParam(required = false, description = "Story point estimate") Integer storyPoints) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
+		// An agent writes markdown; storage is Lexical. Converting here is what
+		// keeps the database holding exactly one representation.
+		RichText body = richText.fromMarkdown(description);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(title)
-				.description(description)
+				.description(body.text())
+				.descriptionDoc(body.doc())
 				.type(type != null ? type : Issue.Type.TASK)
 				.priority(priority != null ? priority : Issue.Priority.NORMAL)
 				.state(state)
@@ -104,7 +111,11 @@ public class IssueWriteTools {
 		User me = currentUser.require();
 		Issue saved = issueService.update(idOrReadableId, issue -> {
 			if (title != null) issue.setTitle(title);
-			if (description != null) issue.setDescription(description);
+			if (description != null) {
+				RichText body = richText.fromMarkdown(description);
+				issue.setDescription(body.text());
+				issue.setDescriptionDoc(body.doc());
+			}
 			if (type != null) issue.setType(type);
 			if (priority != null) issue.setPriority(priority);
 			if (state != null) issue.setState(state);
@@ -147,7 +158,7 @@ public class IssueWriteTools {
 			@McpToolParam(required = true, description = "Comment text (markdown)") String text) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
-		IssueComment saved = issueService.addComment(idOrReadableId, text, me);
+		IssueComment saved = issueService.addComment(idOrReadableId, richText.fromMarkdown(text), me);
 		audit.event(AuditAction.MCP_COMMENT_ADDED).actor(me)
 				.meta("issue", saved.getIssueId()).log();
 		return McpViews.CommentView.of(saved);
@@ -163,7 +174,7 @@ public class IssueWriteTools {
 			@McpToolParam(required = true, description = "Replacement comment text (markdown)") String text) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
-		IssueComment saved = issueService.editComment(idOrReadableId, commentId, text, me);
+		IssueComment saved = issueService.editComment(idOrReadableId, commentId, richText.fromMarkdown(text), me);
 		audit.event(AuditAction.MCP_COMMENT_EDITED).actor(me)
 				.meta("issue", saved.getIssueId()).meta("comment", saved.getId()).log();
 		return McpViews.CommentView.of(saved);

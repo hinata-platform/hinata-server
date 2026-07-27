@@ -3,6 +3,7 @@ package com.ahmadre.hinata.git;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.User;
@@ -43,6 +44,7 @@ public class GitService {
 
 	private final ProjectService projects;
 	private final IssueService issues;
+	private final RichTextService richText;
 	private final GitDevInfoRepository devInfos;
 	private final TokenCipher cipher;
 	private final GitIntegrationSettings config;
@@ -426,7 +428,10 @@ public class GitService {
 			}
 			try {
 				switch (command.type()) {
-					case COMMENT -> issues.addComment(issue.getId(), command.value(), actor);
+					// A smart-commit comment is plain text from a commit message; it goes
+					// through the same converter as every other markdown source.
+					case COMMENT -> issues.addComment(issue.getId(),
+							richText.fromMarkdown(command.value()), actor);
 					case TIME -> {
 						int minutes = SmartCommitParser.minutes(command.value());
 						if (minutes > 0) {
