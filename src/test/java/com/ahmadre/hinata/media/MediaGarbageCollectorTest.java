@@ -28,6 +28,7 @@ import static org.mockito.Mockito.when;
 class MediaGarbageCollectorTest {
 
 	private static final String ID = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
+	private static final String OTHER_ID = "2c8e7dbe-cc0e-4c3e-8c6e-bc9e0cce5cfe";
 	private static final String KEY = MediaService.PREFIX + ID;
 
 	/** A stored object old enough to be past any grace window. */
@@ -90,13 +91,34 @@ class MediaGarbageCollectorTest {
 	@Test
 	void anImageNothingRefersToIsStillReaped() {
 		// The sweep has to keep doing its job: an upload nobody ever embedded is
-		// exactly what it exists to clear out.
+		// exactly what it exists to clear out. One other object is referenced,
+		// so the scan has clearly worked and the safety net stays out of the way.
+		StorageService storage = mock(StorageService.class);
+		when(storage.isConfigured()).thenReturn(true);
+		when(storage.list(MediaService.PREFIX))
+				.thenReturn(List.of(stale(), new StorageService.ObjectInfo(
+						MediaService.PREFIX + OTHER_ID,
+						Instant.now().minus(Duration.ofDays(30)))));
+		MongoTemplate mongo = mongoWith(
+				"issues", "descriptionDoc", "/api/v1/media/" + OTHER_ID);
+
+		new MediaGarbageCollector(storage, mongo, new HinataProperties()).sweep();
+
+		verify(storage).delete(KEY);
+	}
+
+	@Test
+	void aScanThatFoundNothingAtAllDeletesNothing() {
+		// Zero references and a bucket full of objects is what a broken scan
+		// looks like, and it is indistinguishable from a bucket that is
+		// genuinely all garbage. The two are not worth equal risk: skipping
+		// costs disk, proceeding costs every image in the product.
 		StorageService storage = storageHolding(stale());
 		MongoTemplate mongo = mongoWith("issues", "descriptionDoc", "no media here");
 
 		new MediaGarbageCollector(storage, mongo, new HinataProperties()).sweep();
 
-		verify(storage).delete(KEY);
+		verify(storage, never()).delete(any());
 	}
 
 	@Test

@@ -75,10 +75,26 @@ public class MediaGarbageCollector {
 		}
 
 		Set<String> referenced = collectReferencedIds();
+		List<StorageService.ObjectInfo> objects = storage.list(MediaService.PREFIX);
+
+		// Nothing references anything, yet there are objects to reap: that is
+		// what a broken scan looks like, and it is indistinguishable from a
+		// bucket that is genuinely all garbage. The two are not worth equal
+		// risk — the cost of skipping is disk, the cost of proceeding is every
+		// image in the product, deleted, with nothing to restore from. This is
+		// not hypothetical: renaming the body fields to hold Lexical documents
+		// turned this sweep into exactly that job.
+		if (referenced.isEmpty() && !objects.isEmpty()) {
+			log.warn("[media] orphan sweep skipped: {} object(s) in storage and not one "
+					+ "reference found — the reference scan is almost certainly wrong",
+					objects.size());
+			return;
+		}
+
 		Instant cutoff = Instant.now().minus(Duration.ofHours(graceHours));
 
 		int deleted = 0;
-		for (StorageService.ObjectInfo object : storage.list(MediaService.PREFIX)) {
+		for (StorageService.ObjectInfo object : objects) {
 			String id = object.key().substring(MediaService.PREFIX.length());
 			// Reap only objects that are unreferenced AND older than the grace
 			// window (a just-uploaded image whose content isn't saved yet still
