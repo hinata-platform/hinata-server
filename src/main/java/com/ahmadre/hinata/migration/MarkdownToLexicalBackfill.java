@@ -32,7 +32,7 @@ import java.util.List;
  * document yet, converts it with the same {@link RichTextService} that MCP and
  * e-mail ingest go through, and writes both fields together.
  *
- * <p>Four properties make this safe to leave in place forever:
+ * <p>Three properties make this safe to leave in place forever:
  *
  * <ul>
  *   <li><b>Idempotent.</b> The filter only matches rows whose document field is
@@ -40,11 +40,6 @@ import java.util.List;
  *       resumes exactly where it stopped. A completion marker in
  *       {@code migrations} turns a finished migration into one indexed lookup
  *       instead of a full scan of three collections on every boot.</li>
- *   <li><b>Recoverable.</b> The original markdown is copied to a shadow field
- *       ({@code descriptionMd} / {@code contentMd} / {@code textMd}) in the same
- *       {@code $set} that overwrites it. The conversion is a one-way, lossy
- *       projection: without that copy, a converter defect is unrecoverable
- *       data loss, with it, it is a re-run.</li>
  *   <li><b>Non-fatal.</b> Neither a row that cannot be converted nor a batch that
  *       cannot be written stops the run — and neither stops the server from
  *       starting, which is what an unguarded {@code ApplicationRunner} would do
@@ -63,20 +58,18 @@ import java.util.List;
 public class MarkdownToLexicalBackfill implements ApplicationRunner {
 
 	/**
-	 * One field pair to migrate: the legacy markdown field, its new document, and
-	 * the shadow field that keeps the pre-migration markdown. {@code refsField} is
-	 * set for content that also carries derived issue backlinks — without it an
-	 * upgraded knowledge base would answer "no articles reference this issue" until
-	 * every article happened to be edited again.
+	 * One field pair to migrate: the legacy markdown field and its new document.
+	 * {@code refsField} is set for content that also carries derived issue
+	 * backlinks — without it an upgraded knowledge base would answer "no articles
+	 * reference this issue" until every article happened to be edited again.
 	 */
-	private record Target(String collection, String textField, String docField, String shadowField,
-			String refsField) {
+	private record Target(String collection, String textField, String docField, String refsField) {
 	}
 
 	private static final List<Target> TARGETS = List.of(
-			new Target("issues", "description", "descriptionDoc", "descriptionMd", null),
-			new Target("articles", "content", "contentDoc", "contentMd", "referencedIssueKeys"),
-			new Target("issue_comments", "text", "textDoc", "textMd", null));
+			new Target("issues", "description", "descriptionDoc", null),
+			new Target("articles", "content", "contentDoc", "referencedIssueKeys"),
+			new Target("issue_comments", "text", "textDoc", null));
 
 	/** Rows per bulk write. Large enough to be fast, small enough to stay bounded. */
 	private static final int BATCH = 200;
@@ -211,10 +204,7 @@ public class MarkdownToLexicalBackfill implements ApplicationRunner {
 				return null;
 			}
 			Document set = new Document(target.docField(), converted.doc())
-					.append(target.textField(), converted.text())
-					// Written in the same $set as the overwrite it protects, so the
-					// original can never be lost between two operations.
-					.append(target.shadowField(), source);
+					.append(target.textField(), converted.text());
 			if (target.refsField() != null) set.append(target.refsField(), converted.issueKeys());
 			return new UpdateOneModel<>(Filters.eq("_id", row.get("_id")),
 					new Document("$set", set));

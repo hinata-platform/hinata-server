@@ -89,17 +89,6 @@ public class IssueComment {
 	/** The Lexical document — the source of truth for a text comment. */
 	private String textDoc;
 
-	/**
-	 * The original markdown, copied here once by
-	 * {@link com.ahmadre.hinata.migration.MarkdownToLexicalBackfill} before it
-	 * overwrote {@link #text} with the derived plain text. A one-release backup of
-	 * a one-way migration; nothing reads it and no write path maintains it.
-	 * {@link com.fasterxml.jackson.annotation.JsonIgnore} keeps it off the wire —
-	 * this entity is serialized to clients directly.
-	 */
-	@com.fasterxml.jackson.annotation.JsonIgnore
-	private String textMd;
-
 	/** Present only for {@link Type#VOICE}. */
 	private Voice voice;
 

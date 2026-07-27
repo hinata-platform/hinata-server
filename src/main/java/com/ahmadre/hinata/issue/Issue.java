@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.issue;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AccessLevel;
@@ -105,21 +104,6 @@ public class Issue {
 
 	/** The Lexical document — the source of truth for the description. */
 	private String descriptionDoc;
-
-	/**
-	 * The original markdown, copied here once by
-	 * {@link com.ahmadre.hinata.migration.MarkdownToLexicalBackfill} before it
-	 * overwrote {@link #description} with the derived plain text.
-	 *
-	 * <p>The migration is a one-way, lossy projection with no undo: if the
-	 * converter ever drops a token, the only copy that held it is the one being
-	 * overwritten. This shadow keeps that copy for one release so the whole class
-	 * of bug stays recoverable. Nothing reads it and no write path maintains it —
-	 * it is a backup, and {@link com.fasterxml.jackson.annotation.JsonIgnore} keeps
-	 * it off the wire because {@code Issue} is serialized to clients directly.
-	 */
-	@JsonIgnore
-	private String descriptionMd;
 
 	@Builder.Default
 	private Type type = Type.TASK;

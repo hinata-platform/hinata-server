@@ -173,30 +173,6 @@ class MarkdownToLexicalBackfillTest {
 	}
 
 	/**
-	 * The conversion is a one-way, lossy projection over the only copy of the
-	 * content. Keeping the pre-migration markdown next to it is what makes a
-	 * converter defect a re-run rather than permanent data loss — the failure this
-	 * whole migration must not have.
-	 */
-	@Test
-	void keepsTheOriginalMarkdownInAShadowFieldSoTheRunIsRecoverable() {
-		String issueMd = "Wir brauchen List<String>, siehe **hier**.";
-		String articleMd = "# Titel\n\nSiehe {{issue:HIN-5}}.";
-		String commentMd = "sieht `gut` aus";
-		legacy("issues", "i1", "description", issueMd);
-		legacy("articles", "a1", "content", articleMd);
-		legacy("issue_comments", "c1", "text", commentMd);
-
-		backfill.run(null);
-
-		assertThat(read("issues", "i1").getString("descriptionMd")).isEqualTo(issueMd);
-		assertThat(read("articles", "a1").getString("contentMd")).isEqualTo(articleMd);
-		assertThat(read("issue_comments", "c1").getString("textMd")).isEqualTo(commentMd);
-		// And the field it protects really was overwritten with the projection.
-		assertThat(read("issues", "i1").getString("description")).doesNotContain("**");
-	}
-
-	/**
 	 * A migration whose write fails must not take the application down with it.
 	 * {@code flush} is the only I/O in the runner, and an {@code ApplicationRunner}
 	 * that throws makes Spring close the context — the server does not start, and
