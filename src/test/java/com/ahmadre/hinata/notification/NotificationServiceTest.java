@@ -124,6 +124,59 @@ class NotificationServiceTest {
 		assertThat(saved.getValue().getBody()).contains("Login bug");
 	}
 
+	// --- description mentions -------------------------------------------------
+
+	/**
+	 * The whole point of {@code notifyNewMentions} is the word "new": dragging an
+	 * issue to another column, renaming it or changing its priority must not ping
+	 * everyone its description happens to name. This is where a caller passing a
+	 * {@code before} that is always null turns an issue with five mentions into
+	 * five notifications, five pushes and five e-mails on every unrelated edit.
+	 */
+	@Test
+	void anUnrelatedEditDoesNotRenotifyExistingMentions() {
+		User editor = User.builder().id("u9").displayName("Sam").active(true).build();
+		String description = richText.fromMarkdown(
+				"Betrifft {{user:u1}}, {{user:u2}} und {{user:u3}}.").doc();
+
+		// The description did not change; only some other field did.
+		service.notifyNewMentions(issue(), editor, description, description);
+
+		verify(notifications, never()).save(any());
+	}
+
+	@Test
+	void onlyTheMentionAddedByThisEditIsNotified() {
+		User editor = User.builder().id("u9").displayName("Sam").active(true).build();
+		when(users.findById("u2")).thenReturn(
+				Optional.of(User.builder().id("u2").displayName("Nora").active(true).build()));
+		String before = richText.fromMarkdown("Betrifft {{user:u1}}.").doc();
+		String after = richText.fromMarkdown("Betrifft {{user:u1}} und {{user:u2}}.").doc();
+
+		service.notifyNewMentions(issue(), editor, before, after);
+
+		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
+		verify(notifications).save(saved.capture());
+		assertThat(saved.getAllValues()).singleElement().satisfies(n -> {
+			assertThat(n.getType()).isEqualTo(Notification.Type.MENTION);
+			assertThat(n.getUserId()).isEqualTo("u2");
+		});
+	}
+
+	@Test
+	void aFirstDescriptionNotifiesEveryoneItMentions() {
+		User editor = User.builder().id("u9").displayName("Sam").active(true).build();
+		when(users.findById("u1")).thenReturn(
+				Optional.of(User.builder().id("u1").displayName("Rebar").active(true).build()));
+		String after = richText.fromMarkdown("Bitte {{user:u1}} ansehen.").doc();
+
+		service.notifyNewMentions(issue(), editor, null, after);
+
+		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
+		verify(notifications).save(saved.capture());
+		assertThat(saved.getValue().getUserId()).isEqualTo("u1");
+	}
+
 	// --- teaser ---------------------------------------------------------------
 
 	@Test

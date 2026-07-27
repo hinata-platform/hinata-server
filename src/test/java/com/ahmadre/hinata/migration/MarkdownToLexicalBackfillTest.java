@@ -1,8 +1,10 @@
 package com.ahmadre.hinata.migration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.ahmadre.hinata.richtext.RichTextService;
+import com.mongodb.client.model.IndexOptions;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,9 +52,17 @@ class MarkdownToLexicalBackfillTest {
 
 	@BeforeEach
 	void clean() {
-		for (String collection : List.of("issues", "articles", "issue_comments")) {
+		// `migrations` holds the completion marker. Clearing it is what puts each
+		// test back in the position of a server that has not run this yet — the
+		// context boot already ran the migration once against an empty database.
+		for (String collection : List.of("issues", "articles", "issue_comments", "migrations")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
+	}
+
+	private Document marker() {
+		return mongo.getCollection("migrations").find(new Document("_id", "markdown-to-lexical"))
+				.first();
 	}
 
 	/** A row as it looked before this change: markdown in the text field, no document. */
@@ -160,6 +170,98 @@ class MarkdownToLexicalBackfillTest {
 				.countDocuments(new Document("textDoc", new Document("$exists", true)));
 		assertThat(converted).isEqualTo(450);
 		assertThat(read("issue_comments", "c449").getString("text")).isEqualTo("Kommentar 449");
+	}
+
+	/**
+	 * The conversion is a one-way, lossy projection over the only copy of the
+	 * content. Keeping the pre-migration markdown next to it is what makes a
+	 * converter defect a re-run rather than permanent data loss — the failure this
+	 * whole migration must not have.
+	 */
+	@Test
+	void keepsTheOriginalMarkdownInAShadowFieldSoTheRunIsRecoverable() {
+		String issueMd = "Wir brauchen List<String>, siehe **hier**.";
+		String articleMd = "# Titel\n\nSiehe {{issue:HIN-5}}.";
+		String commentMd = "sieht `gut` aus";
+		legacy("issues", "i1", "description", issueMd);
+		legacy("articles", "a1", "content", articleMd);
+		legacy("issue_comments", "c1", "text", commentMd);
+
+		backfill.run(null);
+
+		assertThat(read("issues", "i1").getString("descriptionMd")).isEqualTo(issueMd);
+		assertThat(read("articles", "a1").getString("contentMd")).isEqualTo(articleMd);
+		assertThat(read("issue_comments", "c1").getString("textMd")).isEqualTo(commentMd);
+		// And the field it protects really was overwritten with the projection.
+		assertThat(read("issues", "i1").getString("description")).doesNotContain("**");
+	}
+
+	/**
+	 * A migration whose write fails must not take the application down with it.
+	 * {@code flush} is the only I/O in the runner, and an {@code ApplicationRunner}
+	 * that throws makes Spring close the context — the server does not start, and
+	 * does not start on the next boot either when the cause is a row.
+	 */
+	@Test
+	void aBatchThatCannotBeWrittenDoesNotAbortTheRunOrTheApplication() {
+		legacy("issue_comments", "c1", "text", "identisch");
+		legacy("issue_comments", "c2", "text", "identisch");
+		// Both rows convert to byte-identical documents, so a unique index on the
+		// document field makes the second write of the batch fail for real.
+		mongo.getCollection("issue_comments").createIndex(new Document("textDoc", 1),
+				new IndexOptions().unique(true).name("test_unique_text_doc")
+						.partialFilterExpression(
+								new Document("textDoc", new Document("$exists", true))));
+		try {
+			assertThatCode(() -> backfill.run(null)).doesNotThrowAnyException();
+
+			// The batch is ordered, so the first row landed and the second did not.
+			assertThat(read("issue_comments", "c1").getString("textDoc")).isNotNull();
+			assertThat(read("issue_comments", "c2").get("textDoc")).isNull();
+			// And the run is not marked complete, so the next boot retries it.
+			assertThat(marker()).isNull();
+		}
+		finally {
+			mongo.getCollection("issue_comments").dropIndex("test_unique_text_doc");
+		}
+	}
+
+	// --- completion marker ----------------------------------------------------
+
+	/**
+	 * The filter has no supporting index, so without a marker every boot pays a
+	 * full scan of three collections before the server is ready — forever, on an
+	 * installation where the answer has been "nothing to do" for a year.
+	 */
+	@Test
+	void aCompletedRunIsRecordedAndNotRescanned() {
+		legacy("issues", "i1", "description", "erste");
+
+		backfill.run(null);
+
+		assertThat(marker()).isNotNull();
+		assertThat(marker().get("completedAt")).isNotNull();
+
+		// A row that appears after completion is not scanned for: the marker is the
+		// statement that this migration is done, not a cache of the last cursor.
+		legacy("issues", "i2", "description", "zweite");
+		backfill.run(null);
+		assertThat(read("issues", "i2").get("descriptionDoc")).isNull();
+	}
+
+	@Test
+	void runsAgainWhenTheMarkerIsAbsent() {
+		legacy("issues", "i1", "description", "erste");
+		backfill.run(null);
+		assertThat(read("issues", "i1").getString("descriptionDoc")).isNotNull();
+
+		// Operator drops the marker to force a re-run; a row without a document is
+		// picked up again.
+		mongo.getCollection("migrations").deleteMany(new Document());
+		legacy("issues", "i2", "description", "zweite");
+		backfill.run(null);
+
+		assertThat(read("issues", "i2").getString("descriptionDoc")).isNotNull();
 	}
 
 	@Test

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.migration;
 
+import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.mongodb.client.MongoCollection;
@@ -17,6 +18,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,24 +32,27 @@ import java.util.List;
  * document yet, converts it with the same {@link RichTextService} that MCP and
  * e-mail ingest go through, and writes both fields together.
  *
- * <p>Three properties make this safe to leave in place forever:
+ * <p>Four properties make this safe to leave in place forever:
  *
  * <ul>
  *   <li><b>Idempotent.</b> The filter only matches rows whose document field is
  *       missing or null, so a second run is a no-op and an interrupted run
- *       resumes exactly where it stopped.</li>
- *   <li><b>Non-destructive.</b> The markdown is not deleted — it is replaced by
- *       its own plain-text projection, which is what every plain-text consumer
- *       (search, teasers, exports) wanted from it in the first place. Nothing
- *       reads markdown syntax out of that field.</li>
+ *       resumes exactly where it stopped. A completion marker in
+ *       {@code migrations} turns a finished migration into one indexed lookup
+ *       instead of a full scan of three collections on every boot.</li>
+ *   <li><b>Recoverable.</b> The original markdown is copied to a shadow field
+ *       ({@code descriptionMd} / {@code contentMd} / {@code textMd}) in the same
+ *       {@code $set} that overwrites it. The conversion is a one-way, lossy
+ *       projection: without that copy, a converter defect is unrecoverable
+ *       data loss, with it, it is a re-run.</li>
+ *   <li><b>Non-fatal.</b> Neither a row that cannot be converted nor a batch that
+ *       cannot be written stops the run — and neither stops the server from
+ *       starting, which is what an unguarded {@code ApplicationRunner} would do
+ *       for every boot from then on.</li>
  *   <li><b>Bounded memory.</b> Rows stream in batches rather than loading a
  *       collection into the heap, because an install with a large knowledge base
  *       is exactly the one that cannot afford otherwise.</li>
  * </ul>
- *
- * <p>A row that fails to convert is logged and skipped rather than aborting the
- * run: one unparseable body must not stop the other ten thousand, and skipping
- * leaves it in exactly the state a re-run can retry.
  */
 @Slf4j
 @Component
@@ -58,37 +63,103 @@ import java.util.List;
 public class MarkdownToLexicalBackfill implements ApplicationRunner {
 
 	/**
-	 * One field pair to migrate: the legacy markdown field and its new document.
-	 * {@code refsField} is set for content that also carries derived issue
-	 * backlinks — without it an upgraded knowledge base would answer "no articles
-	 * reference this issue" until every article happened to be edited again.
+	 * One field pair to migrate: the legacy markdown field, its new document, and
+	 * the shadow field that keeps the pre-migration markdown. {@code refsField} is
+	 * set for content that also carries derived issue backlinks — without it an
+	 * upgraded knowledge base would answer "no articles reference this issue" until
+	 * every article happened to be edited again.
 	 */
-	private record Target(String collection, String textField, String docField, String refsField) {
+	private record Target(String collection, String textField, String docField, String shadowField,
+			String refsField) {
 	}
 
 	private static final List<Target> TARGETS = List.of(
-			new Target("issues", "description", "descriptionDoc", null),
-			new Target("articles", "content", "contentDoc", "referencedIssueKeys"),
-			new Target("issue_comments", "text", "textDoc", null));
+			new Target("issues", "description", "descriptionDoc", "descriptionMd", null),
+			new Target("articles", "content", "contentDoc", "contentMd", "referencedIssueKeys"),
+			new Target("issue_comments", "text", "textDoc", "textMd", null));
 
 	/** Rows per bulk write. Large enough to be fast, small enough to stay bounded. */
 	private static final int BATCH = 200;
+
+	/**
+	 * Largest converted document handed to Mongo. A converted body is capped by
+	 * {@link RichTextService} already; this states the ceiling locally so an
+	 * oversized row is reported as "too large" rather than as a BSON write error —
+	 * Mongo's own limit is 16 MB and an ordered bulk write drops the rest of the
+	 * batch when one member of it is refused.
+	 */
+	private static final int MAX_DOC_CHARS = LexicalJson.MAX_JSON_CHARS;
+
+	/** Where completion markers live, and the id of this migration's marker. */
+	static final String MIGRATIONS = "migrations";
+	static final String MARKER_ID = "markdown-to-lexical";
 
 	private final MongoTemplate mongo;
 	private final RichTextService richText;
 
 	@Override
 	public void run(ApplicationArguments args) {
+		if (alreadyDone()) return;
+		boolean complete = true;
+		long converted = 0;
 		for (Target target : TARGETS) {
-			long migrated = migrate(target);
-			if (migrated > 0) {
+			Result result = migrate(target);
+			converted += result.migrated();
+			complete &= result.complete();
+			if (result.migrated() > 0) {
 				log.info("MarkdownToLexicalBackfill: converted {} {} document(s) in {}",
-						migrated, target.textField(), target.collection());
+						result.migrated(), target.textField(), target.collection());
 			}
+		}
+		if (complete) {
+			markDone(converted);
+		}
+		else {
+			log.warn("MarkdownToLexicalBackfill: at least one batch failed to write; leaving the "
+					+ "migration unmarked so the next boot retries it");
 		}
 	}
 
-	private long migrate(Target target) {
+	/**
+	 * Whether a previous boot already completed the migration. This is the point of
+	 * the marker: the filter below has no supporting index, so without it every
+	 * boot pays a full scan of three collections before the server is ready, for
+	 * the rest of the installation's life.
+	 */
+	private boolean alreadyDone() {
+		try {
+			return mongo.getCollection(MIGRATIONS)
+					.find(new Document("_id", MARKER_ID)).limit(1).first() != null;
+		}
+		catch (RuntimeException ex) {
+			// A marker that cannot be read is not a reason to refuse to start; the
+			// migration is idempotent, so the worst case is running it again.
+			log.warn("MarkdownToLexicalBackfill: could not read the completion marker", ex);
+			return false;
+		}
+	}
+
+	private void markDone(long converted) {
+		try {
+			mongo.getCollection(MIGRATIONS).insertOne(new Document("_id", MARKER_ID)
+					.append("completedAt", Instant.now())
+					.append("converted", converted));
+		}
+		catch (RuntimeException ex) {
+			log.warn("MarkdownToLexicalBackfill: could not write the completion marker; the next "
+					+ "boot will scan again", ex);
+		}
+	}
+
+	/** How one collection's pass went: how many rows moved, and whether all writes landed. */
+	private record Result(long migrated, boolean complete) {
+	}
+
+	/** A pending write and the row id it belongs to, so a failed batch can name its rows. */
+	private record Pending(Object id, WriteModel<Document> write) {
+	}
+
+	private Result migrate(Target target) {
 		MongoCollection<Document> collection = mongo.getCollection(target.collection());
 		// Has readable markdown, has no Lexical document yet.
 		Bson filter = Filters.and(
@@ -100,7 +171,8 @@ public class MarkdownToLexicalBackfill implements ApplicationRunner {
 						Filters.eq(target.docField(), null)));
 
 		long migrated = 0;
-		List<WriteModel<Document>> batch = new ArrayList<>(BATCH);
+		boolean complete = true;
+		List<Pending> batch = new ArrayList<>(BATCH);
 		try (MongoCursor<Document> cursor = collection
 				.find(filter)
 				.projection(new Document("_id", 1).append(target.textField(), 1))
@@ -109,14 +181,18 @@ public class MarkdownToLexicalBackfill implements ApplicationRunner {
 			while (cursor.hasNext()) {
 				Document row = cursor.next();
 				UpdateOneModel<Document> write = convert(row, target);
-				if (write != null) batch.add(write);
+				if (write != null) batch.add(new Pending(row.get("_id"), write));
 				if (batch.size() >= BATCH) {
-					migrated += flush(collection, batch);
+					Flushed flushed = flush(collection, batch, target);
+					migrated += flushed.written();
+					complete &= flushed.ok();
 				}
 			}
 		}
-		migrated += flush(collection, batch);
-		return migrated;
+		Flushed flushed = flush(collection, batch, target);
+		migrated += flushed.written();
+		complete &= flushed.ok();
+		return new Result(migrated, complete);
 	}
 
 	/** Converts one row, or {@code null} when it cannot be converted. */
@@ -124,10 +200,21 @@ public class MarkdownToLexicalBackfill implements ApplicationRunner {
 		Object markdown = row.get(target.textField());
 		if (!(markdown instanceof String source) || source.isBlank()) return null;
 		try {
-			RichText converted = richText.fromMarkdown(source);
+			// Stored markdown predates the input bound live callers are held to, so
+			// it is converted under the read bound instead of being skipped forever.
+			RichText converted = richText.fromStoredMarkdown(source);
 			if (converted.doc() == null) return null;
+			if (converted.doc().length() > MAX_DOC_CHARS) {
+				log.warn("MarkdownToLexicalBackfill: skipped {} {} (converted document is {} chars, "
+						+ "over the {} ceiling)", target.collection(), row.get("_id"),
+						converted.doc().length(), MAX_DOC_CHARS);
+				return null;
+			}
 			Document set = new Document(target.docField(), converted.doc())
-					.append(target.textField(), converted.text());
+					.append(target.textField(), converted.text())
+					// Written in the same $set as the overwrite it protects, so the
+					// original can never be lost between two operations.
+					.append(target.shadowField(), source);
 			if (target.refsField() != null) set.append(target.refsField(), converted.issueKeys());
 			return new UpdateOneModel<>(Filters.eq("_id", row.get("_id")),
 					new Document("$set", set));
@@ -141,10 +228,31 @@ public class MarkdownToLexicalBackfill implements ApplicationRunner {
 		}
 	}
 
-	private long flush(MongoCollection<Document> collection, List<WriteModel<Document>> batch) {
-		if (batch.isEmpty()) return 0;
-		long written = collection.bulkWrite(batch).getModifiedCount();
-		batch.clear();
-		return written;
+	/** How one bulk write went. */
+	private record Flushed(long written, boolean ok) {
+	}
+
+	/**
+	 * Writes one batch. A write failure — a stepdown during a rolling restart, a
+	 * lost socket, one refused document — is logged with the ids it covered and the
+	 * run continues. Letting it out of {@link #run} would make Spring close the
+	 * context: the server would not start, and would not start on the next boot
+	 * either if the cause is a row rather than the weather.
+	 */
+	private Flushed flush(MongoCollection<Document> collection, List<Pending> batch, Target target) {
+		if (batch.isEmpty()) return new Flushed(0, true);
+		try {
+			List<WriteModel<Document>> writes = batch.stream().map(Pending::write).toList();
+			return new Flushed(collection.bulkWrite(writes).getModifiedCount(), true);
+		}
+		catch (RuntimeException ex) {
+			log.error("MarkdownToLexicalBackfill: batch of {} row(s) in {} failed to write; "
+					+ "leaving them for the next boot. ids={}",
+					batch.size(), target.collection(), batch.stream().map(Pending::id).toList(), ex);
+			return new Flushed(0, false);
+		}
+		finally {
+			batch.clear();
+		}
 	}
 }

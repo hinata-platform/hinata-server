@@ -222,9 +222,13 @@ public class IssueController {
 
 	@PatchMapping("/{id}")
 	public Issue update(@PathVariable String id, @RequestBody @Valid UpdateIssueRequest request) {
-		RichText description = richText.fromRequest(request.descriptionDoc(), request.description());
 		return issueService.update(id, issue -> {
 			if (request.title() != null) issue.setTitle(request.title());
+			// Resolved against the stored issue: a client old enough to send only the
+			// legacy field is sending back the derived plain text it was given, and
+			// converting that would flatten the document it came from.
+			RichText description = richText.fromRequest(request.descriptionDoc(), request.description(),
+					issue.getDescriptionDoc(), issue.getDescription());
 			if (description != null) {
 				issue.setDescription(description.text());
 				issue.setDescriptionDoc(description.doc());
@@ -347,15 +351,33 @@ public class IssueController {
 	@PatchMapping("/{id}/comments/{commentId}")
 	public IssueComment editComment(@PathVariable String id, @PathVariable String commentId,
 			@RequestBody @Valid CommentRequest request) {
-		return issueService.editComment(id, commentId, commentContent(request), currentUser.require());
+		// The resolver runs against the comment as it is stored, so an old client
+		// echoing back the derived plain text is recognized as "no change" instead
+		// of flattening the document it was rendered from.
+		return issueService.editComment(id, commentId,
+				stored -> commentContent(request, stored.getTextDoc(), stored.getText()),
+				currentUser.require());
 	}
 
 	/** The comment's content in either form, rejecting one that carries none. */
 	private RichText commentContent(CommentRequest request) {
-		RichText content = richText.fromRequest(request.textDoc(), request.text());
-		if (content == null || content.isBlank()) {
+		return commentContent(request, null, null);
+	}
+
+	/**
+	 * As above, resolved against the stored comment: {@code null} means the request
+	 * carried a legacy field that is identical to the stored derived text, i.e. an
+	 * edit that changes nothing and must leave the document alone. A request that
+	 * carries no content at all is still rejected.
+	 */
+	private RichText commentContent(CommentRequest request, String storedDoc, String storedText) {
+		if (request.textDoc() == null && request.text() == null) {
 			throw ApiException.badRequest("error.comment.empty");
 		}
+		RichText content = richText.fromRequest(request.textDoc(), request.text(),
+				storedDoc, storedText);
+		if (content == null) return null;
+		if (content.isBlank()) throw ApiException.badRequest("error.comment.empty");
 		return content;
 	}
 

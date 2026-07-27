@@ -58,7 +58,18 @@ public final class LexicalJson {
 	private static final Set<String> INLINE_TYPES = Set.of(
 			"link", "autolink", "mark", "mention", "hashtag", "smartlink");
 
-	/** Serialized canonical empty document: a root holding one empty paragraph. */
+	/**
+	 * Serialized canonical empty document: a root holding one empty paragraph.
+	 * This is what {@link MarkdownToLexical#convert} emits for blank input and the
+	 * shape the editor writes for an emptied field.
+	 *
+	 * <p>It is deliberately never <em>persisted</em>: {@link RichTextService} maps
+	 * a document with no readable content to {@link RichText#EMPTY}, whose
+	 * {@code doc} is {@code null}, because an entity with no description stores no
+	 * description rather than a document that renders as nothing. So this constant
+	 * is the canonical shape for comparison and for a client that needs a starting
+	 * point, not a stored value.
+	 */
 	public static final String EMPTY_DOC = """
 			{"root":{"children":[{"children":[],"direction":null,"format":"","indent":0,\
 			"type":"paragraph","version":1,"textFormat":0,"textStyle":""}],"direction":null,\
@@ -83,9 +94,18 @@ public final class LexicalJson {
 	// --- reading -------------------------------------------------------------
 
 	/**
-	 * Parses and structurally validates a Lexical document.
+	 * Parses and structurally validates a Lexical document, including the
+	 * structural bounds every walk below relies on.
+	 *
+	 * <p>Enforcing {@link #MAX_DEPTH} and {@link #MAX_NODES} <em>here</em> rather
+	 * than only inside the walks is the whole point: a walk that runs past a bound
+	 * can only stop reading, and a caller that then asks "is it empty?" would be
+	 * told yes. A document the reader cannot read must be a 400, never a silent
+	 * empty save.
 	 *
 	 * @throws ApiException 400 when the input is not a readable Lexical document
+	 *         ({@code error.richtext.invalid}) or exceeds the structural bounds
+	 *         ({@code error.richtext.tooLarge})
 	 */
 	public static JsonNode parse(ObjectMapper mapper, String json) {
 		if (json == null || json.isBlank()) throw invalid();
@@ -101,19 +121,49 @@ public final class LexicalJson {
 		if (root == null || !root.isObject()) throw invalid();
 		if (!"root".equals(root.path("type").asText(""))) throw invalid();
 		if (!root.path("children").isArray()) throw invalid();
+		assertWithinBounds(root);
 		return document;
+	}
+
+	/**
+	 * Rejects a document that is deeper than {@link #MAX_DEPTH} or holds more than
+	 * {@link #MAX_NODES} nodes. Iterative over the same explicit worklist as every
+	 * other walk here, so validating a hostile document cannot exhaust the stack.
+	 */
+	private static void assertWithinBounds(JsonNode root) {
+		Deque<Frame> work = new ArrayDeque<>();
+		work.push(new Frame(root, 0));
+		int nodes = 0;
+		while (!work.isEmpty()) {
+			Frame frame = work.pop();
+			JsonNode node = frame.node();
+			if (node == null || !node.isObject()) continue;
+			if (frame.depth() > MAX_DEPTH) throw tooLarge();
+			if (++nodes > MAX_NODES) throw tooLarge();
+			JsonNode children = node.get("children");
+			if (children == null || !children.isArray()) continue;
+			for (int i = children.size() - 1; i >= 0; i--) {
+				work.push(new Frame(children.get(i), frame.depth() + 1));
+			}
+		}
 	}
 
 	/**
 	 * Whether the document holds no readable content — no text and no node that
 	 * renders something on its own (an image, a horizontal rule, an embed).
+	 *
+	 * <p>Running out of node budget answers {@code false}: a walk that could not
+	 * finish has not proved the document empty, and the caller turns "empty" into
+	 * "store nothing". {@link #parse} rejects such a document outright, so this is
+	 * the second line of defence for documents that reach here another way.
 	 */
 	public static boolean isBlank(JsonNode document) {
 		if (!plainText(document).isBlank()) return false;
 		Deque<JsonNode> work = new ArrayDeque<>();
 		work.push(document.path("root"));
 		int nodes = 0;
-		while (!work.isEmpty() && ++nodes <= MAX_NODES) {
+		while (!work.isEmpty()) {
+			if (++nodes > MAX_NODES) return false;
 			JsonNode node = work.pop();
 			JsonNode children = node.get("children");
 			if (children != null && children.isArray()) {
@@ -158,7 +208,12 @@ public final class LexicalJson {
 			}
 			JsonNode node = frame.node();
 			if (node == null || !node.isObject()) continue;
-			if (++nodes > MAX_NODES || frame.depth() > MAX_DEPTH) break;
+			// Past a bound this skips the offending *subtree* and keeps walking. It
+			// must never end the walk: one deep branch near the front of a document
+			// would otherwise suppress the text of every sibling after it, and a
+			// caller reading "no text" concludes the document is empty.
+			if (frame.depth() > MAX_DEPTH) continue;
+			if (++nodes > MAX_NODES) continue;
 
 			String type = node.path("type").asText("");
 			String own = override.textFor(type, node);
@@ -221,7 +276,10 @@ public final class LexicalJson {
 			Frame frame = work.pop();
 			JsonNode node = frame.node();
 			if (node == null || !node.isObject()) continue;
-			if (++nodes > MAX_NODES || frame.depth() > MAX_DEPTH) break;
+			// Skip the subtree, not the rest of the document — see plainText. A deep
+			// branch must not make the backlinks of everything after it disappear.
+			if (frame.depth() > MAX_DEPTH) continue;
+			if (++nodes > MAX_NODES) continue;
 			if ("smartlink".equals(node.path("type").asText(""))
 					&& kind.equals(node.path("kind").asText(""))) {
 				String id = node.path("targetId").asText("").trim();

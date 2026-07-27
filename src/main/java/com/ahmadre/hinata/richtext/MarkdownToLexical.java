@@ -74,7 +74,11 @@ import java.util.regex.Pattern;
  *       line break instead would visibly reflow every document that exists.</li>
  *   <li>Nothing is ever dropped. A construct this converter does not model falls
  *       back to its literal source text rather than vanishing — losing content on
- *       a format migration is the one outcome that cannot be undone.</li>
+ *       a format migration is the one outcome that cannot be undone. That covers
+ *       raw HTML in both forms: a block keeps its source
+ *       ({@code block()}'s {@code HtmlBlock} branch) and an inline tag keeps its
+ *       source ({@code inline()}'s {@code HtmlInline} branch), because
+ *       {@code List<String>} in an issue description is content, not markup.</li>
  * </ul>
  */
 public final class MarkdownToLexical {
@@ -96,7 +100,14 @@ public final class MarkdownToLexical {
 
 	private static final Pattern CALLOUT_OPEN = Pattern.compile("^:::(info|warn|note|tip)\\s*$");
 	private static final Pattern CALLOUT_CLOSE = Pattern.compile("^:::\\s*$");
-	private static final Pattern SMART_LINK = Pattern.compile("\\{\\{(issue|doc|user):([^}]+)}}");
+	/**
+	 * A smart-link token. The id is bounded rather than {@code [^}]+}: an
+	 * unterminated {@code {{issue:} run makes an unbounded id class rescan to
+	 * end-of-input from every start position, which is quadratic in the input.
+	 * Real ids are issue keys and 24-char ObjectIds, so the bound never bites.
+	 */
+	private static final Pattern SMART_LINK =
+			Pattern.compile("\\{\\{(issue|doc|user):([^}]{1,100})}}");
 
 	private static final Parser PARSER = buildParser();
 
@@ -117,8 +128,16 @@ public final class MarkdownToLexical {
 
 	/**
 	 * Converts markdown to a Lexical document. Blank input yields the canonical
-	 * empty document rather than {@code null}, so callers never have to special-case
-	 * "the agent sent an empty description".
+	 * empty document ({@link LexicalJson#EMPTY_DOC}) rather than {@code null}, so
+	 * this method never returns null and callers never have to special-case "the
+	 * agent sent an empty description".
+	 *
+	 * <p>Note that the storage layer above this one does make that distinction:
+	 * {@link RichTextService} maps a document with no readable content to
+	 * {@link RichText#EMPTY}, whose {@code doc} is {@code null}, because an entity
+	 * with no description stores no description. So the canonical empty document is
+	 * the shape of "empty" for a converter and a comparison, not a value that is
+	 * ever persisted.
 	 */
 	public ObjectNode convert(String markdown) {
 		ArrayNode blocks = mapper.createArrayNode();
@@ -149,17 +168,28 @@ public final class MarkdownToLexical {
 	 * Splits the source on {@code :::kind} … {@code :::} fences. An unterminated
 	 * opener is not a callout — it stays ordinary text, which is what the app's
 	 * renderer did and avoids swallowing the rest of a document over a typo.
+	 *
+	 * <p>The closing fences are located in one backwards pass rather than by
+	 * rescanning to end-of-input per opener. Rescanning is quadratic, and an input
+	 * of nothing but {@code :::info} lines is the worst case: 100 000 chars —
+	 * inside the accepted request size — burned two seconds of a request thread.
 	 */
 	private static List<Segment> split(String markdown) {
 		List<Segment> segments = new ArrayList<>();
 		String[] lines = markdown.split("\n", -1);
+		// nextClose[i] = index of the first closing fence at or after line i, or
+		// lines.length when there is none. One pass, one Matcher per line.
+		int[] nextClose = new int[lines.length + 1];
+		nextClose[lines.length] = lines.length;
+		for (int i = lines.length - 1; i >= 0; i--) {
+			nextClose[i] = CALLOUT_CLOSE.matcher(lines[i]).matches() ? i : nextClose[i + 1];
+		}
 		StringBuilder plain = new StringBuilder();
 		int i = 0;
 		while (i < lines.length) {
 			Matcher open = CALLOUT_OPEN.matcher(lines[i]);
 			if (open.matches()) {
-				int end = i + 1;
-				while (end < lines.length && !CALLOUT_CLOSE.matcher(lines[end]).matches()) end++;
+				int end = nextClose[i + 1];
 				if (end < lines.length) {
 					flush(segments, plain);
 					StringBuilder body = new StringBuilder();
@@ -250,6 +280,12 @@ public final class MarkdownToLexical {
 	 * conformance corpus encodes nesting.
 	 */
 	private ObjectNode list(ListBlock list, int itemIndent, int depth) {
+		// list() → nestedItem() → list() is the one recursion in this converter that
+		// used to run unguarded: ~250 markdown nesting levels (well inside the
+		// accepted request size) emit ~500 JSON levels and blow past Jackson's
+		// write nesting limit, which surfaces as a 500. Fall back to the literal
+		// source exactly as block() does.
+		if (depth > MAX_BLOCK_DEPTH) return paragraph(literal(list), 0);
 		boolean ordered = list instanceof OrderedList;
 		boolean check = hasTaskItem(list);
 
@@ -398,9 +434,13 @@ public final class MarkdownToLexical {
 			case Image image -> out.node(image(image));
 			case Link link -> out.node(link(link, format, depth));
 			case AutoLink autoLink -> out.node(autoLink(autoLink, format));
-			case HtmlInline ignored -> {
-				// An inline tag has no Lexical counterpart and is not content itself;
-				// its text arrives separately as a sibling Text node.
+			case HtmlInline html -> {
+				// CommonMark classifies *any* `<tag …>` inside a paragraph as inline
+				// HTML — including `List<String>`, `Future<void>` and `<br>`, which a
+				// developer typed as content. Dropping it would silently delete those
+				// tokens from bug reports, so the source is kept as text exactly as
+				// the HtmlBlock branch does.
+				out.text(html.getChars().toString(), format);
 			}
 			default -> {
 				if (node.getFirstChild() != null) inlines(node, out, format, depth + 1);

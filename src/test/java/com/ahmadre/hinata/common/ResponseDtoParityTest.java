@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleController;
+import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.notification.Notification;
 import com.ahmadre.hinata.notification.NotificationController;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -68,5 +70,39 @@ class ResponseDtoParityTest {
 		// The derived backlink index is how the server answers ?referencesIssue.
 		// It is storage, not contract — clients ask the endpoint, not the field.
 		assertThat(dtoJson.has("referencedIssueKeys")).isFalse();
+	}
+
+	/**
+	 * The migration keeps a copy of the pre-migration markdown so a converter
+	 * defect stays recoverable. That copy is a backup, not content: it is not part
+	 * of any HTTP contract and must not reach a client — including through the two
+	 * entities that are serialized to clients directly, where the response is the
+	 * entity rather than a DTO that could simply omit the field.
+	 */
+	@Test
+	void theMigrationShadowFieldsStayOffTheWire() {
+		Article article = Article.builder().id("a1").title("Runbook")
+				.content("See HIN-1").contentDoc("{\"root\":{}}")
+				.contentMd("See {{issue:HIN-1}} and **this**")
+				.build();
+		Issue issue = Issue.builder().id("i1").title("Login bug")
+				.description("Betrifft Rebar").descriptionDoc("{\"root\":{}}")
+				.descriptionMd("Betrifft {{user:u1}} und **das**")
+				.build();
+		IssueComment comment = IssueComment.builder().id("c1").issueId("i1").authorId("u1")
+				.text("sieht gut aus").textDoc("{\"root\":{}}")
+				.textMd("sieht `gut` aus")
+				.build();
+
+		assertThat(mapper.valueToTree(ArticleController.ArticleResponse.from(article))
+				.has("contentMd")).isFalse();
+		// These two have no DTO — the entity itself is the response body.
+		assertThat(mapper.<JsonNode>valueToTree(issue).has("descriptionMd")).isFalse();
+		assertThat(mapper.<JsonNode>valueToTree(comment).has("textMd")).isFalse();
+
+		// …and they really are populated, so the assertions above are not vacuous.
+		assertThat(article.getContentMd()).isNotNull();
+		assertThat(issue.getDescriptionMd()).isNotNull();
+		assertThat(comment.getTextMd()).isNotNull();
 	}
 }

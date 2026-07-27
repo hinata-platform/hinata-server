@@ -8,6 +8,7 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.richtext.LexicalToMarkdown;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.mcp.annotation.McpResource;
@@ -46,8 +47,12 @@ public class HinataResources {
 		if (issue.getSprintId() != null) md.append("- Sprint: ").append(issue.getSprintId()).append("\n");
 		if (issue.getDueDate() != null) md.append("- Due: ").append(issue.getDueDate()).append("\n");
 		md.append("\n");
-		if (issue.getDescription() != null && !issue.getDescription().isBlank()) {
-			md.append(issue.getDescription()).append("\n");
+		// The body is rendered back to markdown from the stored document — the
+		// resource declares text/markdown, and the derived plain-text field is not
+		// markdown, it is the projection of it.
+		String body = LexicalToMarkdown.fromStored(issue.getDescriptionDoc(), issue.getDescription());
+		if (body != null && !body.isBlank()) {
+			md.append(body).append("\n");
 		}
 		return md.toString();
 	}
@@ -84,8 +89,9 @@ public class HinataResources {
 		Article article = knowledge.requireVisible(id, user);
 		StringBuilder md = new StringBuilder();
 		md.append("# ").append(nz(article.getTitle())).append("\n\n");
-		if (article.getContent() != null) {
-			md.append(article.getContent()).append("\n");
+		String body = LexicalToMarkdown.fromStored(article.getContentDoc(), article.getContent());
+		if (body != null && !body.isEmpty()) {
+			md.append(body).append("\n");
 		}
 		return md.toString();
 	}

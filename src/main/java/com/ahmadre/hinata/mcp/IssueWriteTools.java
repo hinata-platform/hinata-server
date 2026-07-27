@@ -3,6 +3,7 @@ package com.ahmadre.hinata.mcp;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueService;
@@ -85,7 +86,9 @@ public class IssueWriteTools {
 	@McpTool(name = "update_issue", title = "Update issue",
 			annotations = @McpTool.McpAnnotations(idempotentHint = true, openWorldHint = false),
 			description = "Update fields on an existing issue. Only the fields you pass are changed; "
-					+ "leaving a field unset means \"no change\". To clear a start date, due date or story "
+					+ "leaving a field unset means \"no change\". Passing description REPLACES the whole "
+					+ "body, so send the full markdown — read the issue first and edit what you read "
+					+ "rather than sending a fragment. To clear a start date, due date or story "
 					+ "points, set the matching clear* flag to true (passing null never clears a value). "
 					+ "Returns the updated issue.")
 	public McpViews.IssueView update_issue(
@@ -158,7 +161,7 @@ public class IssueWriteTools {
 			@McpToolParam(required = true, description = "Comment text (markdown)") String text) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
-		IssueComment saved = issueService.addComment(idOrReadableId, richText.fromMarkdown(text), me);
+		IssueComment saved = issueService.addComment(idOrReadableId, commentContent(text), me);
 		audit.event(AuditAction.MCP_COMMENT_ADDED).actor(me)
 				.meta("issue", saved.getIssueId()).log();
 		return McpViews.CommentView.of(saved);
@@ -174,10 +177,25 @@ public class IssueWriteTools {
 			@McpToolParam(required = true, description = "Replacement comment text (markdown)") String text) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
-		IssueComment saved = issueService.editComment(idOrReadableId, commentId, richText.fromMarkdown(text), me);
+		IssueComment saved = issueService.editComment(idOrReadableId, commentId,
+				commentContent(text), me);
 		audit.event(AuditAction.MCP_COMMENT_EDITED).actor(me)
 				.meta("issue", saved.getIssueId()).meta("comment", saved.getId()).log();
 		return McpViews.CommentView.of(saved);
+	}
+
+	/**
+	 * A comment's content, rejecting one that carries none. The HTTP path refuses an
+	 * empty comment; without this the MCP path would store a comment with no text at
+	 * all — and {@code edit_comment} would blank an existing one, which is a delete
+	 * wearing an edit's name.
+	 */
+	private RichText commentContent(String markdown) {
+		RichText content = richText.fromMarkdown(markdown);
+		if (content.isBlank()) {
+			throw ApiException.badRequest("error.comment.empty");
+		}
+		return content;
 	}
 
 	@McpTool(name = "delete_comment", title = "Delete comment",

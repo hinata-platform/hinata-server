@@ -295,6 +295,108 @@ class MarkdownToLexicalTest {
 		assertThat(out).contains("Inhalt");
 	}
 
+	/**
+	 * CommonMark calls any {@code <tag …>} in a paragraph inline HTML, which in an
+	 * issue tracker used by a software team is overwhelmingly <em>content</em>:
+	 * generic types, Flutter/JSX widget names, an XML snippet pasted into a bug
+	 * report. Dropping it deleted those tokens from the document and from the text
+	 * the search index carries, and the migration then overwrote the only copy that
+	 * still had them.
+	 */
+	@Test
+	void inlineHtmlIsKeptAsTextRatherThanDeleted() {
+		assertThat(textOf("Wir brauchen List<String> statt List<Object>."))
+				.isEqualTo("Wir brauchen List<String> statt List<Object>.");
+		assertThat(textOf("Array<int> und Future<void>")).isEqualTo("Array<int> und Future<void>");
+		assertThat(textOf("Das <Widget> rendert nicht.")).isEqualTo("Das <Widget> rendert nicht.");
+		assertThat(textOf("Der <br> zwischen den Zeilen.")).isEqualTo("Der <br> zwischen den Zeilen.");
+		assertThat(textOf("XML: <note>Hallo</note> im Body.")).isEqualTo("XML: <note>Hallo</note> im Body.");
+	}
+
+	@Test
+	void inlineHtmlInsideFormattingKeepsTheFormatting() {
+		JsonNode children = block("**List<String>**").path("children");
+
+		assertThat(children).hasSize(1);
+		assertThat(children.path(0).path("text").asText()).isEqualTo("List<String>");
+		assertThat(children.path(0).path("format").asInt()).isEqualTo(1);
+	}
+
+	/** Plain text of the whole converted document — what the search index gets. */
+	private String textOf(String markdown) {
+		return LexicalJson.plainText(converter.convert(markdown));
+	}
+
+	// --- bounds ---------------------------------------------------------------
+
+	/**
+	 * The callout pre-pass used to rescan to end-of-input for every unterminated
+	 * opener. At the largest accepted article body that was two seconds of CPU per
+	 * request; a handful in parallel saturates the request pool. The assertion is
+	 * deliberately loose — it is there to catch a return to quadratic, not to
+	 * measure the machine.
+	 */
+	@Test
+	void anInputOfNothingButCalloutOpenersConvertsInLinearTime() {
+		String hostile = ":::info\n".repeat(100_000 / ":::info\n".length());
+		assertThat(hostile.length()).isGreaterThan(99_000);
+
+		long start = System.nanoTime();
+		converter.convert(hostile);
+		long millis = (System.nanoTime() - start) / 1_000_000;
+
+		assertThat(millis)
+				.as("quadratic callout pre-pass: %d ms for a size-valid input", millis)
+				.isLessThan(2_000);
+	}
+
+	/**
+	 * Same shape of defect in the smart-link scan: an unterminated {@code {{issue:}
+	 * run made the id class rescan to end-of-input from every start position. Sized
+	 * for the migration, which converts stored bodies far larger than a live caller
+	 * may send.
+	 */
+	@Test
+	void anInputOfNothingButSmartLinkOpenersConvertsInLinearTime() {
+		String hostile = "{{issue:".repeat(200_000 / "{{issue:".length());
+
+		long start = System.nanoTime();
+		converter.convert(hostile);
+		long millis = (System.nanoTime() - start) / 1_000_000;
+
+		assertThat(millis).as("quadratic smart-link scan: %d ms", millis).isLessThan(2_000);
+	}
+
+	/**
+	 * Each markdown nesting level emits two JSON levels, so a few hundred levels —
+	 * well inside an accepted article body — used to blow past Jackson's write
+	 * nesting limit and surface as a 500. It has to degrade to literal text the way
+	 * every other unmodelled construct does.
+	 */
+	@Test
+	void absurdlyNestedListsFallBackToLiteralTextInsteadOfCrashing() throws Exception {
+		StringBuilder markdown = new StringBuilder();
+		for (int level = 0; level < 300; level++) {
+			markdown.append("  ".repeat(level)).append("- Ebene ").append(level).append('\n');
+		}
+
+		JsonNode document = converter.convert(markdown.toString());
+
+		// Serializing is where the old code died; that it round-trips is the point.
+		assertThat(mapper.readTree(mapper.writeValueAsString(document))).isEqualTo(document);
+		assertThat(LexicalJson.plainText(document)).contains("Ebene 0");
+	}
+
+	@Test
+	void listNestingWithinTheBoundIsStillStructured() {
+		JsonNode list = block("- eins\n  - zwei\n    - drei");
+
+		assertThat(list.path("type").asText()).isEqualTo("list");
+		JsonNode items = list.path("children");
+		assertThat(items.path(items.size() - 1).path("children").path(0).path("type").asText())
+				.isEqualTo("list");
+	}
+
 	@Test
 	void strikethroughCarriesItsBit() {
 		JsonNode children = block("~~weg~~").path("children");

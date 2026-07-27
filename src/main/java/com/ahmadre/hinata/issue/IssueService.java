@@ -675,6 +675,12 @@ public class IssueService {
 		return Issue.builder()
 				.title(issue.getTitle())
 				.description(issue.getDescription())
+				// The notification layer diffs the *document* to find newly added
+				// mentions, and the change history diffs it to notice a formatting-only
+				// edit. Leaving it out of the snapshot makes "before" always null, so
+				// every mention reads as new and every unrelated edit re-notifies
+				// everyone the description names.
+				.descriptionDoc(issue.getDescriptionDoc())
 				.type(issue.getType())
 				.priority(issue.getPriority())
 				.state(issue.getState())
@@ -697,7 +703,10 @@ public class IssueService {
 		add(log, after.getId(), actor, IssueActivity.Field.TITLE,
 				before.getTitle(), after.getTitle());
 		// Description bodies can be large; record that it changed, not the text.
-		if (!Objects.equals(before.getDescription(), after.getDescription())) {
+		// Diffed on the document rather than its plain-text projection: bolding a
+		// word or adding a table changes the description without changing a single
+		// character of the derived text.
+		if (!Objects.equals(before.getDescriptionDoc(), after.getDescriptionDoc())) {
 			log.add(entry(after.getId(), actor, IssueActivity.Field.DESCRIPTION, null, null));
 		}
 		add(log, after.getId(), actor, IssueActivity.Field.TYPE,
@@ -1162,6 +1171,18 @@ public class IssueService {
 
 	/** Edit a comment's text. Only the comment's own author may edit it. */
 	public IssueComment editComment(String issueId, String commentId, RichText content, User editor) {
+		return editComment(issueId, commentId, stored -> content, editor);
+	}
+
+	/**
+	 * As above, but the replacement content is resolved <em>against the comment as
+	 * it is stored</em>. That is what lets a caller decide "this legacy,
+	 * markdown-only edit carries no actual change" and return {@code null}, which
+	 * leaves the stored document untouched instead of replacing it with a
+	 * flattening of itself.
+	 */
+	public IssueComment editComment(String issueId, String commentId,
+			java.util.function.Function<IssueComment, RichText> resolver, User editor) {
 		IssueComment comment = requireComment(issueId, commentId, editor);
 		if (!comment.getAuthorId().equals(editor.getId())) {
 			throw ApiException.forbidden("error.comment.editOwnOnly");
@@ -1169,6 +1190,8 @@ public class IssueService {
 		if (comment.resolvedType() == IssueComment.Type.VOICE) {
 			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
+		RichText content = resolver.apply(comment);
+		if (content == null) return withReplyCount(comment);
 		// Atomic field $set (not a whole-document save) so a concurrent
 		// reaction/pin on the same comment isn't clobbered by a stale edit copy.
 		// The document and its derived text are set together — they must never be

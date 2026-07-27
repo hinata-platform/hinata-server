@@ -37,7 +37,8 @@ class RichTextCorpusTest {
 
 	private static final Map<String, String> CORPUS = corpus();
 
-	private static Map<String, String> corpus() {
+	/** The corpus itself, shared with the round-trip test in this package. */
+	static Map<String, String> corpus() {
 		Map<String, String> cases = new LinkedHashMap<>();
 		cases.put("paragraph", "Ein schlichter Absatz.");
 		cases.put("headings", "# Eins\n\n## Zwei\n\n### Drei\n\n###### Sechs");
@@ -55,6 +56,13 @@ class RichTextCorpusTest {
 		cases.put("image", "![Ringelblumen](https://example.org/f.jpg)");
 		cases.put("callout", ":::info\nJede Produktivänderung wird geprüft.\n:::");
 		cases.put("callout-with-list", ":::warn\n- eins\n- zwei\n:::");
+		// CommonMark reads every `<tag …>` in a paragraph as inline HTML, and in an
+		// issue tracker that is content: generic types, widget names, an XML snippet
+		// in a bug report. The app has to render it as the literal text it is.
+		cases.put("inline-html",
+				"Wir brauchen List<String> statt List<Object>.\n\n"
+						+ "Das <Widget> rendert nicht, und der <br> fehlt.\n\n"
+						+ "XML: <note>Hallo</note> im Body.");
 		cases.put("smart-links",
 				"Siehe {{issue:HIN-5}}, {{doc:507f1f77bcf86cd799439011}} und "
 						+ "{{user:507f191e810c19729de860ea}}.");

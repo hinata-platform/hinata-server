@@ -20,8 +20,9 @@ import java.util.regex.Pattern;
  * straight into the (Markdown) description; this re-runs their body through
  * {@link HtmlToMarkdown}.
  *
- * <p>Only ingested issues whose description body still contains HTML markup are
- * touched. Once converted, a document no longer matches, so running on every boot is
+ * <p>Only ingested issues whose description body still contains HTML markup <em>and
+ * that have not yet been converted to a Lexical document</em> are touched. Once
+ * converted, a row no longer matches on either count, so running on every boot is
  * safe. The "Created from e-mail by ..." header is preserved verbatim — only the part
  * after the {@code ---} separator (the actual mail body) is converted.
  *
@@ -60,9 +61,22 @@ public class IngestedHtmlDescriptionBackfill implements ApplicationRunner {
 		MongoCollection<Document> col = mongo.getCollection("issues");
 		// Ingested issues carry ingestConnectionId (and reporterEmail); both are set
 		// only at ingest time, so this never rewrites a user-authored description.
-		Document filter = new Document("$or", List.of(
-				new Document("ingestConnectionId", new Document("$ne", null)),
-				new Document("reporterEmail", new Document("$ne", null))));
+		//
+		// Restricted to rows that have no Lexical document yet, which is what makes
+		// it safe to leave in place. `description` is no longer the stored content —
+		// it is the plain text derived from `descriptionDoc`. Writing markdown into
+		// it on a row that already has a document breaks that invariant, and the
+		// Lexical backfill will never repair the divergence because its own filter
+		// only matches rows whose document is missing. This runner is ordered ahead
+		// of that backfill precisely so it cleans HTML *before* conversion; once a
+		// row is converted there is nothing here left to do.
+		Document filter = new Document("$and", List.of(
+				new Document("$or", List.of(
+						new Document("ingestConnectionId", new Document("$ne", null)),
+						new Document("reporterEmail", new Document("$ne", null)))),
+				new Document("$or", List.of(
+						new Document("descriptionDoc", new Document("$exists", false)),
+						new Document("descriptionDoc", null)))));
 		int migrated = 0;
 		for (Document doc : col.find(filter)) {
 			Object raw = doc.get("description");

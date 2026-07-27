@@ -7,6 +7,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.richtext.LexicalToMarkdown;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.team.TeamService;
 import com.ahmadre.hinata.user.User;
@@ -40,8 +41,11 @@ public class KnowledgeReadTools {
 
 	@McpTool(name = "read_kb_article", title = "Read a knowledge base article",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
-			description = "Fetch a knowledge base article's markdown content by id. Fails with "
-					+ "not-found if the caller has no access to the article's project or team.")
+			description = "Fetch a knowledge base article's full markdown content by id, in the "
+					+ "same dialect update_kb_article accepts (:::info callouts, {{issue:KEY}} / "
+					+ "{{doc:ID}} / {{user:ID}} links), so it can be edited and written back "
+					+ "without losing formatting. Fails with not-found if the caller has no "
+					+ "access to the article's project or team.")
 	public ArticleView readKbArticle(
 			@McpToolParam(description = "Article id") String id) {
 		scopeGuard.require(Scopes.KB_READ);
@@ -127,7 +131,14 @@ public class KnowledgeReadTools {
 		return true; // global / organisation-wide
 	}
 
-	/** Lean article projection — the markdown content plus placement metadata. */
+	/**
+	 * Lean article projection — the markdown content plus placement metadata.
+	 *
+	 * <p>{@code content} is rendered back to markdown from the stored document, not
+	 * read out of the derived plain-text field. {@code update_kb_article} takes
+	 * markdown, so the read has to return markdown or the standard read → edit →
+	 * write loop replaces a formatted article with a flattening of itself.
+	 */
 	public record ArticleView(
 			String id, String title, String content, String space, String icon,
 			String projectId, String teamId, String parentId, List<String> tags,
@@ -135,7 +146,9 @@ public class KnowledgeReadTools {
 
 		static ArticleView of(Article a) {
 			return new ArticleView(
-					a.getId(), a.getTitle(), a.getContent(), a.getSpace(), a.getIcon(),
+					a.getId(), a.getTitle(),
+					LexicalToMarkdown.fromStored(a.getContentDoc(), a.getContent()),
+					a.getSpace(), a.getIcon(),
 					a.getProjectId(), a.getTeamId(), a.getParentId(), a.getTags(),
 					a.getAuthorId(), a.getCreatedAt(), a.getUpdatedAt());
 		}

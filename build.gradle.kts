@@ -202,8 +202,3 @@ System.getenv("BOOTRUN_DEBUG_PORT")?.takeIf { it.isNotBlank() }?.let { port ->
         jvmArgs("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:$port")
     }
 }
-
-// temporary: dump the test runtime classpath
-tasks.register("printTestCp") {
-    doLast { println(sourceSets["test"].runtimeClasspath.asPath) }
-}

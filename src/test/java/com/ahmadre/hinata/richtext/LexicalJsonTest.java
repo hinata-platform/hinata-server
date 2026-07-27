@@ -193,6 +193,88 @@ class LexicalJsonTest {
 		assertThat(LexicalJson.smartLinkTargets(document, "user")).isEmpty();
 	}
 
+	/**
+	 * The bound has to skip the offending <em>subtree</em>, not end the walk. A
+	 * single deep branch near the front of a document otherwise suppresses the
+	 * plain-text projection of every sibling after it — and a caller that reads "no
+	 * text" concludes the document is empty and stores nothing.
+	 */
+	@Test
+	void aSubtreePastTheDepthBoundDoesNotSuppressItsSiblings() throws Exception {
+		String deepBranch = nested(300);
+		String siblingParagraph = """
+				{"type":"paragraph","version":1,"children":[\
+				{"type":"text","version":1,"text":"GEHEIMER INHALT"}]}""";
+		// One over-deep subtree, then an ordinary paragraph of prose.
+		String json = deepBranch.replace("]}}", "," + siblingParagraph + "]}}");
+
+		JsonNode document = mapper.readTree(json);
+
+		assertThat(LexicalJson.plainText(document)).isEqualTo("GEHEIMER INHALT");
+	}
+
+	@Test
+	void aSubtreePastTheDepthBoundDoesNotSuppressLaterSmartLinks() throws Exception {
+		String deepBranch = nested(300);
+		String sibling = """
+				{"type":"paragraph","version":1,"children":[\
+				{"type":"smartlink","version":1,"kind":"user","targetId":"u1","label":null}]}""";
+		String json = deepBranch.replace("]}}", "," + sibling + "]}}");
+
+		assertThat(LexicalJson.smartLinkTargets(mapper.readTree(json), "user"))
+				.containsExactly("u1");
+	}
+
+	/**
+	 * The most important invariant in this file: a document the reader cannot read
+	 * is a 400, never something a writer stores as empty. {@code parse} enforces the
+	 * structural bounds itself so no caller can turn "past the bound" into "no
+	 * content".
+	 */
+	@Test
+	void parseRejectsADocumentPastTheDepthBoundInsteadOfLettingItReadAsEmpty() {
+		assertThatThrownBy(() -> LexicalJson.parse(mapper, nested(300)))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.richtext.tooLarge");
+	}
+
+	@Test
+	void parseRejectsADocumentPastTheNodeBound() {
+		StringBuilder children = new StringBuilder();
+		for (int i = 0; i <= LexicalJson.MAX_NODES; i++) {
+			if (i > 0) children.append(',');
+			children.append("{\"type\":\"paragraph\",\"version\":1,\"children\":[]}");
+		}
+		String json = "{\"root\":{\"type\":\"root\",\"version\":1,\"children\":[" + children + "]}}";
+
+		assertThatThrownBy(() -> LexicalJson.parse(mapper, json))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.richtext.tooLarge");
+	}
+
+	@Test
+	void parseAcceptsADocumentInsideTheBounds() {
+		assertThat(LexicalJson.parse(mapper, nested(60)).path("root").path("children")).hasSize(1);
+	}
+
+	/**
+	 * A walk that ran out of budget has not proved anything. Reporting "blank"
+	 * there is what turned an unreadable document into an empty save.
+	 */
+	@Test
+	void aDocumentTooBigToWalkIsNotReportedAsBlank() throws Exception {
+		StringBuilder children = new StringBuilder();
+		for (int i = 0; i <= LexicalJson.MAX_NODES; i++) {
+			if (i > 0) children.append(',');
+			// Childless *elements*: no text, so the text projection is empty, and an
+			// empty children array means the "is this a decorator?" branch is skipped.
+			children.append("{\"type\":\"listitem\",\"version\":1,\"children\":[]}");
+		}
+		String json = "{\"root\":{\"type\":\"root\",\"version\":1,\"children\":[" + children + "]}}";
+
+		assertThat(LexicalJson.isBlank(mapper.readTree(json))).isFalse();
+	}
+
 	@Test
 	void nestingWithinTheDepthBoundIsStillRead() throws Exception {
 		JsonNode document = mapper.readTree(nested(10));

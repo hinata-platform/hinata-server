@@ -56,6 +56,19 @@ public class Article {
 	private String contentDoc;
 
 	/**
+	 * The original markdown, copied here once by
+	 * {@link com.ahmadre.hinata.migration.MarkdownToLexicalBackfill} before it
+	 * overwrote {@link #content} with the derived plain text.
+	 *
+	 * <p>The migration is a one-way, lossy projection with no undo. This shadow
+	 * keeps the pre-migration copy for one release so that whole class of bug stays
+	 * recoverable. Storage only: {@code ArticleResponse} does not expose it, and
+	 * {@code ResponseDtoParityTest} pins that.
+	 */
+	@com.fasterxml.jackson.annotation.JsonIgnore
+	private String contentMd;
+
+	/**
 	 * Readable issue ids ({@code HIN-42}) this article links to, derived from
 	 * {@link #contentDoc} on every write. Backlinks used to be found by scanning
 	 * every article body for a {@code {{issue:KEY}}} token; a link is a node now,

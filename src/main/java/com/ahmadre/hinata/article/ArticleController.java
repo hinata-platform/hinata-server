@@ -36,8 +36,14 @@ public class ArticleController {
 
 	public record ArticleRequest(
 			@NotBlank @Size(max = 300) String title,
-			/** Markdown. Accepted and converted; {@code contentDoc} wins. */
-			@Size(max = 100000) String content,
+			/**
+			 * Markdown. Accepted and converted; {@code contentDoc} wins. Bounded by
+			 * {@link RichTextService#MAX_MARKDOWN_CHARS} rather than by what a body
+			 * can hold: markdown expands up to ~29× on conversion, and 100 000 chars
+			 * of dense formatting produced a document three times over the size the
+			 * read side accepts — content that loads and can never be saved again.
+			 */
+			@Size(max = RichTextService.MAX_MARKDOWN_CHARS) String content,
 			/** Lexical document — what the app sends. */
 			@Size(max = LexicalJson.MAX_JSON_CHARS) String contentDoc,
 			String projectId,
@@ -147,7 +153,11 @@ public class ArticleController {
 		// an article could be relocated into a space the caller can't access.
 		assertCanTarget(request.projectId(), request.teamId(), user);
 		article.setTitle(request.title());
-		RichText body = richText.fromRequest(request.contentDoc(), request.content());
+		// Resolved against what is stored: a client old enough to send only the
+		// legacy field is sending back the derived plain text it was given, and
+		// converting that would flatten the document it came from.
+		RichText body = richText.fromRequest(request.contentDoc(), request.content(),
+				article.getContentDoc(), article.getContent());
 		if (body != null) {
 			article.setContent(body.text());
 			article.setContentDoc(body.doc());
