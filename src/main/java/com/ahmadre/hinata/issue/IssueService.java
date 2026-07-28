@@ -8,6 +8,7 @@ import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
+import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.storage.StorageService;
@@ -154,7 +155,7 @@ public class IssueService {
 		// Notify every assignee (except the creator) that the issue is theirs.
 		notifications.notifyAssigned(saved, author, saved.getAssigneeIds());
 		// Ping anyone @-mentioned in the freshly written description.
-		notifications.notifyNewMentions(saved, author, null, saved.getDescription());
+		notifications.notifyNewMentions(saved, author, null, saved.getDescriptionDoc());
 		return saved;
 	}
 
@@ -169,9 +170,10 @@ public class IssueService {
 	 * pipeline: this is a mechanical re-derivation of existing content, not a user
 	 * edit, so it records no activity and fires no mention/assignment notifications.
 	 */
-	public Issue replaceIngestedDescription(String id, String description) {
+	public Issue replaceIngestedDescription(String id, RichText description) {
 		Issue issue = get(id);
-		issue.setDescription(description);
+		issue.setDescription(description.text());
+		issue.setDescriptionDoc(description.doc());
 		return issues.save(issue);
 	}
 
@@ -241,7 +243,8 @@ public class IssueService {
 		recordChanges(before, saved, editor);
 		// Ping anyone newly @-mentioned in the description (existing mentions on an
 		// unrelated edit are not re-notified).
-		notifications.notifyNewMentions(saved, editor, before.getDescription(), saved.getDescription());
+		notifications.notifyNewMentions(saved, editor, before.getDescriptionDoc(),
+				saved.getDescriptionDoc());
 		Set<String> newlyAssigned = new HashSet<>(
 				saved.getAssigneeIds() != null ? saved.getAssigneeIds() : List.of());
 		newlyAssigned.removeAll(previousAssignees);
@@ -672,6 +675,12 @@ public class IssueService {
 		return Issue.builder()
 				.title(issue.getTitle())
 				.description(issue.getDescription())
+				// The notification layer diffs the *document* to find newly added
+				// mentions, and the change history diffs it to notice a formatting-only
+				// edit. Leaving it out of the snapshot makes "before" always null, so
+				// every mention reads as new and every unrelated edit re-notifies
+				// everyone the description names.
+				.descriptionDoc(issue.getDescriptionDoc())
 				.type(issue.getType())
 				.priority(issue.getPriority())
 				.state(issue.getState())
@@ -694,7 +703,10 @@ public class IssueService {
 		add(log, after.getId(), actor, IssueActivity.Field.TITLE,
 				before.getTitle(), after.getTitle());
 		// Description bodies can be large; record that it changed, not the text.
-		if (!Objects.equals(before.getDescription(), after.getDescription())) {
+		// Diffed on the document rather than its plain-text projection: bolding a
+		// word or adding a table changes the description without changing a single
+		// character of the derived text.
+		if (!Objects.equals(before.getDescriptionDoc(), after.getDescriptionDoc())) {
 			log.add(entry(after.getId(), actor, IssueActivity.Field.DESCRIPTION, null, null));
 		}
 		add(log, after.getId(), actor, IssueActivity.Field.TYPE,
@@ -950,29 +962,35 @@ public class IssueService {
 		return mongo.find(query, Issue.class);
 	}
 
-	public IssueComment addComment(String issueId, String text, User author) {
-		return addComment(issueId, text, null, author);
+	public IssueComment addComment(String issueId, RichText content, User author) {
+		return addComment(issueId, content, null, author);
 	}
 
 	/**
 	 * Posts a text comment, optionally as a reply that quotes {@code replyToId}
 	 * (WhatsApp-style). A dangling/foreign reply target is silently ignored so the
 	 * comment is still posted.
+	 *
+	 * <p>Takes a {@link RichText} rather than a string so that every caller — the
+	 * app, MCP, a smart commit, an e-mail reply — has already gone through
+	 * {@link RichTextService} and the stored plain text is guaranteed to match the
+	 * stored document.
 	 */
-	public IssueComment addComment(String issueId, String text, String replyToId, User author) {
+	public IssueComment addComment(String issueId, RichText content, String replyToId, User author) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
 		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
-				.text(text);
+				.text(content.text())
+				.textDoc(content.doc());
 		applyReplyTo(builder, issue.getId(), replyToId);
 		IssueComment saved = comments.save(builder.build());
 		// Notifications are best-effort: a failure in the mail/push fan-out (e.g.
 		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
 		// the already-saved comment by bubbling a 500 back to the author.
 		try {
-			notifications.notifyComment(issue, author, text, saved);
+			notifications.notifyComment(issue, author, saved);
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("comment notification failed for issue {} (comment kept)",
@@ -1127,10 +1145,11 @@ public class IssueService {
 				.voice(voice);
 		applyReplyTo(builder, issue.getId(), replyToId);
 		IssueComment saved = comments.save(builder.build());
-		// Blank text → notifyComment falls back to a "commented on <title>" body.
-		// Best-effort (see addComment): never fail a saved voice comment on it.
+		// A voice comment has no document → notifyComment falls back to a
+		// "commented on <title>" body. Best-effort (see addComment): never fail a
+		// saved voice comment on it.
 		try {
-			notifications.notifyComment(issue, author, "", saved);
+			notifications.notifyComment(issue, author, saved);
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("voice-comment notification failed for issue {} (comment kept)",
@@ -1151,7 +1170,19 @@ public class IssueService {
 	}
 
 	/** Edit a comment's text. Only the comment's own author may edit it. */
-	public IssueComment editComment(String issueId, String commentId, String text, User editor) {
+	public IssueComment editComment(String issueId, String commentId, RichText content, User editor) {
+		return editComment(issueId, commentId, stored -> content, editor);
+	}
+
+	/**
+	 * As above, but the replacement content is resolved <em>against the comment as
+	 * it is stored</em>. That is what lets a caller decide "this legacy,
+	 * markdown-only edit carries no actual change" and return {@code null}, which
+	 * leaves the stored document untouched instead of replacing it with a
+	 * flattening of itself.
+	 */
+	public IssueComment editComment(String issueId, String commentId,
+			java.util.function.Function<IssueComment, RichText> resolver, User editor) {
 		IssueComment comment = requireComment(issueId, commentId, editor);
 		if (!comment.getAuthorId().equals(editor.getId())) {
 			throw ApiException.forbidden("error.comment.editOwnOnly");
@@ -1159,12 +1190,17 @@ public class IssueService {
 		if (comment.resolvedType() == IssueComment.Type.VOICE) {
 			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
-		// Atomic single-field $set (not a whole-document save) so a concurrent
+		RichText content = resolver.apply(comment);
+		if (content == null) return withReplyCount(comment);
+		// Atomic field $set (not a whole-document save) so a concurrent
 		// reaction/pin on the same comment isn't clobbered by a stale edit copy.
+		// The document and its derived text are set together — they must never be
+		// observable out of step.
 		Instant editedAt = Instant.now();
 		IssueComment saved = mongo.findAndModify(
 				Query.query(Criteria.where("_id").is(commentId).and("authorId").is(editor.getId())),
-				new Update().set("text", text).set("editedAt", editedAt),
+				new Update().set("text", content.text()).set("textDoc", content.doc())
+						.set("editedAt", editedAt),
 				org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
 				IssueComment.class);
 		if (saved == null) {

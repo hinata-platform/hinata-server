@@ -18,11 +18,9 @@ public interface ArticleRepository extends MongoRepository<Article, String> {
 	List<Article> findBySpace(String space);
 
 	/**
-	 * Articles whose body contains the given (pre-built, injection-safe) regex —
-	 * used server-side to resolve the issue⇄article backlink ({@code {{issue:KEY}}}
-	 * tokens) instead of shipping the whole corpus to the client and scanning it
-	 * there. The caller is responsible for building a safe literal token regex.
+	 * Articles that link to the given readable issue id — the issue⇄article
+	 * backlink. Answered from an index over references derived when the article
+	 * was written, rather than by regex-scanning every body for a token.
 	 */
-	@Query("{ 'content': { $regex: ?0 } }")
-	List<Article> findByContentRegex(String regex);
+	List<Article> findByReferencedIssueKeysContains(String issueKey);
 }

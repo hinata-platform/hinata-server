@@ -2,6 +2,8 @@ package com.ahmadre.hinata.demo;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.board.AgileBoard;
@@ -103,6 +105,7 @@ public class DemoSeeder {
 	private final WorkItemRepository workItems;
 	private final TeamRepository teams;
 	private final ArticleRepository articleRepo;
+	private final RichTextService richText;
 	private final SpaceRepository spaceRepo;
 	private final MongoTemplate mongo;
 	private final GitService gitService;
@@ -1010,6 +1013,10 @@ public class DemoSeeder {
 
 	private Article article(String projectId, String teamId, String space, String icon, String title,
 			String parentId, User author, List<String> tags, int sortOrder, String body) {
+		// The seeder authors the dialect (callouts, {{issue:…}} links) as markdown
+		// because it reads far better in Java than a node tree would; the same
+		// converter every other markdown source uses turns it into a document.
+		RichText seeded = richText.fromMarkdown(body);
 		return articleRepo.save(Article.builder()
 				.projectId(projectId)
 				.teamId(teamId)
@@ -1017,7 +1024,9 @@ public class DemoSeeder {
 				.space(space)
 				.icon(icon)
 				.title(title)
-				.content(body)
+				.content(seeded.text())
+				.contentDoc(seeded.doc())
+				.referencedIssueKeys(new ArrayList<>(seeded.issueKeys()))
 				.tags(new ArrayList<>(tags))
 				.authorId(author.getId())
 				.sortOrder(sortOrder)

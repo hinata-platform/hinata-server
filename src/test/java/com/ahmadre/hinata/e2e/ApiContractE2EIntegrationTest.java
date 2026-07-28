@@ -215,7 +215,14 @@ class ApiContractE2EIntegrationTest {
 		assertThat(articles.isArray()).isTrue();
 		assertThat(articles.size()).as("seeded backlink to HIN-1").isGreaterThan(0);
 		for (JsonNode article : articles) {
-			assertThat(article.path("content").asText()).contains("{{issue:HIN-1}}");
+			// The link is a node in the document now, so the backlink is resolved
+			// from a derived index rather than from a token in the body. What the
+			// body still carries is the readable key, and the document holds the
+			// link the reader clicks.
+			assertThat(article.path("content").asText()).contains("HIN-1");
+			assertThat(article.path("contentDoc").asText())
+					.as("the article ships the document the editor renders")
+					.contains("\"smartlink\"").contains("HIN-1");
 		}
 		// An unknown / malformed key is safely ignored (no match, not an error).
 		assertThat(getOk("/api/v1/articles?referencesIssue=ZZZ-999", token).size()).isEqualTo(0);

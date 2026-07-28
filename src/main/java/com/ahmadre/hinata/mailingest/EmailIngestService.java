@@ -6,6 +6,8 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.storage.AttachmentStore;
 import com.ahmadre.hinata.storage.StorageService;
 import jakarta.mail.Flags;
@@ -41,6 +43,7 @@ public class EmailIngestService {
 
 	private final IngestConnectionRepository connections;
 	private final IssueService issues;
+	private final RichTextService richText;
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final StorageService storage;
@@ -117,10 +120,13 @@ public class EmailIngestService {
 			log.info("Skipping already-ingested message {}", messageId);
 			return; // caller still sets SEEN
 		}
+		// An e-mail body arrives as markdown (HtmlToMarkdown); storage is Lexical.
+		RichText ingested = richText.fromMarkdown(buildDescription(from, message));
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(truncate(subject, 300))
-				.description(buildDescription(from, message))
+				.description(ingested.text())
+				.descriptionDoc(ingested.doc())
 				.type(Issue.Type.TASK)
 				.reporterEmail(from)
 				.inboundMessageId(messageId)
@@ -226,8 +232,11 @@ public class EmailIngestService {
 						|| !issue.getDescription().startsWith(DESCRIPTION_HEADER)) {
 					return Outcome.SKIPPED; // foreign project or a manually edited body
 				}
-				String rebuilt = buildDescription(senderOf(message), message);
-				if (rebuilt.equals(issue.getDescription())) {
+				RichText rebuilt = richText.fromMarkdown(buildDescription(senderOf(message), message));
+				// Compare the derived plain text, not the document: re-converting the
+				// same body must read as "already current" even if the converter's
+				// output shifts between releases.
+				if (rebuilt.text().equals(issue.getDescription())) {
 					return Outcome.SKIPPED; // already current
 				}
 				issues.replaceIngestedDescription(issue.getId(), rebuilt);

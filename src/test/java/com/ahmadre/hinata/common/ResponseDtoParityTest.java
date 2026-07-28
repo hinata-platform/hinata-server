@@ -9,14 +9,16 @@ import com.ahmadre.hinata.notification.NotificationController;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * The new response DTOs decouple the HTTP contract from the
- * {@code @Document} entities, but must serialize to <em>byte-identical</em> JSON
- * so no client {@code fromJson} change is required. These tests pin that
- * equivalence — if a DTO ever drifts from its entity's wire shape, they fail.
+ * The response DTOs decouple the HTTP contract from the {@code @Document}
+ * entities. Every field a DTO exposes must carry exactly its entity's value, so
+ * a client {@code fromJson} never has to change — but an entity is allowed to
+ * hold fields the contract does not expose, and one that does must keep them
+ * off the wire rather than leaking storage internals to clients.
  */
 class ResponseDtoParityTest {
 
@@ -44,7 +46,9 @@ class ResponseDtoParityTest {
 		Article entity = Article.builder()
 				.id("a1").projectId("p1").teamId(null).parentId("root")
 				.space("Engineering").icon("file-text").title("Runbook")
-				.content("See {{issue:HIN-1}}").tags(List.of("ops", "oncall"))
+				.content("See HIN-1").contentDoc("{\"root\":{}}")
+				.referencedIssueKeys(new ArrayList<>(List.of("HIN-1")))
+				.tags(List.of("ops", "oncall"))
 				.authorId("u1").sortOrder(3)
 				.createdAt(Instant.parse("2026-07-01T08:00:00Z"))
 				.updatedAt(Instant.parse("2026-07-19T09:00:00Z"))
@@ -53,8 +57,17 @@ class ResponseDtoParityTest {
 		JsonNode entityJson = mapper.valueToTree(entity);
 		JsonNode dtoJson = mapper.valueToTree(ArticleController.ArticleResponse.from(entity));
 
-		assertThat(dtoJson).isEqualTo(entityJson);
+		// Every exposed field carries its entity value, unchanged.
+		dtoJson.properties().forEach(field -> assertThat(field.getValue())
+				.as("field %s", field.getKey())
+				.isEqualTo(entityJson.get(field.getKey())));
 		assertThat(dtoJson.get("tags")).hasSize(2);
-		assertThat(dtoJson.get("content").asText()).contains("{{issue:HIN-1}}");
+		// The client renders the document and previews the derived plain text.
+		assertThat(dtoJson.get("contentDoc").asText()).isEqualTo("{\"root\":{}}");
+		assertThat(dtoJson.get("content").asText()).isEqualTo("See HIN-1");
+		// The derived backlink index is how the server answers ?referencesIssue.
+		// It is storage, not contract — clients ask the endpoint, not the field.
+		assertThat(dtoJson.has("referencedIssueKeys")).isFalse();
 	}
+
 }

@@ -2,6 +2,9 @@ package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.richtext.LexicalToMarkdown;
+import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
@@ -27,6 +30,7 @@ import java.util.List;
 public class KnowledgeWriteTools {
 
 	private final ArticleRepository articles;
+	private final RichTextService richText;
 	private final CurrentUser currentUser;
 	private final ScopeGuard scopeGuard;
 	private final AuditService audit;
@@ -34,13 +38,18 @@ public class KnowledgeWriteTools {
 	// article the caller could not even see.
 	private final KnowledgeReadTools knowledgeReadTools;
 
-	/** Lean projection of a knowledge-base article for MCP callers. */
+	/**
+	 * Lean projection of a knowledge-base article for MCP callers. {@code content}
+	 * is markdown rendered from the stored document, matching what
+	 * {@code read_kb_article} returns and what these tools accept.
+	 */
 	public record ArticleView(String id, String title, String content, String projectId,
 			String teamId, String parentId, String space, List<String> tags,
 			String authorId, Instant createdAt, Instant updatedAt) {
 
 		static ArticleView of(Article article) {
-			return new ArticleView(article.getId(), article.getTitle(), article.getContent(),
+			return new ArticleView(article.getId(), article.getTitle(),
+					LexicalToMarkdown.fromStored(article.getContentDoc(), article.getContent()),
 					article.getProjectId(), article.getTeamId(), article.getParentId(),
 					article.getSpace(), article.getTags(), article.getAuthorId(),
 					article.getCreatedAt(), article.getUpdatedAt());
@@ -62,9 +71,13 @@ public class KnowledgeWriteTools {
 			@McpToolParam(required = false, description = "Labels / tags") List<String> tags) {
 		scopeGuard.require(Scopes.KB_WRITE);
 		User me = currentUser.require();
+		// An agent writes markdown; storage is Lexical.
+		RichText body = richText.fromMarkdown(content);
 		Article saved = articles.save(Article.builder()
 				.title(title)
-				.content(content)
+				.content(body.text())
+				.contentDoc(body.doc())
+				.referencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()))
 				.projectId(projectId)
 				.teamId(teamId)
 				.parentId(parentId)
@@ -80,6 +93,8 @@ public class KnowledgeWriteTools {
 	@McpTool(name = "update_kb_article", title = "Update knowledge base article",
 			annotations = @McpTool.McpAnnotations(idempotentHint = true, openWorldHint = false),
 			description = "Update a knowledge base article. Only the fields you pass are changed. "
+					+ "Passing content REPLACES the whole body, so send the full markdown — read "
+					+ "the article first and edit what you read rather than sending a fragment. "
 					+ "The article's visibility scope (project / team) cannot be changed here — "
 					+ "use the app for that. Returns the updated article.")
 	public ArticleView update_kb_article(
@@ -93,7 +108,12 @@ public class KnowledgeWriteTools {
 		User me = currentUser.require();
 		Article article = knowledgeReadTools.requireVisible(id, me);
 		if (title != null && !title.isBlank()) article.setTitle(title);
-		if (content != null) article.setContent(content);
+		if (content != null) {
+			RichText body = richText.fromMarkdown(content);
+			article.setContent(body.text());
+			article.setContentDoc(body.doc());
+			article.setReferencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()));
+		}
 		if (parentId != null) article.setParentId(parentId.isBlank() ? null : parentId);
 		if (space != null) article.setSpace(space);
 		if (tags != null) article.setTags(tags);

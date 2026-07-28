@@ -91,6 +91,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-thymeleaf")
     // Inbound e-mail ingest: HTML mail body -> Markdown (brings jsoup transitively)
     implementation("com.vladsch.flexmark:flexmark-html2md-converter:$flexmarkVersion")
+    // Markdown -> Lexical JSON (RichTextService): tables and strikethrough already
+    // arrive with the converter above; task lists are their own extension.
+    implementation("com.vladsch.flexmark:flexmark-ext-gfm-tasklist:$flexmarkVersion")
 
     // PDF generation: GDPR (Art. 15) self-service data report
     implementation("com.github.librepdf:openpdf:$openpdfVersion")

@@ -1,6 +1,10 @@
 package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.richtext.LexicalJson;
+import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.RichTextService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -29,11 +33,15 @@ public class IssueController {
 	private final IssueMoveService issueMoveService;
 	private final CommentEvents commentEvents;
 	private final CurrentUser currentUser;
+	private final RichTextService richText;
 
 	public record CreateIssueRequest(
 			@NotBlank String projectId,
 			@NotBlank @Size(max = 300) String title,
+			/** Markdown. Accepted and converted; {@code descriptionDoc} wins. */
 			@Size(max = 30000) String description,
+			/** Lexical document — what the app sends. */
+			@Size(max = LexicalJson.MAX_JSON_CHARS) String descriptionDoc,
 			Issue.Type type,
 			Issue.Priority priority,
 			String state,
@@ -50,7 +58,10 @@ public class IssueController {
 
 	public record UpdateIssueRequest(
 			@Size(max = 300) String title,
+			/** Markdown. Accepted and converted; {@code descriptionDoc} wins. */
 			@Size(max = 30000) String description,
+			/** Lexical document — what the app sends. */
+			@Size(max = LexicalJson.MAX_JSON_CHARS) String descriptionDoc,
 			Issue.Type type,
 			Issue.Priority priority,
 			String state,
@@ -89,7 +100,16 @@ public class IssueController {
 			Map<String, String> stateMap, boolean includeEpicChildren, Boolean keepSprint) {
 	}
 
-	public record CommentRequest(@NotBlank @Size(max = 10000) String text, String replyToId) {
+	/**
+	 * A comment's content. {@code textDoc} is what the app sends; {@code text} is
+	 * markdown and is converted on the way in. Neither is individually required —
+	 * exactly one has to yield content, which the controller checks, because
+	 * {@code @NotBlank} on either would reject the other form.
+	 */
+	public record CommentRequest(
+			@Size(max = 10000) String text,
+			@Size(max = LexicalJson.MAX_JSON_CHARS) String textDoc,
+			String replyToId) {
 	}
 
 	public record ReactionRequest(@NotBlank @Size(max = 32) String emoji) {
@@ -178,10 +198,13 @@ public class IssueController {
 			assigneeIds = (request.assigneeId() != null && !request.assigneeId().isBlank())
 					? List.of(request.assigneeId()) : List.of();
 		}
+		RichText description = richText.fromRequest(request.descriptionDoc(), request.description());
+		if (description == null) description = RichText.EMPTY;
 		Issue issue = Issue.builder()
 				.projectId(request.projectId())
 				.title(request.title())
-				.description(request.description())
+				.description(description.text())
+				.descriptionDoc(description.doc())
 				.type(request.type() != null ? request.type() : Issue.Type.TASK)
 				.priority(request.priority() != null ? request.priority() : Issue.Priority.NORMAL)
 				.state(request.state())
@@ -201,7 +224,15 @@ public class IssueController {
 	public Issue update(@PathVariable String id, @RequestBody @Valid UpdateIssueRequest request) {
 		return issueService.update(id, issue -> {
 			if (request.title() != null) issue.setTitle(request.title());
-			if (request.description() != null) issue.setDescription(request.description());
+			// Resolved against the stored issue: a client old enough to send only the
+			// legacy field is sending back the derived plain text it was given, and
+			// converting that would flatten the document it came from.
+			RichText description = richText.fromRequest(request.descriptionDoc(), request.description(),
+					issue.getDescriptionDoc(), issue.getDescription());
+			if (description != null) {
+				issue.setDescription(description.text());
+				issue.setDescriptionDoc(description.doc());
+			}
 			if (request.type() != null) issue.setType(request.type());
 			if (request.priority() != null) issue.setPriority(request.priority());
 			if (request.state() != null) issue.setState(request.state());
@@ -313,13 +344,41 @@ public class IssueController {
 	@PostMapping("/{id}/comments")
 	@ResponseStatus(HttpStatus.CREATED)
 	public IssueComment comment(@PathVariable String id, @RequestBody @Valid CommentRequest request) {
-		return issueService.addComment(id, request.text(), request.replyToId(), currentUser.require());
+		return issueService.addComment(id, commentContent(request), request.replyToId(),
+				currentUser.require());
 	}
 
 	@PatchMapping("/{id}/comments/{commentId}")
 	public IssueComment editComment(@PathVariable String id, @PathVariable String commentId,
 			@RequestBody @Valid CommentRequest request) {
-		return issueService.editComment(id, commentId, request.text(), currentUser.require());
+		// The resolver runs against the comment as it is stored, so an old client
+		// echoing back the derived plain text is recognized as "no change" instead
+		// of flattening the document it was rendered from.
+		return issueService.editComment(id, commentId,
+				stored -> commentContent(request, stored.getTextDoc(), stored.getText()),
+				currentUser.require());
+	}
+
+	/** The comment's content in either form, rejecting one that carries none. */
+	private RichText commentContent(CommentRequest request) {
+		return commentContent(request, null, null);
+	}
+
+	/**
+	 * As above, resolved against the stored comment: {@code null} means the request
+	 * carried a legacy field that is identical to the stored derived text, i.e. an
+	 * edit that changes nothing and must leave the document alone. A request that
+	 * carries no content at all is still rejected.
+	 */
+	private RichText commentContent(CommentRequest request, String storedDoc, String storedText) {
+		if (request.textDoc() == null && request.text() == null) {
+			throw ApiException.badRequest("error.comment.empty");
+		}
+		RichText content = richText.fromRequest(request.textDoc(), request.text(),
+				storedDoc, storedText);
+		if (content == null) return null;
+		if (content.isBlank()) throw ApiException.badRequest("error.comment.empty");
+		return content;
 	}
 
 	@DeleteMapping("/{id}/comments/{commentId}")

@@ -89,9 +89,21 @@ public class Issue {
 	@TextIndexed(weight = 10)
 	private String title;
 
-	/** Markdown. */
+	/**
+	 * Plain text of {@link #descriptionDoc}, derived on every write by
+	 * {@link com.ahmadre.hinata.richtext.RichTextService} — never set directly.
+	 *
+	 * <p>It keeps the field name (and therefore this collection's text index)
+	 * that the markdown used to occupy, so full-text search, notification
+	 * teasers, exports and board cards keep reading one plain string. What they
+	 * read is now cleaner than the markdown was: no syntax characters and no
+	 * {@code {{user:<objectid>}}} tokens.
+	 */
 	@TextIndexed(weight = 2)
 	private String description;
+
+	/** The Lexical document — the source of truth for the description. */
+	private String descriptionDoc;
 
 	@Builder.Default
 	private Type type = Type.TASK;

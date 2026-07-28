@@ -1,6 +1,9 @@
 package com.ahmadre.hinata.article;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.richtext.LexicalJson;
+import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -26,13 +29,23 @@ import java.util.stream.Collectors;
 public class ArticleController {
 
 	private final ArticleRepository articles;
+	private final RichTextService richText;
 	private final CurrentUser currentUser;
 	private final ProjectService projectService;
 	private final TeamService teamService;
 
 	public record ArticleRequest(
 			@NotBlank @Size(max = 300) String title,
-			@Size(max = 100000) String content,
+			/**
+			 * Markdown. Accepted and converted; {@code contentDoc} wins. Bounded by
+			 * {@link RichTextService#MAX_MARKDOWN_CHARS} rather than by what a body
+			 * can hold: markdown expands up to ~29× on conversion, and 100 000 chars
+			 * of dense formatting produced a document three times over the size the
+			 * read side accepts — content that loads and can never be saved again.
+			 */
+			@Size(max = RichTextService.MAX_MARKDOWN_CHARS) String content,
+			/** Lexical document — what the app sends. */
+			@Size(max = LexicalJson.MAX_JSON_CHARS) String contentDoc,
 			String projectId,
 			String teamId,
 			String parentId,
@@ -49,13 +62,14 @@ public class ArticleController {
 	 * {@code Article.fromJson} is unchanged.
 	 */
 	public record ArticleResponse(String id, String projectId, String teamId, String parentId,
-			String space, String icon, String title, String content, List<String> tags,
-			String authorId, int sortOrder, java.time.Instant createdAt, java.time.Instant updatedAt) {
+			String space, String icon, String title, String content, String contentDoc,
+			List<String> tags, String authorId, int sortOrder, java.time.Instant createdAt,
+			java.time.Instant updatedAt) {
 
 		public static ArticleResponse from(Article a) {
 			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.getParentId(),
-					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getTags(),
-					a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt());
+					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getContentDoc(),
+					a.getTags(), a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt());
 		}
 
 		static List<ArticleResponse> from(List<Article> articles) {
@@ -72,14 +86,14 @@ public class ArticleController {
 			@RequestParam(defaultValue = "false") boolean all,
 			@RequestParam(required = false) String referencesIssue) {
 		User user = currentUser.require();
-		// Server-side issue⇄article backlink resolution: instead of the client
-		// draining the whole corpus and regex-scanning every body for
-		// {{issue:KEY}}, the server runs the (injection-safe, literal) token
-		// query and returns only the referencing articles the caller may see.
+		// Server-side issue⇄article backlink resolution: the references were
+		// derived when the article was written, so this is an index lookup and
+		// returns only the referencing articles the caller may see.
 		if (referencesIssue != null && referencesIssue.matches("[A-Za-z]+-\\d+")) {
-			String token = "\\{\\{issue:" + referencesIssue.toUpperCase() + "\\}\\}";
-			return ArticleResponse.from(filterVisible(articles.findByContentRegex(token), user)
-					.stream().limit(LIST_CAP).toList());
+			String key = referencesIssue.toUpperCase(java.util.Locale.ROOT);
+			return ArticleResponse.from(
+					filterVisible(articles.findByReferencedIssueKeysContains(key), user)
+							.stream().limit(LIST_CAP).toList());
 		}
 		final List<Article> base;
 		if (all) {
@@ -110,9 +124,13 @@ public class ArticleController {
 		// Write-side ACL: the caller must be able to see the target project/team,
 		// otherwise they could plant KB content into a space they can't access.
 		assertCanTarget(request.projectId(), request.teamId(), user);
+		RichText body = richText.fromRequest(request.contentDoc(), request.content());
+		if (body == null) body = RichText.EMPTY;
 		return ArticleResponse.from(articles.save(Article.builder()
 				.title(request.title())
-				.content(request.content())
+				.content(body.text())
+				.contentDoc(body.doc())
+				.referencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()))
 				.projectId(request.projectId())
 				.teamId(request.teamId())
 				.parentId(request.parentId())
@@ -135,7 +153,16 @@ public class ArticleController {
 		// an article could be relocated into a space the caller can't access.
 		assertCanTarget(request.projectId(), request.teamId(), user);
 		article.setTitle(request.title());
-		if (request.content() != null) article.setContent(request.content());
+		// Resolved against what is stored: a client old enough to send only the
+		// legacy field is sending back the derived plain text it was given, and
+		// converting that would flatten the document it came from.
+		RichText body = richText.fromRequest(request.contentDoc(), request.content(),
+				article.getContentDoc(), article.getContent());
+		if (body != null) {
+			article.setContent(body.text());
+			article.setContentDoc(body.doc());
+			article.setReferencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()));
+		}
 		article.setProjectId(request.projectId());
 		article.setTeamId(request.teamId());
 		article.setParentId(request.parentId());

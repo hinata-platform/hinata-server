@@ -2,6 +2,7 @@ package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
+import com.ahmadre.hinata.richtext.LexicalToMarkdown;
 import org.springframework.data.domain.Page;
 
 import java.time.Instant;
@@ -14,6 +15,12 @@ import java.util.function.Function;
  * internal / storage-only fields (S3 object keys, board ranks, denormalized
  * counters not useful to a client) so tool output can never leak them, and keeps
  * the payload small for the model's context.
+ *
+ * <p>Text bodies are rendered back to markdown from the stored document rather
+ * than taken from the derived plain-text field next to it. The write tools take
+ * markdown, so an agent's read → edit → write loop replaces what it read: handing
+ * it a flattening and calling it markdown made every agent edit destroy the
+ * article's headings, lists, tables and links.
  */
 public final class McpViews {
 
@@ -33,7 +40,8 @@ public final class McpViews {
 		public static IssueView of(Issue issue) {
 			return new IssueView(
 					issue.getId(), issue.getReadableId(), issue.getProjectId(),
-					issue.getTitle(), issue.getDescription(),
+					issue.getTitle(),
+					LexicalToMarkdown.fromStored(issue.getDescriptionDoc(), issue.getDescription()),
 					issue.getType() == null ? null : issue.getType().name(),
 					issue.getPriority() == null ? null : issue.getPriority().name(),
 					issue.getState(), issue.getAssigneeId(), issue.getAssigneeIds(),
@@ -51,7 +59,8 @@ public final class McpViews {
 
 		public static CommentView of(IssueComment comment) {
 			return new CommentView(comment.getId(), comment.getIssueId(), comment.getAuthorId(),
-					comment.getText(), comment.getCreatedAt(), comment.getUpdatedAt());
+					LexicalToMarkdown.fromStored(comment.getTextDoc(), comment.getText()),
+					comment.getCreatedAt(), comment.getUpdatedAt());
 		}
 	}
 
