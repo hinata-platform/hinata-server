@@ -10,6 +10,8 @@ import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.storage.AttachmentStore;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.user.User;
+import com.ahmadre.hinata.user.UserService;
 import jakarta.mail.Flags;
 import jakarta.mail.Folder;
 import jakarta.mail.Message;
@@ -48,6 +50,7 @@ public class EmailIngestService {
 	private final NotificationService notifications;
 	private final StorageService storage;
 	private final AttachmentStore attachments;
+	private final UserService users;
 
 	/** Per-connection epoch seconds of the last poll (the 15s tick is the beat). */
 	private final Map<String, Long> lastRun = new ConcurrentHashMap<>();
@@ -107,7 +110,11 @@ public class EmailIngestService {
 	 */
 	private static final String DESCRIPTION_HEADER = "Created from e-mail by ";
 
-	private void createIssueFrom(Message message, IngestConnection config) throws Exception {
+	/**
+	 * Turns one inbound message into a ticket. Package-private so the mail→issue
+	 * mapping (author resolution, dedupe, fan-out) can be tested without an IMAP server.
+	 */
+	void createIssueFrom(Message message, IngestConnection config) throws Exception {
 		String projectId = config.getProjectId();
 		String subject = message.getSubject() != null ? message.getSubject() : "(no subject)";
 		String from = senderOf(message);
@@ -122,21 +129,46 @@ public class EmailIngestService {
 		}
 		// An e-mail body arrives as markdown (HtmlToMarkdown); storage is Lexical.
 		RichText ingested = richText.fromMarkdown(buildDescription(from, message));
+		String reporterId = resolveReporterId(from);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(truncate(subject, 300))
 				.description(ingested.text())
 				.descriptionDoc(ingested.doc())
 				.type(Issue.Type.TASK)
+				.reporterId(reporterId)
 				.reporterEmail(from)
 				.inboundMessageId(messageId)
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
 				.build();
+		// Created with a null actor on purpose: the sender is the ticket's author, not
+		// an authenticated creator. Passing them as the actor would demand project
+		// membership (A01) and abort ingestion for every non-member sender; IssueService
+		// leaves a builder-set reporterId untouched when the actor is null.
 		Issue created = issues.create(issue, null);
-		log.info("Created {} from e-mail by {}", created.getReadableId(), from);
-		notifyMembers(created, projectId, from);
+		log.info("Created {} from e-mail by {}{}", created.getReadableId(), from,
+				reporterId != null ? " (author resolved to user " + reporterId + ")" : "");
+		notifyMembers(created, projectId, from, reporterId);
 		attachFiles(message, created.getId());
+	}
+
+	/**
+	 * The platform account behind an inbound sender address, so an e-mail author shows
+	 * up as the ticket's author and rides along on the issue's watcher fan-out (state
+	 * changes, comments, assignment) for their own request. {@code null} when the
+	 * address belongs to no usable account — the ticket then stays author-less, as
+	 * every ingested ticket did before.
+	 *
+	 * <p>Attribution only: a {@code From} header is unauthenticated and spoofable, and
+	 * being an issue's reporter grants no access anywhere (project membership alone
+	 * decides that, so a resolved non-member still cannot open the ticket).
+	 */
+	private String resolveReporterId(String from) {
+		if (from == null || from.isBlank() || UNKNOWN_SENDER.equalsIgnoreCase(from)) {
+			return null;
+		}
+		return users.findActiveByEmail(from).map(User::getId).orElse(null);
 	}
 
 	/** The description body written for an ingested message: an attribution header
@@ -145,10 +177,13 @@ public class EmailIngestService {
 		return DESCRIPTION_HEADER + "**" + from + "**\n\n---\n\n" + truncate(textOf(message), 20000);
 	}
 
+	/** Stand-in for a message with no usable {@code From} header. */
+	private static final String UNKNOWN_SENDER = "unknown";
+
 	private String senderOf(Message message) throws Exception {
 		return message.getFrom() != null && message.getFrom().length > 0
 				? ((InternetAddress) message.getFrom()[0]).getAddress()
-				: "unknown";
+				: UNKNOWN_SENDER;
 	}
 
 	private String messageIdOf(Message message) throws Exception {
@@ -262,13 +297,19 @@ public class EmailIngestService {
 	}
 
 	/**
-	 * Tells the project's members that an issue arrived by e-mail. Best-effort:
-	 * a lookup or delivery failure is logged and never aborts ticket creation.
+	 * Tells the project's members that an issue arrived by e-mail. The sender is left
+	 * out when they resolved to a member themselves — they wrote the mail, so a "new
+	 * issue via e-mail from you" notice is noise (they still get every later change via
+	 * the watcher fan-out). Best-effort: a lookup or delivery failure is logged and
+	 * never aborts ticket creation.
 	 */
-	private void notifyMembers(Issue created, String projectId, String from) {
+	private void notifyMembers(Issue created, String projectId, String from, String reporterId) {
 		try {
 			Project project = projects.get(projectId);
-			notifications.notifyIssueIngested(created, project.getMemberIds(), from);
+			java.util.List<String> recipients = new java.util.ArrayList<>(
+					project.getMemberIds() != null ? project.getMemberIds() : java.util.List.of());
+			recipients.remove(reporterId);
+			notifications.notifyIssueIngested(created, recipients, from);
 		}
 		catch (Exception ex) {
 			log.warn("Notifying members of ingested issue {} failed: {}",

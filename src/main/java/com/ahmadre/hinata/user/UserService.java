@@ -40,6 +40,25 @@ public class UserService {
 	}
 
 	/**
+	 * Resolves an e-mail address to the account that owns it, for attributing content
+	 * that arrives from outside an authenticated session (e-mail ingestion). Empty when
+	 * the address belongs to nobody or to an account that cannot act on the platform
+	 * (deactivated, still-pending invite, awaiting approval) — such an account would
+	 * never see the attribution or receive the notifications, so attributing to it
+	 * would only mislead.
+	 *
+	 * <p>An inbound {@code From} header is unauthenticated and trivially spoofable, so
+	 * callers must treat the result as attribution only and never derive permission
+	 * from it.
+	 */
+	public java.util.Optional<User> findActiveByEmail(String email) {
+		if (email == null || email.isBlank()) {
+			return java.util.Optional.empty();
+		}
+		return users.findByEmailIgnoreCase(email.trim()).filter(User::isActive);
+	}
+
+	/**
 	 * Permanently removes a user and scrubs the references that would otherwise
 	 * dangle: their in-app notifications are dropped, issues assigned to them are
 	 * unassigned, and they are removed from every watcher list. Historical author
