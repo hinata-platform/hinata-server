@@ -40,7 +40,10 @@ class ProjectServiceTest {
 		when(teams.findByMembersUserId(any())).thenReturn(List.of());
 		when(projects.save(any(Project.class))).thenAnswer(i -> i.getArgument(0));
 		NotificationService notifications = mock(NotificationService.class);
-		service = new ProjectService(projects, mongo, teams, notifications);
+		// A real ProjectReach over the same mocks: it *is* the membership rule, so
+		// stubbing it out would stub out the access behaviour under test.
+		service = new ProjectService(projects, mongo, teams, notifications,
+				new ProjectReach(projects, teams));
 	}
 
 	private User user(String id, Role... roles) {

@@ -29,6 +29,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
@@ -306,8 +308,8 @@ public class EmailIngestService {
 	private void notifyMembers(Issue created, String projectId, String from, String reporterId) {
 		try {
 			Project project = projects.get(projectId);
-			java.util.List<String> recipients = new java.util.ArrayList<>(
-					project.getMemberIds() != null ? project.getMemberIds() : java.util.List.of());
+			List<String> recipients = new ArrayList<>(
+					project.getMemberIds() != null ? project.getMemberIds() : List.<String>of());
 			recipients.remove(reporterId);
 			notifications.notifyIssueIngested(created, recipients, from);
 		}

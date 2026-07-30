@@ -3,6 +3,7 @@ package com.ahmadre.hinata.notification;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.me.NotificationPreferences;
+import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
@@ -32,6 +33,9 @@ public class NotificationService {
 	private final PushService push;
 	private final GatewayService gateway;
 	private final RichTextService richText;
+	// Decides per recipient whether a project-scoped link resolves for them. Injected as
+	// the rule component, not ProjectService — that service depends on this one.
+	private final ProjectReach reach;
 
 	private static final String SUBJECT_PREFIX = "[Hinata] ";
 
@@ -44,7 +48,7 @@ public class NotificationService {
 				de -> de ? issue.getReadableId() + " dir zugewiesen"
 						: issue.getReadableId() + " assigned to you",
 				de -> issue.getTitle(), // user content — same in every language
-				issueLink(issue));
+				issueLink(issue), issue.getProjectId());
 	}
 
 	/**
@@ -65,7 +69,7 @@ public class NotificationService {
 						? (de ? "Von " + senderEmail + ": \"" + issue.getTitle() + "\""
 								: "From " + senderEmail + ": \"" + issue.getTitle() + "\"")
 						: issue.getTitle(),
-				issueLink(issue));
+				issueLink(issue), issue.getProjectId());
 	}
 
 	/** Notify the issue's watchers that its workflow state changed. */
@@ -75,7 +79,7 @@ public class NotificationService {
 						: issue.getReadableId() + " updated",
 				de -> de ? "Status geändert zu \"" + newState + "\""
 						: "State changed to \"" + newState + "\"",
-				issueLink(issue));
+				issueLink(issue), issue.getProjectId());
 	}
 
 	/**
@@ -111,7 +115,7 @@ public class NotificationService {
 									: author.getDisplayName() + " commented on \"" + issue.getTitle() + "\"")
 							: author.getDisplayName() + (de ? " kommentierte: \"" : " commented: \"")
 									+ preview + "\"",
-					issueLink(issue));
+					issueLink(issue), issue.getProjectId());
 		}
 	}
 
@@ -144,7 +148,7 @@ public class NotificationService {
 								+ issue.getTitle() + "\" geantwortet"
 								: actor.getDisplayName() + " replied to your comment on \""
 										+ issue.getTitle() + "\""),
-				commentLink(issue, comment.getId()));
+				commentLink(issue, comment.getId()), issue.getProjectId());
 	}
 
 	/**
@@ -176,7 +180,7 @@ public class NotificationService {
 						? actor.getDisplayName() + ": \"" + preview + "\""
 						: (de ? actor.getDisplayName() + " hat dich zu \"" + issue.getTitle() + "\" erwähnt"
 								: actor.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\""),
-				issueLink(issue));
+				issueLink(issue), issue.getProjectId());
 	}
 
 	/**
@@ -359,7 +363,7 @@ public class NotificationService {
 						: issue.getReadableId() + " is due soon",
 				de -> de ? "\"" + issue.getTitle() + "\" ist am " + issue.getDueDate() + " fällig."
 						: "\"" + issue.getTitle() + "\" is due on " + issue.getDueDate() + ".",
-				issueLink(issue));
+				issueLink(issue), issue.getProjectId());
 	}
 
 	/**
@@ -541,9 +545,23 @@ public class NotificationService {
 	 * Fan-out to a set of recipients, localizing the title/body <em>per recipient</em>
 	 * from their persisted {@code User.locale} (watchers of one issue may each read a
 	 * different language). {@code title}/{@code body} receive {@code true} for German.
+	 *
+	 * <p>For a link that only some recipients can follow, use
+	 * {@link #deliver(Set, Notification.Type, L10n, L10n, String, String)}.
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link) {
+		deliver(userIds, type, title, body, link, null);
+	}
+
+	/**
+	 * As {@link #deliver(Set, Notification.Type, L10n, L10n, String)}, for a link into a
+	 * project: {@code linkProjectId} names the project whose access decides, per
+	 * recipient, whether the link is theirs to follow (see {@link #linkFor}). Pass
+	 * {@code null} for a link everyone can reach, such as a personal page.
+	 */
+	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
+			String link, String linkProjectId) {
 		String eventId = eventId(type);
 		for (String userId : userIds) {
 			if (userId == null) continue;
@@ -551,23 +569,42 @@ public class NotificationService {
 				boolean de = de(user);
 				String t = title.of(de);
 				String b = body.of(de);
+				String userLink = linkFor(user, link, linkProjectId);
 				// The in-app (bell) notification is always recorded; e-mail and push
 				// are gated by the recipient's per-event channel preferences.
 				notifications.save(Notification.builder()
-						.userId(user.getId()).type(type).title(t).body(b).link(link).build());
+						.userId(user.getId()).type(type).title(t).body(b).link(userLink).build());
 				NotificationPreferences prefs = prefsOf(user);
 				// In-app notifications keep the relative route; the e-mail button gets
 				// an absolute deep link that the native app intercepts as a
 				// Universal/App Link, straight to the issue.
 				if (prefs.deliversEmail(eventId)) {
-					mail.send(user.getEmail(), SUBJECT_PREFIX + t, t, b, appLink(link),
+					mail.send(user.getEmail(), SUBJECT_PREFIX + t, t, b, appLink(userLink),
 							buttonLabel(de));
 				}
 				if (prefs.deliversPush(eventId)) {
-					push.sendToUser(user.getId(), t, b, link);
+					push.sendToUser(user.getId(), t, b, userLink);
 				}
 			});
 		}
+	}
+
+	/**
+	 * The link this recipient can actually follow — {@code null} when they cannot see
+	 * the project it points into.
+	 *
+	 * <p>A watcher does not have to be a project member: an e-mail-ingested ticket is
+	 * attributed to the sender's account whether or not they belong to the project, and
+	 * anyone can be removed from a project after subscribing to one of its issues. They
+	 * should still hear that their own request moved, so the notice goes out either way —
+	 * only the CTA is dropped, because the e-mail button, the push deep link and the bell
+	 * entry would all land on a 403. Both delivery layers already render nothing for a
+	 * null link (no button in the mail, no {@code data.link} in the push), and the app
+	 * simply doesn't navigate.
+	 */
+	private String linkFor(User user, String link, String linkProjectId) {
+		if (link == null || linkProjectId == null) return link;
+		return reach.canSee(linkProjectId, user) ? link : null;
 	}
 
 	/** Produces a string in the recipient's language ({@code true} ⇒ German). */

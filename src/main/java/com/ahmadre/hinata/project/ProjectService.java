@@ -56,6 +56,9 @@ public class ProjectService {
 	private final TeamRepository teams;
 	// Safe to inject: NotificationService does not depend back on this service.
 	private final NotificationService notifications;
+	// Owns the "may this user see that project" rule, so callers outside this domain
+	// (notifications, above all) can ask it without injecting this service back.
+	private final ProjectReach projectReach;
 
 	public Project get(String id) {
 		return projects.findById(id).orElseThrow(() -> ApiException.notFound("project"));
@@ -234,10 +237,10 @@ public class ProjectService {
 	}
 
 	public void assertMember(Project project, User user) {
-		if (user.isAdmin() || project.getMemberIds().contains(user.getId())) return;
-		// A team grant (Team-Admin, or member with ALL/SOME access covering this
-		// project) is equivalent to direct project membership for visibility.
-		if (teamGrantedProjectIds(user).contains(project.getId())) return;
+		// Direct membership, an admin, or a team grant (Team-Admin, or member with
+		// ALL/SOME access covering this project) — see ProjectReach, which owns the rule
+		// so callers outside this domain can ask the same question.
+		if (projectReach.canSee(project, user)) return;
 		throw ApiException.forbidden("error.project.notMember");
 	}
 
@@ -614,9 +617,6 @@ public class ProjectService {
 
 	/** Ids of projects this user can reach through any team they belong to. */
 	private Set<String> teamGrantedProjectIds(User user) {
-		Set<String> granted = new HashSet<>();
-		teams.findByMembersUserId(user.getId())
-				.forEach(team -> granted.addAll(TeamAccess.grantedProjectIds(team, user.getId())));
-		return granted;
+		return projectReach.teamGrantedProjectIds(user);
 	}
 }

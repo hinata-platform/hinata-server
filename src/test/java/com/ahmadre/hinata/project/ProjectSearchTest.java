@@ -48,8 +48,9 @@ class ProjectSearchTest {
 		teams = mock(TeamRepository.class);
 		when(teams.findByMembersUserId(any())).thenReturn(List.of());
 		when(mongo.find(any(Query.class), eq(Project.class))).thenReturn(List.of());
-		service = new ProjectService(mock(ProjectRepository.class), mongo, teams,
-				mock(NotificationService.class));
+		ProjectRepository projects = mock(ProjectRepository.class);
+		service = new ProjectService(projects, mongo, teams,
+				mock(NotificationService.class), new ProjectReach(projects, teams));
 	}
 
 	private User member() {

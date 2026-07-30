@@ -13,7 +13,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * One-time, idempotent backfill that attributes already-ingested e-mail tickets to the
@@ -32,38 +34,50 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class IngestedReporterBackfill implements ApplicationRunner {
 
+	private static final String ISSUES = "issues";
+	private static final String REPORTER_ID = "reporterId";
+	private static final String REPORTER_EMAIL = "reporterEmail";
+
 	private final MongoTemplate mongo;
 	private final UserService users;
 
 	@Override
 	public void run(ApplicationArguments args) {
-		MongoCollection<Document> col = mongo.getCollection("issues");
+		MongoCollection<Document> issues = mongo.getCollection(ISSUES);
 		Document filter = new Document("$and", List.of(
-				new Document("reporterEmail", new Document("$ne", null)),
+				new Document(REPORTER_EMAIL, new Document("$ne", null)),
 				new Document("$or", List.of(
-						new Document("reporterId", new Document("$exists", false)),
-						new Document("reporterId", null)))));
+						new Document(REPORTER_ID, new Document("$exists", false)),
+						new Document(REPORTER_ID, null)))));
 		// One lookup per distinct sender, not per ticket: a support mailbox commonly
 		// holds many tickets from the same handful of addresses.
-		Map<String, String> resolved = new HashMap<>();
+		Map<String, Optional<String>> resolved = new HashMap<>();
 		int attributed = 0;
-		for (Document doc : col.find(filter)) {
-			Object raw = doc.get("reporterEmail");
-			if (!(raw instanceof String email) || email.isBlank()) {
-				continue;
+		for (Document issue : issues.find(filter)) {
+			Optional<String> userId = senderAccount(issue, resolved);
+			if (userId.isPresent()) {
+				issues.updateOne(new Document("_id", issue.get("_id")),
+						new Document("$set", new Document(REPORTER_ID, userId.get())));
+				attributed++;
 			}
-			String userId = resolved.computeIfAbsent(email.toLowerCase(java.util.Locale.ROOT),
-					key -> users.findActiveByEmail(key).map(User::getId).orElse(null));
-			if (userId == null) {
-				continue;
-			}
-			col.updateOne(new Document("_id", doc.get("_id")),
-					new Document("$set", new Document("reporterId", userId)));
-			attributed++;
 		}
 		if (attributed > 0) {
 			log.info("IngestedReporterBackfill: attributed {} e-mail-ingested issue(s) to their "
 					+ "sender's account", attributed);
 		}
+	}
+
+	/**
+	 * The account behind a row's sender address, memoised per address in
+	 * {@code resolved} so a mailbox full of tickets from the same person costs one
+	 * lookup. Empty when the row carries no usable address or nobody owns it.
+	 */
+	private Optional<String> senderAccount(Document issue, Map<String, Optional<String>> resolved) {
+		Object raw = issue.get(REPORTER_EMAIL);
+		if (!(raw instanceof String email) || email.isBlank()) {
+			return Optional.empty();
+		}
+		return resolved.computeIfAbsent(email.toLowerCase(Locale.ROOT),
+				address -> users.findActiveByEmail(address).map(User::getId));
 	}
 }

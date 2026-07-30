@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 @Slf4j
@@ -51,9 +52,9 @@ public class UserService {
 	 * callers must treat the result as attribution only and never derive permission
 	 * from it.
 	 */
-	public java.util.Optional<User> findActiveByEmail(String email) {
+	public Optional<User> findActiveByEmail(String email) {
 		if (email == null || email.isBlank()) {
-			return java.util.Optional.empty();
+			return Optional.empty();
 		}
 		return users.findByEmailIgnoreCase(email.trim()).filter(User::isActive);
 	}

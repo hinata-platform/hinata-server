@@ -18,6 +18,8 @@ import org.mockito.ArgumentCaptor;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
@@ -29,6 +31,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -57,7 +60,7 @@ class EmailIngestServiceTest {
 		lenient().when(issues.findByInboundMessageId(anyString())).thenReturn(Optional.empty());
 		lenient().when(issues.create(any(), isNull())).thenAnswer(call -> call.getArgument(0));
 		lenient().when(projects.get("p1")).thenReturn(Project.builder().id("p1")
-				.memberIds(new java.util.ArrayList<>(List.of("u-author", "u-lead"))).build());
+				.memberIds(new ArrayList<>(List.of("u-author", "u-lead"))).build());
 		lenient().when(users.findActiveByEmail(anyString())).thenReturn(Optional.empty());
 		service = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
 				new RichTextService(), projects, notifications, storage,
@@ -116,7 +119,7 @@ class EmailIngestServiceTest {
 		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
 		verify(issues).create(created.capture(), isNull());
 		assertThat(created.getValue().getReporterId()).isNull();
-		verify(users, org.mockito.Mockito.never()).findActiveByEmail(anyString());
+		verify(users, never()).findActiveByEmail(anyString());
 	}
 
 	@Test
@@ -127,8 +130,8 @@ class EmailIngestServiceTest {
 		ingest("someone@example.org");
 
 		@SuppressWarnings("unchecked")
-		ArgumentCaptor<java.util.Collection<String>> recipients =
-				ArgumentCaptor.forClass(java.util.Collection.class);
+		ArgumentCaptor<Collection<String>> recipients =
+				ArgumentCaptor.forClass(Collection.class);
 		verify(notifications).notifyIssueIngested(any(), recipients.capture(),
 				eq("someone@example.org"));
 		assertThat(recipients.getValue())
@@ -141,8 +144,8 @@ class EmailIngestServiceTest {
 		ingest("stranger@example.org");
 
 		@SuppressWarnings("unchecked")
-		ArgumentCaptor<java.util.Collection<String>> recipients =
-				ArgumentCaptor.forClass(java.util.Collection.class);
+		ArgumentCaptor<Collection<String>> recipients =
+				ArgumentCaptor.forClass(Collection.class);
 		verify(notifications).notifyIssueIngested(any(), recipients.capture(), anyString());
 		assertThat(recipients.getValue()).containsExactlyInAnyOrder("u-author", "u-lead");
 	}

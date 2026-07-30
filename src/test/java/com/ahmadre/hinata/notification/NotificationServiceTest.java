@@ -2,6 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
+import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.user.User;
@@ -12,10 +13,13 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.ArrayList;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -33,6 +37,9 @@ class NotificationServiceTest {
 	private UserRepository users;
 	private NotificationRepository notifications;
 	private RichTextService richText;
+	private MailService mail;
+	private PushService push;
+	private ProjectReach reach;
 	private NotificationService service;
 
 	@BeforeEach
@@ -40,10 +47,12 @@ class NotificationServiceTest {
 		users = mock(UserRepository.class);
 		notifications = mock(NotificationRepository.class);
 		richText = new RichTextService();
+		mail = mock(MailService.class);
+		push = mock(PushService.class);
+		reach = mock(ProjectReach.class);
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
-		service = new NotificationService(notifications, users,
-				mock(MailService.class), mock(PushService.class), mock(GatewayService.class),
-				richText);
+		service = new NotificationService(notifications, users, mail, push,
+				mock(GatewayService.class), richText, reach);
 	}
 
 	/** A stored text comment, as the write path would have produced it. */
@@ -122,6 +131,57 @@ class NotificationServiceTest {
 		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
 		verify(notifications).save(saved.capture());
 		assertThat(saved.getValue().getBody()).contains("Login bug");
+	}
+
+	// --- links a recipient cannot follow --------------------------------------
+
+	/** An issue in project p1, watched by the external reporter u-ext. */
+	private Issue watchedIssue() {
+		return Issue.builder().id("i1").projectId("p1").readableId("MOB-9").title("Login bug")
+				.reporterId("u-ext").watcherIds(new ArrayList<>()).build();
+	}
+
+	/** The recipient u-ext, e.g. an e-mail author resolved to a platform account. */
+	private User recipient() {
+		User user = User.builder().id("u-ext").displayName("Ext").email("ext@example.org")
+				.active(true).build();
+		when(users.findById("u-ext")).thenReturn(Optional.of(user));
+		return user;
+	}
+
+	@Test
+	void stillNotifiesAWatcherWhoCannotOpenTheProjectButDropsTheDeadLink() {
+		User external = recipient();
+		when(reach.canSee("p1", external)).thenReturn(false);
+		User actor = User.builder().id("u1").displayName("Sam").active(true).build();
+
+		// A mention delivers on both channels by default, so one event covers both.
+		service.notifyMentions(watchedIssue(), actor, Set.of("u-ext"), "look at this");
+
+		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
+		verify(notifications).save(saved.capture());
+		assertThat(saved.getValue()).satisfies(n -> {
+			assertThat(n.getUserId()).as("the notice itself still goes out").isEqualTo("u-ext");
+			assertThat(n.getLink()).as("no bell entry pointing at a 403").isNull();
+		});
+		// The e-mail is sent without a CTA, the push without a deep link.
+		verify(mail).send(eq("ext@example.org"), anyString(), anyString(), anyString(),
+				isNull(), anyString());
+		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), isNull());
+	}
+
+	@Test
+	void keepsTheLinkForARecipientWhoCanOpenTheProject() {
+		User member = recipient();
+		when(reach.canSee("p1", member)).thenReturn(true);
+		User actor = User.builder().id("u1").displayName("Sam").active(true).build();
+
+		service.notifyMentions(watchedIssue(), actor, Set.of("u-ext"), "look at this");
+
+		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
+		verify(notifications).save(saved.capture());
+		assertThat(saved.getValue().getLink()).isEqualTo("/issues/MOB-9");
+		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), eq("/issues/MOB-9"));
 	}
 
 	// --- description mentions -------------------------------------------------
