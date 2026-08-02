@@ -52,10 +52,31 @@ public class DeviceController {
 		devices.save(device);
 	}
 
-	/** Drop a token (sign-out / disabled notifications). */
+	public record UnregisterRequest(@NotBlank String token) {
+	}
+
+	/**
+	 * Drop a token (sign-out / disabled notifications).
+	 *
+	 * <p>Takes the token in the body because a Windows registration is a WNS
+	 * channel URI — an https URL containing {@code :}, {@code /} and {@code ?},
+	 * which cannot travel in a path segment. The path variant below stays for
+	 * older app builds.
+	 */
+	@DeleteMapping
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void unregister(@RequestBody UnregisterRequest request) {
+		delete(request.token());
+	}
+
+	/** Legacy path form — FCM tokens only (they are path-safe). */
 	@DeleteMapping("/{token}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
-	public void unregister(@PathVariable String token) {
+	public void unregisterByPath(@PathVariable String token) {
+		delete(token);
+	}
+
+	private void delete(String token) {
 		// Only delete if it belongs to the caller, so one user can't evict another's token.
 		devices.findByToken(token)
 				.filter(d -> d.getUserId().equals(currentUser.requireId()))
