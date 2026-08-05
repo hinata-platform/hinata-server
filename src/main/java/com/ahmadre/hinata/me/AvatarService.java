@@ -8,6 +8,7 @@ import com.ahmadre.hinata.moderation.ModerationVerdict;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
+import com.ahmadre.hinata.media.ImageBounds;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -122,6 +123,9 @@ public class AvatarService {
 
 	private byte[] compress(MultipartFile file) {
 		try {
+			// The 12 MB upload bound says nothing about the decoded size: a flat
+			// 50000x50000 PNG fits inside it and expands to gigabytes here.
+			ImageBounds.requireWithinBudget(file.getBytes(), "error.avatar.imageTooLarge");
 			BufferedImage source = ImageIO.read(new ByteArrayInputStream(file.getBytes()));
 			if (source == null) {
 				throw ApiException.badRequest("error.avatar.unreadable");

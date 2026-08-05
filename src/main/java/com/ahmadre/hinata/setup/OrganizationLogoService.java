@@ -6,6 +6,7 @@ import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.moderation.ModerationVerdict;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.media.ImageBounds;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -150,6 +151,8 @@ public class OrganizationLogoService {
 
 	private byte[] normalize(MultipartFile file) {
 		try {
+			// See AvatarService: the encoded-size bound does not bound the decode.
+			ImageBounds.requireWithinBudget(file.getBytes(), "error.logo.imageTooLarge");
 			BufferedImage source = ImageIO.read(new ByteArrayInputStream(file.getBytes()));
 			if (source == null) {
 				throw ApiException.badRequest("error.logo.unreadable");

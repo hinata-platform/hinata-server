@@ -6,6 +6,7 @@ import com.ahmadre.hinata.moderation.ModerationRecorder;
 import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.moderation.ModerationVerdict;
+import com.ahmadre.hinata.media.ImageBounds;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -170,10 +171,20 @@ public class StorageService {
 		// magic bytes for binary types so a file cannot masquerade as e.g. an
 		// image (defends against polyglot / content-sniffing attacks, A03/A05).
 		verifyMagicBytes(data, contentType);
-		// Only images are classified, and only after the signature check: a
-		// classifier fed bytes that are not the format they claim to be is
-		// answering a question about a file nobody will ever see.
-		if (moderation == null || !contentType.startsWith("image/")) {
+		if (!contentType.startsWith("image/")) {
+			return null;
+		}
+		// Nothing here decodes, so this is not defending its own heap — it is
+		// defending whatever opens the bytes next. The classifier below is one such
+		// reader and lives out of process; refusing the pixel bomb at the door means
+		// the sidecar never has to survive it, and neither does a future thumbnailer.
+		// Silent for formats no reader recognises (WebP has no decoder in this JDK):
+		// bytes nobody here can open are bytes nobody here can be flooded by.
+		ImageBounds.requireWithinBudget(data, "error.storage.imageTooLarge");
+		// Only after the signature check: a classifier fed bytes that are not the
+		// format they claim to be is answering a question about a file nobody will
+		// ever see.
+		if (moderation == null) {
 			return null;
 		}
 		return moderation.checkImage(data, contentType, fileName, surface);

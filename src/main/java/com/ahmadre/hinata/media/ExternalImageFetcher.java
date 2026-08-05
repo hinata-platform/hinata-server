@@ -103,6 +103,11 @@ public class ExternalImageFetcher {
 				throw ApiException.badRequest("error.media.notAnImage");
 			}
 			byte[] data = readCapped(response.body());
+			// Nothing here decodes today, so this guard is not protecting this method
+			// — it protects the classifier on the next line, which does, and which is
+			// the reason an external host's bytes reach a decoder at all. The host
+			// chose these bytes; a pixel bomb is free for them to serve.
+			ImageBounds.requireWithinBudget(data, "error.media.imageTooLarge");
 			moderation.checkImage(data, contentType, uri.getHost(), ModerationSurface.EXTERNAL_IMAGE);
 			return new StorageService.StoredObject(data, contentType);
 		}
