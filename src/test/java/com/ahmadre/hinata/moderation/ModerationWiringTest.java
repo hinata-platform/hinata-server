@@ -9,6 +9,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -130,6 +132,109 @@ class ModerationWiringTest {
 				assertThat(surface).isEqualTo(ModerationSurface.VOICE);
 			}
 		}
+	}
+
+	// --- what Hinata *is*, under the DSA -------------------------------------
+
+	/**
+	 * Pins the set of routes reachable without authentication.
+	 *
+	 * <p>This is not a general security test — {@code SecurityConfig} is where that
+	 * lives. It guards a <em>compliance</em> assumption that has no other
+	 * representation in code, and that a perfectly reasonable feature would break
+	 * without anyone noticing.
+	 *
+	 * <p>The whole moderation design rests on Hinata being a <b>hosting service</b>
+	 * rather than an <b>online platform</b> under the DSA, and the difference is
+	 * exactly whether content is "disseminated to the public". Every route below is
+	 * authentication, setup, a webhook or a signed one-off link — none of them
+	 * publishes user content. The day one does, Hinata becomes an online platform
+	 * and Section 3 switches on: internal complaint handling (Art. 20),
+	 * out-of-court dispute settlement (Art. 21), trusted flaggers (Art. 22) and
+	 * transparency reporting (Art. 24) — none of which this codebase implements.
+	 *
+	 * <p>So a public share link, a public knowledge base or a public issue portal is
+	 * not a feature decision that can be made in a pull request. Adding one fails
+	 * here first, which is the point: the next person should meet this paragraph
+	 * before shipping, not a compliance review afterwards.
+	 *
+	 * <p>Adding a route is allowed. Adding it <em>silently</em> is not.
+	 */
+	@Test
+	void noRouteBecomesPubliclyReadableWithoutReopeningTheComplianceAssessment() {
+		assertThat(publicRoutesIn("config/SecurityConfig.java"))
+				.as("a new unauthenticated route may publish user content — see this test's javadoc")
+				.containsExactlyInAnyOrder(
+						// Authentication and account recovery.
+						"/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/2fa",
+						"/api/v1/auth/sso/providers", "/api/v1/auth/sso/start/**",
+						"/api/v1/auth/sso/exchange",
+						"/api/v1/auth/invite/**", "/api/v1/auth/reset/**",
+						"/api/v1/auth/register", "/api/v1/auth/verify-email",
+						"/api/v1/auth/resend-verification",
+						"/api/v1/me/email-change/confirm", "/api/v1/me/password-reset/confirm",
+						// A signed, single-subject GDPR export — the one route that serves
+						// user content unauthenticated, to the subject of that content.
+						"/api/v1/me/export.pdf",
+						// Branding and boot metadata, not user content.
+						"/api/v1/meta", "/api/v1/meta/logo",
+						"/api/v1/users/*/avatar",
+						// Inbound integrations, authenticated by signature rather than session.
+						"/api/v1/git/oauth/callback", "/api/v1/git/webhooks/**",
+						"/api/v1/setup/status", "/api/v1/setup",
+						"/actuator/health", "/actuator/health/**",
+						// MCP OAuth 2.1 discovery + protocol; consent stays authenticated.
+						"/.well-known/oauth-protected-resource",
+						"/.well-known/oauth-protected-resource/**",
+						"/.well-known/oauth-authorization-server",
+						"/.well-known/hinata-connect-challenge",
+						"/oauth/register", "/oauth/authorize", "/oauth/token",
+						"/login/**", "/oauth2/**", "/saml2/**", "/error");
+	}
+
+	/**
+	 * The API documentation runs on its own filter chain that permits everything it
+	 * matches, so widening that {@code securityMatcher} is a second, quieter way to
+	 * make a route public — one the list above would never see.
+	 */
+	@Test
+	void theDocsChainStaysLimitedToDocumentation() {
+		String source = read(MAIN.resolve("com/ahmadre/hinata/config/SecurityConfig.java"));
+		Matcher matcher = Pattern.compile("\\.securityMatcher\\(([^)]*)\\)").matcher(source);
+
+		assertThat(matcher.find()).isTrue();
+		assertThat(quotedIn(matcher.group(1)))
+				.containsExactlyInAnyOrder(
+						"/v3/api-docs/**", "/docs/**", "/docs", "/scalar/**", "/webjars/**");
+	}
+
+	/** Everything not named above must still require a session. */
+	@Test
+	void everythingElseRemainsAuthenticated() {
+		String source = read(MAIN.resolve("com/ahmadre/hinata/config/SecurityConfig.java"));
+
+		assertThat(source).contains(".anyRequest().authenticated()");
+		assertThat(source).contains("\"/api/v1/admin/**\").hasRole(\"ADMIN\")");
+	}
+
+	/** The route patterns handed to {@code permitAll()} in [file]. */
+	private static List<String> publicRoutesIn(String file) {
+		String source = read(MAIN.resolve("com/ahmadre/hinata").resolve(file));
+		Matcher matcher = Pattern
+				.compile("\\.requestMatchers\\(([\\s\\S]*?)\\)\\s*\\.permitAll\\(\\)")
+				.matcher(source);
+
+		assertThat(matcher.find())
+				.as("could not locate the permitAll block — this parser has drifted and "
+						+ "would otherwise pass vacuously")
+				.isTrue();
+		return quotedIn(matcher.group(1));
+	}
+
+	private static List<String> quotedIn(String block) {
+		return Pattern.compile("\"([^\"]+)\"").matcher(block).results()
+				.map(result -> result.group(1))
+				.toList();
 	}
 
 	/** Repo-relative paths of production sources containing [needle]. */
