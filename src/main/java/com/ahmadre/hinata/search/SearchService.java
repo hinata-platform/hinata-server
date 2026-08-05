@@ -6,6 +6,8 @@ import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
@@ -78,6 +80,7 @@ public class SearchService {
 	private final IssueRepository issues;
 	private final ProjectService projectService;
 	private final TeamService teamService;
+	private final FrozenContentService frozen;
 
 	/**
 	 * What one viewer is allowed to see, resolved once per search.
@@ -176,7 +179,7 @@ public class SearchService {
 			if (only != null && cat != only) continue;
 			List<SearchHit> hits = switch (cat) {
 				case ISSUES -> mapIssues(latest(Issue.class, SUGGEST_LIMIT, F_UPDATED,
-						and(archivedIs(true), reach.projects("projectId"))), true);
+						and(archivedIs(true), unfrozen(reach.projects("projectId"), FrozenTargetType.ISSUE))), true);
 				case PROJECTS -> mapProjects(latest(Project.class, SUGGEST_LIMIT, F_UPDATED,
 						and(archivedTrue(), visibleArchivedProjects(reach))), true);
 				default -> List.<SearchHit>of();
@@ -194,14 +197,15 @@ public class SearchService {
 	private List<SearchHit> suggest(SearchCategory cat, Scope reach) {
 		return switch (cat) {
 			case ISSUES -> mapIssues(latest(Issue.class, SUGGEST_LIMIT, F_UPDATED,
-					and(archivedIs(false), reach.projects("projectId"))), false);
+					and(archivedIs(false), unfrozen(reach.projects("projectId"), FrozenTargetType.ISSUE))), false);
 			case PROJECTS -> mapProjects(latest(Project.class, SUGGEST_LIMIT, F_UPDATED,
 					and(archivedFalse(), visibleProjects(reach))), false);
 			case PEOPLE -> mapPeople(
 					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)));
 			case BOARDS -> suggestBoards(reach);
 			case DOCS -> mapDocs(latest(Article.class, SUGGEST_LIMIT, F_UPDATED,
-					ArticleVisibility.criteria(reach.admin(), reach.projectIds(), reach.teamIds())));
+					unfrozen(ArticleVisibility.criteria(reach.admin(), reach.projectIds(),
+							reach.teamIds()), FrozenTargetType.ARTICLE)));
 		};
 	}
 
@@ -210,7 +214,7 @@ public class SearchService {
 	private List<Issue> searchIssues(String q, int cap, boolean archived, Scope reach) {
 		return hybrid(Issue.class, q, cap,
 				List.of(contains(F_TITLE, q), prefix("readableId", q), contains(F_TAGS, q)),
-				and(archivedIs(archived), reach.projects("projectId")),
+				and(archivedIs(archived), unfrozen(reach.projects("projectId"), FrozenTargetType.ISSUE)),
 				F_UPDATED, Issue::getId, Issue::getTitle);
 	}
 
@@ -397,7 +401,8 @@ public class SearchService {
 	private List<Article> searchDocs(String q, int cap, Scope reach) {
 		return hybrid(Article.class, q, cap,
 				List.of(contains(F_TITLE, q), contains(F_TAGS, q)),
-				ArticleVisibility.criteria(reach.admin(), reach.projectIds(), reach.teamIds()),
+				unfrozen(ArticleVisibility.criteria(reach.admin(), reach.projectIds(),
+						reach.teamIds()), FrozenTargetType.ARTICLE),
 				F_UPDATED, Article::getId, Article::getTitle);
 	}
 
@@ -485,7 +490,7 @@ public class SearchService {
 	private Map<String, Long> counts(Scope reach) {
 		Map<String, Long> counts = new LinkedHashMap<>();
 		counts.put(SearchCategory.ISSUES.name(),
-				count(Issue.class, reach.projects("projectId")));
+				count(Issue.class, unfrozen(reach.projects("projectId"), FrozenTargetType.ISSUE)));
 		counts.put(SearchCategory.PROJECTS.name(),
 				count(Project.class, visibleProjects(reach)));
 		// People are deliberately unscoped: the directory is already readable by any
@@ -497,7 +502,8 @@ public class SearchService {
 				count(AgileBoard.class, reach.projects("projectIds"))
 						+ count(Sprint.class, sprintsOfVisibleBoards(reach)));
 		counts.put(SearchCategory.DOCS.name(), count(Article.class,
-				ArticleVisibility.criteria(reach.admin(), reach.projectIds(), reach.teamIds())));
+				unfrozen(ArticleVisibility.criteria(reach.admin(), reach.projectIds(),
+						reach.teamIds()), FrozenTargetType.ARTICLE)));
 		return counts;
 	}
 
@@ -521,6 +527,27 @@ public class SearchService {
 	 */
 	private static Criteria and(Criteria base, Criteria access) {
 		return access == null ? base : new Criteria().andOperator(base, access);
+	}
+
+	/**
+	 * The access filter for a category, with the freeze exclusion composed onto it.
+	 *
+	 * <p>Composed <em>alongside</em> access rather than folded into it, and that is
+	 * the whole reason freeze is a separate collaborator. The access filters answer
+	 * {@code null} for a platform admin — meaning "no restriction" — and
+	 * {@link #and} drops a null access filter entirely. A freeze that travelled
+	 * inside that value would evaporate for precisely the account it most has to
+	 * apply to, because an admin does not bypass a freeze. So
+	 * {@link FrozenContentService#exclusion} never returns null, and this method is
+	 * the one place the two are joined.
+	 *
+	 * <p>When nothing is frozen the exclusion is {@code $nin: []}, which matches
+	 * every document — so an install with no incident runs the query it always ran,
+	 * one {@code $and} wrapper deeper.
+	 */
+	private Criteria unfrozen(Criteria access, FrozenTargetType type) {
+		Criteria exclusion = frozen.exclusion("_id", type);
+		return access == null ? exclusion : new Criteria().andOperator(access, exclusion);
 	}
 
 	/** Case-insensitive "contains" — regex-escaped (NoSQL-injection safe). */

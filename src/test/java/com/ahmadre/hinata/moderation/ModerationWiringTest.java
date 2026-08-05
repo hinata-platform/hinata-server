@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
+import com.ahmadre.hinata.moderation.report.ContentReport;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -206,6 +208,106 @@ class ModerationWiringTest {
 		assertThat(quotedIn(matcher.group(1)))
 				.containsExactlyInAnyOrder(
 						"/v3/api-docs/**", "/docs/**", "/docs", "/scalar/**", "/webjars/**");
+	}
+
+	// --- freeze ----------------------------------------------------------------
+
+	/**
+	 * Every byte the product serves has to come through the one method the freeze
+	 * guard is on.
+	 *
+	 * <p>{@code StorageService.getObject} is that method, and it is the only place
+	 * allowed to call the backend's read. Eight callers reach it — the media proxy,
+	 * the avatar route, the organisation logo, attachment download, voice playback,
+	 * the e-mail reply that posts bytes to an external address — and a ninth that
+	 * went straight to a backend would be invisible: no test would fail, nothing
+	 * would log, and frozen material would simply keep being served.
+	 *
+	 * <p>The pin is on the caller set rather than on a behaviour because the mistake
+	 * is a new call site, and a new call site is exactly what a behavioural test
+	 * cannot see.
+	 */
+	@Test
+	void everyStorageReadGoesThroughTheOneGuardedMethod() {
+		assertThat(sourceContaining("backend.get("))
+				.as("bytes must be read through StorageService.getObject, which is where the "
+						+ "freeze guard is — see this test's javadoc")
+				.containsExactly("storage/StorageService.java");
+	}
+
+	/**
+	 * The two unauthenticated routes that serve user content have to know about
+	 * freeze.
+	 *
+	 * <p>{@link #noRouteBecomesPubliclyReadableWithoutReopeningTheComplianceAssessment}
+	 * already declares {@code /api/v1/users/*&#47;avatar} and
+	 * {@code /api/v1/me/export.pdf} as the public content routes. They are also the
+	 * two that every viewer-parameterised mechanism in the codebase misses by
+	 * construction, because there is no viewer: the export PDF prints every comment
+	 * its subject authored, over a signed link that needs no session, so the author
+	 * of frozen content retrieves it by mailing themselves one.
+	 *
+	 * <p>The avatar route is covered by the byte chokepoint above rather than by a
+	 * reference of its own — {@code AvatarService.load} goes through
+	 * {@code getObject} — so what is pinned here is the one that renders text.
+	 */
+	@Test
+	void theUnauthenticatedContentRoutesAreFreezeAware() {
+		assertThat(read(MAIN.resolve("com/ahmadre/hinata/me/DataExportPdfService.java")))
+				.as("the unauthenticated GDPR export prints comment text verbatim")
+				.contains("FrozenContentService")
+				.contains("FrozenTargetType.COMMENT")
+				.contains("FrozenTargetType.ISSUE");
+		assertThat(read(MAIN.resolve("com/ahmadre/hinata/storage/StorageService.java")))
+				.as("the avatar and logo routes are unauthenticated and reach bytes through here")
+				.contains("frozen.assertObjectReadable");
+	}
+
+	/**
+	 * Every reportable kind of thing has to be freezable.
+	 *
+	 * <p>The two enums are deliberately separate — {@link com.ahmadre.hinata.moderation.freeze.FrozenTargetType}
+	 * carries {@code OBJECT}, which nobody reports and which is the only thing that
+	 * can cover an inline image — but the five that overlap must stay in step. Adding
+	 * a reportable kind without a freeze counterpart would compile, pass every test,
+	 * and produce a report of the one category that must freeze against a target the
+	 * freeze path silently skips.
+	 */
+	@Test
+	void everyReportTargetTypeHasAFreezeCounterpart() {
+		List<String> reportable = Stream.of(ContentReport.TargetType.values())
+				.map(Enum::name)
+				.toList();
+		List<String> freezable = Stream.of(FrozenTargetType.values())
+				.map(Enum::name)
+				.toList();
+
+		assertThat(freezable)
+				.as("a reportable kind that cannot be frozen is a hole in the freeze trigger")
+				.containsAll(reportable);
+		assertThat(freezable)
+				.as("OBJECT is the one freezable kind with no report counterpart — it is what "
+						+ "covers an inline image, which has no database row at all")
+				.containsExactlyInAnyOrderElementsOf(
+						Stream.concat(reportable.stream(), Stream.of("OBJECT")).toList());
+	}
+
+	/**
+	 * No implementation of the known-illegal hash port ships, and none ever may.
+	 *
+	 * <p>The reasons are on the interface: the hash-matching programmes vet the
+	 * operator organisation rather than the software, their terms forbid
+	 * redistributing credentials, and their lists are server-side precisely so a
+	 * local copy cannot be used as an offline oracle to test evasion against. All
+	 * three are arguments about the <em>shipped artefact</em>, which is what this
+	 * checks — an operator implementing it in their own deployment is the intended
+	 * use and is not affected.
+	 */
+	@Test
+	void noKnownIllegalHashProviderImplementationShips() {
+		assertThat(sourceContaining("implements KnownIllegalHashProvider"))
+				.as("no implementation may ship — see KnownIllegalHashProvider's javadoc")
+				.isEmpty();
 	}
 
 	/** Everything not named above must still require a session. */

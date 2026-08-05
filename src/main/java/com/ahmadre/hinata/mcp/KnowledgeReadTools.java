@@ -2,8 +2,11 @@ package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.article.ArticleVisibility;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -38,6 +41,7 @@ public class KnowledgeReadTools {
 	private final ArticleRepository articles;
 	private final ProjectService projectService;
 	private final TeamService teamService;
+	private final FrozenContentService frozen;
 
 	@McpTool(name = "read_kb_article", title = "Read a knowledge base article",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
@@ -73,19 +77,22 @@ public class KnowledgeReadTools {
 				: articles.findAllByOrderBySortOrderAsc();
 		return candidates.stream()
 				.filter(a -> space == null || space.equalsIgnoreCase(a.getSpace()))
+				.filter(a -> !frozen.isFrozen(FrozenTargetType.ARTICLE, a.getId()))
 				.filter(a -> user.isAdmin() || canSee(a, projectIds, teamIds))
 				.map(ArticleListItem::of)
 				.toList();
 	}
 
+	/**
+	 * Delegates to {@link ArticleVisibility}, which is where this rule lives so the
+	 * REST route, global search and this tool all enforce one of it. This class kept
+	 * a third hand-written copy after {@code 48a725f} migrated the other two — which
+	 * is exactly the situation that class's javadoc describes as "a rule that exists
+	 * in one caller's private method is a rule the next caller does not know about",
+	 * and it is why adding a freeze check here meant finishing the migration first.
+	 */
 	private static boolean canSee(Article article, Set<String> projectIds, Set<String> teamIds) {
-		if (article.getProjectId() != null) {
-			return projectIds.contains(article.getProjectId());
-		}
-		if (article.getTeamId() != null) {
-			return teamIds.contains(article.getTeamId());
-		}
-		return true; // global / organisation-wide
+		return ArticleVisibility.canSee(article, projectIds, teamIds);
 	}
 
 	/** Article metadata without the (potentially large) markdown body. */
@@ -115,20 +122,19 @@ public class KnowledgeReadTools {
 	}
 
 	private boolean canSee(Article article, User user) {
+		// Ahead of the admin short-circuit: an admin bypasses visibility, never a
+		// freeze.
+		if (frozen.isFrozen(FrozenTargetType.ARTICLE, article.getId())) {
+			return false;
+		}
 		if (user.isAdmin()) {
 			return true;
 		}
-		if (article.getProjectId() != null) {
-			Set<String> projectIds = projectService.visibleTo(user).stream()
-					.map(Project::getId).collect(Collectors.toSet());
-			return projectIds.contains(article.getProjectId());
-		}
-		if (article.getTeamId() != null) {
-			Set<String> teamIds = teamService.visibleTo(user).stream()
-					.map(Team::getId).collect(Collectors.toSet());
-			return teamIds.contains(article.getTeamId());
-		}
-		return true; // global / organisation-wide
+		Set<String> projectIds = projectService.visibleTo(user).stream()
+				.map(Project::getId).collect(Collectors.toSet());
+		Set<String> teamIds = teamService.visibleTo(user).stream()
+				.map(Team::getId).collect(Collectors.toSet());
+		return canSee(article, projectIds, teamIds);
 	}
 
 	/**

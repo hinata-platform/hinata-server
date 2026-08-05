@@ -60,7 +60,8 @@ class IssueResolveTest {
 				mock(com.ahmadre.hinata.user.UserRepository.class),
 				mock(com.ahmadre.hinata.moderation.ModerationService.class),
 				mock(com.ahmadre.hinata.moderation.ModerationRecorder.class),
-				mock(com.ahmadre.hinata.moderation.report.UserBlockService.class));
+				mock(com.ahmadre.hinata.moderation.report.UserBlockService.class),
+				com.ahmadre.hinata.moderation.freeze.FreezeFixtures.nothingFrozen());
 	}
 
 	private Query capturedQuery() {

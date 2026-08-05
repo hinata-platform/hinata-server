@@ -11,6 +11,8 @@ import com.ahmadre.hinata.moderation.ModerationRecorder;
 import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.moderation.ModerationVerdict;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.moderation.report.UserBlockService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.richtext.RichText;
@@ -27,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -78,6 +81,7 @@ public class IssueService {
 	private final ModerationService moderation;
 	private final ModerationRecorder moderationRecorder;
 	private final UserBlockService userBlocks;
+	private final FrozenContentService frozen;
 
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
@@ -108,10 +112,25 @@ public class IssueService {
 		return id == null ? null : issues.findById(id).orElse(null);
 	}
 
-	/** Lookup that enforces the caller is a member of the issue's project (A01). */
+	/**
+	 * Lookup that enforces the caller is a member of the issue's project (A01), and
+	 * that the issue is not frozen.
+	 *
+	 * <p>The freeze check is <em>here</em> and not in the controllers, and that is
+	 * the difference between a guard and a gesture. Six things read an issue through
+	 * this method — the REST route, the aggregate detail bootstrap, the hierarchy,
+	 * the activity feed, the MCP {@code hinata://issue/{id}} resource and the
+	 * {@code get_issue} tool — and a check in {@code IssueController} would leave the
+	 * last two rendering the description straight from the entity.
+	 *
+	 * <p>{@link #get(String)} stays unguarded on purpose: it is the ACL-free
+	 * internal lookup the moderation queue itself resolves rows through, and a
+	 * freeze check there would make the queue unable to describe the thing it froze.
+	 */
 	public Issue getForUser(String idOrReadableId, User user) {
 		Issue issue = get(idOrReadableId);
 		assertAccess(issue, user);
+		frozen.assertReadable(FrozenTargetType.ISSUE, issue.getId(), "issue");
 		return issue;
 	}
 
@@ -1181,11 +1200,44 @@ public class IssueService {
 				? Sort.Direction.ASC
 				: Sort.Direction.DESC;
 		Pageable pageable = PageRequest.of(page, Math.min(size, 100), Sort.by(dir, "createdAt"));
-		Page<IssueComment> result = blocked.isEmpty()
-				? comments.findByIssueIdAndReplyToIdIsNull(id, pageable)
-				: comments.findByIssueIdAndReplyToIdIsNullAndAuthorIdNotIn(id, blocked, pageable);
-		attachReplyCounts(result.getContent(), blocked);
+		Set<String> frozenIds = frozen.frozenIds(FrozenTargetType.COMMENT);
+		final Page<IssueComment> result;
+		if (!frozenIds.isEmpty()) {
+			result = topLevelExcluding(id, pageable, blocked, frozenIds);
+		}
+		else if (blocked.isEmpty()) {
+			result = comments.findByIssueIdAndReplyToIdIsNull(id, pageable);
+		}
+		else {
+			result = comments.findByIssueIdAndReplyToIdIsNullAndAuthorIdNotIn(id, blocked, pageable);
+		}
+		attachReplyCounts(result.getContent(), blocked, frozenIds);
 		return result;
+	}
+
+	/**
+	 * The top-level feed with a freeze exclusion, composed rather than derived.
+	 *
+	 * <p>Only reached when something is actually frozen, which is why the derived
+	 * methods above stay. Adding a freeze dimension to them would take four derived
+	 * queries to eight and the reply-count aggregations to four variants — the point
+	 * at which a name encodes a truth table. Composing here keeps the ordinary read
+	 * byte-for-byte the query it always was and puts the rare one in a shape that
+	 * takes a third exclusion without doubling again.
+	 *
+	 * <p>Excluded in the query and not afterwards, for the reason
+	 * {@code IssueCommentRepository} spells out: sifting a fetched page hands back
+	 * short pages and a total that counts comments the viewer will never see.
+	 */
+	private Page<IssueComment> topLevelExcluding(String issueId, Pageable pageable,
+			Set<String> blocked, Set<String> frozenIds) {
+		Criteria criteria = Criteria.where("issueId").is(issueId)
+				.and("replyToId").is(null)
+				.and("_id").nin(frozenIds);
+		if (!blocked.isEmpty()) {
+			criteria = criteria.and("authorId").nin(blocked);
+		}
+		return paged(criteria, pageable);
 	}
 
 	/** One page of a root comment's replies, oldest-first (flat, one level). */
@@ -1193,11 +1245,34 @@ public class IssueService {
 			User user) {
 		IssueComment root = requireComment(issueId, rootId, user);
 		Set<String> blocked = blockedFor(user);
+		Set<String> frozenIds = frozen.frozenIds(FrozenTargetType.COMMENT);
 		Pageable pageable = PageRequest.of(page, Math.min(size, 100),
 				Sort.by(Sort.Direction.ASC, "createdAt"));
-		return blocked.isEmpty()
-				? comments.findByReplyToId(root.getId(), pageable)
-				: comments.findByReplyToIdAndAuthorIdNotIn(root.getId(), blocked, pageable);
+		if (frozenIds.isEmpty()) {
+			return blocked.isEmpty()
+					? comments.findByReplyToId(root.getId(), pageable)
+					: comments.findByReplyToIdAndAuthorIdNotIn(root.getId(), blocked, pageable);
+		}
+		Criteria criteria = Criteria.where("replyToId").is(root.getId())
+				.and("_id").nin(frozenIds);
+		if (!blocked.isEmpty()) {
+			criteria = criteria.and("authorId").nin(blocked);
+		}
+		return paged(criteria, pageable);
+	}
+
+	/**
+	 * One page of comments matching [criteria], with the total the pager needs.
+	 *
+	 * <p>The count is issued from the criteria rather than from the paged query, so
+	 * it cannot inherit the skip and limit. A total that reflects the page is a
+	 * total that makes "load more" stop early — the same failure the exclusion is
+	 * in the query to avoid in the first place.
+	 */
+	private Page<IssueComment> paged(Criteria criteria, Pageable pageable) {
+		List<IssueComment> content = mongo.find(new Query(criteria).with(pageable), IssueComment.class);
+		long total = mongo.count(new Query(criteria), IssueComment.class);
+		return new PageImpl<>(content, pageable, total);
 	}
 
 	/**
@@ -1215,10 +1290,11 @@ public class IssueService {
 
 	/**
 	 * Populates the transient {@code replyCount} on a page of top-level comments,
-	 * counting only the replies [blocked] leaves visible — the badge must promise
-	 * exactly what opening the thread delivers.
+	 * counting only the replies [blocked] and [frozenIds] leave visible — the badge
+	 * must promise exactly what opening the thread delivers.
 	 */
-	private void attachReplyCounts(List<IssueComment> roots, Set<String> blocked) {
+	private void attachReplyCounts(List<IssueComment> roots, Set<String> blocked,
+			Set<String> frozenIds) {
 		if (roots.isEmpty()) {
 			return;
 		}
@@ -1232,12 +1308,42 @@ public class IssueService {
 			for (IssueCommentRepository.ReplyCount rc : rows) {
 				counts.put(rc.rootId(), rc.count());
 			}
+			discountFrozen(counts, blocked, frozenIds);
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("reply-count aggregation failed (counts default to 0)", ex);
 		}
 		for (IssueComment c : roots) {
 			c.setReplyCount(counts.getOrDefault(c.getId(), 0L).intValue());
+		}
+	}
+
+	/**
+	 * Subtracts frozen replies from counts the aggregation already produced.
+	 *
+	 * <p>A correction rather than a fourth variant of the grouped pipeline, and the
+	 * arithmetic is sound because the frozen set is tiny by construction — this is
+	 * one {@code findAllById} over single digits, against a second copy of an
+	 * aggregation that would then have to be kept in step with the first.
+	 *
+	 * <p>The correction is not optional. A badge that counts a reply the page will
+	 * not show reproduces exactly the hole {@code IssueCommentRepository} added its
+	 * blocked-author variant to prevent: a thread that promises three replies and
+	 * shows two, which reads to the viewer as the product having lost something.
+	 */
+	private void discountFrozen(Map<String, Long> counts, Set<String> blocked,
+			Set<String> frozenIds) {
+		if (frozenIds.isEmpty() || counts.isEmpty()) {
+			return;
+		}
+		for (IssueComment reply : comments.findAllById(frozenIds)) {
+			String root = reply.getReplyToId();
+			// Only replies the base count actually included: one by a blocked author
+			// was never counted, and subtracting it again would undercount.
+			if (root == null || !counts.containsKey(root) || blocked.contains(reply.getAuthorId())) {
+				continue;
+			}
+			counts.merge(root, -1L, (current, delta) -> Math.max(0L, current + delta));
 		}
 	}
 
@@ -1458,6 +1564,15 @@ public class IssueService {
 		// A top-level comment owns a flat reply thread — remove it too so replies
 		// don't orphan, freeing any voice blobs they hold (best-effort).
 		if (comment.getReplyToId() == null) {
+			// requireComment already refused a frozen root; a frozen REPLY under an
+			// unfrozen root is the case it cannot see, and deleting the root would
+			// take the preserved reply and its voice blob with it.
+			Set<String> frozenIds = frozen.frozenIds(FrozenTargetType.COMMENT);
+			for (IssueComment reply : comments.findByReplyToId(comment.getId())) {
+				if (frozenIds.contains(reply.getId())) {
+					throw ApiException.notFound("comment");
+				}
+			}
 			for (IssueComment reply : comments.findByReplyToId(comment.getId())) {
 				if (reply.resolvedType() == IssueComment.Type.VOICE && reply.getVoice() != null) {
 					storage.delete(reply.getVoice().getObjectKey());
@@ -1544,12 +1659,19 @@ public class IssueService {
 	 */
 	private List<IssueComment> pinnedComments(String issueId, User user, Set<String> blocked) {
 		String id = getForUser(issueId, user).getId();
+		Set<String> frozenIds = frozen.frozenIds(FrozenTargetType.COMMENT);
 		List<IssueComment> pinned = comments.findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(id)
 				.stream()
 				.filter(c -> c.getReplyToId() == null)
 				.filter(c -> !blocked.contains(c.getAuthorId()))
+				// A pin is the most prominent place a comment can be, so this is the
+				// one list where a frozen row left in would be seen first rather than
+				// scrolled past. Filtered in the stream and not the query for the
+				// reason the block filter already is: the list is unpaged, so there
+				// are no totals to keep honest.
+				.filter(c -> !frozenIds.contains(c.getId()))
 				.toList();
-		attachReplyCounts(pinned, blocked);
+		attachReplyCounts(pinned, blocked, frozenIds);
 		return pinned;
 	}
 
@@ -1560,9 +1682,13 @@ public class IssueService {
 	 */
 	private IssueComment withReplyCount(IssueComment comment, User user) {
 		Set<String> blocked = blockedFor(user);
-		comment.setReplyCount((int) (blocked.isEmpty()
+		Set<String> frozenIds = frozen.frozenIds(FrozenTargetType.COMMENT);
+		Map<String, Long> count = new HashMap<>();
+		count.put(comment.getId(), blocked.isEmpty()
 				? comments.countByReplyToId(comment.getId())
-				: comments.countByReplyToIdAndAuthorIdNotIn(comment.getId(), blocked)));
+				: comments.countByReplyToIdAndAuthorIdNotIn(comment.getId(), blocked));
+		discountFrozen(count, blocked, frozenIds);
+		comment.setReplyCount(count.get(comment.getId()).intValue());
 		return comment;
 	}
 
@@ -1575,10 +1701,26 @@ public class IssueService {
 	 * id. An admin who blocked a user still has to be able to open and delete that
 	 * user's comment from the report queue, and a 404 here would take that away from
 	 * exactly the person the moderation flow depends on.
+	 *
+	 * <p><b>Freeze is filtered, and the exemption above is why it has to be.</b> That
+	 * paragraph turns on "a block does not revoke the ability to act on an item
+	 * reached by id" — and a freeze is precisely such a revocation, for everyone
+	 * including an admin. The cited example inverts, too: for a blocked author's
+	 * comment the admin's job is to be able to delete it, and for frozen content
+	 * deleting is the one thing that must not happen. Every operation this method
+	 * serves is refused as a result — playback and replies because they are reads,
+	 * and edit, delete, react and pin because a frozen item is not only unreadable
+	 * but immutable. Without that, {@code editComment} lets the author overwrite the
+	 * evidence and {@code deleteComment} lets any admin destroy it.
+	 *
+	 * <p>The queue needs no exemption from this: it never returns a body, only a
+	 * label and a link, and for a frozen target it suppresses both anyway.
 	 */
 	private IssueComment requireComment(String issueId, String commentId, User user) {
 		Issue issue = get(issueId);
 		assertAccess(issue, user);
+		frozen.assertReadable(FrozenTargetType.ISSUE, issue.getId(), "issue");
+		frozen.assertReadable(FrozenTargetType.COMMENT, commentId, "comment");
 		return comments.findById(commentId)
 				.filter(c -> c.getIssueId().equals(issue.getId()))
 				.orElseThrow(() -> ApiException.notFound("comment"));

@@ -9,6 +9,8 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.moderation.image.ImageTierState;
 import com.ahmadre.hinata.moderation.report.ContentReport;
 import com.ahmadre.hinata.moderation.report.ContentReportService;
@@ -81,6 +83,7 @@ public class ModerationQueueService {
 	private final ArticleRepository articles;
 	private final AuditService audit;
 	private final ModerationService moderation;
+	private final FrozenContentService frozen;
 
 	// --- Rows -----------------------------------------------------------------
 
@@ -249,15 +252,46 @@ public class ModerationQueueService {
 		Map<String, String> commentLinks = commentLinks(rows);
 		return found.map(record -> {
 			ModerationRecord.CategoryScore primary = primary(record);
+			// Same suppression as a frozen report row, and it has to be repeated here
+			// because the two queues assemble their rows separately: a record whose
+			// target was later frozen keeps its verdict, loses its label and loses the
+			// link that would open the content.
+			boolean isFrozen = frozenRecord(record);
 			return new RecordRow(record.getId(), record.getCreatedAt(), record.getSurface(),
 					primary == null ? null : primary.getCategory(), record.getDecision(),
 					record.getTier(), primary == null ? 0 : primary.getScore(), record.isDegraded(),
 					record.getReviewState(), record.getTargetType(), record.getTargetId(),
-					record.getLabel(), commentLinks.get(record.getId()), record.getProjectId(),
+					isFrozen ? null : record.getLabel(),
+					isFrozen ? null : commentLinks.get(record.getId()), record.getProjectId(),
 					named(projectNames, record.getProjectId()), record.getAuthorId(),
 					named(userNames, record.getAuthorId()),
 					primary == null ? null : primary.getEvidence(), record.getReviewNote());
 		});
+	}
+
+	/**
+	 * Whether a recorded verdict points at frozen content.
+	 *
+	 * <p>The record's {@code targetType} is the lowercase entity word the client
+	 * derives routes from — {@code issue}, {@code comment}, {@code media} — rather
+	 * than an enum, so the mapping is written out. An unrecognised word answers
+	 * "not frozen", which is the right default only because every word that can
+	 * carry frozen content is listed: {@code media} and {@code attachment} both
+	 * store an object key as their target id, which is why they map to OBJECT.
+	 */
+	private boolean frozenRecord(ModerationRecord record) {
+		if (record.getTargetId() == null || record.getTargetType() == null) {
+			return false;
+		}
+		FrozenTargetType type = switch (record.getTargetType()) {
+			case "issue" -> FrozenTargetType.ISSUE;
+			case "comment" -> FrozenTargetType.COMMENT;
+			case "article" -> FrozenTargetType.ARTICLE;
+			case "user" -> FrozenTargetType.USER;
+			case "media", "attachment" -> FrozenTargetType.OBJECT;
+			default -> null;
+		};
+		return type != null && frozen.isFrozen(type, record.getTargetId());
 	}
 
 	/**
@@ -318,6 +352,24 @@ public class ModerationQueueService {
 	private record Reference(String label, String link, String authorId) {
 
 		private static final Reference NONE = new Reference(null, null, null);
+
+		/**
+		 * The same row with nothing that opens or describes the content.
+		 *
+		 * <p>Both removals are load-bearing. The <b>link</b> deep-links straight into
+		 * the thread or the article, so leaving it is leaving a one-click way for a
+		 * moderator to see material the whole freeze exists to stop anyone seeing —
+		 * and "a moderator must not just check" has to be enforced by removing the
+		 * affordance, not by writing an instruction next to it. The <b>label</b> is an
+		 * article title or a file name, and for this category the title may be the
+		 * violating text itself.
+		 *
+		 * <p>Who wrote it stays. That is the field the moderator actually works from
+		 * — the author's account and its history — and it is not content.
+		 */
+		Reference frozen() {
+			return new Reference(null, null, authorId);
+		}
 	}
 
 	private Reference reference(ContentReport report, Map<String, Issue> issuesById,
@@ -325,6 +377,30 @@ public class ModerationQueueService {
 		if (report.getTargetType() == null) {
 			return Reference.NONE;
 		}
+		Reference resolved = resolve(report, issuesById, articlesById, commentsById);
+		return isFrozen(report) ? resolved.frozen() : resolved;
+	}
+
+	/**
+	 * Whether the reported target is frozen.
+	 *
+	 * <p>Answered from the in-memory snapshot, so a page of twenty-five rows costs
+	 * no queries at all — which is what makes it affordable to ask for every row
+	 * rather than only for the ones a caller remembered to check.
+	 */
+	private boolean isFrozen(ContentReport report) {
+		FrozenTargetType type = switch (report.getTargetType()) {
+			case ISSUE -> FrozenTargetType.ISSUE;
+			case COMMENT -> FrozenTargetType.COMMENT;
+			case ARTICLE -> FrozenTargetType.ARTICLE;
+			case ATTACHMENT -> FrozenTargetType.ATTACHMENT;
+			case USER -> FrozenTargetType.USER;
+		};
+		return frozen.isFrozen(type, report.getTargetId());
+	}
+
+	private Reference resolve(ContentReport report, Map<String, Issue> issuesById,
+			Map<String, Article> articlesById, Map<String, IssueComment> commentsById) {
 		return switch (report.getTargetType()) {
 			case ISSUE -> {
 				Issue issue = issuesById.get(report.getTargetId());

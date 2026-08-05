@@ -95,7 +95,42 @@ public enum AuditAction {
 	// so it is countable (mass-blocking one person says something) without dressing
 	// an ordinary self-protective action up as an incident.
 	USER_BLOCKED(MODERATION, INFO, true),
-	USER_UNBLOCKED(MODERATION, INFO, true);
+	USER_UNBLOCKED(MODERATION, INFO, true),
+
+	/**
+	 * Content was frozen: preserved, and unreachable to everyone including admins.
+	 *
+	 * <p>WARNING and, unlike every other toggle in this enum, one an operator
+	 * should never switch off — a freeze is the strongest thing the product does to
+	 * a piece of content, it is reversible only by a named person, and the row here
+	 * is the only place the sequence "who froze what, when, and on whose report"
+	 * survives. The content itself is deliberately unreadable afterwards, so this
+	 * log is what the eventual conversation with an authority is reconstructed from.
+	 */
+	CONTENT_FROZEN(MODERATION, WARNING, true),
+
+	/**
+	 * A frozen item was released. Recorded separately from the freeze rather than
+	 * as an outcome on it, because the two are answered by different people at
+	 * different times and an unfreeze is the one that needs defending: it is an
+	 * administrative correction — wrong target, malicious reporter — and never a
+	 * judgement on content nobody was allowed to look at.
+	 */
+	CONTENT_UNFROZEN(MODERATION, WARNING, true),
+
+	/** A frozen item was handed to the operator's external escalation endpoint. */
+	MODERATION_ESCALATED(MODERATION, WARNING, true),
+
+	/**
+	 * Escalation could not be delivered after every retry.
+	 *
+	 * <p>Its own action rather than a FAILURE outcome on {@link #MODERATION_ESCALATED}
+	 * so it can be alerted on directly. This is the case where the product did
+	 * everything it can — froze the content, preserved the bytes — and the person
+	 * who has to act on it was never told, which is precisely the failure that must
+	 * not be a log line nobody greps for.
+	 */
+	MODERATION_ESCALATION_FAILED(MODERATION, WARNING, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

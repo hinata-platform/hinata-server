@@ -201,6 +201,48 @@ public class HinataProperties {
 		private boolean failOpen = true;
 		/** The optional out-of-process image classifier. */
 		private Image image = new Image();
+		/** Where frozen content is escalated to, when the operator has somewhere. */
+		private Escalation escalation = new Escalation();
+
+		/**
+		 * The outbound notice a freeze raises — a webhook to whatever the operator
+		 * already routes incidents through.
+		 *
+		 * <p>Env-only and never an admin setting, for the same reason the sidecar's
+		 * address is: this is the endpoint that gets told about the most serious
+		 * thing the product can find, and an admin web form that can repoint it is a
+		 * web form that can silence it.
+		 *
+		 * <p>Empty {@link #url} is the default and the whole adapter stays
+		 * uninstantiated. That is a supported configuration — a small self-hosted
+		 * install may genuinely have nobody to notify — and it changes nothing about
+		 * the freeze itself, which happens either way.
+		 */
+		@Getter
+		@Setter
+		public static class Escalation {
+			/** Endpoint the signed notice is POSTed to. Empty ⇒ no adapter. */
+			private String url = "";
+			/**
+			 * Shared secret for the {@code X-Hinata-Signature} HMAC. Without it the
+			 * recipient cannot tell a real notice from anyone who learned the URL, so
+			 * an adapter configured without a secret refuses to start rather than
+			 * sending unauthenticated claims about frozen material.
+			 */
+			private String secret = "";
+			/** Budget for one delivery attempt, applied to the connect and the read. */
+			private Duration timeout = Duration.ofSeconds(5);
+			/**
+			 * How many times one notice is attempted before it is audited as
+			 * undelivered. Bounded rather than "until it works": an endpoint that is
+			 * down stays down, and a retry loop with no end is a queue nobody drains
+			 * plus a thread nobody frees.
+			 */
+			@Min(1)
+			private int maxAttempts = 3;
+			/** Wait between attempts. Fixed, not exponential — three tries is not a backoff curve. */
+			private Duration retryDelay = Duration.ofSeconds(2);
+		}
 
 		/**
 		 * The image classification sidecar — a separate process holding the model and

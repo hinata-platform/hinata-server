@@ -139,6 +139,22 @@ public class ModerationRecord {
 	 */
 	private String contentHash;
 
+	/**
+	 * The accredited programme's own handle for a known-illegal match, prefixed
+	 * with the programme that gave it — {@code photodna:AB12…}.
+	 *
+	 * <p>Written only by a
+	 * {@link com.ahmadre.hinata.moderation.image.KnownIllegalHashProvider} match,
+	 * and deliberately <em>not</em> folded into
+	 * {@link CategoryScore#getEvidence()}, which is the field that already means
+	 * "which rule fired". Evidence is rendered on the admin queue row; this must
+	 * not be. It is the identifier by which a hash programme names material it has
+	 * adjudicated, it is what an authority quotes back, and its whole value depends
+	 * on it not circulating — so it lives on the row, reaches no DTO, and is
+	 * excluded from the escalation payload as explicitly as from the API.
+	 */
+	private String externalReference;
+
 	@CreatedDate
 	private Instant createdAt;
 

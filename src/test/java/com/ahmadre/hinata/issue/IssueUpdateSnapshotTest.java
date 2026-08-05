@@ -82,7 +82,8 @@ class IssueUpdateSnapshotTest {
 				mock(UserRepository.class),
 				mock(ModerationService.class),
 				mock(ModerationRecorder.class),
-				mock(UserBlockService.class));
+				mock(UserBlockService.class),
+				com.ahmadre.hinata.moderation.freeze.FreezeFixtures.nothingFrozen());
 
 		when(issues.save(any(Issue.class))).thenAnswer(call -> call.getArgument(0));
 	}

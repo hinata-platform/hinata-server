@@ -9,8 +9,13 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.moderation.ModerationCategory;
 import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.escalation.ModerationEscalation;
+import com.ahmadre.hinata.moderation.freeze.FrozenContent;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -33,6 +38,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -91,6 +97,26 @@ public class ContentReportService {
 	 */
 	public static final int REPORTS_PER_HOUR = 20;
 
+	/**
+	 * Reports one account may file <em>that cause a freeze</em> per day.
+	 *
+	 * <p>Far tighter than {@link #REPORTS_PER_HOUR}, and for a different reason.
+	 * That budget caps ordinary reporting, which is cheap to be wrong about — a
+	 * spurious report costs a moderator ten seconds. A freeze costs the author their
+	 * content, immediately, on one unverified assertion, reversible only by an
+	 * audited admin action. This class's own javadoc warns that "a system that lets a
+	 * handful of them remove a colleague's work is a system whose moderation can be
+	 * aimed", and freezing on a single report is exactly that, only stronger.
+	 *
+	 * <p>Freezing anyway is still the right trade — leaving suspected child sexual
+	 * content up while an admin wakes is the worse outcome — so the answer to the
+	 * abuse risk is not to freeze rarely but to freeze <em>attributably</em> and
+	 * release fast: every freeze carries its reporter, and over this budget the
+	 * report is still <b>filed and queued in full</b>, it simply does not freeze.
+	 * Nobody's notice is ever discarded.
+	 */
+	public static final int FREEZING_REPORTS_PER_DAY = 3;
+
 	private final ContentReportRepository reports;
 	private final IssueService issues;
 	private final IssueCommentRepository comments;
@@ -101,6 +127,8 @@ public class ContentReportService {
 	private final ModerationService moderation;
 	private final NotificationService notifications;
 	private final AuditService audit;
+	private final FrozenContentService frozen;
+	private final List<ModerationEscalation> escalations;
 
 	/**
 	 * Per-user token buckets, mirroring {@link com.ahmadre.hinata.config.RateLimitFilter}
@@ -111,6 +139,9 @@ public class ContentReportService {
 	 * per-IP map the key space here is bounded by the workspace's own membership.
 	 */
 	private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
+
+	/** The freeze-causing budget, kept separately so one cannot exhaust the other. */
+	private final Map<String, Bucket> freezeBuckets = new ConcurrentHashMap<>();
 
 	/**
 	 * Files [reason] against the given target on behalf of [reporter].
@@ -139,6 +170,17 @@ public class ContentReportService {
 			// refused as a threat.
 			moderation.checkText(explanation, ModerationSurface.COMMENT);
 		}
+		// Freeze BEFORE the report row, and outside any transaction. Both halves
+		// matter. The ordering: freezing and then failing to file leaves content
+		// unreachable with no report — safe, and visible in the audit log. Filing and
+		// then failing to freeze leaves suspected child sexual content up, which is
+		// the outcome this exists to prevent. And no transaction, because the gate
+		// two lines above is a gate: MongoModerationRecorder's javadoc spells out
+		// that a gate inside a transaction "would roll back the very row that
+		// explains why it rolled back", and SprintService.start was fixed for exactly
+		// that. The order is what makes the sequence safe; a transaction would only
+		// make it fail differently.
+		FrozenContent freeze = freezeIfWarranted(reporter, targetType, target, reason);
 		ContentReport saved = reports.save(ContentReport.builder()
 				.reporterId(reporter.getId())
 				.targetType(targetType)
@@ -148,14 +190,151 @@ public class ContentReportService {
 				.reason(reason)
 				.note(explanation)
 				.build());
+		frozen.attachReport(freeze, saved.getId());
 		audit.event(AuditAction.CONTENT_REPORTED)
 				.actor(reporter)
 				.target(target.id(), target.label())
 				.meta("targetType", targetType.name())
 				.meta("reason", reason.name())
+				.meta("frozen", String.valueOf(freeze != null))
 				.log();
-		notifyModerators(saved, reporter, target);
+		escalate(saved, targetType, target);
+		notifyModerators(saved, reporter, target, freeze != null);
 		return saved;
+	}
+
+	/**
+	 * Freezes the reported target when the reason calls for it.
+	 *
+	 * <p><b>{@code SEXUAL_MINORS} only, not {@link ContentReport.ReportReason#urgent()}.</b>
+	 * That predicate also covers {@code MALWARE}, and freezing on a malware report
+	 * would be a weapon for no safety gain: a malicious file is refused at upload
+	 * and never persisted, and {@link ModerationCategory#MALWARE} is documented as a
+	 * scanner verdict that "is never appealable on the merits and never routed to a
+	 * content moderator". There is nothing for a freeze to preserve and nothing for a
+	 * human to decide — only an attachment anyone could make disappear by naming the
+	 * right reason.
+	 *
+	 * <p>Never fails the report. A registry that cannot be written is a reason to
+	 * escalate and to log, not to discard somebody's notice — the report row and the
+	 * queue are the fallback the product had before freeze existed.
+	 *
+	 * @return the freeze, or {@code null} when none was raised
+	 */
+	private FrozenContent freezeIfWarranted(User reporter, ContentReport.TargetType targetType,
+			Target target, ContentReport.ReportReason reason) {
+		if (reason == null || reason.category() != ModerationCategory.SEXUAL_MINORS) {
+			return null;
+		}
+		FrozenTargetType type = freezableType(targetType);
+		if (type == null) {
+			return null;
+		}
+		if (!freezeBudget(reporter.getId())) {
+			log.warn("Report by {} would have frozen {} {} but the account is over its daily "
+					+ "freeze budget — the report is filed and queued, unfrozen",
+					reporter.getId(), targetType, target.id());
+			return null;
+		}
+		try {
+			return frozen.freeze(new FrozenContentService.Request(type, target.id(),
+					target.contextId(), target.objectKeys(), ModerationCategory.SEXUAL_MINORS,
+					null, reporter.getId(), null, "report:" + reason.name()));
+		}
+		catch (RuntimeException ex) {
+			log.error("Could not freeze reported {} {}: {}", targetType, target.id(), ex.toString());
+			return null;
+		}
+	}
+
+	/**
+	 * The freeze target type a report target maps to, or {@code null} for one that
+	 * cannot be frozen.
+	 *
+	 * <p>{@link ContentReport.TargetType#USER} is the {@code null}: a report about a
+	 * person is about a pattern of behaviour with no content id attached — that is
+	 * why it exists as its own kind — and freezing an account is a suspension, which
+	 * is a different action with a different due-process story. Nothing in WP-3
+	 * grants it, so it is not quietly granted here.
+	 */
+	private static FrozenTargetType freezableType(ContentReport.TargetType targetType) {
+		return switch (targetType) {
+			case ISSUE -> FrozenTargetType.ISSUE;
+			case COMMENT -> FrozenTargetType.COMMENT;
+			case ARTICLE -> FrozenTargetType.ARTICLE;
+			case ATTACHMENT -> FrozenTargetType.ATTACHMENT;
+			case USER -> null;
+		};
+	}
+
+	/** Charges one token against the reporter's daily freeze-causing budget. */
+	private boolean freezeBudget(String userId) {
+		return freezeBuckets.computeIfAbsent(userId, key -> Bucket.builder()
+						.addLimit(Bandwidth.builder()
+								.capacity(FREEZING_REPORTS_PER_DAY)
+								.refillGreedy(FREEZING_REPORTS_PER_DAY, Duration.ofDays(1))
+								.build())
+						.build())
+				.tryConsume(1);
+	}
+
+	/**
+	 * Hands an urgent report to the operator's escalation targets.
+	 *
+	 * <p>{@link ContentReport.ReportReason#urgent()} here, unlike the freeze trigger
+	 * above — and the asymmetry is deliberate. Escalating is telling a human that
+	 * something needs looking at, which is exactly right for a malware report even
+	 * though there is nothing to freeze. Removing someone's content is not.
+	 *
+	 * <p>The payload names the report and the target, and carries neither the
+	 * reporter's note nor the target's label: the label is an article title or a file
+	 * name, which for this category is potentially the violating material itself.
+	 */
+	private void escalate(ContentReport report, ContentReport.TargetType targetType, Target target) {
+		if (report.getReason() == null || !report.getReason().urgent() || escalations.isEmpty()) {
+			return;
+		}
+		ModerationEscalation.Event event = new ModerationEscalation.Event(report.getId(),
+				report.getReason().category(), surfaceOf(targetType),
+				targetType.name().toLowerCase(Locale.ROOT) + ":" + target.id(), Instant.now());
+		for (ModerationEscalation destination : escalations) {
+			try {
+				destination.escalate(event);
+			}
+			catch (RuntimeException ex) {
+				log.error("Escalation target {} failed for report {}: {}", destination.id(),
+						report.getId(), ex.toString());
+			}
+		}
+	}
+
+	/**
+	 * Every stored object an issue owns.
+	 *
+	 * <p>Freezing an issue without these leaves its attachments downloadable to
+	 * anyone holding a presigned URL or the download route, which is the whole of
+	 * what an attachment is: bytes with an addressable existence independent of the
+	 * row that lists them.
+	 */
+	private static List<String> attachmentKeys(Issue issue) {
+		if (issue.getAttachments() == null) {
+			return List.of();
+		}
+		return issue.getAttachments().stream()
+				.map(Issue.Attachment::getObjectKey)
+				.filter(key -> key != null && !key.isBlank())
+				.toList();
+	}
+
+	/** The reported target expressed as a moderation surface, so both queues speak one vocabulary. */
+	private static ModerationSurface surfaceOf(ContentReport.TargetType type) {
+		return switch (type) {
+			case ISSUE -> ModerationSurface.ISSUE_DESCRIPTION;
+			case COMMENT -> ModerationSurface.COMMENT;
+			case ARTICLE -> ModerationSurface.ARTICLE_CONTENT;
+			case ATTACHMENT -> ModerationSurface.ATTACHMENT;
+			case USER -> ModerationSurface.PROFILE;
+		};
 	}
 
 	/**
@@ -266,8 +445,14 @@ public class ContentReportService {
 	 * @param label     short human-readable handle for the queue row and the audit
 	 *                  entry — an issue key, a file name, a display name; never the
 	 *                  reported content itself
+	 * @param objectKeys every stored object the target owns — a voice blob, an
+	 *                  attachment's bytes, an issue's attachments. Resolved here
+	 *                  because this is where the entity is already in hand, and a
+	 *                  freeze that reaches the row but not the bytes leaves the
+	 *                  material downloadable by anyone who kept the URL
 	 */
-	private record Target(String id, String contextId, String projectId, String label) {
+	private record Target(String id, String contextId, String projectId, String label,
+			List<String> objectKeys) {
 	}
 
 	private Target resolve(ContentReport.TargetType targetType, String targetId, String contextId,
@@ -278,7 +463,8 @@ public class ContentReportService {
 		return switch (targetType) {
 			case ISSUE -> {
 				Issue issue = issues.getForUser(targetId, reporter);
-				yield new Target(issue.getId(), null, issue.getProjectId(), issue.getReadableId());
+				yield new Target(issue.getId(), null, issue.getProjectId(), issue.getReadableId(),
+						attachmentKeys(issue));
 			}
 			case COMMENT -> {
 				IssueComment comment = comments.findById(targetId)
@@ -288,7 +474,9 @@ public class ContentReportService {
 				// the thread it lives in.
 				Issue issue = issues.getForUser(comment.getIssueId(), reporter);
 				yield new Target(comment.getId(), issue.getId(), issue.getProjectId(),
-						issue.getReadableId());
+						issue.getReadableId(),
+						comment.getVoice() == null ? List.of()
+								: List.of(comment.getVoice().getObjectKey()));
 			}
 			case ARTICLE -> {
 				Article article = articles.findById(targetId)
@@ -298,7 +486,8 @@ public class ContentReportService {
 					// exists to someone who may not know that.
 					throw ApiException.notFound("article");
 				}
-				yield new Target(article.getId(), null, article.getProjectId(), article.getTitle());
+				yield new Target(article.getId(), null, article.getProjectId(), article.getTitle(),
+						List.of());
 			}
 			case ATTACHMENT -> {
 				if (contextId == null || contextId.isBlank()) {
@@ -313,7 +502,7 @@ public class ContentReportService {
 						.findFirst()
 						.orElseThrow(() -> ApiException.notFound("attachment"));
 				yield new Target(attachment.getId(), issue.getId(), issue.getProjectId(),
-						attachment.getFileName());
+						attachment.getFileName(), List.of(attachment.getObjectKey()));
 			}
 			case USER -> {
 				if (targetId.equals(reporter.getId())) {
@@ -325,7 +514,7 @@ public class ContentReportService {
 				// pattern of behaviour that no single item carries, and requiring the
 				// reporter to first name a piece of content is exactly the gap Google
 				// Play rejects apps for.
-				yield new Target(reported.getId(), null, null, reported.getDisplayName());
+				yield new Target(reported.getId(), null, null, reported.getDisplayName(), List.of());
 			}
 		};
 	}
@@ -361,14 +550,22 @@ public class ContentReportService {
 	 * the report itself: the row is already saved and the queue is the source of truth,
 	 * so a mail outage must not cost the reporter their submission.
 	 */
-	private void notifyModerators(ContentReport report, User reporter, Target target) {
+	private void notifyModerators(ContentReport report, User reporter, Target target,
+			boolean frozenTarget) {
 		try {
 			List<User> admins = users.findByRolesContainingAndActiveIsTrue(Role.ADMIN);
 			if (admins.isEmpty()) {
 				log.warn("Content report {} has no active admin to notify", report.getId());
 				return;
 			}
-			notifications.notifyAdminsContentReported(admins, reporter, target.label(),
+			// A frozen target's label is suppressed. The label is an article title or a
+			// file name, and for this category the title may itself be the violating
+			// material — while this notice becomes a persisted row, an SMTP mail and a
+			// push body on every admin's lock screen. Freezing the content and then
+			// mailing its title to everyone would leave the one copy that cannot be
+			// recalled in the one place with the widest audience.
+			notifications.notifyAdminsContentReported(admins, reporter,
+					frozenTarget ? null : target.label(),
 					report.getReason().urgent(), "/admin/moderation?report=" + report.getId());
 		}
 		catch (RuntimeException ex) {

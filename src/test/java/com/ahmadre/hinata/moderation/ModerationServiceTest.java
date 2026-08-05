@@ -1,7 +1,9 @@
 package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.moderation.escalation.ModerationEscalation;
 import com.ahmadre.hinata.moderation.image.ImageModerator;
+import com.ahmadre.hinata.moderation.image.KnownIllegalHashProvider;
 import com.ahmadre.hinata.moderation.text.LexiconTextModerator;
 import com.ahmadre.hinata.moderation.text.TextModerator;
 import com.ahmadre.hinata.setup.ServerSettings;
@@ -9,12 +11,14 @@ import com.ahmadre.hinata.setup.SettingsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -340,6 +344,194 @@ class ModerationServiceTest {
 		assertThat(verdict.degraded()).isTrue();
 	}
 
+	// --- known-illegal hash matching (WP-3 §6.1/§6.2) ---------------------------------
+
+	/**
+	 * A match is a refusal, in the one category no setting can weaken, from the tier
+	 * that names an external body — and nothing about it is a score.
+	 */
+	@Test
+	void aKnownIllegalHashMatchBlocksAsSexualMinorsFromTheExternalTier() {
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(matchingProvider()), List.of());
+
+		ModerationException thrown = catchModeration(() -> service.checkImage(new byte[] { 1 },
+				"image/png", "cat.png", ModerationSurface.ATTACHMENT));
+
+		assertThat(thrown.getVerdict().decision()).isEqualTo(ModerationDecision.BLOCK);
+		assertThat(thrown.getVerdict().primaryCategory()).isEqualTo(ModerationCategory.SEXUAL_MINORS);
+		assertThat(thrown.getVerdict().primary().score()).isEqualTo(100);
+		assertThat(thrown.getVerdict().tier()).isEqualTo(ModerationVerdict.ModerationTier.EXTERNAL);
+	}
+
+	/**
+	 * The verdict that reaches the author carries no evidence — and here that word
+	 * means the hash programme's own reference, which is the handle by which an
+	 * accredited body identifies adjudicated material. Handing it back would be worse
+	 * than the lexicon oracle {@code refusalDoesNotDiscloseTheMatchedTerm} guards
+	 * against: not a term to rephrase around, but an identifier inside somebody
+	 * else's corpus.
+	 */
+	@Test
+	void theRefusalHandedToTheAuthorCarriesNoProviderReference() {
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(matchingProvider()), List.of());
+
+		ModerationException thrown = catchModeration(() -> service.checkImage(new byte[] { 1 },
+				"image/png", "cat.png", ModerationSurface.ATTACHMENT));
+
+		assertThat(thrown.getVerdict().matches())
+				.isNotEmpty()
+				.allSatisfy(match -> assertThat(match.evidence()).isNull());
+		assertThat(thrown.getMessage()).doesNotContain("REF-9911");
+	}
+
+	/** The reference is written to the record — the one place it may exist. */
+	@Test
+	void theProviderReferenceIsRecordedOnTheRowAndNowhereElse() {
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(matchingProvider()), List.of());
+
+		catchModeration(() -> service.checkImage(new byte[] { 1 }, "image/png", "cat.png",
+				ModerationSurface.ATTACHMENT));
+
+		assertThat(recorder.recorded).hasSize(1);
+		RecordingRecorder.Recorded row = recorder.recorded.getFirst();
+		assertThat(row.externalReference()).isEqualTo("photodna:REF-9911");
+		assertThat(row.target().label()).isEqualTo("cat.png");
+		// One row, not two: the known-illegal path writes its own and checkImage must
+		// not then add a second, poorer one for the same refusal.
+		assertThat(row.verdict().primaryCategory()).isEqualTo(ModerationCategory.SEXUAL_MINORS);
+	}
+
+	/**
+	 * A match escalates, and the payload is a pointer and a classification. The
+	 * negative half is the point: no bytes, no file content, and above all not the
+	 * reference — the escalation leaves the machine, and that value must not.
+	 */
+	@Test
+	void aMatchEscalatesWithoutContentAndWithoutTheHashReference() {
+		RecordingEscalation escalation = new RecordingEscalation();
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(matchingProvider()), List.of(escalation));
+
+		catchModeration(() -> service.checkImage("bytes".getBytes(StandardCharsets.UTF_8),
+				"image/png", "cat.png", ModerationSurface.ATTACHMENT));
+
+		assertThat(escalation.events).hasSize(1);
+		ModerationEscalation.Event event = escalation.events.getFirst();
+		assertThat(event.category()).isEqualTo(ModerationCategory.SEXUAL_MINORS);
+		assertThat(event.surface()).isEqualTo(ModerationSurface.ATTACHMENT);
+		assertThat(event.recordId()).isNotBlank();
+		assertThat(event.at()).isNotNull();
+		// The hash reference and the bytes were already asserted absent. The file
+		// name is the one that got through: it is chosen by the uploader, routinely
+		// describes what the file depicts, and this payload leaves the product for an
+		// operator-supplied webhook. Asserting on the whole event rather than one
+		// field, because the leak was in a field nobody thought to look at.
+		assertThat(event.toString())
+				.doesNotContain("REF-9911")
+				.doesNotContain("photodna")
+				.doesNotContain("bytes")
+				// Not a bare "cat": that is a substring of "category=", which would
+				// fail on the field name rather than on a leak.
+				.doesNotContain("cat.png");
+		assertThat(event.reference()).isEqualTo("record:" + event.recordId());
+	}
+
+	/**
+	 * A configured-but-unavailable provider refuses the upload on <em>every</em>
+	 * surface, including the internal ones where an unavailable classifier is
+	 * explicitly allowed to degrade and pass. That contrast is the test: the same
+	 * surface, the same failOpen setting, opposite outcomes, because the check is
+	 * different in kind rather than in confidence.
+	 */
+	@ParameterizedTest
+	@EnumSource(ModerationSurface.class)
+	void anUnavailableHashProviderRefusesOnEverySurface(ModerationSurface surface) {
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(unavailableProvider()), List.of());
+
+		assertThatThrownBy(() -> service.checkImage(new byte[] { 1 }, "image/png", "cat.png", surface))
+				.isInstanceOf(ModerationException.class)
+				.hasMessageContaining("unavailable");
+	}
+
+	/** And it is not degrade-and-pass: nothing about the verdict says "queued". */
+	@Test
+	void anUnavailableHashProviderDoesNotDegradeAndPass() {
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(unavailableProvider()), List.of());
+
+		assertThatThrownBy(() -> service.assessImage(new byte[] { 1 }, "image/png",
+				ModerationSurface.ATTACHMENT))
+				.isInstanceOf(ModerationException.class);
+	}
+
+	/**
+	 * Not even with fail-open turned on and image classification switched off — the
+	 * two settings that make an unavailable classifier pass. Neither reaches this
+	 * check, which is what {@code ModerationCheck.KNOWN_ILLEGAL_HASH} encodes.
+	 */
+	@Test
+	void noAdminSettingLetsAnUnavailableHashProviderThrough() {
+		settings.getModeration().setFailOpen(true);
+		settings.getModeration().setImageEnabled(false);
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(unavailableProvider()), List.of());
+
+		assertThatThrownBy(() -> service.checkImage(new byte[] { 1 }, "image/png", "cat.png",
+				ModerationSurface.ATTACHMENT))
+				.isInstanceOf(ModerationException.class);
+	}
+
+	/** A working provider that finds nothing must not change a single upload. */
+	@Test
+	void aCleanProviderLeavesTheUploadExactlyAsItWas() {
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(cleanProvider()), List.of());
+
+		ModerationVerdict verdict = service.assessImage(new byte[] { 1 }, "image/png",
+				ModerationSurface.ATTACHMENT);
+
+		assertThat(verdict.decision()).isEqualTo(ModerationDecision.ALLOW);
+		assertThat(verdict.degraded()).isFalse();
+		assertThat(recorder.recorded).isEmpty();
+	}
+
+	/**
+	 * Turning image classification off does not turn the hash check off. An admin
+	 * disabling the model is saying "do not score our screenshots", and reading that
+	 * as "accept material an accredited body already adjudicated" would make a
+	 * checkbox weaken the one category the policy refuses to let anyone weaken.
+	 */
+	@Test
+	void switchingImageModerationOffDoesNotSwitchOffTheHashCheck() {
+		settings.getModeration().setImageEnabled(false);
+		service = new ModerationService(policy, recorder, List.of(), List.of(),
+				List.of(matchingProvider()), List.of());
+
+		assertThatThrownBy(() -> service.checkImage(new byte[] { 1 }, "image/png", "cat.png",
+				ModerationSurface.ATTACHMENT))
+				.isInstanceOf(ModerationException.class);
+	}
+
+	/**
+	 * The hash tier runs BEFORE the classifiers. Asserted through a classifier that
+	 * would throw if it were reached: order is not observable from the verdict — both
+	 * paths refuse — and an implementation that scored first and matched second would
+	 * send the bytes to a sidecar that has no business receiving them.
+	 */
+	@Test
+	void theHashTierRunsBeforeTheClassifierTiers() {
+		service = new ModerationService(policy, recorder, List.of(),
+				List.of(explodingImageModerator()), List.of(matchingProvider()), List.of());
+
+		assertThatThrownBy(() -> service.checkImage(new byte[] { 1 }, "image/png", "cat.png",
+				ModerationSurface.ATTACHMENT))
+				.isInstanceOf(ModerationException.class);
+	}
+
 	// --- helpers ----------------------------------------------------------------------
 
 	private static ModerationException catchModeration(Runnable action) {
@@ -363,26 +555,116 @@ class ModerationServiceTest {
 		private final List<Recorded> recorded = new ArrayList<>();
 
 		private record Recorded(ModerationVerdict verdict, ModerationSurface surface, Target target,
+				String content, String externalReference) {
+		}
+
+		@Override
+		public String record(ModerationVerdict verdict, ModerationSurface surface, Target target) {
+			return add(new Recorded(verdict, surface, target, null, null));
+		}
+
+		@Override
+		public String record(ModerationVerdict verdict, ModerationSurface surface, Target target,
 				String content) {
+			return add(new Recorded(verdict, surface, target, content, null));
 		}
 
 		@Override
-		public void record(ModerationVerdict verdict, ModerationSurface surface, Target target) {
-			recorded.add(new Recorded(verdict, surface, target, null));
-		}
-
-		@Override
-		public void record(ModerationVerdict verdict, ModerationSurface surface, Target target,
-				String content) {
-			recorded.add(new Recorded(verdict, surface, target, content));
-		}
-
-		@Override
-		public void record(ModerationVerdict verdict, ModerationSurface surface, Target target,
+		public String record(ModerationVerdict verdict, ModerationSurface surface, Target target,
 				byte[] content) {
-			recorded.add(new Recorded(verdict, surface, target,
-					content == null ? null : new String(content, StandardCharsets.UTF_8)));
+			return add(new Recorded(verdict, surface, target, text(content), null));
 		}
+
+		@Override
+		public String recordKnownIllegal(ModerationVerdict verdict, ModerationSurface surface,
+				Target target, byte[] content, String externalReference) {
+			return add(new Recorded(verdict, surface, target, text(content), externalReference));
+		}
+
+		private String add(Recorded row) {
+			recorded.add(row);
+			return "record-" + recorded.size();
+		}
+
+		private static String text(byte[] content) {
+			return content == null ? null : new String(content, StandardCharsets.UTF_8);
+		}
+	}
+
+	/** An escalation target that keeps what it was handed instead of sending it. */
+	private static final class RecordingEscalation implements ModerationEscalation {
+
+		private final List<Event> events = new ArrayList<>();
+
+		@Override
+		public void escalate(Event event) {
+			events.add(event);
+		}
+
+		@Override
+		public String id() {
+			return "recording";
+		}
+	}
+
+	/** A provider that matches everything it is shown. */
+	private static KnownIllegalHashProvider matchingProvider() {
+		return new KnownIllegalHashProvider() {
+			@Override
+			public Optional<HashMatch> match(byte[] data, String contentType) {
+				return Optional.of(new HashMatch("photodna", "REF-9911"));
+			}
+
+			@Override
+			public String id() {
+				return "matching";
+			}
+
+			@Override
+			public boolean available() {
+				return true;
+			}
+		};
+	}
+
+	/** A provider that never matches — the shape of a working, quiet subscription. */
+	private static KnownIllegalHashProvider cleanProvider() {
+		return new KnownIllegalHashProvider() {
+			@Override
+			public Optional<HashMatch> match(byte[] data, String contentType) {
+				return Optional.empty();
+			}
+
+			@Override
+			public String id() {
+				return "clean";
+			}
+
+			@Override
+			public boolean available() {
+				return true;
+			}
+		};
+	}
+
+	/** A provider that is installed and cannot answer. */
+	private static KnownIllegalHashProvider unavailableProvider() {
+		return new KnownIllegalHashProvider() {
+			@Override
+			public Optional<HashMatch> match(byte[] data, String contentType) {
+				throw new AssertionError("must not be asked while unavailable");
+			}
+
+			@Override
+			public String id() {
+				return "down";
+			}
+
+			@Override
+			public boolean available() {
+				return false;
+			}
+		};
 	}
 
 	private static TextModerator throwingModerator() {
@@ -452,6 +734,24 @@ class ModerationServiceTest {
 			@Override
 			public String id() {
 				return "throwing-image";
+			}
+		};
+	}
+	private static ImageModerator explodingImageModerator() {
+		return new ImageModerator() {
+			@Override
+			public Map<ModerationCategory, Integer> score(byte[] data, String contentType) {
+				throw new AssertionError("the classifier must never see bytes the hash tier matched");
+			}
+
+			@Override
+			public boolean supports(String contentType) {
+				return true;
+			}
+
+			@Override
+			public String id() {
+				return "exploding";
 			}
 		};
 	}

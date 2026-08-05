@@ -1,17 +1,21 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.moderation.escalation.ModerationEscalation;
 import com.ahmadre.hinata.moderation.image.ImageModerator;
 import com.ahmadre.hinata.moderation.image.ImageTierState;
+import com.ahmadre.hinata.moderation.image.KnownIllegalHashProvider;
 import com.ahmadre.hinata.moderation.text.TextModerator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * The gate every piece of user content passes through.
@@ -46,15 +50,37 @@ public class ModerationService {
 	private final ModerationRecorder recorder;
 	private final List<TextModerator> textModerators;
 	private final List<ImageModerator> imageModerators;
+	private final List<KnownIllegalHashProvider> hashProviders;
+	private final List<ModerationEscalation> escalations;
 
+	/**
+	 * Without the hash tier or an escalation target — the shape every test and
+	 * every install that has not been given a credentialed provider uses.
+	 *
+	 * <p>The constructor below carries {@code @Autowired} because this one exists:
+	 * Spring resolves two unannotated constructors by preferring the shortest, and
+	 * the shortest here is the one that never runs the hash check.
+	 */
 	public ModerationService(ModerationPolicy policy,
 			ModerationRecorder recorder,
 			List<TextModerator> textModerators,
 			List<ImageModerator> imageModerators) {
+		this(policy, recorder, textModerators, imageModerators, List.of(), List.of());
+	}
+
+	@org.springframework.beans.factory.annotation.Autowired
+	public ModerationService(ModerationPolicy policy,
+			ModerationRecorder recorder,
+			List<TextModerator> textModerators,
+			List<ImageModerator> imageModerators,
+			List<KnownIllegalHashProvider> hashProviders,
+			List<ModerationEscalation> escalations) {
 		this.policy = policy;
 		this.recorder = recorder;
 		this.textModerators = List.copyOf(textModerators);
 		this.imageModerators = List.copyOf(imageModerators);
+		this.hashProviders = List.copyOf(hashProviders);
+		this.escalations = List.copyOf(escalations);
 	}
 
 	/**
@@ -166,12 +192,31 @@ public class ModerationService {
 	 */
 	public ModerationVerdict checkImage(byte[] data, String contentType, String fileName,
 			ModerationSurface surface) {
-		ModerationVerdict verdict = assessImage(data, contentType, surface);
+		Judgement judgement = judgeImage(data, contentType, fileName, surface);
+		ModerationVerdict verdict = judgement.verdict();
 		if (verdict.isBlocking()) {
-			recorder.record(verdict, surface, refusal(fileName), data);
+			if (!judgement.recorded()) {
+				recorder.record(verdict, surface, refusal(fileName), data);
+			}
 			throw ModerationException.blockedFile(verdict, surface, fileName);
 		}
 		return verdict;
+	}
+
+	/**
+	 * A verdict plus whether the row for it has already been written.
+	 *
+	 * <p>Only one path sets {@link #recorded()}: a known-illegal match, which has to
+	 * write its own row because that row carries a field no other call may pass
+	 * ({@link ModerationRecorder#recordKnownIllegal}) and because the escalation it
+	 * raises needs the row's id. The flag exists so {@link #checkImage} does not
+	 * then write a second, poorer row for the same refusal.
+	 */
+	private record Judgement(ModerationVerdict verdict, boolean recorded) {
+
+		static Judgement of(ModerationVerdict verdict) {
+			return new Judgement(verdict, false);
+		}
 	}
 
 	/**
@@ -220,10 +265,48 @@ public class ModerationService {
 		}
 	}
 
-	/** Judges uploaded bytes without throwing. */
+	/**
+	 * Judges uploaded bytes without throwing — except for the one check that is
+	 * allowed to.
+	 *
+	 * <p>{@link #matchKnownIllegal} runs first and refuses when it cannot run, which
+	 * is a deliberate exception to this method's "does not throw" contract and is
+	 * why the contract is stated with one. Everything else here is a score folded
+	 * into a verdict the caller decides about; that check is not a score, and there
+	 * is no verdict that honestly represents "the mandatory check did not happen".
+	 */
 	public ModerationVerdict assessImage(byte[] data, String contentType, ModerationSurface surface) {
-		if (!policy.imageEnabled() || data == null || data.length == 0) {
-			return ModerationVerdict.disabled();
+		return judgeImage(data, contentType, null, surface).verdict();
+	}
+
+	/**
+	 * The whole image pipeline, in the order the checks have to run.
+	 *
+	 * <p>Shared by {@link #checkImage} and {@link #assessImage} rather than one
+	 * calling the other, because the hash tier is a network call to a metered
+	 * external programme and running it twice per upload is not a cost worth paying
+	 * for a call-graph shape. The consequence — that neither entry point can skip
+	 * it — is the whole point: a check that only the enforcing caller runs is a
+	 * check any future non-enforcing caller silently walks around.
+	 */
+	private Judgement judgeImage(byte[] data, String contentType, String fileName,
+			ModerationSurface surface) {
+		if (data == null || data.length == 0) {
+			return Judgement.of(ModerationVerdict.disabled());
+		}
+		// Before the classifiers, and before the imageEnabled switch. A hash match is
+		// not image classification and is not what that switch is about: an admin who
+		// turns image scoring off is saying "do not run a model over our screenshots",
+		// not "accept material an accredited body has already adjudicated". The
+		// category is non-overridable, so the switch that could disable this is one
+		// the policy already refuses to honour.
+		Optional<KnownIllegalHashProvider.HashMatch> illegal =
+				matchKnownIllegal(data, contentType, surface);
+		if (illegal.isPresent()) {
+			return recordKnownIllegal(illegal.get(), data, fileName, surface);
+		}
+		if (!policy.imageEnabled()) {
+			return Judgement.of(ModerationVerdict.disabled());
 		}
 		Map<ModerationCategory, Integer> scores = new EnumMap<>(ModerationCategory.class);
 		boolean degraded = false;
@@ -247,12 +330,127 @@ public class ModerationService {
 			// default for a self-hosted install, and it is honest about it: the
 			// bytes were not judged, so the verdict says DISABLED rather than
 			// claiming a clean pass the product never actually made.
-			return ModerationVerdict.disabled();
+			return Judgement.of(ModerationVerdict.disabled());
 		}
 		if (degraded && !policy.failOpen(surface)) {
 			throw ModerationException.unavailable(surface);
 		}
-		return finish(scores, surface, ModerationVerdict.ModerationTier.LOCAL_MODEL, degraded);
+		return Judgement.of(
+				finish(scores, surface, ModerationVerdict.ModerationTier.LOCAL_MODEL, degraded));
+	}
+
+	// --- known-illegal hash matching ---------------------------------------------
+
+	/**
+	 * Asks every configured hash provider, and refuses when one cannot answer.
+	 *
+	 * <p>The asymmetry with the classifier loop directly above is the point.
+	 * There, an unavailable tier sets {@code degraded} and the upload continues,
+	 * because a classifier is an optional opinion and the surface rule decides what
+	 * that costs. Here, unavailability throws — on <em>every</em> surface, whatever
+	 * {@code failOpen} is set to, expressed through
+	 * {@link ModerationCheck#KNOWN_ILLEGAL_HASH} so the rule sits in the policy
+	 * rather than in this loop.
+	 *
+	 * <p>An operator who configured a provider asked for these bytes to be checked
+	 * against an adjudicated list before they are stored. "It was unreachable, so we
+	 * stored them" is not a degraded version of that answer.
+	 *
+	 * @return the first match; providers after it are not asked, because a second
+	 *         opinion on material already adjudicated adds nothing and the outcome
+	 *         is identical
+	 */
+	private Optional<KnownIllegalHashProvider.HashMatch> matchKnownIllegal(byte[] data,
+			String contentType, ModerationSurface surface) {
+		for (KnownIllegalHashProvider provider : hashProviders) {
+			try {
+				if (!provider.available()) {
+					throw new IllegalStateException("provider unavailable");
+				}
+				Optional<KnownIllegalHashProvider.HashMatch> match = provider.match(data, contentType);
+				if (match != null && match.isPresent()) {
+					return match;
+				}
+			}
+			catch (RuntimeException ex) {
+				// The message deliberately names the provider and not the payload:
+				// this string reaches a log line, and the payload is the one thing
+				// that must not.
+				log.error("Known-illegal hash provider {} could not check an upload on {} — refusing "
+						+ "the upload: {}", provider.id(), surface, ex.toString());
+				if (!policy.failOpen(surface, ModerationCheck.KNOWN_ILLEGAL_HASH)) {
+					throw ModerationException.unavailable(surface);
+				}
+			}
+		}
+		return Optional.empty();
+	}
+
+	/**
+	 * The verdict a match produces. Not computed from a score and not passed
+	 * through {@link ModerationPolicy#decide}: there is no confidence to compare
+	 * against a threshold, so 100 is not a score here but a statement that the
+	 * question of confidence does not arise.
+	 */
+	private static ModerationVerdict knownIllegalVerdict() {
+		return new ModerationVerdict(ModerationDecision.BLOCK,
+				List.of(new ModerationVerdict.Match(ModerationCategory.SEXUAL_MINORS, 100, null)),
+				ModerationVerdict.ModerationTier.EXTERNAL, false);
+	}
+
+	/**
+	 * Writes the row and raises the escalation for a match.
+	 *
+	 * <p>The row carries the programme's reference; the escalation deliberately does
+	 * not. Those two sentences are the whole of this method's design — the reference
+	 * identifies adjudicated material inside a hash programme, so it is stored where
+	 * only the server can read it and is excluded from the one payload that leaves
+	 * the machine.
+	 *
+	 * <p>Escalation failures are not this method's problem to solve: the adapter
+	 * audits them, and there is nothing sensible to do here with the knowledge that
+	 * an endpoint was down. The upload is refused either way.
+	 */
+	private Judgement recordKnownIllegal(KnownIllegalHashProvider.HashMatch match, byte[] data,
+			String fileName, ModerationSurface surface) {
+		ModerationVerdict verdict = knownIllegalVerdict();
+		String recordId = recorder.recordKnownIllegal(verdict, surface, refusal(fileName), data,
+				reference(match));
+		// The record id, not the file name. Nothing was stored, so there is no object
+		// key to point at — but a file name is content: it is chosen by whoever
+		// uploaded it, it routinely describes what the file depicts, and this payload
+		// travels to an operator-supplied webhook outside the product. The record it
+		// names carries everything the operator's incident process needs, behind
+		// their own authentication.
+		escalate(new ModerationEscalation.Event(recordId, ModerationCategory.SEXUAL_MINORS, surface,
+				recordId == null ? null : "record:" + recordId, Instant.now()));
+		return new Judgement(verdict, true);
+	}
+
+	/** {@code source:reference}, or just one of them when the provider omitted the other. */
+	private static String reference(KnownIllegalHashProvider.HashMatch match) {
+		if (match.source() == null || match.source().isBlank()) {
+			return match.reference();
+		}
+		return match.source() + ":" + match.reference();
+	}
+
+	/**
+	 * Hands [event] to every configured escalation target.
+	 *
+	 * <p>Wrapped, because an escalation adapter is the one collaborator here that
+	 * talks to somebody else's network. It must not be able to turn a refusal that
+	 * has already been decided and recorded into a 500 for the uploader.
+	 */
+	private void escalate(ModerationEscalation.Event event) {
+		for (ModerationEscalation target : escalations) {
+			try {
+				target.escalate(event);
+			}
+			catch (RuntimeException ex) {
+				log.error("Escalation target {} failed: {}", target.id(), ex.toString());
+			}
+		}
 	}
 
 	/**

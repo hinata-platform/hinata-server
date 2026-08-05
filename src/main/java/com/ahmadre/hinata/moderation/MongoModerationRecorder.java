@@ -53,22 +53,30 @@ public class MongoModerationRecorder implements ModerationRecorder {
 	private final ModerationRecordRepository records;
 
 	@Override
-	public void record(ModerationVerdict verdict, ModerationSurface surface, Target target) {
-		save(verdict, surface, target, null);
+	public String record(ModerationVerdict verdict, ModerationSurface surface, Target target) {
+		return save(verdict, surface, target, null, null);
 	}
 
 	@Override
-	public void record(ModerationVerdict verdict, ModerationSurface surface, Target target, String content) {
+	public String record(ModerationVerdict verdict, ModerationSurface surface, Target target,
+			String content) {
 		// UTF-8 and not the platform charset: the hash has to be reproducible across
 		// the servers of one deployment, and a default-encoding digest of the same
 		// sentence differs between them.
-		save(verdict, surface, target,
-				content == null ? null : content.getBytes(StandardCharsets.UTF_8));
+		return save(verdict, surface, target,
+				content == null ? null : content.getBytes(StandardCharsets.UTF_8), null);
 	}
 
 	@Override
-	public void record(ModerationVerdict verdict, ModerationSurface surface, Target target, byte[] content) {
-		save(verdict, surface, target, content);
+	public String record(ModerationVerdict verdict, ModerationSurface surface, Target target,
+			byte[] content) {
+		return save(verdict, surface, target, content, null);
+	}
+
+	@Override
+	public String recordKnownIllegal(ModerationVerdict verdict, ModerationSurface surface,
+			Target target, byte[] content, String externalReference) {
+		return save(verdict, surface, target, content, externalReference);
 	}
 
 	/**
@@ -80,13 +88,14 @@ public class MongoModerationRecorder implements ModerationRecorder {
 	 * because from the caller's side both are the same event — bookkeeping did not
 	 * happen — and neither is a reason to fail a write policy already decided on.
 	 */
-	private void save(ModerationVerdict verdict, ModerationSurface surface, Target target, byte[] content) {
+	private String save(ModerationVerdict verdict, ModerationSurface surface, Target target,
+			byte[] content, String externalReference) {
 		if (verdict == null || (verdict.decision() == ModerationDecision.ALLOW && !verdict.degraded())) {
-			return;
+			return null;
 		}
 		try {
 			Target subject = target != null ? target : new Target(null, null, null, null, null);
-			records.save(ModerationRecord.builder()
+			return records.save(ModerationRecord.builder()
 					.surface(surface)
 					.decision(verdict.decision())
 					.tier(verdict.tier())
@@ -103,11 +112,17 @@ public class MongoModerationRecorder implements ModerationRecorder {
 					// is reachable through targetId, and a hash of it would be a second
 					// identifier to keep in sync for no gain.
 					.contentHash(verdict.isBlocking() ? sha256(content) : null)
+					.externalReference(externalReference)
 					.reviewState(ModerationRecord.ReviewState.OPEN)
-					.build());
+					.build())
+					.getId();
 		}
 		catch (Exception ex) {
 			warn(verdict.decision(), surface, ex);
+			// Null rather than a rethrow: the caller wanted an id to point a freeze
+			// or an escalation at, and not having one is a reason to escalate without
+			// a row reference — never a reason to undo the refusal that produced it.
+			return null;
 		}
 	}
 

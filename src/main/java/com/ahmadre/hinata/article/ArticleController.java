@@ -3,6 +3,8 @@ package com.ahmadre.hinata.article;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -38,6 +40,7 @@ public class ArticleController {
 	// The body is gated inside RichTextService; the title has no converter to hide
 	// behind and needs the gate called by name. See #gateTitle.
 	private final ModerationService moderation;
+	private final FrozenContentService frozen;
 
 	public record ArticleRequest(
 			@NotBlank @Size(max = 300) String title,
@@ -241,7 +244,13 @@ public class ArticleController {
 	 */
 	private List<Article> filterVisible(List<Article> base, User user) {
 		if (user.isAdmin()) {
-			return base;
+			// An admin skips visibility and not the freeze: the short-circuit means
+			// "sees every space", and reading it as "sees everything" is how the one
+			// account that must not reach frozen content becomes the one account that
+			// does.
+			return base.stream()
+					.filter(a -> !frozen.isFrozen(FrozenTargetType.ARTICLE, a.getId()))
+					.toList();
 		}
 		Set<String> projectIds = projectService.visibleTo(user).stream()
 				.map(Project::getId).collect(Collectors.toSet());
@@ -272,6 +281,13 @@ public class ArticleController {
 	}
 
 	private boolean canSee(Article article, User user) {
+		// The freeze check is ahead of the admin short-circuit, not behind it. An
+		// admin bypasses visibility — that is what the line below means and it is
+		// correct — and does not bypass a freeze, which is the one difference
+		// between the two mechanisms that a single method must not blur.
+		if (frozen.isFrozen(FrozenTargetType.ARTICLE, article.getId())) {
+			return false;
+		}
 		if (user.isAdmin()) {
 			return true;
 		}
@@ -288,6 +304,7 @@ public class ArticleController {
 	 * only here, and search — reading the same collection — never applied it.
 	 */
 	private boolean canSee(Article article, Set<String> projectIds, Set<String> teamIds) {
-		return ArticleVisibility.canSee(article, projectIds, teamIds);
+		return ArticleVisibility.canSee(article, projectIds, teamIds)
+				&& !frozen.isFrozen(FrozenTargetType.ARTICLE, article.getId());
 	}
 }

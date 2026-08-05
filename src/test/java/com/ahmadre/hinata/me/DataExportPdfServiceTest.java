@@ -41,7 +41,8 @@ class DataExportPdfServiceTest {
 		issues = mock(IssueRepository.class);
 		comments = mock(IssueCommentRepository.class);
 		auditLogs = mock(AuditLogRepository.class);
-		service = new DataExportPdfService(me, sessions, issues, comments, auditLogs);
+		service = new DataExportPdfService(me, sessions, issues, comments, auditLogs,
+				com.ahmadre.hinata.moderation.freeze.FreezeFixtures.nothingFrozen());
 
 		user = User.builder().id("u1").username("ada").displayName("Ada Lovelace")
 				.email("ada@example.org").locale("en").roles(Set.of(Role.MEMBER))

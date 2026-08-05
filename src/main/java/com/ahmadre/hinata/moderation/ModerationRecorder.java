@@ -53,8 +53,16 @@ public interface ModerationRecorder {
 	 *
 	 * <p>Must not throw. A failure to record is a monitoring problem; it is never a
 	 * reason to fail a write that policy already allowed.
+	 *
+	 * @return the id of the row that was written, or {@code null} when nothing was
+	 *         (a clean verdict) or when it could not be. Returned rather than
+	 *         discarded because a freeze and an escalation both have to point at the
+	 *         same row this call created, and the alternative — querying for it
+	 *         afterwards — means inventing a second way to identify a record and
+	 *         keeping the two in step. Every existing caller ignores it, which is
+	 *         correct: recording is bookkeeping.
 	 */
-	void record(ModerationVerdict verdict, ModerationSurface surface, Target target);
+	String record(ModerationVerdict verdict, ModerationSurface surface, Target target);
 
 	/**
 	 * The same, for content that was <em>refused</em>: [content] is hashed onto the
@@ -70,8 +78,10 @@ public interface ModerationRecorder {
 	 * would only be a second identifier to keep in sync.
 	 *
 	 * <p>Must not throw, for the same reason as above.
+	 *
+	 * @return the written row's id, or {@code null} — see the three-argument form
 	 */
-	void record(ModerationVerdict verdict, ModerationSurface surface, Target target, String content);
+	String record(ModerationVerdict verdict, ModerationSurface surface, Target target, String content);
 
 	/**
 	 * The same for refused bytes.
@@ -82,6 +92,31 @@ public interface ModerationRecorder {
 	 * hashes a lossy decoding of the file, and that value matches nothing — not the
 	 * next upload of the same file, and not the scanner report it would be held
 	 * against.
+	 *
+	 * @return the written row's id, or {@code null} — see the three-argument form
 	 */
-	void record(ModerationVerdict verdict, ModerationSurface surface, Target target, byte[] content);
+	String record(ModerationVerdict verdict, ModerationSurface surface, Target target, byte[] content);
+
+	/**
+	 * The same for refused bytes that matched a known-illegal hash list, carrying
+	 * [externalReference] — the programme's own handle for the material.
+	 *
+	 * <p>A method of its own rather than a sixth parameter on the byte form,
+	 * because the value it adds must not be reachable from any other call. Every
+	 * other field a record carries is meant to be read by somebody: the category
+	 * reaches the author, the evidence reaches the moderator, the label reaches the
+	 * queue. This one is read by nobody in the product. Passing it through a shared
+	 * signature would make "did this call site mean to send a reference?" a question
+	 * about an argument being null, which is the shape under which it eventually
+	 * gets filled in from something else.
+	 *
+	 * <p>Must not throw, like the rest.
+	 *
+	 * @param externalReference {@code source:reference} from a
+	 *                          {@link com.ahmadre.hinata.moderation.image.KnownIllegalHashProvider.HashMatch};
+	 *                          stored on the row and exposed by no DTO
+	 * @return the written row's id, or {@code null}
+	 */
+	String recordKnownIllegal(ModerationVerdict verdict, ModerationSurface surface, Target target,
+			byte[] content, String externalReference);
 }

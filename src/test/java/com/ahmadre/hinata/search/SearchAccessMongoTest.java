@@ -120,7 +120,8 @@ class SearchAccessMongoTest {
 		UserRepository users = mock(UserRepository.class);
 		when(users.findAllById(org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
 
-		search = new SearchService(mongo, users, projects, issues, projectService, teamService);
+		search = new SearchService(mongo, users, projects, issues, projectService, teamService,
+				com.ahmadre.hinata.moderation.freeze.FreezeFixtures.nothingFrozen());
 	}
 
 	// --- what must no longer leak -------------------------------------------

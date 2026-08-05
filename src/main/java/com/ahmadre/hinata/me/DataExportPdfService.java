@@ -6,6 +6,8 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.user.User;
@@ -63,6 +65,21 @@ public class DataExportPdfService {
 	private final IssueRepository issues;
 	private final IssueCommentRepository comments;
 	private final AuditLogRepository auditLogs;
+	/**
+	 * The freeze registry.
+	 *
+	 * <p>Needed here of all places because this document is reached over
+	 * {@code GET /api/v1/me/export.pdf}, which is <b>unauthenticated</b> — a signed
+	 * single-subject link, pinned as public in {@code ModerationWiringTest}. It
+	 * prints every comment the subject authored verbatim, so without this the author
+	 * of frozen content retrieves it by mailing themselves an export link, and does
+	 * so without presenting a session.
+	 *
+	 * <p>Art. 15 is not narrowed by leaving it out. The subject is told the records
+	 * exist and are withheld pending an escalation, which is a different thing from
+	 * pretending they were never written.
+	 */
+	private final FrozenContentService frozen;
 
 	/** A suggested, filesystem-safe download name for {@code user}'s export. */
 	public String fileName(User user) {
@@ -250,8 +267,8 @@ public class DataExportPdfService {
 	}
 
 	private void issuesSection(Document doc, User user, boolean de) {
-		List<Issue> reported = issues.findByReporterIdOrderByCreatedAtDesc(user.getId());
-		List<Issue> assigned = issues.findByAssigneeIdsContainsOrderByCreatedAtDesc(user.getId());
+		List<Issue> reported = unfrozen(issues.findByReporterIdOrderByCreatedAtDesc(user.getId()));
+		List<Issue> assigned = unfrozen(issues.findByAssigneeIdsContainsOrderByCreatedAtDesc(user.getId()));
 
 		section(doc, (de ? "Von dir gemeldete Vorgänge" : "Issues you reported") + " (" + reported.size() + ")");
 		issueTable(doc, reported, de);
@@ -282,8 +299,21 @@ public class DataExportPdfService {
 		doc.add(t);
 	}
 
+	/** Drops frozen issues from an export section. */
+	private List<Issue> unfrozen(List<Issue> list) {
+		return list.stream()
+				.filter(issue -> !frozen.isFrozen(FrozenTargetType.ISSUE, issue.getId()))
+				.toList();
+	}
+
 	private void commentsSection(Document doc, User user, boolean de) {
-		List<IssueComment> list = comments.findByAuthorIdOrderByCreatedAtDesc(user.getId());
+		List<IssueComment> list = comments.findByAuthorIdOrderByCreatedAtDesc(user.getId()).stream()
+				// The single worst line in this file without the filter: it prints
+				// c.getText() verbatim, for every comment the subject wrote, over a
+				// route that never asked them to sign in.
+				.filter(c -> !frozen.isFrozen(FrozenTargetType.COMMENT, c.getId()))
+				.filter(c -> !frozen.isFrozen(FrozenTargetType.ISSUE, c.getIssueId()))
+				.toList();
 		section(doc, (de ? "Von dir verfasste Kommentare" : "Comments you wrote") + " (" + list.size() + ")");
 		if (list.isEmpty()) {
 			doc.add(emptyNote(de));

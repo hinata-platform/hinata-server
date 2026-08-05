@@ -6,6 +6,7 @@ import com.ahmadre.hinata.moderation.ModerationRecorder;
 import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.moderation.ModerationVerdict;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
 import com.ahmadre.hinata.media.ImageBounds;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,12 +43,21 @@ public class StorageService {
 
 	private final ModerationRecorder moderationRecorder;
 
+	/**
+	 * The freeze registry, or {@code null} on an instance built outside the
+	 * container.
+	 *
+	 * @see #StorageService(HinataProperties)
+	 */
+	private final FrozenContentService frozen;
+
 	@Autowired
 	public StorageService(HinataProperties properties, ModerationService moderation,
-			ModerationRecorder moderationRecorder) {
+			ModerationRecorder moderationRecorder, FrozenContentService frozen) {
 		this.properties = properties;
 		this.moderation = moderation;
 		this.moderationRecorder = moderationRecorder;
+		this.frozen = frozen;
 		this.backend = createBackend(properties.getStorage());
 	}
 
@@ -60,7 +70,7 @@ public class StorageService {
 	 * one, which would leave the product uploading unclassified images.
 	 */
 	public StorageService(HinataProperties properties) {
-		this(properties, null, null);
+		this(properties, null, null, null);
 	}
 
 	private static StorageBackend createBackend(HinataProperties.Storage storage) {
@@ -247,9 +257,29 @@ public class StorageService {
 		}
 	}
 
-	/** Reads an object's bytes + content type, or empty when it doesn't exist. */
+	/**
+	 * Reads an object's bytes + content type, or empty when it doesn't exist.
+	 *
+	 * <p><b>Every byte the product serves comes through here</b>, which is why the
+	 * freeze guard is on this method and not on the eight callers. Six of those
+	 * callers reach it from a route with no access control worth the name: the
+	 * media proxy takes no user at all, the avatar and organisation-logo routes are
+	 * unauthenticated by design (pinned as such in {@code ModerationWiringTest}), and
+	 * the e-mail reply path posts attachment bytes back out to an external address.
+	 * Freezing a comment does nothing to an image embedded in it, because the
+	 * reference lives inside the frozen body and this route never asked who was
+	 * calling — the exact shape of the search leak {@code 48a725f} fixed, one layer
+	 * down.
+	 *
+	 * <p>A frozen object is a 404 rather than a 403, for the reason
+	 * {@link FrozenContentService#assertReadable} gives: a distinguishable status
+	 * confirms the object exists to whoever still holds its URL.
+	 */
 	public Optional<StoredObject> getObject(String objectKey) {
 		requireConfigured();
+		if (frozen != null) {
+			frozen.assertObjectReadable(objectKey);
+		}
 		try {
 			return backend.get(objectKey);
 		}
@@ -292,8 +322,29 @@ public class StorageService {
 		}
 	}
 
+	/**
+	 * Removes an object — unless it is frozen, in which case it is left alone.
+	 *
+	 * <p>Skipped rather than refused, and the difference matters. Every caller here
+	 * treats deletion as best-effort housekeeping: the orphan sweep reaps
+	 * unreferenced media, comment deletion frees a voice blob, project deletion
+	 * cascades. Throwing would turn a nightly sweep into a failed job and a comment
+	 * deletion into a 500, in both cases for content the caller was not trying to
+	 * destroy. Skipping keeps the promise that actually matters — <b>frozen bytes
+	 * are never deleted</b> — and says so at WARN, which is where an operator would
+	 * look for why storage is not shrinking.
+	 *
+	 * <p>Deleting the <em>entity</em> is a different question and is refused
+	 * outright, because there the caller is asking for exactly the thing freeze
+	 * forbids. That guard sits on the entity paths, not here.
+	 */
 	public void delete(String objectKey) {
 		requireConfigured();
+		if (frozen != null && frozen.isFrozenObject(objectKey)) {
+			log.warn("Refusing to delete frozen object {} — it is preserved for an open escalation",
+					objectKey);
+			return;
+		}
 		try {
 			backend.delete(objectKey);
 		}

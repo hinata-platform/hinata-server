@@ -56,7 +56,8 @@ class ArticleBacklinkAclTest {
 		teams = mock(TeamService.class);
 		currentUser = mock(CurrentUser.class);
 		controller = new ArticleController(articles, new RichTextService(), currentUser,
-				projects, teams, mock(ModerationService.class));
+				projects, teams, mock(ModerationService.class),
+				com.ahmadre.hinata.moderation.freeze.FreezeFixtures.nothingFrozen());
 
 		when(articles.findByReferencedIssueKeysContains("HIN-1"))
 				.thenReturn(List.of(VISIBLE, HIDDEN, TEAM_HIDDEN));

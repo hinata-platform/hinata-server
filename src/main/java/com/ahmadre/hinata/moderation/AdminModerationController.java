@@ -1,8 +1,12 @@
 package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.moderation.freeze.FrozenContent;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.moderation.report.ContentReport;
 import com.ahmadre.hinata.moderation.report.ContentReportService;
+import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -11,6 +15,7 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -48,6 +54,7 @@ import java.util.List;
 public class AdminModerationController {
 
 	private final ModerationQueueService queue;
+	private final FrozenContentService frozen;
 	private final CurrentUser currentUser;
 
 	// --- DTOs -----------------------------------------------------------------
@@ -138,6 +145,75 @@ public class AdminModerationController {
 	public ModerationQueueService.ReportRow handle(@PathVariable String id,
 			@RequestBody @Valid HandleRequest request) {
 		return queue.handleReport(currentUser.require(), id, request.state(), request.note());
+	}
+
+	// --- Freeze ----------------------------------------------------------------
+
+	/**
+	 * A hand-raised freeze, or its release.
+	 *
+	 * @param note why. Optional on a freeze — the trigger is self-evident from the
+	 *             report it accompanies — and <b>required</b> on an unfreeze, which
+	 *             is enforced in the service rather than here because that is where
+	 *             the automatic triggers also arrive
+	 */
+	public record FreezeRequest(@NotNull FrozenTargetType targetType, @NotNull String targetId,
+			String contextId, @Size(max = ContentReportService.MAX_NOTE_LENGTH) String note) {
+	}
+
+	/**
+	 * What a freeze looks like to an admin.
+	 *
+	 * <p>Deliberately no label, no link and no object keys. This endpoint answers
+	 * "is this frozen, since when, on whose report" — the questions an operator has
+	 * to answer to an authority — and nothing that would let the caller find the
+	 * content. A DTO that echoed the storage keys would hand back exactly the
+	 * addressing the byte guard exists to refuse.
+	 */
+	public record FreezeResponse(String id, FrozenTargetType targetType, String targetId,
+			ModerationCategory category, String reportId, String reporterId, Instant frozenAt,
+			boolean statementWithheld) {
+
+		static FreezeResponse of(FrozenContent row) {
+			return new FreezeResponse(row.getId(), row.getTargetType(), row.getTargetId(),
+					row.getCategory(), row.getReportId(), row.getReporterId(), row.getFrozenAt(),
+					row.isStatementWithheld());
+		}
+	}
+
+	/**
+	 * Freezes a target by hand — the path for content an authority named directly,
+	 * or that a moderator recognised from a report on something else.
+	 */
+	@Operation(summary = "Freeze content: preserved, and unreachable to everyone including admins")
+	@PostMapping("/freeze")
+	public FreezeResponse freeze(@RequestBody @Valid FreezeRequest request) {
+		User admin = currentUser.require();
+		return FreezeResponse.of(frozen.freeze(new FrozenContentService.Request(
+				request.targetType(), request.targetId(), request.contextId(), List.of(),
+				ModerationCategory.SEXUAL_MINORS, null, null, admin,
+				ContentReportService.trimNote(request.note()))));
+	}
+
+	/**
+	 * Releases a freeze.
+	 *
+	 * <p>Separate from {@code POST /reports/{id}/handle}, and that separation is the
+	 * point: dismissing a report and releasing content are different claims, and the
+	 * moderator can only honestly make the first — they have not seen the content
+	 * and must not. Collapsing the two would make "dismiss" the one-click way to
+	 * look.
+	 *
+	 * <p>A note is mandatory (400 without one). An unfreeze is an administrative
+	 * correction — wrong target, malicious reporter, an authority that came back —
+	 * never a judgement on the merits of something nobody was allowed to read.
+	 */
+	@Operation(summary = "Release a freeze (mandatory note; audited)")
+	@DeleteMapping("/freeze")
+	public FreezeResponse unfreeze(@RequestBody @Valid FreezeRequest request) {
+		User admin = currentUser.require();
+		return FreezeResponse.of(
+				frozen.unfreeze(admin, request.targetType(), request.targetId(), request.note()));
 	}
 
 	// --- Backlog ---------------------------------------------------------------

@@ -200,7 +200,7 @@ public class ModerationPolicy {
 	}
 
 	/**
-	 * Whether the write may proceed when a tier is unavailable.
+	 * Whether the write may proceed when a classifier tier is unavailable.
 	 *
 	 * <p>Fail-open for everything the deterministic gate already covers, because an
 	 * unreachable optional classifier must not take the product down — but the
@@ -208,10 +208,31 @@ public class ModerationPolicy {
 	 * so the bypass is a row someone can count rather than a silent pass.
 	 */
 	public boolean failOpen(ModerationSurface surface) {
+		return failOpen(surface, ModerationCheck.CLASSIFIER);
+	}
+
+	/**
+	 * Whether the write may proceed when a check of [check] could not run on
+	 * [surface].
+	 *
+	 * <p>Two independent vetoes, and both have to be satisfied for the write to go
+	 * through. The surface veto is the older one: external ingress is the place a
+	 * silent pass is not acceptable, because nobody is accountable for the content
+	 * and nobody is waiting on the response. The check veto generalises it — some
+	 * checks are not tradeable anywhere, whoever is waiting.
+	 *
+	 * <p>Written as one method rather than as a special case at the caller
+	 * deliberately. "This particular tier ignores failOpen" is a rule that lives in
+	 * whichever file remembered it, and the next tier added is the one that does
+	 * not; expressed here, an unavailable check that must refuse says so through
+	 * {@link ModerationCheck} and every enforcement point gets the same answer.
+	 */
+	public boolean failOpen(ModerationSurface surface, ModerationCheck check) {
+		if (check != null && !check.degradable()) {
+			return false;
+		}
 		Boolean override = db().getFailOpen();
 		boolean open = override != null ? override : properties.getModeration().isFailOpen();
-		// External ingress is the one place a silent pass is not acceptable: nobody
-		// is accountable for the content and nobody is waiting on the response.
 		return open && !surface.external();
 	}
 
