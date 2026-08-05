@@ -1,13 +1,17 @@
 package com.ahmadre.hinata.search;
 
 import com.ahmadre.hinata.article.Article;
+import com.ahmadre.hinata.article.ArticleVisibility;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
+import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.search.SearchResponse.SearchGroup;
+import com.ahmadre.hinata.team.Team;
+import com.ahmadre.hinata.team.TeamService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -72,9 +76,45 @@ public class SearchService {
 	private final UserRepository users;
 	private final ProjectRepository projects;
 	private final IssueRepository issues;
+	private final ProjectService projectService;
+	private final TeamService teamService;
 
-	public SearchResponse search(String rawQuery, String scope) {
-		return search(rawQuery, scope, false);
+	/**
+	 * What one viewer is allowed to see, resolved once per search.
+	 *
+	 * <p>Resolved once and threaded through rather than asked per category, because
+	 * the membership lookup is several queries and there are five categories. More
+	 * importantly, one object means one answer: a category that forgot to ask would
+	 * previously just have searched everything, which is exactly how this went wrong.
+	 *
+	 * <p>{@code admin} short-circuits every filter instead of expanding to "every id
+	 * in the organisation". That is the same answer computed cheaply, and it keeps an
+	 * {@code $in} clause from growing with the install.
+	 */
+	private record Scope(boolean admin, Set<String> projectIds, Set<String> archivedProjectIds,
+			Set<String> teamIds) {
+
+		/** Restricts [field] to the projects this viewer reaches; null for an admin. */
+		Criteria projects(String field) {
+			return admin ? null : Criteria.where(field).in(projectIds);
+		}
+	}
+
+	private Scope scopeOf(User viewer) {
+		if (viewer.isAdmin()) {
+			return new Scope(true, Set.of(), Set.of(), Set.of());
+		}
+		return new Scope(false,
+				projectService.visibleTo(viewer).stream()
+						.map(Project::getId).collect(Collectors.toSet()),
+				projectService.archivedVisibleTo(viewer).stream()
+						.map(Project::getId).collect(Collectors.toSet()),
+				teamService.visibleTo(viewer).stream()
+						.map(Team::getId).collect(Collectors.toSet()));
+	}
+
+	public SearchResponse search(String rawQuery, String scope, User viewer) {
+		return search(rawQuery, scope, false, viewer);
 	}
 
 	/**
@@ -82,11 +122,17 @@ public class SearchService {
 	 *                 issues and archived projects, badged by the client. Only
 	 *                 those two categories exist in the archive; the rest stay
 	 *                 empty. An empty query suggests the latest archived items.
+	 * @param viewer   whose access decides what may be returned. Every category is
+	 *                 filtered by it <em>inside</em> the Mongo query rather than
+	 *                 afterwards — sifting a capped candidate window would hand back
+	 *                 a short page, and an empty one to anyone whose own work happens
+	 *                 to rank below other people's.
 	 */
-	public SearchResponse search(String rawQuery, String scope, boolean archived) {
+	public SearchResponse search(String rawQuery, String scope, boolean archived, User viewer) {
 		String q = rawQuery == null ? "" : rawQuery.trim();
 		SearchCategory only = SearchCategory.parse(scope);
 		int cap = only == null ? CAP_ALL : CAP_SCOPED;
+		Scope reach = scopeOf(viewer);
 
 		// Empty query + a specific entity scope → suggest the latest entities.
 		// Empty + "all" (or Commands) → no groups (the client shows recents) —
@@ -94,27 +140,27 @@ public class SearchService {
 		// the latest archived items.
 		final List<SearchGroup> groups;
 		if (!q.isBlank()) {
-			groups = queryGroups(q, only, cap, archived);
+			groups = queryGroups(q, only, cap, archived, reach);
 		} else if (only != null || archived) {
-			groups = suggestGroups(only, archived);
+			groups = suggestGroups(only, archived, reach);
 		} else {
 			groups = List.of();
 		}
-		return new SearchResponse(groups, counts());
+		return new SearchResponse(groups, counts(reach));
 	}
 
 	private List<SearchGroup> queryGroups(String q, SearchCategory only, int cap,
-			boolean archived) {
+			boolean archived, Scope reach) {
 		List<SearchGroup> groups = new ArrayList<>();
 		for (SearchCategory cat : SearchCategory.values()) {
 			if (only != null && cat != only) continue;
 			List<SearchHit> hits = switch (cat) {
-				case ISSUES -> mapIssues(searchIssues(q, cap, archived), archived);
-				case PROJECTS -> mapProjects(searchProjects(q, cap, archived), archived);
+				case ISSUES -> mapIssues(searchIssues(q, cap, archived, reach), archived);
+				case PROJECTS -> mapProjects(searchProjects(q, cap, archived, reach), archived);
 				// People, boards and docs have no archive — hidden in archive mode.
 				case PEOPLE -> archived ? List.<SearchHit>of() : mapPeople(searchPeople(q, cap));
-				case BOARDS -> archived ? List.<SearchHit>of() : searchBoards(q, cap);
-				case DOCS -> archived ? List.<SearchHit>of() : mapDocs(searchDocs(q, cap));
+				case BOARDS -> archived ? List.<SearchHit>of() : searchBoards(q, cap, reach);
+				case DOCS -> archived ? List.<SearchHit>of() : mapDocs(searchDocs(q, cap, reach));
 			};
 			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
 		}
@@ -123,16 +169,16 @@ public class SearchService {
 
 	/** Empty-query suggestions: latest entities of one scope, or — in archive
 	 * mode — the latest archived issues and projects across both categories. */
-	private List<SearchGroup> suggestGroups(SearchCategory only, boolean archived) {
-		if (!archived) return groupOf(only, suggest(only));
+	private List<SearchGroup> suggestGroups(SearchCategory only, boolean archived, Scope reach) {
+		if (!archived) return groupOf(only, suggest(only, reach));
 		List<SearchGroup> groups = new ArrayList<>();
 		for (SearchCategory cat : List.of(SearchCategory.ISSUES, SearchCategory.PROJECTS)) {
 			if (only != null && cat != only) continue;
 			List<SearchHit> hits = switch (cat) {
-				case ISSUES -> mapIssues(
-						latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, archivedIs(true)), true);
-				case PROJECTS -> mapProjects(
-						latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedTrue()), true);
+				case ISSUES -> mapIssues(latest(Issue.class, SUGGEST_LIMIT, F_UPDATED,
+						and(archivedIs(true), reach.projects("projectId"))), true);
+				case PROJECTS -> mapProjects(latest(Project.class, SUGGEST_LIMIT, F_UPDATED,
+						and(archivedTrue(), visibleArchivedProjects(reach))), true);
 				default -> List.<SearchHit>of();
 			};
 			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
@@ -145,26 +191,27 @@ public class SearchService {
 	}
 
 	/** Latest entities of [cat] (most-recent first) for the empty-query state. */
-	private List<SearchHit> suggest(SearchCategory cat) {
+	private List<SearchHit> suggest(SearchCategory cat, Scope reach) {
 		return switch (cat) {
-			case ISSUES -> mapIssues(
-					latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, archivedIs(false)), false);
-			case PROJECTS -> mapProjects(
-					latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedFalse()), false);
+			case ISSUES -> mapIssues(latest(Issue.class, SUGGEST_LIMIT, F_UPDATED,
+					and(archivedIs(false), reach.projects("projectId"))), false);
+			case PROJECTS -> mapProjects(latest(Project.class, SUGGEST_LIMIT, F_UPDATED,
+					and(archivedFalse(), visibleProjects(reach))), false);
 			case PEOPLE -> mapPeople(
 					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)));
-			case BOARDS -> suggestBoards();
-			case DOCS -> mapDocs(
-					latest(Article.class, SUGGEST_LIMIT, F_UPDATED, null));
+			case BOARDS -> suggestBoards(reach);
+			case DOCS -> mapDocs(latest(Article.class, SUGGEST_LIMIT, F_UPDATED,
+					ArticleVisibility.criteria(reach.admin(), reach.projectIds(), reach.teamIds())));
 		};
 	}
 
 	// ─────────────────────────── per-category ─────────────────────────────
 
-	private List<Issue> searchIssues(String q, int cap, boolean archived) {
+	private List<Issue> searchIssues(String q, int cap, boolean archived, Scope reach) {
 		return hybrid(Issue.class, q, cap,
 				List.of(contains(F_TITLE, q), prefix("readableId", q), contains(F_TAGS, q)),
-				archivedIs(archived), F_UPDATED, Issue::getId, Issue::getTitle);
+				and(archivedIs(archived), reach.projects("projectId")),
+				F_UPDATED, Issue::getId, Issue::getTitle);
 	}
 
 	/** Ids of active (non-archived) projects — archived projects are hidden
@@ -174,6 +221,15 @@ public class SearchService {
 				.map(Project::getId).collect(Collectors.toSet());
 	}
 
+	/**
+	 * Hides issues whose project is archived.
+	 *
+	 * <p>Access is <em>not</em> what this does — that is already settled in the query
+	 * by {@link Scope#projects}. This is the archive rule, and it stays a
+	 * post-filter because an issue's own {@code archived} flag and its project's are
+	 * independent: an active issue in an archived project must not surface, and there
+	 * is no field on the issue that says so.
+	 */
 	private List<SearchHit> mapIssues(List<Issue> rawHits, boolean archived) {
 		Set<String> active = activeProjectIds();
 		List<Issue> hits = rawHits.stream()
@@ -198,11 +254,21 @@ public class SearchService {
 		}).toList();
 	}
 
-	private List<Project> searchProjects(String q, int cap, boolean archived) {
+	private List<Project> searchProjects(String q, int cap, boolean archived, Scope reach) {
 		return hybrid(Project.class, q, cap,
 				List.of(contains(F_NAME, q), prefix("key", q)),
-				Criteria.where("archived").is(archived),
+				and(Criteria.where("archived").is(archived),
+						archived ? visibleArchivedProjects(reach) : visibleProjects(reach)),
 				F_UPDATED, Project::getId, Project::getName);
+	}
+
+	/** Restricts a project query to the ones this viewer reaches; null for an admin. */
+	private static Criteria visibleProjects(Scope reach) {
+		return reach.admin() ? null : Criteria.where("_id").in(reach.projectIds());
+	}
+
+	private static Criteria visibleArchivedProjects(Scope reach) {
+		return reach.admin() ? null : Criteria.where("_id").in(reach.archivedProjectIds());
 	}
 
 	private List<SearchHit> mapProjects(List<Project> rawHits, boolean archived) {
@@ -259,21 +325,43 @@ public class SearchService {
 				.toList();
 	}
 
-	private List<SearchHit> searchBoards(String q, int cap) {
+	private List<SearchHit> searchBoards(String q, int cap, Scope reach) {
 		List<AgileBoard> boards = hybrid(AgileBoard.class, q, cap,
-				List.of(contains(F_NAME, q)), null, AgileBoard::getId, AgileBoard::getName);
+				List.of(contains(F_NAME, q)), reach.projects("projectIds"),
+				null, AgileBoard::getId, AgileBoard::getName);
 		List<Sprint> sprints = hybrid(Sprint.class, q, cap,
-				List.of(contains(F_NAME, q), contains("goal", q)), null, Sprint::getId, Sprint::getName);
+				List.of(contains(F_NAME, q), contains("goal", q)), sprintsOfVisibleBoards(reach),
+				null, Sprint::getId, Sprint::getName);
 		return combineBoards(boards, sprints, cap);
 	}
 
-	private List<SearchHit> suggestBoards() {
-		List<AgileBoard> boards = latest(AgileBoard.class, SUGGEST_LIMIT, "createdAt", null);
+	private List<SearchHit> suggestBoards(Scope reach) {
+		List<AgileBoard> boards = latest(AgileBoard.class, SUGGEST_LIMIT, "createdAt",
+				reach.projects("projectIds"));
 		int remaining = SUGGEST_LIMIT - boards.size();
 		List<Sprint> sprints = remaining > 0
-				? latest(Sprint.class, remaining, "createdAt", null)
+				? latest(Sprint.class, remaining, "createdAt", sprintsOfVisibleBoards(reach))
 				: List.of();
 		return combineBoards(boards, sprints, SUGGEST_LIMIT);
+	}
+
+	/**
+	 * Restricts sprints to boards this viewer reaches; null for an admin.
+	 *
+	 * <p>A sprint carries only a {@code boardId}, so its access has to be resolved
+	 * through the board — which is why it was the one category with no filter at all
+	 * and leaked every sprint name and goal in the organisation. The extra query is
+	 * the price of that indirection and is paid once per search, not per hit.
+	 */
+	private Criteria sprintsOfVisibleBoards(Scope reach) {
+		if (reach.admin()) {
+			return null;
+		}
+		Query boardIds = new Query(Criteria.where("projectIds").in(reach.projectIds()));
+		boardIds.fields().include("_id");
+		Set<String> ids = mongo.find(boardIds, AgileBoard.class).stream()
+				.map(AgileBoard::getId).collect(Collectors.toSet());
+		return Criteria.where("boardId").in(ids);
 	}
 
 	private List<SearchHit> combineBoards(List<AgileBoard> boards, List<Sprint> sprints, int cap) {
@@ -306,9 +394,10 @@ public class SearchService {
 				.build();
 	}
 
-	private List<Article> searchDocs(String q, int cap) {
+	private List<Article> searchDocs(String q, int cap, Scope reach) {
 		return hybrid(Article.class, q, cap,
 				List.of(contains(F_TITLE, q), contains(F_TAGS, q)),
+				ArticleVisibility.criteria(reach.admin(), reach.projectIds(), reach.teamIds()),
 				F_UPDATED, Article::getId, Article::getTitle);
 	}
 
@@ -346,9 +435,14 @@ public class SearchService {
 			Function<T, String> labelFn) {
 		int candidates = cap * CANDIDATE_FACTOR;
 
-		Query regexQuery = new Query(new Criteria()
-				.orOperator(regexOrs.toArray(Criteria[]::new))).limit(candidates);
-		if (filter != null) regexQuery.addCriteria(filter);
+		// Composed into one root criteria rather than added on top. Both halves are
+		// key-less ($or of the label regexes, $and of archive + access), and Spring
+		// Data refuses to hold two key-less criteria in one Query — addCriteria here
+		// throws InvalidMongoDbApiUsageException instead of narrowing anything.
+		Criteria regexRoot = new Criteria().orOperator(regexOrs.toArray(Criteria[]::new));
+		Query regexQuery = new Query(
+				filter == null ? regexRoot : new Criteria().andOperator(regexRoot, filter))
+				.limit(candidates);
 		if (sortField != null) regexQuery.with(Sort.by(Sort.Direction.DESC, sortField));
 		List<T> regexHits = mongo.find(regexQuery, type);
 
@@ -379,18 +473,55 @@ public class SearchService {
 				.toList();
 	}
 
-	private Map<String, Long> counts() {
+	/**
+	 * The per-category totals behind the palette's chips.
+	 *
+	 * <p>Scoped like everything else. An unscoped {@code estimatedCount} is a small
+	 * leak on its own — it tells anyone with an account how many issues and documents
+	 * the organisation holds — and a confusing one on top of that: a chip reading
+	 * "1,284 issues" above three results invites a bug report about search being
+	 * broken. Admins keep the estimate because it is free and, for them, accurate.
+	 */
+	private Map<String, Long> counts(Scope reach) {
 		Map<String, Long> counts = new LinkedHashMap<>();
-		counts.put(SearchCategory.ISSUES.name(), mongo.estimatedCount(Issue.class));
-		counts.put(SearchCategory.PROJECTS.name(), mongo.estimatedCount(Project.class));
+		counts.put(SearchCategory.ISSUES.name(),
+				count(Issue.class, reach.projects("projectId")));
+		counts.put(SearchCategory.PROJECTS.name(),
+				count(Project.class, visibleProjects(reach)));
+		// People are deliberately unscoped: the directory is already readable by any
+		// signed-in account through GET /api/v1/users, because mention and assignee
+		// pickers need it. Narrowing it here would only make search disagree with the
+		// rest of the product.
 		counts.put(SearchCategory.PEOPLE.name(), mongo.estimatedCount(User.class));
 		counts.put(SearchCategory.BOARDS.name(),
-				mongo.estimatedCount(AgileBoard.class) + mongo.estimatedCount(Sprint.class));
-		counts.put(SearchCategory.DOCS.name(), mongo.estimatedCount(Article.class));
+				count(AgileBoard.class, reach.projects("projectIds"))
+						+ count(Sprint.class, sprintsOfVisibleBoards(reach)));
+		counts.put(SearchCategory.DOCS.name(), count(Article.class,
+				ArticleVisibility.criteria(reach.admin(), reach.projectIds(), reach.teamIds())));
 		return counts;
 	}
 
+	/** Counts [type], estimating when there is nothing to restrict (i.e. for an admin). */
+	private <T> long count(Class<T> type, Criteria filter) {
+		return filter == null
+				? mongo.estimatedCount(type)
+				: mongo.count(new Query(filter), type);
+	}
+
 	// ─────────────────────────── helpers ──────────────────────────────────
+
+	/**
+	 * Combines the archive filter with the access filter, dropping a null access
+	 * filter (an admin, who is not restricted).
+	 *
+	 * <p>{@code andOperator} rather than chaining {@code Criteria.and(...)}: the two
+	 * halves can name the same field — a project query restricts {@code _id} while
+	 * the access half restricts {@code _id} too — and chaining would silently
+	 * overwrite one of them instead of requiring both.
+	 */
+	private static Criteria and(Criteria base, Criteria access) {
+		return access == null ? base : new Criteria().andOperator(base, access);
+	}
 
 	/** Case-insensitive "contains" — regex-escaped (NoSQL-injection safe). */
 	private static Criteria contains(String field, String q) {

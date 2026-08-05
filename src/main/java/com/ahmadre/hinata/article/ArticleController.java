@@ -282,13 +282,12 @@ public class ArticleController {
 		return canSee(article, projectIds, teamIds);
 	}
 
+	/**
+	 * Delegates to {@link ArticleVisibility}, which is where this rule now lives so
+	 * that global search enforces the same one. It used to be spelled out here and
+	 * only here, and search — reading the same collection — never applied it.
+	 */
 	private boolean canSee(Article article, Set<String> projectIds, Set<String> teamIds) {
-		if (article.getProjectId() != null) {
-			return projectIds.contains(article.getProjectId());
-		}
-		if (article.getTeamId() != null) {
-			return teamIds.contains(article.getTeamId());
-		}
-		return true; // global / organisation-wide
+		return ArticleVisibility.canSee(article, projectIds, teamIds);
 	}
 }

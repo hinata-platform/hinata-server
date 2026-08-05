@@ -12,9 +12,15 @@ import org.springframework.stereotype.Service;
 /**
  * Read-only MCP tool exposing the unified global search (the ⌘K palette
  * backend). Gates on {@code search:read}, resolves the caller via
- * {@link CurrentUser} and delegates to {@link SearchService}, which already
- * restricts hits to active projects. The {@link SearchResponse} carries only
- * presentation-safe fields (no tokens or storage keys).
+ * {@link CurrentUser} and delegates to {@link SearchService}, which restricts
+ * every category to what that caller may see. The {@link SearchResponse} carries
+ * only presentation-safe fields (no tokens or storage keys).
+ *
+ * <p>This javadoc used to say the service "already restricts hits to active
+ * projects", which was true and beside the point: active is not the same question
+ * as permitted, and the service was in fact returning every non-archived project's
+ * content to any caller. Worth noting because a token minted for an integration is
+ * a more attractive thing to point at a leaky search endpoint than a login is.
  */
 @Service
 @RequiredArgsConstructor
@@ -33,7 +39,6 @@ public class SearchTools {
 			@McpToolParam(description = "Free-text query") String q,
 			@McpToolParam(required = false, description = "Category scope: all | ISSUES | PROJECTS | PEOPLE | BOARDS | DOCS") String scope) {
 		scopeGuard.require(Scopes.SEARCH_READ);
-		currentUser.require();
-		return searchService.search(q, scope);
+		return searchService.search(q, scope, currentUser.require());
 	}
 }

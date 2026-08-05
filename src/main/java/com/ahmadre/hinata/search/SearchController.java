@@ -32,7 +32,6 @@ public class SearchController {
 			@RequestParam(required = false) String q,
 			@RequestParam(required = false) String scope,
 			@RequestParam(defaultValue = "false") boolean archived) {
-		currentUser.require();
-		return searchService.search(q, scope, archived);
+		return searchService.search(q, scope, archived, currentUser.require());
 	}
 }
