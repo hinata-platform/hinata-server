@@ -7,6 +7,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.pat.Scopes;
@@ -59,7 +60,16 @@ public class IssueWriteTools {
 		User me = currentUser.require();
 		// An agent writes markdown; storage is Lexical. Converting here is what
 		// keeps the database holding exactly one representation.
-		RichText body = richText.fromMarkdown(description);
+		//
+		// ISSUE_DESCRIPTION and not MCP, deliberately — see #commentContent for the
+		// case that goes the other way. A description is dictated: the person tells
+		// the agent what broke and pastes the log, and the agent transcribes it. The
+		// words are theirs, the ticket becomes theirs to edit, and the trade
+		// ModerationPolicy makes for long-form bodies — flag rather than refuse,
+		// because losing a defect report to a false positive is the worse outcome —
+		// is exactly the trade that applies. Refusing here would fail the whole
+		// create_issue call and throw away every structured field with it.
+		RichText body = richText.fromMarkdown(description, ModerationSurface.ISSUE_DESCRIPTION);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(title)
@@ -115,7 +125,10 @@ public class IssueWriteTools {
 		Issue saved = issueService.update(idOrReadableId, issue -> {
 			if (title != null) issue.setTitle(title);
 			if (description != null) {
-				RichText body = richText.fromMarkdown(description);
+				// Same surface as create_issue: an edit rewrites the same field and must
+				// not be judged by a different rule than the write that made it.
+				RichText body = richText.fromMarkdown(description,
+						ModerationSurface.ISSUE_DESCRIPTION);
 				issue.setDescription(body.text());
 				issue.setDescriptionDoc(body.doc());
 			}
@@ -189,9 +202,21 @@ public class IssueWriteTools {
 	 * empty comment; without this the MCP path would store a comment with no text at
 	 * all — and {@code edit_comment} would blank an existing one, which is a delete
 	 * wearing an edit's name.
+	 *
+	 * <p>Judged as {@link ModerationSurface#MCP} rather than as
+	 * {@link ModerationSurface#COMMENT} — the one place in these tools where the
+	 * agent's own surface is the right one. A comment is not a field the agent filled
+	 * in on someone's behalf, it is the agent speaking into a thread where people
+	 * talk to each other, and nobody dictated those sentences. Both surfaces are
+	 * technical, so a stack trace still gets its relief; what MCP does not carry is
+	 * the long-form exemption in {@link com.ahmadre.hinata.moderation.ModerationPolicy},
+	 * which exists because a refused body costs a person the work they wrote. It
+	 * costs an agent one tool error it can be told about and act on, so the exemption
+	 * buys nothing here and would only mean a machine may post what a colleague may
+	 * not.
 	 */
 	private RichText commentContent(String markdown) {
-		RichText content = richText.fromMarkdown(markdown);
+		RichText content = richText.fromMarkdown(markdown, ModerationSurface.MCP);
 		if (content.isBlank()) {
 			throw ApiException.badRequest("error.comment.empty");
 		}

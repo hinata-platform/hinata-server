@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.admin;
 
+import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
@@ -59,7 +60,8 @@ class AdminUserServiceTest {
 		AuditService audit = mock(AuditService.class);
 		when(audit.event(any())).thenReturn(mock(AuditService.Entry.class, RETURNS_SELF));
 		service = new AdminUserService(users, userService, sessions, notifications, gateway, adminMail,
-				accountMail, currentUser, new BCryptPasswordEncoder(4), audit);
+				accountMail, currentUser, new BCryptPasswordEncoder(4), audit,
+				mock(ModerationService.class));
 	}
 
 	private User user(String id, Role role, boolean active, User.Origin origin) {

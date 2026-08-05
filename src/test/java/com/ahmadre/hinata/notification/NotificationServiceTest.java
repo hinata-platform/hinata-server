@@ -2,6 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
+import com.ahmadre.hinata.moderation.report.UserBlockService;
 import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -40,6 +41,7 @@ class NotificationServiceTest {
 	private MailService mail;
 	private PushService push;
 	private ProjectReach reach;
+	private UserBlockService userBlocks;
 	private NotificationService service;
 
 	@BeforeEach
@@ -51,8 +53,12 @@ class NotificationServiceTest {
 		push = mock(PushService.class);
 		reach = mock(ProjectReach.class);
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
+		userBlocks = mock(UserBlockService.class);
+		// Nobody has blocked anyone unless a test says so — the fan-out asks this on
+		// every event and a null would fail every case for the wrong reason.
+		lenient().when(userBlocks.blockersOf(anyString())).thenReturn(Set.of());
 		service = new NotificationService(notifications, users, mail, push,
-				mock(GatewayService.class), richText, reach);
+				mock(GatewayService.class), richText, reach, userBlocks);
 	}
 
 	/** A stored text comment, as the write path would have produced it. */

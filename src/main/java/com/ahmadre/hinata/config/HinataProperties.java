@@ -63,6 +63,7 @@ public class HinataProperties {
 	private App app = new App();
 	private Storage storage = new Storage();
 	private Security security = new Security();
+	private Moderation moderation = new Moderation();
 	private Mongodb mongodb = new Mongodb();
 	private Demo demo = new Demo();
 	private Gateway gateway = new Gateway();
@@ -145,6 +146,57 @@ public class HinataProperties {
 		 */
 		@Min(8)
 		private int passwordMinLength = 10;
+	}
+
+	/**
+	 * Env-level defaults for user-generated-content moderation. Every one of these
+	 * is only the fallback: an admin can override it at runtime from the Moderation
+	 * settings panel, and {@link com.ahmadre.hinata.moderation.ModerationPolicy}
+	 * resolves the effective value (DB override wins over this env default).
+	 */
+	@Getter
+	@Setter
+	public static class Moderation {
+		/** Master switch for the whole pipeline. */
+		private boolean enabled = true;
+		/** Whether user-authored text is scanned. */
+		private boolean textEnabled = true;
+		/** Whether uploaded images are classified (needs a configured image tier). */
+		private boolean imageEnabled = true;
+		/**
+		 * Score at or above which content is refused. Defaults to
+		 * {@link com.ahmadre.hinata.moderation.ModerationPolicy#DEFAULT_BLOCK_THRESHOLD}.
+		 */
+		@Min(1)
+		private int blockThreshold = 85;
+		/** Score at or above which content is stored but queued for a human. */
+		@Min(1)
+		private int flagThreshold = 55;
+		/**
+		 * Block threshold for the categories no admin may weaken — child sexual
+		 * content and malware. Lower than the general one on purpose: for these the
+		 * cost of a false negative dominates.
+		 */
+		@Min(1)
+		private int strictBlockThreshold = 70;
+		/** Flag threshold for the non-overridable categories. */
+		@Min(1)
+		private int strictFlagThreshold = 40;
+		/**
+		 * When true, long-form bodies (descriptions, comments, articles, worklogs)
+		 * are queued for review rather than refused, however high they score. On by
+		 * default because a wrongly refused defect report is not rewritten — it is
+		 * abandoned, or moved somewhere nobody can moderate it at all. Short display
+		 * fields and uploads are always refusable regardless of this setting.
+		 */
+		private boolean longFormFlagOnly = true;
+		/**
+		 * Whether a write proceeds when an optional tier is unavailable. On by
+		 * default so an unreachable classifier degrades the product rather than
+		 * stopping it; the resulting verdict is marked degraded and queued, so the
+		 * bypass stays countable. Never applies to externally authored ingress.
+		 */
+		private boolean failOpen = true;
 	}
 
 	@Getter

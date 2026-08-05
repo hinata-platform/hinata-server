@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.media;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -47,8 +48,11 @@ public class MediaService {
 		if (contentType == null || !ALLOWED_TYPES.contains(contentType.toLowerCase())) {
 			throw ApiException.badRequest("error.media.notAnImage");
 		}
-		// StorageService re-checks size + magic bytes against the declared type.
-		String objectKey = storage.upload(file, PREFIX);
+		// StorageService re-checks size + magic bytes against the declared type and
+		// classifies the image. INLINE_IMAGE rather than ATTACHMENT because these
+		// bytes render in the body of whatever they are embedded in — nobody
+		// chooses to open them the way they choose to open an attachment.
+		String objectKey = storage.upload(file, PREFIX, ModerationSurface.INLINE_IMAGE);
 		String id = objectKey.substring(PREFIX.length());
 		return new MediaUpload("/api/v1/media/" + id, file.getOriginalFilename(), contentType,
 				file.getSize());

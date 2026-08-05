@@ -57,7 +57,10 @@ class IssueResolveTest {
 				mock(com.ahmadre.hinata.audit.AuditService.class), mongo,
 				mock(com.ahmadre.hinata.board.AgileBoardRepository.class),
 				mock(com.ahmadre.hinata.board.SprintRepository.class),
-				mock(com.ahmadre.hinata.user.UserRepository.class));
+				mock(com.ahmadre.hinata.user.UserRepository.class),
+				mock(com.ahmadre.hinata.moderation.ModerationService.class),
+				mock(com.ahmadre.hinata.moderation.ModerationRecorder.class),
+				mock(com.ahmadre.hinata.moderation.report.UserBlockService.class));
 	}
 
 	private Query capturedQuery() {

@@ -2,7 +2,12 @@ package com.ahmadre.hinata.storage;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.ModerationVerdict;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -27,9 +32,34 @@ public class StorageService {
 	private final HinataProperties properties;
 	private final StorageBackend backend;
 
-	public StorageService(HinataProperties properties) {
+	/**
+	 * The image gate, or {@code null} on an instance built outside the container.
+	 *
+	 * @see #StorageService(HinataProperties)
+	 */
+	private final ModerationService moderation;
+
+	private final ModerationRecorder moderationRecorder;
+
+	@Autowired
+	public StorageService(HinataProperties properties, ModerationService moderation,
+			ModerationRecorder moderationRecorder) {
 		this.properties = properties;
+		this.moderation = moderation;
+		this.moderationRecorder = moderationRecorder;
 		this.backend = createBackend(properties.getStorage());
+	}
+
+	/**
+	 * Backend selection without the image gate, for the unit tests that only ask
+	 * which backend a configuration selects and never put a byte anywhere.
+	 *
+	 * <p>The constructor above carries {@code @Autowired} because this one exists:
+	 * Spring resolves two unannotated constructors by falling back to the shortest
+	 * one, which would leave the product uploading unclassified images.
+	 */
+	public StorageService(HinataProperties properties) {
+		this(properties, null, null);
 	}
 
 	private static StorageBackend createBackend(HinataProperties.Storage storage) {
@@ -53,7 +83,12 @@ public class StorageService {
 	}
 
 	public String upload(MultipartFile file) {
-		return upload(file, "");
+		return upload(file, "", ModerationSurface.ATTACHMENT);
+	}
+
+	/** As {@link #upload(MultipartFile, String, ModerationSurface)}, as an attachment. */
+	public String upload(MultipartFile file, String keyPrefix) {
+		return upload(file, keyPrefix, ModerationSurface.ATTACHMENT);
 	}
 
 	/**
@@ -61,29 +96,121 @@ public class StorageService {
 	 * so different concerns stay isolated in the bucket and can't be read across
 	 * endpoints by guessing a bare UUID. The object name is still a random UUID;
 	 * user-supplied file names never reach the bucket layout.
+	 *
+	 * <p>[surface] is what the bytes are being used <em>for</em> — an attachment
+	 * nobody sees until they open it is not the same risk as an image that renders
+	 * inline in every reader's feed — so it comes from the caller rather than
+	 * being guessed from the key prefix.
 	 */
-	public String upload(MultipartFile file, String keyPrefix) {
+	public String upload(MultipartFile file, String keyPrefix, ModerationSurface surface) {
 		requireConfigured();
-		HinataProperties.Storage storage = properties.getStorage();
 		String contentType = file.getContentType();
-		if (contentType == null || !storage.getAllowedContentTypes().contains(contentType)) {
-			throw ApiException.badRequest("error.storage.fileTypeNotAllowed");
-		}
-		if (file.getSize() > (long) storage.getMaxUploadMb() * 1024 * 1024) {
-			throw ApiException.badRequest("error.storage.fileTooLarge", storage.getMaxUploadMb());
-		}
-		// The client-declared content type is not trusted on its own: verify the
-		// magic bytes for binary types so a file cannot masquerade as e.g. an
-		// image (defends against polyglot / content-sniffing attacks, A03/A05).
-		verifyMagicBytes(file, contentType);
+		// The declared size decides before a byte is copied. Classifying an image
+		// means holding it in memory, so an oversized upload has to be refused off
+		// the part's own metadata rather than after materializing it — validate()
+		// re-checks against the real length, which is the number that binds.
+		requireWithinSizeLimit(file.getSize());
+		byte[] data = read(file);
 		String objectKey = keyPrefix + UUID.randomUUID();
-		try (var stream = file.getInputStream()) {
-			backend.put(objectKey, stream, file.getSize(), contentType);
+		String fileName = file.getOriginalFilename();
+		ModerationVerdict verdict = validate(data, contentType, fileName, surface);
+		try (var stream = new ByteArrayInputStream(data)) {
+			backend.put(objectKey, stream, data.length, contentType);
+			recordVerdict(verdict, surface, objectKey, fileName);
 			return objectKey;
 		}
 		catch (Exception ex) {
 			log.error("Upload failed: {}", ex.getMessage());
 			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
+		}
+	}
+
+	/**
+	 * Stores already-read bytes through the <em>same</em> checks as
+	 * {@link #upload}: the content-type allowlist, the size bound, the magic-byte
+	 * verification and the image gate.
+	 *
+	 * <p>Exists because {@link #putObject} deliberately trusts its caller, and one
+	 * caller must never be trusted: an e-mail attachment, whose declared content
+	 * type is a MIME header written by whoever sent the mail. Bytes that did not
+	 * arrive as a multipart request are still bytes a colleague will open.
+	 */
+	public String putChecked(String keyPrefix, byte[] data, String contentType, String fileName,
+			ModerationSurface surface) {
+		requireConfigured();
+		String objectKey = keyPrefix + UUID.randomUUID();
+		ModerationVerdict verdict = validate(data, contentType, fileName, surface);
+		try (var stream = new ByteArrayInputStream(data)) {
+			backend.put(objectKey, stream, data.length, contentType);
+			recordVerdict(verdict, surface, objectKey, fileName);
+			return objectKey;
+		}
+		catch (Exception ex) {
+			log.error("Upload of {} failed: {}", fileName, ex.getMessage());
+			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
+		}
+	}
+
+	/**
+	 * Everything that has to be true of a byte array before it is stored, in the
+	 * order that costs least: an allow-listed type, a bounded size, a signature
+	 * matching the declared type, and only then the classifier.
+	 *
+	 * @return the classifier's verdict, or {@code null} when nothing judged these
+	 *         bytes — a non-image, or an instance built without the gate
+	 */
+	private ModerationVerdict validate(byte[] data, String contentType, String fileName,
+			ModerationSurface surface) {
+		if (contentType == null
+				|| !properties.getStorage().getAllowedContentTypes().contains(contentType)) {
+			throw ApiException.badRequest("error.storage.fileTypeNotAllowed");
+		}
+		requireWithinSizeLimit(data.length);
+		// The client-declared content type is not trusted on its own: verify the
+		// magic bytes for binary types so a file cannot masquerade as e.g. an
+		// image (defends against polyglot / content-sniffing attacks, A03/A05).
+		verifyMagicBytes(data, contentType);
+		// Only images are classified, and only after the signature check: a
+		// classifier fed bytes that are not the format they claim to be is
+		// answering a question about a file nobody will ever see.
+		if (moderation == null || !contentType.startsWith("image/")) {
+			return null;
+		}
+		return moderation.checkImage(data, contentType, fileName, surface);
+	}
+
+	/**
+	 * Files a surviving suspicion against the object that was just written.
+	 *
+	 * <p>Recorded here rather than by the caller because the object key is the
+	 * durable reference a moderator needs and it does not exist until the put
+	 * succeeds — and because every caller would otherwise repeat this, and one of
+	 * them would forget. Only ever a reference: the bytes stay in the bucket, the
+	 * queue row holds the verdict and the file name.
+	 */
+	private void recordVerdict(ModerationVerdict verdict, ModerationSurface surface,
+			String objectKey, String fileName) {
+		if (verdict == null || moderationRecorder == null) {
+			return;
+		}
+		String type = surface == ModerationSurface.INLINE_IMAGE ? "media" : "attachment";
+		moderationRecorder.record(verdict, surface,
+				new ModerationRecorder.Target(type, objectKey, null, null, fileName));
+	}
+
+	private void requireWithinSizeLimit(long bytes) {
+		int maxMb = properties.getStorage().getMaxUploadMb();
+		if (bytes > (long) maxMb * 1024 * 1024) {
+			throw ApiException.badRequest("error.storage.fileTooLarge", maxMb);
+		}
+	}
+
+	private byte[] read(MultipartFile file) {
+		try {
+			return file.getBytes();
+		}
+		catch (Exception ex) {
+			throw ApiException.badRequest("error.storage.unreadableUpload");
 		}
 	}
 
@@ -170,15 +297,10 @@ public class StorageService {
 	 * and are stored as-is; all downloads are served with
 	 * {@code Content-Disposition: attachment}, so they are never rendered inline.
 	 */
-	private void verifyMagicBytes(MultipartFile file, String contentType) {
+	private void verifyMagicBytes(byte[] data, String contentType) {
 		byte[] head = new byte[12];
-		int read;
-		try (var stream = file.getInputStream()) {
-			read = stream.readNBytes(head, 0, head.length);
-		}
-		catch (Exception ex) {
-			throw ApiException.badRequest("error.storage.unreadableUpload");
-		}
+		int read = Math.min(head.length, data.length);
+		System.arraycopy(data, 0, head, 0, read);
 		boolean ok = switch (contentType) {
 			case "image/png" -> startsWith(head, read, 0x89, 0x50, 0x4E, 0x47);
 			case "image/jpeg" -> startsWith(head, read, 0xFF, 0xD8, 0xFF);

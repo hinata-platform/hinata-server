@@ -62,6 +62,7 @@ public class MeService {
 	// --- Profile --------------------------------------------------------------
 
 	public User updateProfile(User user, String displayName, String title, String locale) {
+		userService.moderateProfile(displayName, title);
 		if (displayName != null) user.setDisplayName(displayName.trim());
 		if (title != null) user.setTitle(title.trim());
 		if (locale != null) user.setLocale(locale);

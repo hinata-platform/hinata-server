@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.team;
 
+import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
@@ -31,7 +32,8 @@ class TeamServiceTest {
 		projects = mock(ProjectService.class);
 		notifications = mock(NotificationService.class);
 		when(teams.save(any(Team.class))).thenAnswer(invocation -> invocation.getArgument(0));
-		service = new TeamService(teams, mock(TeamActivityRepository.class), projects, notifications);
+		service = new TeamService(teams, mock(TeamActivityRepository.class), projects, notifications,
+				mock(ModerationService.class));
 	}
 
 	private User user(String id, Role... roles) {

@@ -2,6 +2,7 @@ package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -198,7 +199,8 @@ public class IssueController {
 			assigneeIds = (request.assigneeId() != null && !request.assigneeId().isBlank())
 					? List.of(request.assigneeId()) : List.of();
 		}
-		RichText description = richText.fromRequest(request.descriptionDoc(), request.description());
+		RichText description = richText.fromRequest(request.descriptionDoc(), request.description(),
+				ModerationSurface.ISSUE_DESCRIPTION);
 		if (description == null) description = RichText.EMPTY;
 		Issue issue = Issue.builder()
 				.projectId(request.projectId())
@@ -228,7 +230,8 @@ public class IssueController {
 			// legacy field is sending back the derived plain text it was given, and
 			// converting that would flatten the document it came from.
 			RichText description = richText.fromRequest(request.descriptionDoc(), request.description(),
-					issue.getDescriptionDoc(), issue.getDescription());
+					issue.getDescriptionDoc(), issue.getDescription(),
+					ModerationSurface.ISSUE_DESCRIPTION);
 			if (description != null) {
 				issue.setDescription(description.text());
 				issue.setDescriptionDoc(description.doc());
@@ -375,7 +378,7 @@ public class IssueController {
 			throw ApiException.badRequest("error.comment.empty");
 		}
 		RichText content = richText.fromRequest(request.textDoc(), request.text(),
-				storedDoc, storedText);
+				storedDoc, storedText, ModerationSurface.COMMENT);
 		if (content == null) return null;
 		if (content.isBlank()) throw ApiException.badRequest("error.comment.empty");
 		return content;

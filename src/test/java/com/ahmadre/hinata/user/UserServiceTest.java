@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.user;
 
+import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.common.ApiException;
@@ -31,7 +32,8 @@ class UserServiceTest {
 		SecurityPolicy securityPolicy = mock(SecurityPolicy.class);
 		when(securityPolicy.passwordMinLength()).thenReturn(10);
 		service = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class),
-				mock(AuditService.class), mock(NotificationService.class), securityPolicy);
+				mock(AuditService.class), mock(NotificationService.class), securityPolicy,
+				mock(ModerationService.class));
 	}
 
 	@Test

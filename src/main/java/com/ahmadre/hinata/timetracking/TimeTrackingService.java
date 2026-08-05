@@ -3,6 +3,10 @@ package com.ahmadre.hinata.timetracking;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.ModerationVerdict;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +25,8 @@ public class TimeTrackingService {
 
 	private final WorkItemRepository workItems;
 	private final IssueRepository issues;
+	private final ModerationService moderation;
+	private final ModerationRecorder moderationRecorder;
 
 	public WorkItem add(String issueId, WorkItem item) {
 		Issue issue = issues.findById(issueId)
@@ -29,12 +35,20 @@ public class TimeTrackingService {
 		if (item.getDurationMinutes() <= 0 || item.getDurationMinutes() > 24 * 60) {
 			throw ApiException.badRequest("error.time.invalidDuration");
 		}
+		// A worklog note is short but it is prose about a colleague's day, it is
+		// visible to everyone on the project, and it lands in exported timesheets —
+		// so it is judged, not assumed harmless because the field is small.
+		ModerationVerdict verdict =
+				moderation.checkText(item.getDescription(), ModerationSurface.WORKLOG);
 		item.setIssueId(issue.getId());
 		item.setProjectId(issue.getProjectId());
 		if (item.getDate() == null) {
 			item.setDate(LocalDate.now(ZoneOffset.UTC));
 		}
 		WorkItem saved = workItems.save(item);
+		moderationRecorder.record(verdict, ModerationSurface.WORKLOG,
+				new ModerationRecorder.Target("workItem", saved.getId(), issue.getProjectId(),
+						saved.getUserId(), issue.getReadableId()));
 		syncSpentTime(issue);
 		return saved;
 	}

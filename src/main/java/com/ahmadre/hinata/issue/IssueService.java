@@ -7,6 +7,11 @@ import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.ModerationVerdict;
+import com.ahmadre.hinata.moderation.report.UserBlockService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.project.Project;
@@ -70,6 +75,9 @@ public class IssueService {
 	private final AgileBoardRepository boardRepo;
 	private final SprintRepository sprintRepo;
 	private final UserRepository userRepo;
+	private final ModerationService moderation;
+	private final ModerationRecorder moderationRecorder;
+	private final UserBlockService userBlocks;
 
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
@@ -131,6 +139,17 @@ public class IssueService {
 		if (author != null) {
 			projects.assertMember(project, author); // only project members may add issues (A01)
 		}
+		// After the access check and before the first write. After, because a gate
+		// that answers ahead of authorization is an oracle a non-member can probe;
+		// before, because the next line reserves a project-scoped issue number and a
+		// refusal past that point would burn one and leave a permanent gap in the key
+		// sequence.
+		//
+		// In the service rather than the controller because MCP tool parameters are
+		// not bean-validated and an MCP write never reaches a controller at all —
+		// nor does the e-mail poller.
+		ModerationVerdict titleVerdict =
+				moderation.checkText(issue.getTitle(), ModerationSurface.ISSUE_TITLE);
 		assignIssueNumber(issue, project);
 		if (issue.getState() == null || !project.workflowStateNames().contains(issue.getState())) {
 			issue.setState(project.workflowStateNames().get(0));
@@ -146,6 +165,8 @@ public class IssueService {
 		validateHierarchy(issue);
 		issue.setRank(Instant.now().toEpochMilli());
 		Issue saved = saveWithNumberRetry(issue, project);
+		recordVerdict(saved, titleVerdict, ModerationSurface.ISSUE_TITLE);
+		recordDescription(saved);
 		mergeProjectLabels(project, saved.getTags());
 		activities.save(IssueActivity.builder()
 				.issueId(saved.getId())
@@ -157,6 +178,41 @@ public class IssueService {
 		// Ping anyone @-mentioned in the freshly written description.
 		notifications.notifyNewMentions(saved, author, null, saved.getDescriptionDoc());
 		return saved;
+	}
+
+	/**
+	 * Files a verdict against an issue, now that it has an id a moderator can open.
+	 *
+	 * <p>{@link ModerationService} deliberately persists nothing — it sits on the
+	 * write path of every comment and stays free of a repository — so attaching the
+	 * verdict to the entity is this layer's job. A {@code null} verdict means
+	 * nothing was judged (an unchanged title), and an ALLOW verdict is dropped by
+	 * the recorder itself, so neither needs a conditional at the call site.
+	 */
+	private void recordVerdict(Issue issue, ModerationVerdict verdict, ModerationSurface surface) {
+		if (verdict == null) {
+			return;
+		}
+		moderationRecorder.record(verdict, surface, new ModerationRecorder.Target(
+				"issue", issue.getId(), issue.getProjectId(), issue.getReporterId(),
+				issue.getReadableId()));
+	}
+
+	/**
+	 * Queues a flagged description against the saved issue.
+	 *
+	 * <p>The body already passed the gate inside {@code RichTextService}, which is
+	 * where a refusal has to happen — but that is one layer below an entity id, so
+	 * a suspicion it decided <em>not</em> to refuse would otherwise never reach a
+	 * moderator. That matters more than it sounds: long-form bodies are configured
+	 * flag-only by default, so for descriptions FLAG is the <em>only</em> outcome
+	 * moderation ever produces. The second pass costs an in-process lexicon lookup
+	 * over text that is already in memory.
+	 */
+	private void recordDescription(Issue issue) {
+		recordVerdict(issue,
+				moderation.assessText(issue.getDescription(), ModerationSurface.ISSUE_DESCRIPTION),
+				ModerationSurface.ISSUE_DESCRIPTION);
 	}
 
 	/** The ticket an inbound e-mail created, if any — for mailbox reprocessing. */
@@ -218,6 +274,14 @@ public class IssueService {
 		mutator.accept(issue);
 		validateHierarchy(issue);
 
+		// Only a title that actually changed is judged. Re-judging an untouched one
+		// would make an unrelated edit — dragging the card to another column, say —
+		// start failing on a title that has sat in the backlog for a year, which is
+		// how a filter teaches people to route around it.
+		ModerationVerdict titleVerdict = Objects.equals(before.getTitle(), issue.getTitle())
+				? null
+				: moderation.checkText(issue.getTitle(), ModerationSurface.ISSUE_TITLE);
+
 		Project project = projects.get(issue.getProjectId());
 		// Keep the issue's state in step with its sprint membership:
 		//  • pulled into a sprint  → advance out of Backlog (it's now on the board);
@@ -239,6 +303,10 @@ public class IssueService {
 				: null);
 
 		Issue saved = issues.save(issue);
+		recordVerdict(saved, titleVerdict, ModerationSurface.ISSUE_TITLE);
+		if (!Objects.equals(before.getDescription(), saved.getDescription())) {
+			recordDescription(saved);
+		}
 		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);
 		// Ping anyone newly @-mentioned in the description (existing mentions on an
@@ -557,8 +625,12 @@ public class IssueService {
 		Issue issue = getForUser(idOrReadableId, user); // primary ACL assert
 		String id = issue.getId();
 		Project project = projects.get(issue.getProjectId());
-		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort, user);
-		List<IssueComment> pinned = pinnedComments(id, user);
+		// Resolved here and threaded into both comment reads: this method exists to
+		// collapse an issue open into ONE round-trip, and a per-sub-part block lookup
+		// would quietly add queries back to the path that was built to remove them.
+		Set<String> blocked = blockedFor(user);
+		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort, user, blocked);
+		List<IssueComment> pinned = pinnedComments(id, user, blocked);
 		Page<IssueActivity> activityPage = activityOf(id, 0, activitySize, user);
 		List<WorkItem> items = workItems.findByIssueIdOrderByDateDesc(id);
 		Hierarchy hierarchy = hierarchyOf(id, user);
@@ -662,6 +734,22 @@ public class IssueService {
 		if (changed) projects.save(project);
 	}
 
+	/**
+	 * The change history, deliberately NOT filtered by who the viewer has blocked.
+	 *
+	 * <p>Comments are filtered and this is not, because the two carry different
+	 * things. A comment is one person addressing others; the history is the issue's
+	 * own state — who moved it, when the due date shifted, what the title became.
+	 * The only free text it holds is a value already on the issue itself, so hiding
+	 * the row would remove the record of a change without removing a single word the
+	 * blocked person wrote, and would leave the viewer looking at a title with no
+	 * account of where it came from.
+	 *
+	 * <p>That is the line {@link com.ahmadre.hinata.moderation.report.UserBlock}
+	 * draws: a block filters the discretionary, person-to-person surface and never
+	 * the shared work. A tracker whose history silently omits changes is a tracker
+	 * that lies about the project's state, and no personal filter is worth that.
+	 */
 	public Page<IssueActivity> activityOf(String issueId, int page, int size, User user) {
 		String id = getForUser(issueId, user).getId();
 		return activities.findByIssueIdOrderByCreatedAtDesc(id,
@@ -986,6 +1074,7 @@ public class IssueService {
 				.textDoc(content.doc());
 		applyReplyTo(builder, issue.getId(), replyToId);
 		IssueComment saved = comments.save(builder.build());
+		recordComment(issue, saved, content.text(), ModerationSurface.COMMENT);
 		// Notifications are best-effort: a failure in the mail/push fan-out (e.g.
 		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
 		// the already-saved comment by bubbling a 500 back to the author.
@@ -998,6 +1087,19 @@ public class IssueService {
 		}
 		commentEvents.publishChanged(issue.getId());
 		return saved;
+	}
+
+	/**
+	 * Queues a flagged comment against the saved comment — the same split as
+	 * {@link #recordDescription}: the gate refuses at the writer, the queue row is
+	 * attached where an id exists. [text] is the derived plain text, never the
+	 * document, because that is what the gate judged.
+	 */
+	private void recordComment(Issue issue, IssueComment comment, String text,
+			ModerationSurface surface) {
+		moderationRecorder.record(moderation.assessText(text, surface), surface,
+				new ModerationRecorder.Target("comment", comment.getId(), issue.getProjectId(),
+						comment.getAuthorId(), issue.getReadableId()));
 	}
 
 	/**
@@ -1047,13 +1149,42 @@ public class IssueService {
 	 */
 	public Page<IssueComment> commentsOf(String issueId, int page, int size, String sort,
 			User user) {
+		return commentsOf(issueId, page, size, sort, user, blockedFor(user));
+	}
+
+	/**
+	 * <b>Hidden, not tombstoned.</b> A comment by an author the viewer has blocked is
+	 * absent from this page as if it had never been written — no placeholder, no
+	 * "content hidden" row, no gap they can expand.
+	 *
+	 * <p>A tombstone was the alternative and it is the wrong one for a block: it
+	 * re-renders the blocked person's name on every visit, tells the viewer exactly
+	 * how often that person is still writing at them, and hands anyone who wants to
+	 * be seen a way to be seen anyway. Someone who blocks a colleague is asking to
+	 * stop encountering them, and a row saying "1 hidden comment" is still an
+	 * encounter. Apple Guideline 1.2 asks for the ability to block abusive users, not
+	 * to label their output.
+	 *
+	 * <p>The cost of hiding is a thread that can read as discontinuous — a reply
+	 * answering something the viewer cannot see. That is paid for rather than argued
+	 * away: reply counts are computed under the same filter (see
+	 * {@link #attachReplyCounts}), so a thread never advertises replies that will not
+	 * appear, and the quoted-reply snapshot a reply carries keeps the remaining
+	 * conversation readable on its own. Nothing is deleted and nobody else's view
+	 * changes — the same comment is still there for every other member, and for a
+	 * moderator acting on a report.
+	 */
+	private Page<IssueComment> commentsOf(String issueId, int page, int size, String sort,
+			User user, Set<String> blocked) {
 		String id = getForUser(issueId, user).getId();
 		Sort.Direction dir = "oldest".equalsIgnoreCase(sort)
 				? Sort.Direction.ASC
 				: Sort.Direction.DESC;
-		Page<IssueComment> result = comments.findByIssueIdAndReplyToIdIsNull(id,
-				PageRequest.of(page, Math.min(size, 100), Sort.by(dir, "createdAt")));
-		attachReplyCounts(result.getContent());
+		Pageable pageable = PageRequest.of(page, Math.min(size, 100), Sort.by(dir, "createdAt"));
+		Page<IssueComment> result = blocked.isEmpty()
+				? comments.findByIssueIdAndReplyToIdIsNull(id, pageable)
+				: comments.findByIssueIdAndReplyToIdIsNullAndAuthorIdNotIn(id, blocked, pageable);
+		attachReplyCounts(result.getContent(), blocked);
 		return result;
 	}
 
@@ -1061,13 +1192,33 @@ public class IssueService {
 	public Page<IssueComment> repliesOf(String issueId, String rootId, int page, int size,
 			User user) {
 		IssueComment root = requireComment(issueId, rootId, user);
-		return comments.findByReplyToId(root.getId(),
-				PageRequest.of(page, Math.min(size, 100),
-						Sort.by(Sort.Direction.ASC, "createdAt")));
+		Set<String> blocked = blockedFor(user);
+		Pageable pageable = PageRequest.of(page, Math.min(size, 100),
+				Sort.by(Sort.Direction.ASC, "createdAt"));
+		return blocked.isEmpty()
+				? comments.findByReplyToId(root.getId(), pageable)
+				: comments.findByReplyToIdAndAuthorIdNotIn(root.getId(), blocked, pageable);
 	}
 
-	/** Populates the transient {@code replyCount} on a page of top-level comments. */
-	private void attachReplyCounts(List<IssueComment> roots) {
+	/**
+	 * Who [user] has blocked, resolved ONCE for the request that is about to read
+	 * comments.
+	 *
+	 * <p>Every caller threads the result down rather than asking again per page, per
+	 * comment or per count: the aggregate {@link #detail} alone reads the feed, the
+	 * pinned list and the reply counts, and re-asking at each of them would turn one
+	 * indexed lookup into three for a set that cannot change mid-request.
+	 */
+	private Set<String> blockedFor(User user) {
+		return user == null ? Set.of() : userBlocks.blockedBy(user.getId());
+	}
+
+	/**
+	 * Populates the transient {@code replyCount} on a page of top-level comments,
+	 * counting only the replies [blocked] leaves visible — the badge must promise
+	 * exactly what opening the thread delivers.
+	 */
+	private void attachReplyCounts(List<IssueComment> roots, Set<String> blocked) {
 		if (roots.isEmpty()) {
 			return;
 		}
@@ -1075,7 +1226,10 @@ public class IssueService {
 		Map<String, Long> counts = new HashMap<>();
 		// Never let a count hiccup break the comment list — default to 0 instead.
 		try {
-			for (IssueCommentRepository.ReplyCount rc : comments.countRepliesGrouped(ids)) {
+			List<IssueCommentRepository.ReplyCount> rows = blocked.isEmpty()
+					? comments.countRepliesGrouped(ids)
+					: comments.countRepliesGroupedExcludingAuthors(ids, blocked);
+			for (IssueCommentRepository.ReplyCount rc : rows) {
 				counts.put(rc.rootId(), rc.count());
 			}
 		}
@@ -1119,6 +1273,16 @@ public class IssueService {
 		catch (java.io.IOException ex) {
 			throw ApiException.badRequest("error.storage.unreadableUpload");
 		}
+		// The declared type is a client-supplied header and was the ONLY thing
+		// standing between this endpoint and the bucket: the write below goes
+		// through putObject, which skips every check StorageService applies. So the
+		// signature is verified here, the same defence the HTTP upload path gets.
+		if (!isKnownAudio(data, contentType.toLowerCase())) {
+			// A distinct key from notAudio: that one means "you picked a PDF", this
+			// one means "this says it is audio and is not", which is a different
+			// thing to tell someone whose recorder just produced a broken file.
+			throw ApiException.badRequest("error.voice.contentMismatch");
+		}
 		// Clamp untrusted metadata: non-negative duration, at most VOICE_MAX_PEAKS
 		// bars, each normalised into 0–100.
 		int safeDuration = Math.max(0, durationMs);
@@ -1145,6 +1309,23 @@ public class IssueService {
 				.voice(voice);
 		applyReplyTo(builder, issue.getId(), replyToId);
 		IssueComment saved = comments.save(builder.build());
+		// NOT recorded to the moderator queue, and that is the point of this comment.
+		//
+		// Hinata has no audio classifier: every voice message is un-scanned, always,
+		// by design (ModerationSurface#VOICE is binary and no ImageModerator claims an
+		// audio type). Filing a degraded verdict per recording therefore did not
+		// report an incident, it reported the product's documented normal state — one
+		// queue row per voice note, growing with usage, drowning the flagged text a
+		// moderator opens the queue to act on. A signal that fires on every single
+		// occurrence carries no information, and the cost is paid by the one person
+		// reading the queue.
+		//
+		// What is genuinely un-scanned still reaches a human the way un-scanned
+		// content always has to: somebody listens to it and reports it, and
+		// ContentReportService puts that report in front of every admin. The honest
+		// statement "voice is not content-scanned" belongs in the policy and in
+		// ModerationSurface, not in a row manufactured per recording.
+		//
 		// A voice comment has no document → notifyComment falls back to a
 		// "commented on <title>" body. Best-effort (see addComment): never fail a
 		// saved voice comment on it.
@@ -1157,6 +1338,57 @@ public class IssueService {
 		}
 		commentEvents.publishChanged(issue.getId());
 		return saved;
+	}
+
+	/**
+	 * Whether [data] really is one of the container formats {@link #VOICE_TYPES}
+	 * accepts, judged by its leading bytes rather than by what the client said.
+	 *
+	 * <p>Deliberately keyed on the <em>family</em> a type belongs to, not on the
+	 * exact MIME string: the four recorders in play disagree about what to call an
+	 * MPEG-4 audio file ({@code audio/mp4}, {@code audio/x-m4a}, {@code audio/m4a})
+	 * while all producing the same box structure, and a check that insisted on a
+	 * one-to-one mapping would reject real recordings from real phones.
+	 */
+	private static boolean isKnownAudio(byte[] data, String contentType) {
+		return switch (contentType) {
+			// ISO base media (MP4/M4A): a "....ftyp" box at offset 4.
+			case "audio/mp4", "audio/x-m4a", "audio/m4a" -> matches(data, 4, "ftyp");
+			// Matroska/WebM: the EBML header.
+			case "audio/webm" -> matches(data, 0, 0x1A, 0x45, 0xDF, 0xA3);
+			case "audio/ogg" -> matches(data, 0, "OggS");
+			case "audio/wav", "audio/x-wav" -> matches(data, 0, "RIFF") && matches(data, 8, "WAVE");
+			// MP3: an ID3 tag, or a bare frame with the 11-bit sync word set.
+			case "audio/mpeg" -> matches(data, 0, "ID3") || isMpegFrame(data);
+			// Raw AAC: an ADTS frame (0xFFF sync + MPEG-4 layer bits) or an ADIF header.
+			case "audio/aac" -> isAdts(data) || matches(data, 0, "ADIF");
+			default -> false;
+		};
+	}
+
+	private static boolean isMpegFrame(byte[] data) {
+		return data.length >= 2 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xE0) == 0xE0;
+	}
+
+	private static boolean isAdts(byte[] data) {
+		return data.length >= 2 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xF6) == 0xF0;
+	}
+
+	private static boolean matches(byte[] data, int offset, String ascii) {
+		int[] bytes = ascii.chars().toArray();
+		return matches(data, offset, bytes);
+	}
+
+	private static boolean matches(byte[] data, int offset, int... signature) {
+		if (data.length < offset + signature.length) {
+			return false;
+		}
+		for (int i = 0; i < signature.length; i++) {
+			if ((data[offset + i] & 0xFF) != signature[i]) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** Authorised read of a voice comment's audio bytes for the bytes proxy. */
@@ -1191,7 +1423,7 @@ public class IssueService {
 			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
 		RichText content = resolver.apply(comment);
-		if (content == null) return withReplyCount(comment);
+		if (content == null) return withReplyCount(comment, editor);
 		// Atomic field $set (not a whole-document save) so a concurrent
 		// reaction/pin on the same comment isn't clobbered by a stale edit copy.
 		// The document and its derived text are set together — they must never be
@@ -1206,8 +1438,12 @@ public class IssueService {
 		if (saved == null) {
 			saved = comment;
 		}
+		// An edit is a fresh write of the same body, so it is judged again: posting
+		// something innocuous and filling it in afterwards must not be a way past
+		// the queue.
+		recordComment(get(comment.getIssueId()), saved, content.text(), ModerationSurface.COMMENT);
 		commentEvents.publishChanged(comment.getIssueId());
-		return withReplyCount(saved);
+		return withReplyCount(saved, editor);
 	}
 
 	/**
@@ -1274,7 +1510,7 @@ public class IssueService {
 		}
 		IssueComment saved = comments.findById(commentId).orElse(comment);
 		commentEvents.publishChanged(comment.getIssueId());
-		return withReplyCount(saved);
+		return withReplyCount(saved, user);
 	}
 
 	/** Pins/unpins a comment. Any project member may pin and unpin. */
@@ -1291,26 +1527,55 @@ public class IssueService {
 			saved = comment;
 		}
 		commentEvents.publishChanged(comment.getIssueId());
-		return withReplyCount(saved);
+		return withReplyCount(saved, user);
 	}
 
 	/** Pinned TOP-LEVEL comments of a thread, in pin order — surfaced above the feed. */
 	public List<IssueComment> pinnedComments(String issueId, User user) {
+		return pinnedComments(issueId, user, blockedFor(user));
+	}
+
+	/**
+	 * As above, with the viewer's block set already resolved. Filtered in memory
+	 * rather than in the query because this list is unpaged and already streams
+	 * through a predicate — a second condition on the same stream costs nothing,
+	 * while a paged read would have to exclude in the query to keep its totals
+	 * honest.
+	 */
+	private List<IssueComment> pinnedComments(String issueId, User user, Set<String> blocked) {
 		String id = getForUser(issueId, user).getId();
 		List<IssueComment> pinned = comments.findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(id)
 				.stream()
 				.filter(c -> c.getReplyToId() == null)
+				.filter(c -> !blocked.contains(c.getAuthorId()))
 				.toList();
-		attachReplyCounts(pinned);
+		attachReplyCounts(pinned, blocked);
 		return pinned;
 	}
 
-	/** Sets the read-time reply count on a single comment (0 for a reply). */
-	private IssueComment withReplyCount(IssueComment comment) {
-		comment.setReplyCount((int) comments.countByReplyToId(comment.getId()));
+	/**
+	 * Sets the read-time reply count on a single comment (0 for a reply), under the
+	 * same block filter the feed uses — otherwise pinning or reacting would answer
+	 * with a count the list the caller is looking at cannot reach.
+	 */
+	private IssueComment withReplyCount(IssueComment comment, User user) {
+		Set<String> blocked = blockedFor(user);
+		comment.setReplyCount((int) (blocked.isEmpty()
+				? comments.countByReplyToId(comment.getId())
+				: comments.countByReplyToIdAndAuthorIdNotIn(comment.getId(), blocked)));
 		return comment;
 	}
 
+	/**
+	 * Loads a comment for an operation the caller performs ON it — edit, react, pin,
+	 * delete, play back a voice note.
+	 *
+	 * <p>Deliberately NOT block-filtered. Blocking hides someone's writing from a
+	 * feed; it does not revoke the viewer's ability to act on an item they reached by
+	 * id. An admin who blocked a user still has to be able to open and delete that
+	 * user's comment from the report queue, and a 404 here would take that away from
+	 * exactly the person the moderation flow depends on.
+	 */
 	private IssueComment requireComment(String issueId, String commentId, User user) {
 		Issue issue = get(issueId);
 		assertAccess(issue, user);

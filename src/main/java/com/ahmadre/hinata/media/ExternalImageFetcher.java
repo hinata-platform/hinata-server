@@ -1,7 +1,10 @@
 package com.ahmadre.hinata.media;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.storage.StorageService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -44,6 +47,7 @@ import java.util.Set;
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class ExternalImageFetcher {
 
 	private static final long MAX_BYTES = 10L * 1024 * 1024;
@@ -60,7 +64,19 @@ public class ExternalImageFetcher {
 			.connectTimeout(CONNECT_TIMEOUT)
 			.build();
 
-	/** Fetches [rawUrl] and returns its validated image bytes + content type. */
+	private final ModerationService moderation;
+
+	/**
+	 * Fetches [rawUrl] and returns its validated, moderated image bytes + content
+	 * type.
+	 *
+	 * <p>The moderation is not belt-and-braces on top of the upload path: these
+	 * bytes never touch {@code StorageService.upload}, so nothing else has ever
+	 * looked at them. They also come from a host nobody here controls, which is
+	 * why {@link ModerationSurface#EXTERNAL_IMAGE} is judged a band stricter and
+	 * is not allowed to fail open — a URL that renders for every reader of an
+	 * issue is an easier thing to abuse than an upload with an author's name on it.
+	 */
 	public StorageService.StoredObject fetch(String rawUrl) {
 		URI uri = parse(rawUrl);
 		for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -86,7 +102,9 @@ public class ExternalImageFetcher {
 				close(response.body());
 				throw ApiException.badRequest("error.media.notAnImage");
 			}
-			return new StorageService.StoredObject(readCapped(response.body()), contentType);
+			byte[] data = readCapped(response.body());
+			moderation.checkImage(data, contentType, uri.getHost(), ModerationSurface.EXTERNAL_IMAGE);
+			return new StorageService.StoredObject(data, contentType);
 		}
 		throw fetchFailed();
 	}

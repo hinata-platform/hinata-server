@@ -46,6 +46,11 @@ public class MediaController {
 		return inline(media.load(id), CacheControl.maxAge(Duration.ofDays(30)).cachePrivate());
 	}
 
+	/**
+	 * The proxied bytes never pass the upload path, so {@link ExternalImageFetcher}
+	 * is where they are judged — it refuses the fetch rather than returning
+	 * something this method would then serve inline to every reader.
+	 */
 	@Operation(summary = "Proxy an external image URL server-side (bypasses CORS)")
 	@GetMapping("/proxy")
 	public ResponseEntity<byte[]> proxy(@RequestParam("url") String url) {

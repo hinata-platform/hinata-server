@@ -1,10 +1,13 @@
 package com.ahmadre.hinata.richtext;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -75,17 +78,66 @@ public class RichTextService {
 	public static final int MAX_MARKDOWN_CHARS = 30_000;
 
 	/**
+	 * The surface assumed when a caller does not name one.
+	 *
+	 * <p>Long-form technical prose is the only honest default here: every call
+	 * that omits a surface is writing a <em>body</em> — a description, an article,
+	 * a converted mail — and judging one of those as if it were a display name
+	 * would refuse stack traces and cost someone their written defect report. A
+	 * caller writing something shorter, or something authored outside the
+	 * organisation, says so through the {@link ModerationSurface} overloads, and
+	 * every ingress where that actually changes the verdict does.
+	 */
+	private static final ModerationSurface DEFAULT_SURFACE = ModerationSurface.ISSUE_DESCRIPTION;
+
+	/**
+	 * The gate, or {@code null} on an instance built outside the container.
+	 *
+	 * @see #RichTextService()
+	 */
+	private final ModerationService moderation;
+
+	@Autowired
+	public RichTextService(ModerationService moderation) {
+		this.moderation = moderation;
+	}
+
+	/**
+	 * A converter with <b>no gate</b>, for callers that convert documents they
+	 * never store — the wire-format conformance corpus and the markdown
+	 * round-trip, which compare documents and throw them away.
+	 *
+	 * <p>The constructor above carries {@code @Autowired} precisely because this
+	 * one exists: with two constructors and no annotation Spring would pick the
+	 * no-arg one and the product would run with moderation silently switched off,
+	 * which is the single worst way this class could fail.
+	 */
+	public RichTextService() {
+		this(null);
+	}
+
+	/**
 	 * Accepts a Lexical document from a client: validates it against the bounds in
-	 * {@link LexicalJson} and derives its plain text.
+	 * {@link LexicalJson}, derives its plain text, and puts that text past the
+	 * moderation gate as {@link #DEFAULT_SURFACE}.
 	 *
 	 * @throws com.ahmadre.hinata.common.ApiException 400 when the document is
 	 *         unreadable or exceeds the structural limits
+	 * @throws com.ahmadre.hinata.moderation.ModerationException 422 when the
+	 *         content is refused
 	 */
 	public RichText fromLexical(String json) {
+		return fromLexical(json, DEFAULT_SURFACE);
+	}
+
+	/** As {@link #fromLexical(String)}, judged as content written on [surface]. */
+	public RichText fromLexical(String json, ModerationSurface surface) {
 		if (json == null || json.isBlank()) return RichText.EMPTY;
 		JsonNode document = LexicalJson.parse(MAPPER, json);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
-		return new RichText(json, LexicalJson.plainText(document), issueKeys(document));
+		String text = LexicalJson.plainText(document);
+		gate(text, surface);
+		return new RichText(json, text, issueKeys(document));
 	}
 
 	/**
@@ -94,9 +146,16 @@ public class RichTextService {
 	 * converted document may not exceed {@link LexicalJson#MAX_JSON_CHARS}.
 	 *
 	 * @throws com.ahmadre.hinata.common.ApiException 400 {@code error.richtext.tooLarge}
+	 * @throws com.ahmadre.hinata.moderation.ModerationException 422 when the
+	 *         content is refused
 	 */
 	public RichText fromMarkdown(String source) {
-		return convert(source, MAX_MARKDOWN_CHARS);
+		return fromMarkdown(source, DEFAULT_SURFACE);
+	}
+
+	/** As {@link #fromMarkdown(String)}, judged as content written on [surface]. */
+	public RichText fromMarkdown(String source, ModerationSurface surface) {
+		return convert(source, MAX_MARKDOWN_CHARS, surface);
 	}
 
 	/**
@@ -105,12 +164,18 @@ public class RichTextService {
 	 * bodies. Refusing those on input would leave them unconverted forever; the
 	 * output bound still applies, so a body that cannot become a readable document
 	 * is reported rather than written.
+	 *
+	 * <p>Not moderated, for the same reason the input bound is relaxed: this is a
+	 * re-derivation of content the database already holds, not a write. Blocking
+	 * it would strand the body in a format nothing can read while leaving the
+	 * offending text exactly where it already is. Stored content reaches a
+	 * moderator through the queue, never by refusing a migration.
 	 */
 	public RichText fromStoredMarkdown(String source) {
-		return convert(source, LexicalJson.MAX_JSON_CHARS);
+		return convert(source, LexicalJson.MAX_JSON_CHARS, null);
 	}
 
-	private RichText convert(String source, int maxSourceChars) {
+	private RichText convert(String source, int maxSourceChars, ModerationSurface surface) {
 		if (source == null || source.isBlank()) return RichText.EMPTY;
 		if (source.length() > maxSourceChars) throw tooLarge();
 		ObjectNode document = MARKDOWN.convert(source);
@@ -119,7 +184,27 @@ public class RichTextService {
 		// The read side refuses a document past this bound. Storing one anyway
 		// produces content that loads and can never be saved again.
 		if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
-		return new RichText(json, LexicalJson.plainText(document), issueKeys(document));
+		String text = LexicalJson.plainText(document);
+		gate(text, surface);
+		return new RichText(json, text, issueKeys(document));
+	}
+
+	/**
+	 * Puts one body past the moderation gate.
+	 *
+	 * <p>What is judged is the <em>derived plain text</em>, never the document.
+	 * Scoring the JSON would score node type names and inline styling, and — far
+	 * worse — an author could split a word across two text nodes and have the
+	 * filter read two harmless fragments while every reader sees the word. The
+	 * flattening is what a person actually reads, so it is what has to be judged.
+	 *
+	 * <p>A {@code null} surface means the content is already stored and is only
+	 * being re-derived; a {@code null} service means this instance was built
+	 * outside the container. Both are documented above and nowhere else.
+	 */
+	private void gate(String text, ModerationSurface surface) {
+		if (moderation == null || surface == null) return;
+		moderation.checkText(text, surface);
 	}
 
 	/**
@@ -145,18 +230,34 @@ public class RichTextService {
 	 *         "leave it as it is"
 	 */
 	public RichText fromRequest(String doc, String markdown, String storedDoc, String storedText) {
-		if (doc != null) return fromLexical(doc);
+		return fromRequest(doc, markdown, storedDoc, storedText, DEFAULT_SURFACE);
+	}
+
+	/**
+	 * As {@link #fromRequest(String, String, String, String)}, judged as content
+	 * written on [surface]. The "no change" branch is decided <em>before</em> the
+	 * gate on purpose: a save that carries no edit must not start failing because
+	 * a body written under an older ruleset would not pass today's.
+	 */
+	public RichText fromRequest(String doc, String markdown, String storedDoc, String storedText,
+			ModerationSurface surface) {
+		if (doc != null) return fromLexical(doc, surface);
 		if (markdown == null) return null;
 		if (storedDoc != null && !storedDoc.isBlank()
 				&& markdown.strip().equals(storedText == null ? "" : storedText.strip())) {
 			return null;
 		}
-		return fromMarkdown(markdown);
+		return fromMarkdown(markdown, surface);
 	}
 
 	/** As {@link #fromRequest(String, String, String, String)}, for a new entity. */
 	public RichText fromRequest(String doc, String markdown) {
 		return fromRequest(doc, markdown, null, null);
+	}
+
+	/** As {@link #fromRequest(String, String)}, judged as content on [surface]. */
+	public RichText fromRequest(String doc, String markdown, ModerationSurface surface) {
+		return fromRequest(doc, markdown, null, null, surface);
 	}
 
 	/** Plain text of a stored document, for consumers that only want words. */

@@ -3,6 +3,8 @@ package com.ahmadre.hinata.git;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.moderation.ModerationException;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -429,9 +431,15 @@ public class GitService {
 			try {
 				switch (command.type()) {
 					// A smart-commit comment is plain text from a commit message; it goes
-					// through the same converter as every other markdown source.
+					// through the same converter as every other markdown source — named as
+					// GIT_COMMIT, because that is what it actually is. Judging it as an
+					// internal description would hand a webhook the leniency the product
+					// grants a colleague who signed in, and a webhook payload is the one
+					// comment in the product nobody authenticated: whoever can push to the
+					// repository, or forge a hook, can put text in a project's thread.
 					case COMMENT -> issues.addComment(issue.getId(),
-							richText.fromMarkdown(command.value()), actor);
+							richText.fromMarkdown(command.value(), ModerationSurface.GIT_COMMIT),
+							actor);
 					case TIME -> {
 						int minutes = SmartCommitParser.minutes(command.value());
 						if (minutes > 0) {
@@ -446,6 +454,18 @@ public class GitService {
 						}
 					}
 				}
+			}
+			catch (ModerationException refused) {
+				// Split out from the catch below because the two mean opposite things
+				// and only one of them is a bug. A refusal is the gate working: the
+				// content was judged and rejected, the verdict says why, and nothing is
+				// broken. Folding it into the generic warning made every refused commit
+				// message read like a parser fault, so the one signal worth acting on —
+				// somebody is pushing abuse through a webhook — was indistinguishable
+				// from noise in the log.
+				log.warn("[git] smart-commit comment on {} refused by content policy ({}): {}",
+						command.issueKey(), refused.getVerdict().primaryCategory(),
+						refused.getMessage());
 			}
 			catch (RuntimeException e) {
 				log.warn("[git] smart-commit '{}' on {} skipped: {}",

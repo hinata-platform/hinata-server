@@ -4,6 +4,8 @@ import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleRepository;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -31,6 +33,7 @@ public class SpaceController {
 	private final SpaceRepository spaces;
 	private final ArticleRepository articles;
 	private final CurrentUser currentUser;
+	private final ModerationService moderation;
 
 	public record SpaceRequest(
 			@NotBlank @Size(max = 60) String name,
@@ -58,6 +61,7 @@ public class SpaceController {
 		if (name.isEmpty()) {
 			throw ApiException.badRequest("error.space.nameRequired");
 		}
+		moderateNaming(name, request.description());
 		if (spaces.existsByName(name)) {
 			throw ApiException.conflict("error.space.exists");
 		}
@@ -79,6 +83,7 @@ public class SpaceController {
 		if (newName.isEmpty()) {
 			throw ApiException.badRequest("error.space.nameRequired");
 		}
+		moderateNaming(newName, request.description());
 		if (!newName.equals(space.getName())) {
 			if (spaces.existsByName(newName)) {
 				throw ApiException.conflict("error.space.exists");
@@ -107,6 +112,17 @@ public class SpaceController {
 			throw ApiException.conflict("error.space.notEmpty");
 		}
 		spaces.deleteById(id);
+	}
+
+	/**
+	 * Gates a space's name and description. Exceptionally in the controller rather
+	 * than a service, because spaces have no service layer — this class is the
+	 * whole write path — and a space name is org-wide: it is the key articles are
+	 * filed under and it appears in every knowledge-base sidebar.
+	 */
+	private void moderateNaming(String name, String description) {
+		moderation.checkText(name, ModerationSurface.ENTITY_NAME);
+		moderation.checkText(description, ModerationSurface.ENTITY_DESCRIPTION);
 	}
 
 	private int nextSortOrder() {

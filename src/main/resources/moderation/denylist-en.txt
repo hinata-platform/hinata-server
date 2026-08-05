@@ -1,0 +1,144 @@
+# English denylist — SEED LIST.
+#
+# Format:  CATEGORY <TAB> WEIGHT <TAB> TERM
+#
+#   CATEGORY  one of the ModerationCategory constants
+#   WEIGHT    1-100 confidence that this term alone indicates the category.
+#             >= 85 refuses content outright on a blocking surface (see
+#             ModerationPolicy.DEFAULT_BLOCK_THRESHOLD); >= 55 queues it for a
+#             human. Reserve >= 85 for terms with no innocent reading at all.
+#   TERM      a single word or a phrase of up to three words. Matched on whole
+#             normalised tokens only — never as a substring — so "assess" is
+#             safe next to a rule for "ass".
+#
+# This list is deliberately small and conservative. It is a floor, not a
+# solution: it exists so a self-hosted instance with no external provider still
+# refuses the unambiguous cases, and so the pipeline has something real to test
+# against. Broad coverage is the job of an external provider (see
+# ModerationProperties.provider), which an operator can switch on.
+#
+# Before adding a term, ask whether it can appear in an ordinary defect report.
+# If it can, either do not add it or add it at FLAG weight only.
+
+# --- child sexual content -------------------------------------------------
+# Highest weights in the file. These are phrases, not single words, because
+# every constituent word is innocent on its own and only the combination is
+# not. Never relieved on technical surfaces, never admin-overridable.
+SEXUAL_MINORS	95	child porn
+SEXUAL_MINORS	95	child pornography
+SEXUAL_MINORS	95	childporn
+SEXUAL_MINORS	95	cp video
+SEXUAL_MINORS	90	underage porn
+SEXUAL_MINORS	90	underage nudes
+SEXUAL_MINORS	90	preteen nude
+SEXUAL_MINORS	90	loli porn
+SEXUAL_MINORS	90	lolicon
+SEXUAL_MINORS	90	shotacon
+SEXUAL_MINORS	90	jailbait
+SEXUAL_MINORS	95	minor nudes
+SEXUAL_MINORS	90	kids nude
+SEXUAL_MINORS	85	pedo content
+
+# --- sexual / pornographic ------------------------------------------------
+SEXUAL	70	porn
+SEXUAL	70	porno
+SEXUAL	70	pornography
+SEXUAL	65	xxx video
+SEXUAL	60	nudes
+SEXUAL	70	blowjob
+SEXUAL	70	handjob
+SEXUAL	70	creampie
+SEXUAL	65	cumshot
+SEXUAL	60	masturbate
+SEXUAL	60	masturbation
+SEXUAL	65	dickpic
+SEXUAL	65	dick pic
+SEXUAL	70	camgirl
+SEXUAL	60	escort service
+SEXUAL	70	hardcore porn
+SEXUAL	60	sex tape
+
+# --- hate speech ----------------------------------------------------------
+# Slurs. Single words, high weight: none has a non-abusive use in a work tool.
+HATE	90	nigger
+HATE	90	niggers
+HATE	85	nigga
+HATE	90	faggot
+HATE	90	faggots
+HATE	85	fag
+HATE	90	kike
+HATE	90	spic
+HATE	90	chink
+HATE	90	gook
+HATE	90	wetback
+HATE	85	tranny
+HATE	85	retard
+HATE	85	retarded
+HATE	90	subhuman
+HATE	85	untermensch
+HATE	80	white power
+HATE	85	racial purity
+HATE	85	gas the
+HATE	80	race traitor
+
+# --- extremism ------------------------------------------------------------
+EXTREMISM	85	heil hitler
+EXTREMISM	85	sieg heil
+EXTREMISM	80	white genocide
+EXTREMISM	80	final solution for
+EXTREMISM	75	ethnic cleansing
+EXTREMISM	80	holocaust denial
+
+# --- violent threats ------------------------------------------------------
+# Phrases with an explicit human target. Single violent words are NOT listed:
+# they live in allowlist-technical.txt because a bug tracker is full of them.
+VIOLENT_THREAT	90	i will kill you
+VIOLENT_THREAT	90	kill yourself
+VIOLENT_THREAT	90	kys
+VIOLENT_THREAT	85	i will find you
+VIOLENT_THREAT	90	i will murder
+VIOLENT_THREAT	85	you should die
+VIOLENT_THREAT	85	hope you die
+VIOLENT_THREAT	85	shoot you
+VIOLENT_THREAT	80	beat you up
+VIOLENT_THREAT	85	rape you
+VIOLENT_THREAT	85	i know where you
+
+# --- violence / gore ------------------------------------------------------
+VIOLENCE	70	beheading
+VIOLENCE	70	decapitation
+VIOLENCE	65	gore video
+VIOLENCE	70	snuff film
+VIOLENCE	65	torture video
+VIOLENCE	60	mutilation
+
+# --- self-harm ------------------------------------------------------------
+SELF_HARM	80	how to hang myself
+SELF_HARM	80	suicide method
+SELF_HARM	80	kill myself
+SELF_HARM	75	self harm tips
+SELF_HARM	75	cut myself
+
+# --- harassment -----------------------------------------------------------
+HARASSMENT	70	you are worthless
+HARASSMENT	70	nobody likes you
+HARASSMENT	65	you are pathetic
+HARASSMENT	70	shut the fuck up
+HARASSMENT	65	fuck you
+HARASSMENT	65	fuck off
+HARASSMENT	60	piece of shit
+HARASSMENT	60	dumbass
+HARASSMENT	60	asshole
+HARASSMENT	65	bitch
+HARASSMENT	65	whore
+HARASSMENT	65	slut
+HARASSMENT	60	moron
+HARASSMENT	60	idiot savant
+
+# --- illegal --------------------------------------------------------------
+ILLEGAL	70	buy cocaine
+ILLEGAL	70	sell heroin
+ILLEGAL	65	stolen credit cards
+ILLEGAL	70	counterfeit passport
+ILLEGAL	70	hitman for hire
+ILLEGAL	65	buy a gun illegally

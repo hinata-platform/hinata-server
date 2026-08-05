@@ -1,5 +1,8 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.report.UserBlockService;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -76,7 +79,10 @@ class IssueUpdateSnapshotTest {
 				mock(MongoTemplate.class),
 				mock(AgileBoardRepository.class),
 				mock(SprintRepository.class),
-				mock(UserRepository.class));
+				mock(UserRepository.class),
+				mock(ModerationService.class),
+				mock(ModerationRecorder.class),
+				mock(UserBlockService.class));
 
 		when(issues.save(any(Issue.class))).thenAnswer(call -> call.getArgument(0));
 	}

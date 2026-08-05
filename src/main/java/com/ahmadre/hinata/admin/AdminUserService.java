@@ -5,6 +5,8 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.me.AccountMailService;
 import com.ahmadre.hinata.me.RefreshSession;
 import com.ahmadre.hinata.me.SessionService;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.notification.GatewayService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.user.Role;
@@ -53,6 +55,7 @@ public class AdminUserService {
 	private final CurrentUser currentUser;
 	private final PasswordEncoder passwordEncoder;
 	private final AuditService audit;
+	private final ModerationService moderation;
 
 	// --- Read: filter + sort + paginate --------------------------------------
 
@@ -142,6 +145,12 @@ public class AdminUserService {
 	 * and only deliveries the SMTP server accepted are counted as {@code sent}.
 	 */
 	public InviteResult invite(List<String> emails, boolean admin, String message) {
+		// The invite note is the one piece of free text in the product that reaches
+		// an address that has never agreed to receive anything from this org, over
+		// the org's own SMTP and under its name. Judged once for the whole batch,
+		// before a single mail goes out — a refusal after the third recipient would
+		// be a refusal nobody can act on.
+		moderation.checkText(message, ModerationSurface.INVITE_MESSAGE);
 		Set<Role> roles = admin ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER);
 		String inviterId = currentUser.requireId();
 		String inviterName = users.findById(inviterId).map(User::getDisplayName).orElse("Hinata");
@@ -294,6 +303,10 @@ public class AdminUserService {
 
 	public AdminUserResponse updateDetails(String id, String displayName, String title, String email) {
 		User u = userService.get(id);
+		// An admin editing someone else's name is if anything the case that most
+		// needs a gate: the person whose profile it is never sees the edit, and
+		// their name is what everyone else's notifications will read.
+		userService.moderateProfile(displayName, title);
 		if (displayName != null) u.setDisplayName(displayName.trim());
 		if (title != null) u.setTitle(title.trim());
 		if (email != null && !email.equalsIgnoreCase(u.getEmail())) {

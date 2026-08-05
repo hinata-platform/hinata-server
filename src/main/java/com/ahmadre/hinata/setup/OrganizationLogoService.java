@@ -1,6 +1,10 @@
 package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.ModerationVerdict;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,6 +60,8 @@ public class OrganizationLogoService {
 
 	private final StorageService storage;
 	private final SettingsService settings;
+	private final ModerationService moderation;
+	private final ModerationRecorder moderationRecorder;
 
 	/**
 	 * Whether {@code logoUrl} refers to an uploaded logo (an internal proxy path)
@@ -83,9 +89,19 @@ public class OrganizationLogoService {
 		}
 
 		byte[] png = normalize(file);
+		// Gated even though only an admin can get here. The logo is the one image
+		// every user of the instance sees on every screen and in every e-mail, so
+		// it is the highest-reach surface in the product — and putObject below
+		// bypasses the checks the HTTP upload path applies, which leaves this the
+		// only place the bytes are looked at at all.
+		ModerationVerdict verdict = moderation.checkImage(png, "image/png",
+				file.getOriginalFilename(), ModerationSurface.ORGANISATION_LOGO);
 		// The bucket stays private; bytes are served back through the /meta/logo
 		// proxy, so storage credentials never leave the server.
 		storage.putObject(LOGO_OBJECT_KEY, png, "image/png");
+		moderationRecorder.record(verdict, ModerationSurface.ORGANISATION_LOGO,
+				new ModerationRecorder.Target("organization", LOGO_OBJECT_KEY, null, null,
+						file.getOriginalFilename()));
 
 		String url = urlFor();
 		ServerSettings current = settings.get();

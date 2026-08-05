@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.user;
 
+import com.ahmadre.hinata.user.UserService;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -28,7 +29,7 @@ class UserControllerTest {
 		users = mock(UserRepository.class);
 		currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(User.builder().id("me").build());
-		controller = new UserController(users, currentUser);
+		controller = new UserController(users, currentUser, mock(UserService.class));
 	}
 
 	private User user(String id, boolean active) {

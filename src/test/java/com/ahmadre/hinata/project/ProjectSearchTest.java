@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.project;
 
+import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.ProjectAccess;
 import com.ahmadre.hinata.team.Team;
@@ -50,7 +51,8 @@ class ProjectSearchTest {
 		when(mongo.find(any(Query.class), eq(Project.class))).thenReturn(List.of());
 		ProjectRepository projects = mock(ProjectRepository.class);
 		service = new ProjectService(projects, mongo, teams,
-				mock(NotificationService.class), new ProjectReach(projects, teams));
+				mock(NotificationService.class), new ProjectReach(projects, teams),
+				mock(ModerationService.class));
 	}
 
 	private User member() {

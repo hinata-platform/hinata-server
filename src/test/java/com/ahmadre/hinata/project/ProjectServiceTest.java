@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.project;
 
+import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.TeamRepository;
@@ -43,7 +44,7 @@ class ProjectServiceTest {
 		// A real ProjectReach over the same mocks: it *is* the membership rule, so
 		// stubbing it out would stub out the access behaviour under test.
 		service = new ProjectService(projects, mongo, teams, notifications,
-				new ProjectReach(projects, teams));
+				new ProjectReach(projects, teams), mock(ModerationService.class));
 	}
 
 	private User user(String id, Role... roles) {

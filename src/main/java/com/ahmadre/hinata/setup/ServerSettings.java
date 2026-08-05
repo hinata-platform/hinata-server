@@ -33,6 +33,7 @@ public class ServerSettings {
 	private App app = new App();
 	private Smtp smtp = new Smtp();
 	private Security security = new Security();
+	private Moderation moderation = new Moderation();
 	private Oidc oidc = new Oidc();
 	private OAuth2 oauth2 = new OAuth2();
 	private Saml saml = new Saml();
@@ -122,6 +123,36 @@ public class ServerSettings {
 		private Integer sessionLifetimeHours;
 		/** Per-IP API rate limiting on/off; null ⇒ {@code hinata.rate-limit.enabled}. */
 		private Boolean rateLimitEnabled;
+	}
+
+	/**
+	 * Runtime moderation policy, admin-configurable. Nullable wrappers so an unset
+	 * field falls back to the env-driven defaults — the effective value is resolved
+	 * by {@link com.ahmadre.hinata.moderation.ModerationPolicy} (DB override wins
+	 * over env), which is also where the floors live that stop a setting from
+	 * making the filter useless.
+	 *
+	 * <p>Note what is <em>not</em> here: there is no per-category switch for child
+	 * sexual content or malware. Those categories are non-overridable by
+	 * construction, so no admin panel, and no compromised admin account, can turn a
+	 * Hinata instance into a safe place to put either.
+	 */
+	@Data
+	public static class Moderation {
+		/** Master switch; null ⇒ {@code hinata.moderation.enabled}. */
+		private Boolean enabled;
+		/** Scan user-authored text; null ⇒ {@code hinata.moderation.text-enabled}. */
+		private Boolean textEnabled;
+		/** Classify uploaded images; null ⇒ {@code hinata.moderation.image-enabled}. */
+		private Boolean imageEnabled;
+		/** Refusal threshold; null ⇒ {@code hinata.moderation.block-threshold}. */
+		private Integer blockThreshold;
+		/** Review threshold; null ⇒ {@code hinata.moderation.flag-threshold}. */
+		private Integer flagThreshold;
+		/** Queue long-form bodies instead of refusing them; null ⇒ env default. */
+		private Boolean longFormFlagOnly;
+		/** Proceed when an optional tier is unavailable; null ⇒ env default. */
+		private Boolean failOpen;
 	}
 
 	/** OpenID Connect (e.g. Synology SSO, Keycloak, Authentik). */

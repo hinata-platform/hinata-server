@@ -3,6 +3,11 @@ package com.ahmadre.hinata.mailingest;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.moderation.ModerationException;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.ModerationVerdict;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -53,6 +58,8 @@ public class EmailIngestService {
 	private final StorageService storage;
 	private final AttachmentStore attachments;
 	private final UserService users;
+	private final ModerationService moderation;
+	private final ModerationRecorder moderationRecorder;
 
 	/** Per-connection epoch seconds of the last poll (the 15s tick is the beat). */
 	private final Map<String, Long> lastRun = new ConcurrentHashMap<>();
@@ -96,7 +103,18 @@ public class EmailIngestService {
 			try {
 				for (Message message : folder.search(
 						new jakarta.mail.search.FlagTerm(new Flags(Flags.Flag.SEEN), false))) {
-					createIssueFrom(message, config);
+					try {
+						createIssueFrom(message, config);
+					}
+					catch (ModerationException refused) {
+						// A refusal is a verdict, not a fault: the message is done with,
+						// so it is flagged SEEN below like any other. Caught per message
+						// rather than per batch — one refused mail must not stop the
+						// mailbox from being drained, or a single crafted message would
+						// stall every ticket behind it.
+						log.warn("Refused an inbound message on {}@{}: {}",
+								config.getUsername(), config.getHost(), refused.getMessage());
+					}
 					message.setFlag(Flags.Flag.SEEN, true);
 				}
 			}
@@ -129,8 +147,28 @@ public class EmailIngestService {
 			log.info("Skipping already-ingested message {}", messageId);
 			return; // caller still sets SEEN
 		}
+		String body = buildDescription(from, message);
+		// The one ingress in the product where the author proved nothing: anyone who
+		// learns the ingest address can put content in front of the whole team, and
+		// no colleague's name is attached to it. So it is judged before a ticket
+		// exists at all, subject and body together — a subject alone is short enough
+		// to look harmless while the body carries the payload, and vice versa.
+		//
+		// Assessed rather than checked: a refusal here must drop this one message
+		// and leave the mailbox being drained, not raise a 422 at a caller that
+		// isn't there. Nothing is persisted, so the record carries the verdict and
+		// no id, which is exactly what ModerationRecorder documents for that case.
+		ModerationVerdict verdict =
+				moderation.assessText(subject + "\n\n" + body, ModerationSurface.EMAIL_INGEST);
+		if (verdict.isBlocking()) {
+			log.warn("Dropped an inbound e-mail from {} into project {}: refused as {}",
+					from, projectId, verdict.primaryCategory());
+			moderationRecorder.record(verdict, ModerationSurface.EMAIL_INGEST,
+					new ModerationRecorder.Target("email", null, projectId, null, from));
+			return; // caller still sets SEEN — a refused mail must not be re-ingested
+		}
 		// An e-mail body arrives as markdown (HtmlToMarkdown); storage is Lexical.
-		RichText ingested = richText.fromMarkdown(buildDescription(from, message));
+		RichText ingested = richText.fromMarkdown(body, ModerationSurface.EMAIL_INGEST);
 		String reporterId = resolveReporterId(from);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
@@ -149,6 +187,10 @@ public class EmailIngestService {
 		// membership (A01) and abort ingestion for every non-member sender; IssueService
 		// leaves a builder-set reporterId untouched when the actor is null.
 		Issue created = issues.create(issue, null);
+		// The flag that survived the block band now has a ticket to point at.
+		moderationRecorder.record(verdict, ModerationSurface.EMAIL_INGEST,
+				new ModerationRecorder.Target("issue", created.getId(), projectId, reporterId,
+						created.getReadableId()));
 		log.info("Created {} from e-mail by {}{}", created.getReadableId(), from,
 				reporterId != null ? " (author resolved to user " + reporterId + ")" : "");
 		notifyMembers(created, projectId, from, reporterId);
@@ -269,7 +311,10 @@ public class EmailIngestService {
 						|| !issue.getDescription().startsWith(DESCRIPTION_HEADER)) {
 					return Outcome.SKIPPED; // foreign project or a manually edited body
 				}
-				RichText rebuilt = richText.fromMarkdown(buildDescription(senderOf(message), message));
+				// Judged on the way in like any other ingest; a refusal lands in the
+				// catch below and leaves the existing description untouched.
+				RichText rebuilt = richText.fromMarkdown(buildDescription(senderOf(message), message),
+						ModerationSurface.EMAIL_INGEST);
 				// Compare the derived plain text, not the document: re-converting the
 				// same body must read as "already current" even if the converter's
 				// output shifts between releases.
@@ -367,8 +412,24 @@ public class EmailIngestService {
 		}
 		String fileName = attachmentName(part);
 		String contentType = baseContentType(part);
-		String objectKey = UUID.randomUUID().toString();
-		storage.putObject(objectKey, data, contentType);
+		// This used to call putObject, which trusts its caller absolutely — so an
+		// e-mail attachment reached the bucket without the content-type allowlist,
+		// without the magic-byte check, and without any classifier, on a content
+		// type read verbatim out of a MIME header the sender wrote. It is the same
+		// bucket the app serves attachments from, and the sender is a stranger.
+		// putChecked applies exactly what the HTTP upload path applies.
+		String objectKey;
+		try {
+			objectKey = storage.putChecked("", data, contentType, fileName,
+					ModerationSurface.EMAIL_ATTACHMENT);
+		}
+		catch (RuntimeException rejected) {
+			// One bad attachment costs its own file and nothing else: the ticket and
+			// the sender's other files are already worth keeping.
+			log.warn("Skipped e-mail attachment {} ({}) for {}: {}", fileName, contentType,
+					issueId, rejected.getMessage());
+			return;
+		}
 		attachments.add(issueId, Issue.Attachment.builder()
 				.id(UUID.randomUUID().toString())
 				.fileName(fileName)

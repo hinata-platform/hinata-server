@@ -1,6 +1,10 @@
 package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
+import com.ahmadre.hinata.moderation.ModerationVerdict;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -54,6 +58,8 @@ public class AvatarService {
 
 	private final StorageService storage;
 	private final UserRepository users;
+	private final ModerationService moderation;
+	private final ModerationRecorder moderationRecorder;
 
 	/** Object key for a user's avatar, e.g. {@code avatars/{userId}.jpg}. */
 	private String objectKey(String userId) {
@@ -74,11 +80,18 @@ public class AvatarService {
 		}
 
 		byte[] jpeg = compress(file);
-		// Deterministic key in the avatars/ folder: re-uploads overwrite cleanly,
-		// no orphaned objects. The bucket stays private; bytes are served back
-		// through the AvatarController proxy, so S3 credentials never leave the
-		// server and no public bucket policy is required.
+		// Judged after normalization, not before: the re-encoded JPEG is what every
+		// colleague will actually see next to this person's name in every list,
+		// comment and mention. It is also the only version that is certainly a
+		// decodable raster image, which is what a classifier can answer about.
+		// putObject bypasses every check in StorageService, so this is the only
+		// gate an avatar ever passes.
+		ModerationVerdict verdict = moderation.checkImage(jpeg, "image/jpeg",
+				file.getOriginalFilename(), ModerationSurface.AVATAR);
 		storage.putObject(objectKey(user.getId()), jpeg, "image/jpeg");
+		moderationRecorder.record(verdict, ModerationSurface.AVATAR,
+				new ModerationRecorder.Target("user", user.getId(), null, user.getId(),
+						user.getDisplayName()));
 
 		String url = urlFor(user.getId());
 		user.setAvatarUrl(url);

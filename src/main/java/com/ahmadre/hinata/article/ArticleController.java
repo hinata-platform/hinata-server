@@ -1,6 +1,8 @@
 package com.ahmadre.hinata.article;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -33,6 +35,9 @@ public class ArticleController {
 	private final CurrentUser currentUser;
 	private final ProjectService projectService;
 	private final TeamService teamService;
+	// The body is gated inside RichTextService; the title has no converter to hide
+	// behind and needs the gate called by name. See #gateTitle.
+	private final ModerationService moderation;
 
 	public record ArticleRequest(
 			@NotBlank @Size(max = 300) String title,
@@ -124,7 +129,9 @@ public class ArticleController {
 		// Write-side ACL: the caller must be able to see the target project/team,
 		// otherwise they could plant KB content into a space they can't access.
 		assertCanTarget(request.projectId(), request.teamId(), user);
-		RichText body = richText.fromRequest(request.contentDoc(), request.content());
+		gateTitle(request.title(), null);
+		RichText body = richText.fromRequest(request.contentDoc(), request.content(),
+				ModerationSurface.ARTICLE_CONTENT);
 		if (body == null) body = RichText.EMPTY;
 		return ArticleResponse.from(articles.save(Article.builder()
 				.title(request.title())
@@ -152,12 +159,15 @@ public class ArticleController {
 		// The caller must also be able to see the TARGET project/team — otherwise
 		// an article could be relocated into a space the caller can't access.
 		assertCanTarget(request.projectId(), request.teamId(), user);
+		// Before the first setter, so a refused title cannot leave the article
+		// half-updated: everything below mutates the loaded entity in place.
+		gateTitle(request.title(), article.getTitle());
 		article.setTitle(request.title());
 		// Resolved against what is stored: a client old enough to send only the
 		// legacy field is sending back the derived plain text it was given, and
 		// converting that would flatten the document it came from.
 		RichText body = richText.fromRequest(request.contentDoc(), request.content(),
-				article.getContentDoc(), article.getContent());
+				article.getContentDoc(), article.getContent(), ModerationSurface.ARTICLE_CONTENT);
 		if (body != null) {
 			article.setContent(body.text());
 			article.setContentDoc(body.doc());
@@ -185,6 +195,36 @@ public class ArticleController {
 			throw ApiException.conflict("error.article.hasChildren");
 		}
 		articles.deleteById(id);
+	}
+
+	/**
+	 * Puts an article title past the moderation gate.
+	 *
+	 * <p>The title was the only user-authored string in the knowledge base nothing
+	 * judged, and it is the most-rendered one: 300 characters that appear in the
+	 * sidebar tree, in every search result, in the breadcrumb of every child article
+	 * and in the queue label of a report about it. A body at least has to be opened.
+	 *
+	 * <p>Judged as {@link ModerationSurface#ARTICLE_TITLE} rather than as content:
+	 * both are technical surfaces, but the title is short and therefore always
+	 * refusable, while a body is exempt from refusal on the "flag only" setting. That
+	 * asymmetry is the point — retyping a heading costs a moment, losing a written
+	 * page costs an afternoon.
+	 *
+	 * <p>A title equal to [stored] is not judged. {@code title} is {@code @NotBlank},
+	 * so every PATCH carries it whether or not it changed — gating unconditionally
+	 * would mean a heading written under an older ruleset makes every later save of
+	 * that article fail, on a field the author is not even touching. Same rule
+	 * {@link RichTextService#fromRequest} applies to the body for the same reason;
+	 * pass {@code null} on create, where there is nothing to compare against.
+	 *
+	 * @throws com.ahmadre.hinata.moderation.ModerationException 422 when refused
+	 */
+	private void gateTitle(String title, String stored) {
+		if (title != null && title.equals(stored)) {
+			return;
+		}
+		moderation.checkText(title, ModerationSurface.ARTICLE_TITLE);
 	}
 
 	// ── visibility ──────────────────────────────────────────────────────────

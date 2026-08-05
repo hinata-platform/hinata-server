@@ -61,7 +61,8 @@ public class SprintController {
 	}
 
 	@PostMapping("/{id}/start")
-	public Sprint start(@PathVariable String id, @RequestBody(required = false) StartSprintRequest request) {
+	public Sprint start(@PathVariable String id,
+			@RequestBody(required = false) @Valid StartSprintRequest request) {
 		StartSprintRequest body = request != null ? request : new StartSprintRequest(null, null);
 		return sprintService.start(id, body.goal(), body.endDate(), currentUser.require());
 	}

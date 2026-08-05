@@ -78,7 +78,24 @@ public enum AuditAction {
 	MCP_SPRINT_UPDATED(INTEGRATION, INFO, true),
 	MCP_SPRINT_STARTED(INTEGRATION, NOTICE, true),
 	MCP_SPRINT_COMPLETED(INTEGRATION, NOTICE, true),
-	MCP_OAUTH_AUTHORIZED(INTEGRATION, NOTICE, true);
+	MCP_OAUTH_AUTHORIZED(INTEGRATION, NOTICE, true),
+
+	// --- Moderation (content reports + personal blocks) ----------------------
+	CONTENT_REPORTED(MODERATION, NOTICE, true),
+	/**
+	 * A human decided a queued item. Recorded at WARNING, one band above the report
+	 * that raised it: this is the enforcement action itself, the only point where a
+	 * named person overrules or upholds the machine, and it is what an appeal months
+	 * later is answered from. The decision is one of a very few events where "who did
+	 * this, and when" has to survive the row being decided again.
+	 */
+	MODERATION_RECORD_REVIEWED(MODERATION, WARNING, true),
+	CONTENT_REPORT_HANDLED(MODERATION, WARNING, true),
+	// A block is one user's private boundary, not an accusation — recorded at INFO
+	// so it is countable (mass-blocking one person says something) without dressing
+	// an ordinary self-protective action up as an incident.
+	USER_BLOCKED(MODERATION, INFO, true),
+	USER_UNBLOCKED(MODERATION, INFO, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

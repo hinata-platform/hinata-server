@@ -1,0 +1,115 @@
+# Deutsche Denylist — SEED-LISTE.
+#
+# Format:  KATEGORIE <TAB> GEWICHT <TAB> BEGRIFF
+# (siehe denylist-en.txt für die vollständige Beschreibung des Formats)
+#
+# Deutsch ist der schwierigere Fall, aus einem Grund: Komposita. Ein
+# Substring-Filter, der "anal" sucht, verbietet Analyse, Kanal und
+# Kanalisation; einer, der "sex" sucht, verbietet Sexualität und Essex. Der
+# Abgleich läuft deshalb ausschließlich über ganze, normalisierte Tokens, und
+# die Allowlist gewinnt immer.
+#
+# Praktische Folge für diese Datei: ein zusammengesetztes Schimpfwort muss als
+# ganzes Token eingetragen werden ("hurensohn"), nicht als Bestandteil
+# ("huren"). Ein Eintrag "huren" würde "Hurensohn" NICHT treffen und dafür
+# jede legitime Verwendung von "Huren" melden — also genau falsch herum.
+
+# --- sexueller Missbrauch von Kindern -------------------------------------
+SEXUAL_MINORS	95	kinderporno
+SEXUAL_MINORS	95	kinderpornografie
+SEXUAL_MINORS	95	kinderpornographie
+SEXUAL_MINORS	90	kinderpornos
+SEXUAL_MINORS	90	minderjaehrige nackt
+SEXUAL_MINORS	90	minderjährige nackt
+SEXUAL_MINORS	90	kinder nackt
+SEXUAL_MINORS	85	kinderschaender
+SEXUAL_MINORS	85	kinderschänder
+
+# --- sexuell / pornografisch ----------------------------------------------
+SEXUAL	70	porno
+SEXUAL	70	pornos
+SEXUAL	70	pornografie
+SEXUAL	70	pornographie
+SEXUAL	65	nacktbilder
+SEXUAL	65	nacktfotos
+SEXUAL	60	schwanzbild
+SEXUAL	70	blasen lutschen
+SEXUAL	60	onanieren
+SEXUAL	65	tittenbilder
+
+# --- Hassrede -------------------------------------------------------------
+HATE	90	untermensch
+HATE	90	untermenschen
+HATE	85	kanake
+HATE	85	kanaken
+HATE	85	neger
+HATE	90	judensau
+HATE	85	zigeuner
+HATE	85	schwuchtel
+HATE	85	schwuchteln
+HATE	80	spasti
+HATE	80	mongo
+HATE	85	volksschaedling
+HATE	85	volksschädling
+HATE	80	rassenschande
+
+# --- Extremismus ----------------------------------------------------------
+EXTREMISM	90	heil hitler
+EXTREMISM	90	sieg heil
+EXTREMISM	85	endloesung
+EXTREMISM	85	endlösung
+EXTREMISM	80	blut und boden
+EXTREMISM	80	auslaender raus
+EXTREMISM	80	ausländer raus
+
+# --- Gewaltandrohung ------------------------------------------------------
+# Nur Phrasen mit klarem menschlichem Ziel. Einzelne Gewaltwörter stehen
+# bewusst in allowlist-technical.txt — ein Bugtracker ist voll davon.
+VIOLENT_THREAT	90	ich bringe dich um
+VIOLENT_THREAT	90	ich toete dich
+VIOLENT_THREAT	90	ich töte dich
+VIOLENT_THREAT	90	bring dich um
+VIOLENT_THREAT	85	du sollst sterben
+VIOLENT_THREAT	85	ich schlage dich
+VIOLENT_THREAT	85	ich finde dich
+VIOLENT_THREAT	85	ich weiss wo du
+VIOLENT_THREAT	85	ich weiß wo du
+VIOLENT_THREAT	90	ich vergewaltige dich
+
+# --- Gewalt / Gore --------------------------------------------------------
+VIOLENCE	70	enthauptung
+VIOLENCE	70	enthauptungsvideo
+VIOLENCE	65	folterviedeo
+VIOLENCE	65	foltervideo
+VIOLENCE	60	verstuemmelung
+VIOLENCE	60	verstümmelung
+
+# --- Selbstverletzung -----------------------------------------------------
+SELF_HARM	80	bring mich um
+SELF_HARM	80	will mich umbringen
+SELF_HARM	80	selbstmord anleitung
+SELF_HARM	75	ritzen anleitung
+
+# --- Belaestigung ---------------------------------------------------------
+HARASSMENT	70	hurensohn
+HARASSMENT	70	hurensoehne
+HARASSMENT	70	hurensöhne
+HARASSMENT	70	wichser
+HARASSMENT	65	arschloch
+HARASSMENT	65	fick dich
+HARASSMENT	65	verpiss dich
+HARASSMENT	60	halt die fresse
+HARASSMENT	60	du bist wertlos
+HARASSMENT	60	miststueck
+HARASSMENT	60	miststück
+HARASSMENT	60	schlampe
+HARASSMENT	60	missgeburt
+
+# --- Illegales ------------------------------------------------------------
+ILLEGAL	70	kokain kaufen
+ILLEGAL	70	heroin verkaufen
+ILLEGAL	65	gestohlene kreditkarten
+ILLEGAL	70	gefaelschter reisepass
+ILLEGAL	70	gefälschter reisepass
+ILLEGAL	70	auftragsmoerder
+ILLEGAL	70	auftragsmörder

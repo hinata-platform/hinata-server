@@ -34,11 +34,25 @@ public class RegistrationController {
 	private final RegistrationService registration;
 	private final ClientIpResolver clientIpResolver;
 
+	/**
+	 * Both length caps are load-bearing on an <em>unauthenticated</em> endpoint.
+	 *
+	 * <p>{@code displayName} is capped at 120 like every other endpoint that
+	 * accepts one; without it, this route — the one anyone on the internet can
+	 * reach — was the only way to store an unbounded name, and that name is
+	 * interpolated into other users' push notification titles.
+	 *
+	 * <p>{@code password} is capped because it is bcrypt-hashed before anything
+	 * about the request is known to be legitimate. Hashing cost grows with input
+	 * length, so an uncapped field on an anonymous endpoint is a CPU-burn lever:
+	 * a handful of megabyte passwords ties up request threads for free. 200 is far
+	 * past any real passphrase and far below anything that costs measurable work.
+	 */
 	public record RegisterRequest(
 			@NotBlank @Email String email,
 			@NotBlank @Size(min = 3, max = 40) String username,
-			@NotBlank String displayName,
-			@NotBlank String password) {
+			@NotBlank @Size(max = 120) String displayName,
+			@NotBlank @Size(max = 200) String password) {
 	}
 
 	public record VerifyEmailRequest(@NotBlank String token) {

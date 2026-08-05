@@ -5,6 +5,8 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.notification.MailService;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
@@ -38,6 +40,7 @@ public class IssueEmailReplyService {
 	private final StorageService storage;
 	private final SettingsService settings;
 	private final HinataProperties properties;
+	private final ModerationService moderation;
 
 	/**
 	 * Validates access + preconditions and sends the reply. {@code attachmentIds}
@@ -55,9 +58,16 @@ public class IssueEmailReplyService {
 		if (body == null || body.isBlank()) {
 			throw ApiException.badRequest("errors.emailReply.bodyRequired");
 		}
-
 		// Authorize against the issue's project (throws 404/403 as appropriate).
 		Issue issue = issues.getForUser(issueId, user);
+		// The one place content leaves the organisation over Hinata's own SMTP and
+		// lands at an outside address carrying the org's name. There is no queue to
+		// walk a sent mail back from, so the reply is refused at write time and the
+		// author told why, rather than flagged after the fact.
+		//
+		// After the access check on purpose: a gate that answers before authorizing
+		// is an oracle anyone can probe without being allowed near the issue.
+		moderation.checkText(subject + "\n\n" + body, ModerationSurface.EMAIL_REPLY);
 		String recipient = issue.getReporterEmail();
 		if (recipient == null || recipient.isBlank()) {
 			throw ApiException.badRequest("errors.emailReply.notEmailSourced");

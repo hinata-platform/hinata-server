@@ -21,6 +21,7 @@ public class UserController {
 
 	private final UserRepository users;
 	private final CurrentUser currentUser;
+	private final UserService userService;
 
 	public record DirectoryUser(String id, String username, String displayName, String avatarUrl,
 			String title) {
@@ -95,6 +96,7 @@ public class UserController {
 	@PatchMapping("/api/v1/users/me")
 	public User updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
 		User user = currentUser.require();
+		userService.moderateProfile(request.displayName(), request.title());
 		if (request.displayName() != null) user.setDisplayName(request.displayName());
 		if (request.title() != null) user.setTitle(request.title());
 		if (request.locale() != null) user.setLocale(request.locale());

@@ -1,6 +1,8 @@
 package com.ahmadre.hinata.team;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -33,6 +35,7 @@ public class TeamService {
 	private final TeamActivityRepository activity;
 	private final ProjectService projects;
 	private final NotificationService notifications;
+	private final ModerationService moderation;
 
 	// --- Reads ---------------------------------------------------------------
 
@@ -79,6 +82,7 @@ public class TeamService {
 
 	public Team create(User creator, String name, String key, String description, int colorHue,
 			String icon) {
+		moderateNaming(name, description);
 		String normalized = normalizeKey(key);
 		if (teams.existsByKeyIgnoreCase(normalized)) {
 			throw ApiException.conflict("error.team.keyExists");
@@ -104,6 +108,7 @@ public class TeamService {
 
 	public Team update(Team team, User actor, String name, String description, String key,
 			Integer colorHue, String icon) {
+		moderateNaming(name, description);
 		if (name != null) team.setName(name);
 		if (description != null) team.setDescription(description);
 		if (key != null) {
@@ -254,6 +259,18 @@ public class TeamService {
 	}
 
 	// --- Helpers -------------------------------------------------------------
+
+	/**
+	 * Gates a team's name and description, the same way {@code ProjectService}
+	 * gates a project's: short, cheap to retype, and shown to everyone the team
+	 * touches — including in the "you were added to <name>" notification that goes
+	 * out to people who never asked for it. A {@code null} field is a PATCH's "no
+	 * change" and the gate is a no-op on it.
+	 */
+	private void moderateNaming(String name, String description) {
+		moderation.checkText(name, ModerationSurface.ENTITY_NAME);
+		moderation.checkText(description, ModerationSurface.ENTITY_DESCRIPTION);
+	}
 
 	private TeamMembership requireMember(Team team, String userId) {
 		TeamMembership membership = team.membership(userId);

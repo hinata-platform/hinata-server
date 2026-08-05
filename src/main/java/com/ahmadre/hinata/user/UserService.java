@@ -1,6 +1,8 @@
 package com.ahmadre.hinata.user;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -35,6 +37,25 @@ public class UserService {
 	private final com.ahmadre.hinata.audit.AuditService audit;
 	private final com.ahmadre.hinata.notification.NotificationService notifications;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
+	private final ModerationService moderation;
+
+	/**
+	 * Gates a display name or job title.
+	 *
+	 * <p>A display name is not a field only its owner reads: it is interpolated
+	 * into other people's push notification titles, into "X commented on Y" mails,
+	 * into every mention chip and every avatar tooltip. That reach is why it is
+	 * refused outright — a name is trivial to retype, and a person cannot mute
+	 * someone else's name showing up on their lock screen.
+	 *
+	 * <p>Deliberately not applied to {@link #provisionSso}: that name comes from
+	 * the organisation's own identity provider, and refusing it would not moderate
+	 * anything, it would lock a colleague out of the product entirely.
+	 */
+	public void moderateProfile(String displayName, String title) {
+		moderation.checkText(displayName, ModerationSurface.PROFILE);
+		moderation.checkText(title, ModerationSurface.PROFILE);
+	}
 
 	public User get(String id) {
 		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
@@ -83,6 +104,15 @@ public class UserService {
 				new Update().unset("assigneeId"), "issues");
 		mongo.updateMulti(new Query(Criteria.where("watcherIds").is(id)),
 				new Update().pull("watcherIds", id), "issues");
+		// Blocks in both directions. Left behind, a block whose blocked account is
+		// gone renders as a permanent nameless row in the blocker's list that they
+		// cannot explain and have no reason to keep, and a block whose *blocker* is
+		// gone quietly keeps filtering comments for an account that no longer exists.
+		// Removed here rather than through UserBlockService because that service
+		// resolves users, and pulling it into deletion is how a cycle starts.
+		mongo.remove(new Query(new Criteria().orOperator(
+				Criteria.where("blockerId").is(id),
+				Criteria.where("blockedId").is(id))), "user_blocks");
 		users.delete(user);
 		log.info("Deleted user {} ({}) and scrubbed dangling references", id, user.getUsername());
 	}
@@ -90,6 +120,7 @@ public class UserService {
 	public User createLocal(String email, String username, String displayName, String rawPassword,
 			Set<Role> roles) {
 		validatePassword(rawPassword);
+		moderateProfile(displayName, null);
 		if (users.existsByEmailIgnoreCase(email)) {
 			throw ApiException.conflict("error.user.emailInUse");
 		}
@@ -115,6 +146,9 @@ public class UserService {
 	public User createSelfRegistered(String email, String username, String displayName,
 			String rawPassword) {
 		validatePassword(rawPassword);
+		// The only account creation an unauthenticated stranger can drive, and the
+		// name they choose here is what everyone else's notifications will say.
+		moderateProfile(displayName, null);
 		if (users.existsByEmailIgnoreCase(email)) {
 			throw ApiException.conflict("error.user.emailInUse");
 		}
@@ -141,6 +175,7 @@ public class UserService {
 	 */
 	public User createInvited(String email, String displayName, Set<Role> roles, String invitedBy,
 			String inviteTokenHash, Instant invitedAt, Instant inviteExpiresAt) {
+		moderateProfile(displayName, null);
 		String normalized = email.toLowerCase(Locale.ROOT);
 		return users.save(User.builder()
 				.email(normalized)

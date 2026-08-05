@@ -3,6 +3,7 @@ package com.ahmadre.hinata.notification;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.me.NotificationPreferences;
+import com.ahmadre.hinata.moderation.report.UserBlockService;
 import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.user.Role;
@@ -36,6 +37,10 @@ public class NotificationService {
 	// Decides per recipient whether a project-scoped link resolves for them. Injected as
 	// the rule component, not ProjectService — that service depends on this one.
 	private final ProjectReach reach;
+	// A block that holds in the thread but not in the push is not a block: the
+	// recipient still gets the message, just on the one surface they cannot look away
+	// from. See #blockersOf.
+	private final UserBlockService userBlocks;
 
 	private static final String SUBJECT_PREFIX = "[Hinata] ";
 
@@ -89,20 +94,32 @@ public class NotificationService {
 	 * the broader {@code ISSUE_COMMENTED} notice. Each stronger notice supersedes
 	 * the weaker one for the same recipient (mention &gt; reply &gt; watcher), so
 	 * nobody is pinged twice. The comment author never notifies themselves.
+	 *
+	 * <p>Nobody who has blocked {@code author} hears about this comment on any of
+	 * the three notices — including a direct {@code @}-mention, which is the one an
+	 * author can aim. A mention is not a way to reach past a block; being able to
+	 * type someone's name and land on their lock screen is precisely what the block
+	 * exists to stop.
 	 */
 	public void notifyComment(Issue issue, User author, IssueComment comment) {
 		String doc = comment == null ? null : comment.getTextDoc();
 		String preview = preview(doc);
+		// Resolved once for the whole fan-out and passed down: the three notices below
+		// each ask the same question about the same author, and answering it per
+		// recipient would put a query inside the delivery loop.
+		Set<String> blockers = blockersOf(author);
 		Set<String> mentioned = new HashSet<>(richText.mentionedUsers(doc));
 		mentioned.remove(author.getId());
-		notifyMentions(issue, author, mentioned, preview);
+		mentioned.removeAll(blockers);
+		notifyMentions(issue, author, mentioned, preview, blockers);
 		// Everyone already directly notified about this comment — start with the
 		// mentioned users, then add the reply target so the watcher notice below
 		// skips them too.
 		Set<String> notified = new HashSet<>(mentioned);
-		notifyReply(issue, author, comment, preview, notified);
+		notifyReply(issue, author, comment, preview, notified, blockers);
 		Set<String> watchers = watchersWithout(issue, author);
 		watchers.removeAll(notified);
+		watchers.removeAll(blockers);
 		if (!watchers.isEmpty()) {
 			// Lead with a teaser of the comment itself so the recipient can triage
 			// straight from the push/e-mail; fall back to the issue title when the
@@ -129,12 +146,17 @@ public class NotificationService {
 	 * your comment", so replies honour the same toggle.
 	 */
 	private void notifyReply(Issue issue, User actor, IssueComment comment, String preview,
-			Set<String> notified) {
+			Set<String> notified, Set<String> blockers) {
 		if (comment == null) return;
 		String recipient = comment.getReplyToAuthorId();
 		if (recipient == null || recipient.isBlank()) return; // top-level comment
 		if (recipient.equals(actor.getId())) return; // replying to oneself
-		if (!notified.add(recipient)) return; // already mentioned — don't double-ping
+		// Marked notified before the block test, not after: the recipient must stay
+		// off the broader watcher notice too, or the reply they were meant not to
+		// hear about reaches them as "new comment on HIN-42" instead.
+		boolean first = notified.add(recipient);
+		if (blockers.contains(recipient)) return;
+		if (!first) return; // already mentioned — don't double-ping
 		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(Set.of(recipient), Notification.Type.COMMENT_REPLY,
 				de -> de
@@ -168,8 +190,19 @@ public class NotificationService {
 	 */
 	public void notifyMentions(Issue issue, User actor, Set<String> mentionedIds, String preview) {
 		if (actor == null) return; // system/seed authored — no human to attribute
+		notifyMentions(issue, actor, mentionedIds, preview, blockersOf(actor));
+	}
+
+	/**
+	 * As above, with [actor]'s blockers already resolved — for a caller that is
+	 * sending several notices about one write and must not ask again per notice.
+	 */
+	private void notifyMentions(Issue issue, User actor, Set<String> mentionedIds, String preview,
+			Set<String> blockers) {
+		if (actor == null) return; // system/seed authored — no human to attribute
 		Set<String> recipients = new HashSet<>(mentionedIds);
 		recipients.remove(actor.getId());
+		recipients.removeAll(blockers);
 		if (recipients.isEmpty()) return;
 		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(recipients, Notification.Type.MENTION,
@@ -193,6 +226,21 @@ public class NotificationService {
 		added.removeAll(richText.mentionedUsers(before));
 		if (added.isEmpty()) return;
 		notifyMentions(issue, actor, added, preview(after));
+	}
+
+	/**
+	 * The recipients [actor]'s writing must not reach, resolved ONCE per event.
+	 *
+	 * <p>Applied to the person-to-person notices only — a comment, a reply, a
+	 * mention. It deliberately does <em>not</em> touch assignment, state-change,
+	 * sprint or due-date notices: those are the work talking, not a colleague, and a
+	 * block that silently stops someone hearing that an issue was assigned to them
+	 * would let a personal filter cost them their job, which is the one thing
+	 * {@link com.ahmadre.hinata.moderation.report.UserBlock} says a block must never
+	 * do.
+	 */
+	private Set<String> blockersOf(User actor) {
+		return actor == null ? Set.of() : userBlocks.blockersOf(actor.getId());
 	}
 
 	/** Max characters of comment/description text surfaced in a notification preview. */
@@ -489,6 +537,54 @@ public class NotificationService {
 			persist(admin, Notification.Type.SYSTEM, title, body,
 					"/admin/users?user=" + newUser.getId());
 		}
+	}
+
+	/**
+	 * In-app (bell) notice + push to each admin that a user reported content or
+	 * another user, deep-linking to the report in the moderation queue.
+	 *
+	 * <p>The body names the reporter and the thing reported, and deliberately carries
+	 * neither the reported content nor the reason the reporter picked. A push notice is
+	 * the least private surface in the product — it lands on a lock screen — and
+	 * accusing someone of, say, harassment there, in front of whoever is looking at the
+	 * phone, is a judgement no machine has made yet. The moderator opens the queue and
+	 * reads the case; the notification only says there is one.
+	 *
+	 * <p>Not gated by {@link NotificationPreferences}: it maps to the locked
+	 * {@code security} event via {@link #eventId}, because a report an admin can switch
+	 * off is a report nobody is accountable for acting on within the time DSA Art. 16(6)
+	 * expects.
+	 */
+	public void notifyAdminsContentReported(java.util.Collection<User> admins, User reporter,
+			String targetLabel, boolean urgent, String link) {
+		for (User admin : admins) {
+			if (admin == null || !admin.isActive()) continue;
+			boolean de = de(admin);
+			persist(admin, Notification.Type.CONTENT_REPORTED, reportTitle(de, urgent),
+					reportBody(de, reporter, targetLabel), link);
+		}
+	}
+
+	private String reportTitle(boolean de, boolean urgent) {
+		if (de) {
+			return urgent ? "Dringende Meldung wartet auf Prüfung" : "Neue Meldung wartet auf Prüfung";
+		}
+		return urgent ? "Urgent report awaiting review" : "New report awaiting review";
+	}
+
+	private String reportBody(boolean de, User reporter, String targetLabel) {
+		String name = reporter != null && reporter.getDisplayName() != null
+				? reporter.getDisplayName()
+				: (de ? "Jemand" : "Someone");
+		boolean hasTarget = targetLabel != null && !targetLabel.isBlank();
+		if (de) {
+			return hasTarget
+					? name + " hat Inhalte zur Prüfung gemeldet: \"" + targetLabel + "\""
+					: name + " hat Inhalte zur Prüfung gemeldet.";
+		}
+		return hasTarget
+				? name + " reported content for review: \"" + targetLabel + "\""
+				: name + " reported content for review.";
 	}
 
 	private void persist(User user, Notification.Type type, String title, String body, String link) {

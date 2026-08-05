@@ -25,5 +25,16 @@ public enum AuditCategory {
 	 * External integrations acting on the workspace — Personal Access Token
 	 * lifecycle and writes performed by AI clients over the MCP endpoint.
 	 */
-	INTEGRATION
+	INTEGRATION,
+
+	/**
+	 * Content safety: reports filed about content or people, and the personal
+	 * blocks users place on each other.
+	 *
+	 * <p>Its own category rather than a corner of {@link #DATA} because these are
+	 * the events a store review or a DSA transparency question asks about, and
+	 * answering "how many reports did you receive and what happened to them" must
+	 * not mean filtering them back out of everything else that touches user data.
+	 */
+	MODERATION
 }

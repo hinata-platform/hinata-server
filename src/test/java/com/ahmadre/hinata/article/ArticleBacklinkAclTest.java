@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.team.Team;
@@ -55,7 +56,7 @@ class ArticleBacklinkAclTest {
 		teams = mock(TeamService.class);
 		currentUser = mock(CurrentUser.class);
 		controller = new ArticleController(articles, new RichTextService(), currentUser,
-				projects, teams);
+				projects, teams, mock(ModerationService.class));
 
 		when(articles.findByReferencedIssueKeysContains("HIN-1"))
 				.thenReturn(List.of(VISIBLE, HIDDEN, TEAM_HIDDEN));

@@ -5,6 +5,8 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueActivityRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -52,6 +54,8 @@ public class SprintService {
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
+	private final ModerationService moderation;
+	private final SprintActivation activation;
 
 	// ── access ────────────────────────────────────────────────────────────
 
@@ -89,6 +93,7 @@ public class SprintService {
 	public Sprint create(String boardId, String name, String goal, LocalDate startDate,
 			LocalDate endDate, Integer capacityPoints, User user) {
 		AgileBoard board = accessibleBoard(boardId, user);
+		moderateNaming(name, goal);
 		if (board.getType() != AgileBoard.Type.SCRUM) {
 			throw ApiException.badRequest("error.sprint.notScrumBoard");
 		}
@@ -108,6 +113,7 @@ public class SprintService {
 	public Sprint update(String id, String name, String goal, LocalDate startDate,
 			LocalDate endDate, Integer capacityPoints, User user) {
 		Sprint sprint = accessibleSprint(id, user);
+		moderateNaming(name, goal);
 		if (name != null && !name.isBlank()) sprint.setName(name);
 		if (goal != null) sprint.setGoal(goal);
 		if (startDate != null) sprint.setStartDate(startDate);
@@ -120,20 +126,40 @@ public class SprintService {
 		return sprints.save(sprint);
 	}
 
-	/** Locks scope and marks this sprint the board's active sprint. */
-	@Transactional
+	/**
+	 * Locks scope and marks this sprint the board's active sprint.
+	 *
+	 * <p>The moderation gate runs here, before {@link SprintActivation} opens the
+	 * transaction, and that order is load-bearing rather than incidental: a refused goal
+	 * is recorded and then thrown, so gating inside the transaction would roll the record
+	 * back with the write it explains — and since nothing was stored, that record is the
+	 * only trace the refusal ever had. It stays in this service and not in the two
+	 * callers because {@code SprintWriteTools} reaches the same path without bean
+	 * validation, so a gate one layer up would be a gate with a hole in it.
+	 */
 	public Sprint start(String id, String goal, LocalDate endDate, User user) {
 		Sprint sprint = accessibleSprint(id, user);
 		AgileBoard board = boards.findById(sprint.getBoardId())
 				.orElseThrow(() -> ApiException.notFound("board"));
-		if (goal != null) sprint.setGoal(goal);
-		if (endDate != null) sprint.setEndDate(endDate);
-		sprint.setArchived(false);
-		Sprint saved = sprints.save(sprint);
-		board.setActiveSprintId(saved.getId());
-		boards.save(board);
+		// Starting a sprint may rewrite its goal, and doing so fans a notification
+		// out to every member of every project the board spans.
+		moderation.checkText(goal, ModerationSurface.ENTITY_DESCRIPTION);
+		Sprint saved = activation.activate(sprint, board, goal, endDate);
+		// After the commit, not inside it: a fan-out about a start that then failed to
+		// commit is a notification nobody can act on.
 		notifySprintLifecycle(board, saved.getName(), user, true);
 		return saved;
+	}
+
+	/**
+	 * Gates a sprint's name and goal. The goal is prose, but short prose that sits
+	 * in a board header rather than a body someone spent ten minutes writing, so it
+	 * is judged as a description and refused rather than flagged. A {@code null}
+	 * field is "no change" and the gate is a no-op on it.
+	 */
+	private void moderateNaming(String name, String goal) {
+		moderation.checkText(name, ModerationSurface.ENTITY_NAME);
+		moderation.checkText(goal, ModerationSurface.ENTITY_DESCRIPTION);
 	}
 
 	/** Union of the member ids of every project the board spans. */

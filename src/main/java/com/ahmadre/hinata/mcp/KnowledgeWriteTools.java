@@ -2,6 +2,8 @@ package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.richtext.LexicalToMarkdown;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -37,6 +39,9 @@ public class KnowledgeWriteTools {
 	// Shares the read tools' visibility rule so writes can never reach an
 	// article the caller could not even see.
 	private final KnowledgeReadTools knowledgeReadTools;
+	// Mirrors ArticleController: the body is gated by RichTextService, the title has
+	// to be handed to the gate explicitly.
+	private final ModerationService moderation;
 
 	/**
 	 * Lean projection of a knowledge-base article for MCP callers. {@code content}
@@ -71,8 +76,15 @@ public class KnowledgeWriteTools {
 			@McpToolParam(required = false, description = "Labels / tags") List<String> tags) {
 		scopeGuard.require(Scopes.KB_WRITE);
 		User me = currentUser.require();
+		// Surfaces named the same way the HTTP path names them, on purpose. A tool
+		// call is still an article: it is read in the same sidebar, searched in the
+		// same index and reported through the same queue, so it has to be judged by
+		// the rule that belongs to where it lands and not by the door it came in
+		// through. An agent that could write what a person cannot is a way around the
+		// policy, not an integration.
+		moderation.checkText(title, ModerationSurface.ARTICLE_TITLE);
 		// An agent writes markdown; storage is Lexical.
-		RichText body = richText.fromMarkdown(content);
+		RichText body = richText.fromMarkdown(content, ModerationSurface.ARTICLE_CONTENT);
 		Article saved = articles.save(Article.builder()
 				.title(title)
 				.content(body.text())
@@ -107,9 +119,19 @@ public class KnowledgeWriteTools {
 		scopeGuard.require(Scopes.KB_WRITE);
 		User me = currentUser.require();
 		Article article = knowledgeReadTools.requireVisible(id, me);
-		if (title != null && !title.isBlank()) article.setTitle(title);
+		if (title != null && !title.isBlank()) {
+			// Gated before the setter: everything here mutates the loaded article in
+			// place, so a refusal after a setter would leave a half-applied update.
+			// A title that did not actually change is not re-judged — an agent that
+			// echoes back what it read must not be the thing that finally trips a
+			// heading written under an older ruleset. Mirrors ArticleController.
+			if (!title.equals(article.getTitle())) {
+				moderation.checkText(title, ModerationSurface.ARTICLE_TITLE);
+			}
+			article.setTitle(title);
+		}
 		if (content != null) {
-			RichText body = richText.fromMarkdown(content);
+			RichText body = richText.fromMarkdown(content, ModerationSurface.ARTICLE_CONTENT);
 			article.setContent(body.text());
 			article.setContentDoc(body.doc());
 			article.setReferencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()));

@@ -6,6 +6,8 @@ import com.ahmadre.hinata.deletion.DeletionService;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.User;
@@ -45,14 +47,23 @@ public class BoardController {
 	private final DeletionService deletion;
 	private final CurrentUser currentUser;
 	private final com.ahmadre.hinata.team.TeamRepository teams;
+	private final ModerationService moderation;
 
 	public record CreateBoardRequest(@NotBlank @Size(max = 120) String name,
 			@NotEmpty List<String> projectIds, AgileBoard.Type type) {
 	}
 
-	/** Partial board update — every field is optional (null = no change). */
+	/**
+	 * Partial board update — every field is optional (null = no change).
+	 *
+	 * <p>{@code columns} is a {@code List<@Valid ColumnRequest>}: without the
+	 * element annotation Bean Validation stops at the list itself and every
+	 * constraint declared on {@link ColumnRequest} is silently skipped, so a
+	 * column could be named with 50 000 characters through this endpoint while the
+	 * identical record was enforced everywhere else.
+	 */
 	public record UpdateBoardRequest(@Size(max = 120) String name, AgileBoard.Type type,
-			String activeSprintId, List<String> projectIds, List<ColumnRequest> columns,
+			String activeSprintId, List<String> projectIds, List<@Valid ColumnRequest> columns,
 			Boolean resetColumns) {
 	}
 
@@ -183,6 +194,7 @@ public class BoardController {
 	public AgileBoard create(@RequestBody @Valid CreateBoardRequest request) {
 		User user = currentUser.require();
 		String userId = user.getId();
+		moderation.checkText(request.name(), ModerationSurface.ENTITY_NAME);
 		assertMemberOfAll(request.projectIds(), user);
 		// Default columns merge every spanned project's workflow: one column per
 		// state for a single project (unchanged), and equivalent states of
@@ -265,7 +277,7 @@ public class BoardController {
 	}
 
 	@PatchMapping("/{id}")
-	public AgileBoard update(@PathVariable String id, @RequestBody UpdateBoardRequest req) {
+	public AgileBoard update(@PathVariable String id, @RequestBody @Valid UpdateBoardRequest req) {
 		User user = currentUser.require();
 		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		assertBoardAccess(board, user);
@@ -273,6 +285,10 @@ public class BoardController {
 		boolean renaming = req.name() != null && !req.name().equals(board.getName());
 		if (renaming) {
 			assertBoardManage(board, user);
+			// Only a name that actually changed: a board is PATCHed on every sprint
+			// switch and column tweak, and re-judging an untouched name would turn
+			// one refused word into a board nobody can reconfigure again.
+			moderation.checkText(req.name(), ModerationSurface.ENTITY_NAME);
 		}
 		if (req.name() != null) board.setName(req.name());
 		if (req.type() != null) board.setType(req.type());
@@ -308,6 +324,8 @@ public class BoardController {
 			assertMemberOfAll(board.getProjectIds(), user);
 			List<AgileBoard.Column> custom = new ArrayList<>();
 			for (ColumnRequest column : req.columns()) {
+				// A column header is read by everyone who opens the board, every day.
+				moderation.checkText(column.name(), ModerationSurface.ENTITY_NAME);
 				custom.add(AgileBoard.Column.builder()
 						.name(column.name() == null ? null : column.name().trim())
 						.states(new ArrayList<>(column.states() == null ? List.of() : column.states()))
@@ -376,6 +394,10 @@ public class BoardController {
 		User user = currentUser.require();
 		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		assertBoardAccess(board, user);
+		// This route writes the sprint itself instead of going through SprintService,
+		// so it needs its own gate — the same pair SprintService applies.
+		moderation.checkText(request.name(), ModerationSurface.ENTITY_NAME);
+		moderation.checkText(request.goal(), ModerationSurface.ENTITY_DESCRIPTION);
 		return sprints.save(Sprint.builder()
 				.boardId(id)
 				.name(request.name())

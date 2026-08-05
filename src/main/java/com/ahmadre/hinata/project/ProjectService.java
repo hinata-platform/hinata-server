@@ -1,6 +1,8 @@
 package com.ahmadre.hinata.project;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.TeamAccess;
 import com.ahmadre.hinata.team.TeamRepository;
@@ -59,6 +61,7 @@ public class ProjectService {
 	// Owns the "may this user see that project" rule, so callers outside this domain
 	// (notifications, above all) can ask it without injecting this service back.
 	private final ProjectReach projectReach;
+	private final ModerationService moderation;
 
 	public Project get(String id) {
 		return projects.findById(id).orElseThrow(() -> ApiException.notFound("project"));
@@ -183,6 +186,7 @@ public class ProjectService {
 	}
 
 	public Project create(Project project, User creator) {
+		moderateNaming(project.getName(), project.getDescription());
 		String key = project.getKey().toUpperCase(Locale.ROOT);
 		if (!key.matches("[A-Z][A-Z0-9]{1,9}")) {
 			throw ApiException.badRequest("error.project.invalidKey");
@@ -209,6 +213,24 @@ public class ProjectService {
 
 	public Project save(Project project) {
 		return projects.save(project);
+	}
+
+	/**
+	 * Gates a project's name and description.
+	 *
+	 * <p>Both are refused rather than flagged, and that asymmetry with an issue
+	 * body is deliberate: a project name is a handful of words that costs seconds
+	 * to retype, and it is rendered in every list, breadcrumb, board header and
+	 * notification e-mail the organisation sends. Losing a written defect report to
+	 * a false positive is a real cost; losing a project name is not.
+	 *
+	 * <p>Lives in the service and not the controller because a project is also
+	 * created from {@code TeamService.createTeamProject} and from MCP, neither of
+	 * which passes through {@code ProjectController}.
+	 */
+	private void moderateNaming(String name, String description) {
+		moderation.checkText(name, ModerationSurface.ENTITY_NAME);
+		moderation.checkText(description, ModerationSurface.ENTITY_DESCRIPTION);
 	}
 
 	/**
@@ -281,6 +303,7 @@ public class ProjectService {
 	public Project applyUpdate(String id, ProjectUpdateRequest req, User user) {
 		Project project = get(id);
 		assertLeadOrAdmin(project, user);
+		moderateNaming(req.name(), req.description());
 
 		if (req.name() != null) {
 			if (req.name().isBlank()) throw ApiException.badRequest("error.project.nameRequired");
@@ -414,6 +437,9 @@ public class ProjectService {
 					throw ApiException.badRequest("error.project.stateNameRequired");
 				}
 				s.setName(s.getName().trim());
+				// A state name is a board column header — on screen for every member
+				// of the project all day, and one word to retype if refused.
+				moderation.checkText(s.getName(), ModerationSurface.ENTITY_NAME);
 				if (!seen.add(s.getName().toLowerCase(Locale.ROOT))) {
 					throw ApiException.badRequest("error.project.duplicateState", s.getName());
 				}
@@ -513,6 +539,9 @@ public class ProjectService {
 				throw ApiException.badRequest("error.project.labelNameRequired");
 			}
 			l.setName(l.getName().trim());
+			// Labels ride along on every issue card that carries them, so a label is
+			// judged exactly like the other names the project puts on screen.
+			moderation.checkText(l.getName(), ModerationSurface.ENTITY_NAME);
 			if (!seen.add(l.getName().toLowerCase(Locale.ROOT))) {
 				throw ApiException.badRequest("error.project.duplicateLabel", l.getName());
 			}

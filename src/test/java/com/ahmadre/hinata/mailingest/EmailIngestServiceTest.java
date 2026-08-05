@@ -2,6 +2,9 @@ package com.ahmadre.hinata.mailingest;
 
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.moderation.ModerationRecorder;
+import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.ModerationVerdict;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -62,9 +65,14 @@ class EmailIngestServiceTest {
 		lenient().when(projects.get("p1")).thenReturn(Project.builder().id("p1")
 				.memberIds(new ArrayList<>(List.of("u-author", "u-lead"))).build());
 		lenient().when(users.findActiveByEmail(anyString())).thenReturn(Optional.empty());
+		// A gate that lets everything through: this test is about attribution, and a
+		// verdict is never null in the product, so the stub returns a real one.
+		ModerationService moderation = mock(ModerationService.class);
+		lenient().when(moderation.assessText(anyString(), any()))
+				.thenReturn(ModerationVerdict.disabled());
 		service = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
 				new RichTextService(), projects, notifications, storage,
-				mock(AttachmentStore.class), users);
+				mock(AttachmentStore.class), users, moderation, mock(ModerationRecorder.class));
 	}
 
 	private IngestConnection connection() {
