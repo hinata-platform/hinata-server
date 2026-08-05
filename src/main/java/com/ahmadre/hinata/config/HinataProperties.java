@@ -8,8 +8,10 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Central, environment-driven configuration. Every value can be supplied via
@@ -197,6 +199,44 @@ public class HinataProperties {
 		 * bypass stays countable. Never applies to externally authored ingress.
 		 */
 		private boolean failOpen = true;
+		/** The optional out-of-process image classifier. */
+		private Image image = new Image();
+
+		/**
+		 * The image classification sidecar — a separate process holding the model and
+		 * the native inference runtime, reached over HTTP.
+		 *
+		 * <p>Out of process on purpose, and the reason is not taste: a useful NSFW
+		 * classifier is megabytes of weights plus a native runtime, and bundling that
+		 * into the server jar would tax every self-hosted install — including the ARM
+		 * ones — for a capability many of them never use. Empty
+		 * {@link #endpoint} is therefore the default and the whole tier stays
+		 * uninstantiated (see {@code HttpImageModerator}); nothing here changes what a
+		 * verdict <em>means</em>, only who computes it.
+		 *
+		 * <p>These are deliberately env-only, unlike the thresholds above: where the
+		 * classifier runs is a deployment fact, not a tenant policy an admin should be
+		 * able to repoint from a web form to a host of their choosing.
+		 */
+		@Getter
+		@Setter
+		public static class Image {
+			/** Base URL of the sidecar, e.g. {@code http://hinata-moderation:8081}. Empty ⇒ no tier. */
+			private String endpoint = "";
+			/**
+			 * Budget for one call to the sidecar, applied to the connect and the read
+			 * separately. This sits on the upload path of every attachment, so it is a
+			 * user-visible wait — and exceeding it is not an error the upload fails on:
+			 * the verdict degrades and the file is queued for a human instead.
+			 */
+			private Duration timeout = Duration.ofSeconds(5);
+			/**
+			 * Content types the sidecar can decode. Anything else is never sent, which
+			 * makes an image the tier cannot judge an honest {@code DISABLED} verdict
+			 * rather than a round trip that ends in a 415 and a degraded one.
+			 */
+			private Set<String> supportedTypes = Set.of("image/jpeg", "image/png", "image/webp");
+		}
 	}
 
 	@Getter
