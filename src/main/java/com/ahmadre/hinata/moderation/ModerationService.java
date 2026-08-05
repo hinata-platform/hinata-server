@@ -1,8 +1,11 @@
 package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.moderation.image.ImageModerator;
+import com.ahmadre.hinata.moderation.image.ImageTierState;
 import com.ahmadre.hinata.moderation.text.TextModerator;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -169,6 +172,52 @@ public class ModerationService {
 			throw ModerationException.blockedFile(verdict, surface, fileName);
 		}
 		return verdict;
+	}
+
+	/**
+	 * Whether images are actually being classified right now.
+	 *
+	 * <p>Not derivable from {@link ModerationPolicy#imageEnabled()} alone, which is
+	 * the whole point: policy states an intention, and with no tier installed that
+	 * intention has no effect on a single upload. Reported to the admin panel and
+	 * logged once at startup so the difference is visible somewhere.
+	 */
+	public ImageTierState imageTierState() {
+		if (!policy.imageEnabled()) {
+			return ImageTierState.DISABLED_BY_POLICY;
+		}
+		if (imageModerators.isEmpty()) {
+			return ImageTierState.NOT_CONFIGURED;
+		}
+		// Availability, not mere presence: a sidecar whose model failed to load is a
+		// bean that exists and classifies nothing, which is the case an operator most
+		// needs told apart from a working one.
+		return imageModerators.stream().anyMatch(ImageModerator::available)
+				? ImageTierState.ACTIVE
+				: ImageTierState.CONFIGURED_UNAVAILABLE;
+	}
+
+	/**
+	 * Says once, on startup, that images are not being checked.
+	 *
+	 * <p>At {@code WARN} and naming the key that would change it, because the
+	 * alternative — a toggle in the admin panel reading "on" — actively tells the
+	 * operator the opposite. Deliberately not a startup failure: running without an
+	 * image tier is a supported configuration, it just must not be a silent one.
+	 */
+	@EventListener(ApplicationReadyEvent.class)
+	void reportImageTierOnStartup() {
+		ImageTierState state = imageTierState();
+		if (state == ImageTierState.NOT_CONFIGURED) {
+			log.warn("Image moderation is enabled but no classifier is installed — uploaded images "
+					+ "are NOT being checked. Set hinata.moderation.image.endpoint to a running "
+					+ "moderation sidecar, or set hinata.moderation.image-enabled=false to make "
+					+ "this explicit.");
+		}
+		else if (state == ImageTierState.CONFIGURED_UNAVAILABLE) {
+			log.warn("An image classifier is configured but reports itself unavailable — uploaded "
+					+ "images are NOT being checked until it recovers.");
+		}
 	}
 
 	/** Judges uploaded bytes without throwing. */

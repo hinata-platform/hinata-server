@@ -9,6 +9,7 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.image.ImageTierState;
 import com.ahmadre.hinata.moderation.report.ContentReport;
 import com.ahmadre.hinata.moderation.report.ContentReportService;
 import com.ahmadre.hinata.project.ProjectRepository;
@@ -79,6 +80,7 @@ public class ModerationQueueService {
 	private final IssueCommentRepository comments;
 	private final ArticleRepository articles;
 	private final AuditService audit;
+	private final ModerationService moderation;
 
 	// --- Rows -----------------------------------------------------------------
 
@@ -122,8 +124,16 @@ public class ModerationQueueService {
 			String authorId, String authorName, String note) {
 	}
 
-	/** The open backlog, for the badge on the admin section. */
-	public record Summary(long openRecords, long openReports, long open) {
+	/**
+	 * The open backlog for the badge on the admin section, plus what the image tier
+	 * is actually doing.
+	 *
+	 * <p>[imageTier] rides along here rather than getting an endpoint of its own
+	 * because the panel that shows the backlog is the panel that shows the policy
+	 * switches, and the switch labelled "classify images" is precisely the one an
+	 * operator can otherwise read as a promise the product is not keeping.
+	 */
+	public record Summary(long openRecords, long openReports, long open, ImageTierState imageTier) {
 	}
 
 	// --- Records --------------------------------------------------------------
@@ -220,7 +230,8 @@ public class ModerationQueueService {
 	public Summary summary() {
 		long openRecords = records.countByReviewState(ModerationRecord.ReviewState.OPEN);
 		long openReports = reports.countOpen();
-		return new Summary(openRecords, openReports, openRecords + openReports);
+		return new Summary(openRecords, openReports, openRecords + openReports,
+				moderation.imageTierState());
 	}
 
 	// --- Assembly -------------------------------------------------------------
