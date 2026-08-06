@@ -51,6 +51,11 @@ why it is set the way it is first.
 **Two categories cannot be weakened by any setting**: child sexual content and
 malware. There is no admin control for them, by construction.
 
+Why the unchecked rows are unchecked — voice, PDF contents, video, and the missing
+statement of reasons on a freeze — is set out with its evidence in *Why these gaps
+exist* in the setup guide. None of them is an oversight; the reasons differ in kind,
+and one of them is legal rather than technical.
+
 ---
 
 ## 3. Turning on image classification

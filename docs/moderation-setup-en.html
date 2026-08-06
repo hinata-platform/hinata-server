@@ -65,8 +65,14 @@
   .pill.on{background:#e2f2ea;color:var(--ok)}
   .pill.off{background:#f2e6e6;color:var(--bad)}
   .pill.warnp{background:#faeed8;color:var(--warn)}
-  .pagebreak{page-break-before:always}
   .avoid{page-break-inside:avoid}
+  /* Flow control instead of forced breaks. Explicit page breaks were emptying
+     half a page each time the next section happened to start near the top. */
+  h1,h2,h3{break-after:avoid-page;page-break-after:avoid}
+  h2+figure,h2+p,h2+table,h3+p,h3+pre{break-before:avoid-page;page-break-before:avoid}
+  table{break-inside:auto;page-break-inside:auto}
+  tr,.box,pre,.step{break-inside:avoid;page-break-inside:avoid}
+  p,li{orphans:2;widows:2}
   .cols{display:flex;gap:14pt}
   .cols>div{flex:1}
   .tiny{font-size:8.6pt;color:var(--soft)}
@@ -157,7 +163,6 @@
   <p><strong>No setting can weaken two categories:</strong> child sexual abuse material and malware. There is deliberately no control for them.</p>
 </div>
 
-<div class="pagebreak"></div>
 
 <div class="step"><span class="n">1</span><h2>Add the sidecar</h2></div>
 
@@ -310,7 +315,6 @@ networks:
   <p>If you do <em>not</em> want image checking, switch it off in the admin area. The panel then says "off" instead of implying a check that is not happening — and nobody relies on it later.</p>
 </div>
 
-<div class="pagebreak"></div>
 
 <h2>What happens to an uploaded image</h2>
 
@@ -377,7 +381,6 @@ networks:
 <figcaption>Step 3 protects the sidecar too: a pixel bomb is refused before anything decodes it.</figcaption>
 </figure>
 
-<div class="pagebreak"></div>
 
 <div class="step"><span class="n">4</span><h2>Set up the escalation webhook</h2></div>
 
@@ -476,6 +479,37 @@ networks:
 <tr><td>Statement of reasons on a freeze</td><td>Not generated automatically. If you need one, it is a manual step in your procedure.</td></tr>
 <tr><td>Notifications already sent</td><td>A freeze cannot recall what already went out by mail or push. It only stops what would follow.</td></tr>
 </table>
+
+<h2>Why these gaps exist</h2>
+
+<p>None of them is an oversight. Each is a decision, and the reasons differ in kind: one is technical, one is legal, one is a line that is deliberately never crossed.</p>
+
+<h3>Voice notes — buildable, legally unsettled</h3>
+<p>The build would be modest: a second endpoint on the same sidecar, Whisper produces a transcript, and the existing text filter scores it. No new scoring path, no new categories.</p>
+<p>What holds it back is not the effort but the legal basis. <em>Hosted files</em> and <em>interpersonal communication</em> sit under different ones — and a voice note attached to an issue is the former, while one in a direct message may be the latter. The relevant EU interim regulation (Reg.&nbsp;2021/1232) lapsed on 3&nbsp;April&nbsp;2026 and was re-enacted in July&nbsp;2026 until 3&nbsp;April&nbsp;2028, narrowed, and requiring human verification before anything reaches an authority. <strong>As of August&nbsp;2026 — the permanent successor is not settled, so check this yourself.</strong> That is a question for your legal advice, not for the code.</p>
+<p class="tiny">While Hinata only knows voice notes as attachments on issues, the question probably does not arise. The day it ships voice direct messages, it does.</p>
+
+<h3>PDF and Office — the parser is the risk</h3>
+<p>Pulling text and embedded images out of a PDF means turning a parser loose on a file somebody else built. All three known attacks kill the server process:</p>
+<ul>
+  <li>compressed containers expand catastrophically — which is why Apache Tika has a <code>SecureContentHandler</code> at all;</li>
+  <li>image extraction from PDFs runs out of memory on crafted masks (documented as PDFBOX-2101);</li>
+  <li>the image decoder allocates from the dimensions in the header <em>before</em> validating them — exactly the hole step&nbsp;3 above closes.</li>
+</ul>
+<p>So it is only feasible outside the server process, with hard limits on memory, wall clock and output size: another container, not a configuration switch. On top of that, Tika's bomb heuristic has documented false positives (TIKA-2091) — a hit would therefore have to queue for a human rather than refuse.</p>
+
+<h3>Video — the cost has to be bounded before you start</h3>
+<p>The usual approach is frame sampling at roughly one frame per second. Without a hard cap, a two-hour upload silently becomes 7,200 classifications. It needs ffmpeg in its own container, a fixed frame ceiling and deduplication of near-identical frames — plus the honesty that one frame per second does not see a single image flashed for 300&nbsp;ms.</p>
+
+<h3>No statement of reasons on a freeze — marked as a gap, not papered over</h3>
+<p>The data model carries a field for it that is never set, and the code says so plainly. The alternative would be a field asserting <code>true</code> and thereby implying a step nobody performs — worse than an openly named gap. If the obligation applies to you, it is a point in your procedure, not in the software.</p>
+
+<h3>No CSAM classifier of our own — and that will never change</h3>
+<p>Training such a model requires possessing the material. That is the offence itself. Repurposing a general NSFW model for it is worse than nothing: it fires on ordinary family photos, and every false positive manufactures a human review of exactly the material the system exists to keep people from having to look at.</p>
+<p>Hence the slot for the vetted programmes in step&nbsp;5 rather than a model of our own — and hence their hash lists live on their servers and not in this image: a local copy would be an oracle to test evasion against.</p>
+
+<h3>Notifications already sent</h3>
+<p>A delivered mail is delivered. A freeze stops what would follow and redacts the stored history — it cannot recall anything. That is not a design decision but a property of e-mail.</p>
 
 <div class="box">
   <span class="t">And the legal side?</span>

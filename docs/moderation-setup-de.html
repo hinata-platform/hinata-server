@@ -65,8 +65,14 @@
   .pill.on{background:#e2f2ea;color:var(--ok)}
   .pill.off{background:#f2e6e6;color:var(--bad)}
   .pill.warnp{background:#faeed8;color:var(--warn)}
-  .pagebreak{page-break-before:always}
   .avoid{page-break-inside:avoid}
+  /* Flow control instead of forced breaks. Explicit page breaks were emptying
+     half a page each time the next section happened to start near the top. */
+  h1,h2,h3{break-after:avoid-page;page-break-after:avoid}
+  h2+figure,h2+p,h2+table,h3+p,h3+pre{break-before:avoid-page;page-break-before:avoid}
+  table{break-inside:auto;page-break-inside:auto}
+  tr,.box,pre,.step{break-inside:avoid;page-break-inside:avoid}
+  p,li{orphans:2;widows:2}
   .cols{display:flex;gap:14pt}
   .cols>div{flex:1}
   .tiny{font-size:8.6pt;color:var(--soft)}
@@ -157,7 +163,6 @@
   <p><strong>Zwei Kategorien kann keine Einstellung abschwächen:</strong> sexuelle Gewalt gegen Kinder und Schadsoftware. Dafür gibt es bewusst keinen Regler.</p>
 </div>
 
-<div class="pagebreak"></div>
 
 <div class="step"><span class="n">1</span><h2>Sidecar dazustellen</h2></div>
 
@@ -310,7 +315,6 @@ networks:
   <p>Wollt ihr <em>keine</em> Bildprüfung, schaltet den Regler im Adminbereich ab. Dann sagt das Panel „abgeschaltet“ statt eine Prüfung zu suggerieren, die nicht stattfindet — und niemand verlässt sich später darauf.</p>
 </div>
 
-<div class="pagebreak"></div>
 
 <h2>Was mit einem hochgeladenen Bild passiert</h2>
 
@@ -377,7 +381,6 @@ networks:
 <figcaption>Schritt 3 schützt auch den Sidecar: eine Pixelbombe wird abgewiesen, bevor irgendetwas sie dekodiert.</figcaption>
 </figure>
 
-<div class="pagebreak"></div>
 
 <div class="step"><span class="n">4</span><h2>Eskalations-Webhook einrichten</h2></div>
 
@@ -476,6 +479,37 @@ networks:
 <tr><td>Statement of Reasons beim Einfrieren</td><td>Wird nicht automatisch erzeugt. Wenn ihr es braucht, ist es ein manueller Schritt in eurem Verfahren.</td></tr>
 <tr><td>Bereits versandte Benachrichtigungen</td><td>Ein Einfrieren kann nicht zurückholen, was schon per Mail oder Push draußen ist. Es stoppt nur, was danach käme.</td></tr>
 </table>
+
+<h2>Warum diese Lücken bestehen</h2>
+
+<p>Keine davon ist ein Versehen. Jede ist eine Entscheidung, und die Gründe sind unterschiedlicher Natur: einer ist technisch, einer rechtlich, einer ist eine Grenze, die bewusst nie überschritten wird.</p>
+
+<h3>Sprachnachrichten — technisch machbar, rechtlich offen</h3>
+<p>Der Bau wäre überschaubar: ein zweiter Endpunkt am selben Sidecar, Whisper transkribiert, und der vorhandene Textfilter bewertet das Transkript. Kein neuer Bewertungspfad, keine neuen Kategorien.</p>
+<p>Der Grund für die Zurückhaltung ist nicht der Aufwand, sondern die Rechtsgrundlage. Für <em>gehostete Dateien</em> gilt eine andere als für <em>zwischenmenschliche Kommunikation</em> — und eine Sprachnachricht an einem Vorgang ist Ersteres, eine in einer Direktnachricht womöglich Letzteres. Die einschlägige EU-Übergangsregelung (VO&nbsp;2021/1232) lief am 3.&nbsp;April&nbsp;2026 aus und wurde im Juli&nbsp;2026 befristet bis 3.&nbsp;April&nbsp;2028 neu erlassen, enger gefasst und mit menschlicher Prüfung, bevor etwas an eine Behörde geht. <strong>Stand August&nbsp;2026 — die dauerhafte Nachfolgeregelung ist noch nicht beschlossen, bitte selbst nachprüfen.</strong> Das ist eine Frage für eure Rechtsberatung, keine für den Code.</p>
+<p class="tiny">Solange Hinata Sprachnachrichten nur als Anhang an Vorgängen kennt, stellt sich die Frage vermutlich nicht. Sobald es Sprach-Direktnachrichten gäbe, schon.</p>
+
+<h3>PDF und Office — der Parser ist das Risiko</h3>
+<p>Text und eingebettete Bilder aus einem PDF zu ziehen heißt, einen Parser auf eine Datei loszulassen, die jemand anderes gebaut hat. Alle drei bekannten Angriffe töten dabei den Serverprozess:</p>
+<ul>
+  <li>komprimierte Container expandieren katastrophal — deshalb hat Apache Tika überhaupt einen <code>SecureContentHandler</code>;</li>
+  <li>die Bildextraktion aus PDFs läuft bei präparierten Masken in den Speicher (dokumentiert als PDFBOX-2101);</li>
+  <li>der Bilddecoder alloziert nach den Maßen aus dem Header, <em>bevor</em> er sie prüft — genau die Lücke, die Schritt&nbsp;3 oben schließt.</li>
+</ul>
+<p>Machbar ist das also nur außerhalb des Serverprozesses, mit harten Grenzen für Speicher, Laufzeit und Ausgabegröße: ein weiterer Container, kein Konfigurationsschalter. Dazu kommt, dass Tikas Bomben-Heuristik dokumentierte Fehlalarme hat (TIKA-2091) — ein Treffer dürfte also nicht ablehnen, sondern nur einem Menschen vorlegen.</p>
+
+<h3>Video — die Kosten müssen begrenzt sein, bevor man anfängt</h3>
+<p>Der übliche Weg ist Einzelbild-Abtastung bei rund einem Bild pro Sekunde. Ohne harte Obergrenze wird ein zweistündiger Upload still zu 7.200 Klassifikationen. Es braucht also ffmpeg in einem eigenen Container, eine feste Obergrenze an Bildern und eine Entdopplung ähnlicher Bilder — und die Ehrlichkeit, dass ein Bild pro Sekunde ein für 300&nbsp;ms eingeblendetes Bild nicht sieht.</p>
+
+<h3>Kein Statement of Reasons beim Einfrieren — als Lücke markiert, nicht kaschiert</h3>
+<p>Das Datenmodell führt ein Feld dafür, das nie gesetzt wird, und der Code sagt genau das. Die Alternative wäre ein Feld, das <code>true</code> behauptet und damit einen Schritt vortäuscht, den niemand ausführt — schlechter als eine offen benannte Lücke. Wenn diese Pflicht für euch greift, ist sie ein Punkt in eurem Verfahren, nicht in der Software.</p>
+
+<h3>Kein eigener CSAM-Klassifikator — und das ändert sich nie</h3>
+<p>Ein solches Modell zu trainieren setzt voraus, das Material zu besitzen. Das ist die Straftat selbst. Ein allgemeines NSFW-Modell dafür zweckzuentfremden ist schlimmer als nichts: es schlägt bei gewöhnlichen Familienfotos an, und jeder Fehlalarm erzeugt eine menschliche Sichtung genau des Materials, dessen Sichtung das System verhindern soll.</p>
+<p>Deshalb der Steckplatz für die geprüften Programme aus Schritt&nbsp;5 statt eines eigenen Modells — und deshalb liegen deren Hash-Listen auf deren Servern und nicht in diesem Image: eine lokale Kopie wäre ein Orakel, gegen das sich Umgehung testen lässt.</p>
+
+<h3>Bereits versandte Benachrichtigungen</h3>
+<p>Eine Mail, die zugestellt ist, ist zugestellt. Ein Einfrieren stoppt, was danach käme, und markiert den gespeicherten Verlauf — zurückholen kann es nichts. Das ist keine Designentscheidung, sondern eine Eigenschaft von E-Mail.</p>
 
 <div class="box">
   <span class="t">Und die rechtliche Seite?</span>
