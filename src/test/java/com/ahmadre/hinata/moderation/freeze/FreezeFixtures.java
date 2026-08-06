@@ -20,6 +20,12 @@ import static org.mockito.Mockito.when;
  * {@code false} and {@code null} by default, which is the fail-open answer this
  * class is written to make impossible — every collaborator test would then pass
  * against a guard that never ran, and the one that mattered would pass too.
+ *
+ * <p>{@code FrozenObjectKeys} <em>is</em> mocked, and that asymmetry is deliberate:
+ * it resolves storage keys for the write path, answers an empty list by default,
+ * and nothing about a collaborator's read depends on it. Mocking the read side is
+ * what would be dangerous; mocking the resolver only means these fixtures freeze
+ * exactly the rows they were told to.
  */
 public final class FreezeFixtures {
 
@@ -49,8 +55,8 @@ public final class FreezeFixtures {
 	private static FrozenContentService loaded(List<FrozenContent> rows) {
 		FrozenContentRepository repository = mock(FrozenContentRepository.class);
 		when(repository.findByUnfrozenAtIsNull()).thenReturn(rows);
-		FrozenContentService service =
-				new FrozenContentService(repository, mock(AuditService.class, RETURNS_DEEP_STUBS));
+		FrozenContentService service = new FrozenContentService(repository,
+				mock(AuditService.class, RETURNS_DEEP_STUBS), mock(FrozenObjectKeys.class));
 		// The container fires this on ApplicationReadyEvent; without it the snapshot
 		// is "unknown" and every guard answers 503, which is correct behaviour and
 		// not what a collaborator's test is trying to exercise.

@@ -59,6 +59,7 @@ class FreezeReportTriggerTest {
 	private ContentReportRepository reports;
 	private IssueService issues;
 	private IssueCommentRepository comments;
+	private com.ahmadre.hinata.issue.IssueRepository objectIssues;
 	private FrozenContentRepository registry;
 	private FrozenContentService frozen;
 	private NotificationService notifications;
@@ -74,6 +75,7 @@ class FreezeReportTriggerTest {
 		reports = mock(ContentReportRepository.class);
 		issues = mock(IssueService.class);
 		comments = mock(IssueCommentRepository.class);
+		objectIssues = mock(com.ahmadre.hinata.issue.IssueRepository.class);
 		registry = mock(FrozenContentRepository.class);
 		notifications = mock(NotificationService.class);
 		escalation = new RecordingEscalation();
@@ -81,6 +83,7 @@ class FreezeReportTriggerTest {
 		Issue issue = Issue.builder().id("i-1").projectId("p-1").readableId("HIN-1")
 				.reporterId("u-author").attachments(new ArrayList<>()).createdAt(Instant.now()).build();
 		when(issues.getForUser(eq("i-1"), any())).thenReturn(issue);
+		when(objectIssues.findById("i-1")).thenReturn(Optional.of(issue));
 		when(comments.findById("c-1")).thenReturn(Optional.of(IssueComment.builder()
 				.id("c-1").issueId("i-1").authorId("u-author").text("reported")
 				.createdAt(Instant.now()).build()));
@@ -103,7 +106,11 @@ class FreezeReportTriggerTest {
 		when(users.findByRolesContainingAndActiveIsTrue(Role.ADMIN))
 				.thenReturn(List.of(user("u-admin")));
 
-		frozen = new FrozenContentService(registry, mock(AuditService.class, RETURNS_DEEP_STUBS));
+		// A real FrozenObjectKeys over mocked repositories, not a mock: it is what
+		// decides which bytes a freeze reaches, and a mock of it would make every
+		// assertion below pass against a resolver that never ran.
+		frozen = new FrozenContentService(registry, mock(AuditService.class, RETURNS_DEEP_STUBS),
+				new FrozenObjectKeys(objectIssues, comments, mock(ArticleRepository.class)));
 		frozen.refresh();
 
 		service = new ContentReportService(reports, issues, comments,

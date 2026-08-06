@@ -3,6 +3,7 @@ package com.ahmadre.hinata.weeklysummary;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.moderation.freeze.FrozenIssues;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.timetracking.WorkItem;
@@ -54,6 +55,7 @@ public class WeeklySummaryService {
 	private final ProjectService projects;
 	private final UserRepository users;
 	private final MongoTemplate mongo;
+	private final FrozenIssues frozenIssues;
 
 	// ─────────────────────────── DTOs ───────────────────────────
 
@@ -120,19 +122,25 @@ public class WeeklySummaryService {
 		Criteria inScope = Criteria.where("projectId").in(scopedIds)
 				.and("archived").ne(true);
 
-		long completed = mongo.count(Query.query(new Criteria().andOperator(
+		// Every issue query here is scoped, and the counts as much as the lists. This
+		// one aggregation feeds two surfaces — the in-app page and the Monday digest
+		// e-mail — so an unscoped `highlights` did not merely serve a frozen title, it
+		// re-published one outward in an HTML mail that no freeze can recall. Scoping
+		// the counts alongside keeps the headline number matching the list beneath it.
+		long completed = mongo.count(frozenIssues.scoped(Query.query(new Criteria().andOperator(
 				Criteria.where("projectId").in(scopedIds),
 				Criteria.where("archived").ne(true),
-				Criteria.where("resolvedAt").gte(since))), Issue.class);
-		long created = mongo.count(Query.query(new Criteria().andOperator(
+				Criteria.where("resolvedAt").gte(since)))), Issue.class);
+		long created = mongo.count(frozenIssues.scoped(Query.query(new Criteria().andOperator(
 				Criteria.where("projectId").in(scopedIds),
 				Criteria.where("archived").ne(true),
-				Criteria.where("createdAt").gte(since))), Issue.class);
+				Criteria.where("createdAt").gte(since)))), Issue.class);
 
-		List<Issue> resolvedThisWeek = mongo.find(Query.query(new Criteria().andOperator(
-				Criteria.where("projectId").in(scopedIds),
-				Criteria.where("archived").ne(true),
-				Criteria.where("resolvedAt").gte(since))), Issue.class);
+		List<Issue> resolvedThisWeek = mongo.find(frozenIssues.scoped(Query.query(
+				new Criteria().andOperator(
+						Criteria.where("projectId").in(scopedIds),
+						Criteria.where("archived").ne(true),
+						Criteria.where("resolvedAt").gte(since)))), Issue.class);
 
 		List<Contributor> contributors = contributors(resolvedThisWeek);
 		long myCompleted = resolvedThisWeek.stream()
@@ -202,7 +210,8 @@ public class WeeklySummaryService {
 	private SprintSnapshot sprintSnapshot(AgileBoard board, Sprint sprint,
 			Map<String, Set<String>> resolvedByProject) {
 		List<Issue> inSprint = mongo.find(
-				Query.query(Criteria.where("sprintId").is(sprint.getId())), Issue.class);
+				frozenIssues.scoped(Query.query(Criteria.where("sprintId").is(sprint.getId()))),
+				Issue.class);
 		int pointsTotal = 0;
 		int points = 0;
 		int issuesDone = 0;
@@ -239,7 +248,7 @@ public class WeeklySummaryService {
 				Criteria.where("assigneeId").is(user.getId()));
 		Query query = Query.query(new Criteria().andOperator(
 				inScope, assignedToMe, Criteria.where("resolvedAt").is(null)));
-		List<Issue> open = mongo.find(query, Issue.class);
+		List<Issue> open = mongo.find(frozenIssues.scoped(query), Issue.class);
 		long overdue = open.stream()
 				.filter(i -> i.getDueDate() != null && i.getDueDate().isBefore(today))
 				.count();

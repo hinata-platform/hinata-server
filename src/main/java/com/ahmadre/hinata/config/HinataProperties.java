@@ -203,6 +203,27 @@ public class HinataProperties {
 		private Image image = new Image();
 		/** Where frozen content is escalated to, when the operator has somewhere. */
 		private Escalation escalation = new Escalation();
+		/**
+		 * How often each instance re-reads the frozen-content registry.
+		 *
+		 * <p>This is the <b>worst-case window in which a freeze raised on one replica
+		 * is not yet enforced on another</b>. The registry is held in a per-JVM
+		 * snapshot (see {@code FrozenContentService}); the instance that performs the
+		 * freeze refreshes immediately, every other instance learns about it here.
+		 * There is no message bus in this product — {@code SettingsService} has the
+		 * same in-process limitation — so polling is the established shape rather
+		 * than a shortcut, and this value is the honest name of its cost.
+		 *
+		 * <p>Lowering it shortens the exposure window at the price of one small
+		 * indexed query per instance per interval; the query returns nothing in every
+		 * install that has never had an incident. Raising it above a minute or two is
+		 * hard to defend for the category this mechanism exists for.
+		 *
+		 * <p>Bound by {@code @Scheduled(fixedDelayString = ...)} as well as read here,
+		 * so the placeholder default and this default have to agree — that agreement
+		 * is pinned by {@code ModerationWiringTest}.
+		 */
+		private Duration freezeRefreshInterval = Duration.ofSeconds(30);
 
 		/**
 		 * The outbound notice a freeze raises — a webhook to whatever the operator

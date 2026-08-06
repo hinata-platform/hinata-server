@@ -237,8 +237,12 @@ public class ContentReportService {
 			return null;
 		}
 		try {
+			// No object keys: freeze() resolves what the target owns — attachments, a
+			// voice blob, the inline images embedded in the body — from the target
+			// itself, so this path and the admin hand-freeze cover the same bytes by
+			// construction rather than by two lists staying in step.
 			return frozen.freeze(new FrozenContentService.Request(type, target.id(),
-					target.contextId(), target.objectKeys(), ModerationCategory.SEXUAL_MINORS,
+					target.contextId(), List.of(), ModerationCategory.SEXUAL_MINORS,
 					null, reporter.getId(), null, "report:" + reason.name()));
 		}
 		catch (RuntimeException ex) {
@@ -306,24 +310,6 @@ public class ContentReportService {
 						report.getId(), ex.toString());
 			}
 		}
-	}
-
-	/**
-	 * Every stored object an issue owns.
-	 *
-	 * <p>Freezing an issue without these leaves its attachments downloadable to
-	 * anyone holding a presigned URL or the download route, which is the whole of
-	 * what an attachment is: bytes with an addressable existence independent of the
-	 * row that lists them.
-	 */
-	private static List<String> attachmentKeys(Issue issue) {
-		if (issue.getAttachments() == null) {
-			return List.of();
-		}
-		return issue.getAttachments().stream()
-				.map(Issue.Attachment::getObjectKey)
-				.filter(key -> key != null && !key.isBlank())
-				.toList();
 	}
 
 	/** The reported target expressed as a moderation surface, so both queues speak one vocabulary. */
@@ -445,14 +431,16 @@ public class ContentReportService {
 	 * @param label     short human-readable handle for the queue row and the audit
 	 *                  entry — an issue key, a file name, a display name; never the
 	 *                  reported content itself
-	 * @param objectKeys every stored object the target owns — a voice blob, an
-	 *                  attachment's bytes, an issue's attachments. Resolved here
-	 *                  because this is where the entity is already in hand, and a
-	 *                  freeze that reaches the row but not the bytes leaves the
-	 *                  material downloadable by anyone who kept the URL
+	 *
+	 * <p>Deliberately no object keys. They used to be resolved here, on the argument
+	 * that the entity was already in hand — and that argument was right about this
+	 * path and wrong about the other one: the admin hand-freeze had no entity in
+	 * hand, passed an empty list, and froze a row and not one byte. Both paths now
+	 * ask {@code FrozenObjectKeys} through {@code FrozenContentService.freeze}, which
+	 * costs this path one extra lookup of an entity it just read and buys the
+	 * guarantee that the two cannot cover different bytes.
 	 */
-	private record Target(String id, String contextId, String projectId, String label,
-			List<String> objectKeys) {
+	private record Target(String id, String contextId, String projectId, String label) {
 	}
 
 	private Target resolve(ContentReport.TargetType targetType, String targetId, String contextId,
@@ -463,8 +451,7 @@ public class ContentReportService {
 		return switch (targetType) {
 			case ISSUE -> {
 				Issue issue = issues.getForUser(targetId, reporter);
-				yield new Target(issue.getId(), null, issue.getProjectId(), issue.getReadableId(),
-						attachmentKeys(issue));
+				yield new Target(issue.getId(), null, issue.getProjectId(), issue.getReadableId());
 			}
 			case COMMENT -> {
 				IssueComment comment = comments.findById(targetId)
@@ -474,9 +461,7 @@ public class ContentReportService {
 				// the thread it lives in.
 				Issue issue = issues.getForUser(comment.getIssueId(), reporter);
 				yield new Target(comment.getId(), issue.getId(), issue.getProjectId(),
-						issue.getReadableId(),
-						comment.getVoice() == null ? List.of()
-								: List.of(comment.getVoice().getObjectKey()));
+						issue.getReadableId());
 			}
 			case ARTICLE -> {
 				Article article = articles.findById(targetId)
@@ -486,8 +471,7 @@ public class ContentReportService {
 					// exists to someone who may not know that.
 					throw ApiException.notFound("article");
 				}
-				yield new Target(article.getId(), null, article.getProjectId(), article.getTitle(),
-						List.of());
+				yield new Target(article.getId(), null, article.getProjectId(), article.getTitle());
 			}
 			case ATTACHMENT -> {
 				if (contextId == null || contextId.isBlank()) {
@@ -502,7 +486,7 @@ public class ContentReportService {
 						.findFirst()
 						.orElseThrow(() -> ApiException.notFound("attachment"));
 				yield new Target(attachment.getId(), issue.getId(), issue.getProjectId(),
-						attachment.getFileName(), List.of(attachment.getObjectKey()));
+						attachment.getFileName());
 			}
 			case USER -> {
 				if (targetId.equals(reporter.getId())) {
@@ -514,7 +498,7 @@ public class ContentReportService {
 				// pattern of behaviour that no single item carries, and requiring the
 				// reporter to first name a piece of content is exactly the gap Google
 				// Play rejects apps for.
-				yield new Target(reported.getId(), null, null, reported.getDisplayName(), List.of());
+				yield new Target(reported.getId(), null, null, reported.getDisplayName());
 			}
 		};
 	}

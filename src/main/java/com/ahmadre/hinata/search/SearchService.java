@@ -200,8 +200,8 @@ public class SearchService {
 					and(archivedIs(false), unfrozen(reach.projects("projectId"), FrozenTargetType.ISSUE))), false);
 			case PROJECTS -> mapProjects(latest(Project.class, SUGGEST_LIMIT, F_UPDATED,
 					and(archivedFalse(), visibleProjects(reach))), false);
-			case PEOPLE -> mapPeople(
-					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)));
+			case PEOPLE -> mapPeople(latest(User.class, SUGGEST_LIMIT, F_UPDATED,
+					unfrozen(Criteria.where("active").is(true), FrozenTargetType.USER)));
 			case BOARDS -> suggestBoards(reach);
 			case DOCS -> mapDocs(latest(Article.class, SUGGEST_LIMIT, F_UPDATED,
 					unfrozen(ArticleVisibility.criteria(reach.admin(), reach.projectIds(),
@@ -309,9 +309,18 @@ public class SearchService {
 		}).toList();
 	}
 
+	/**
+	 * People have no access filter — the directory is visible to every member — but
+	 * they do have a freeze filter, which is why the {@code null} that used to sit in
+	 * the {@code filter} slot is now an exclusion. A frozen account's display name
+	 * and title are user-written text on a moderated surface
+	 * ({@code ModerationSurface.PROFILE}), and the avatar this hit carries is served
+	 * over the one unauthenticated content route in the product.
+	 */
 	private List<User> searchPeople(String q, int cap) {
 		return hybrid(User.class, q, cap,
 				List.of(contains("displayName", q), contains("username", q), contains(F_TITLE, q)),
+				frozen.exclusion("_id", FrozenTargetType.USER),
 				null, User::getId, User::getDisplayName);
 	}
 
@@ -493,11 +502,16 @@ public class SearchService {
 				count(Issue.class, unfrozen(reach.projects("projectId"), FrozenTargetType.ISSUE)));
 		counts.put(SearchCategory.PROJECTS.name(),
 				count(Project.class, visibleProjects(reach)));
-		// People are deliberately unscoped: the directory is already readable by any
-		// signed-in account through GET /api/v1/users, because mention and assignee
-		// pickers need it. Narrowing it here would only make search disagree with the
-		// rest of the product.
-		counts.put(SearchCategory.PEOPLE.name(), mongo.estimatedCount(User.class));
+		// People are deliberately unscoped by *access*: the directory is already
+		// readable by any signed-in account through GET /api/v1/users, because mention
+		// and assignee pickers need it. Narrowing it there would only make search
+		// disagree with the rest of the product. Freeze is a different question and
+		// does apply, so this is no longer the raw estimate — a chip counting an
+		// account whose group cannot show it is the badge-versus-page mismatch the
+		// comment counts already had to be corrected for.
+		counts.put(SearchCategory.PEOPLE.name(),
+				count(User.class, unfrozen(Criteria.where("active").is(true),
+						FrozenTargetType.USER)));
 		counts.put(SearchCategory.BOARDS.name(),
 				count(AgileBoard.class, reach.projects("projectIds"))
 						+ count(Sprint.class, sprintsOfVisibleBoards(reach)));

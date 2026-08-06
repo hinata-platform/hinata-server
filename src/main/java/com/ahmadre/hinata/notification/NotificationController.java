@@ -22,6 +22,10 @@ public class NotificationController {
 	private final NotificationRepository notifications;
 	private final CurrentUser currentUser;
 	private final MongoTemplate mongo;
+	// Every path that returns a body goes through this. A notification persists a
+	// verbatim preview of somebody's comment, and a row written before a freeze
+	// would otherwise keep serving that text from here forever.
+	private final NotificationRedactor redactor;
 
 	/**
 	 * Client-facing notification shape. Decouples the HTTP contract from the
@@ -42,9 +46,15 @@ public class NotificationController {
 	@GetMapping
 	public Page<NotificationResponse> list(@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
-		return notifications.findByUserIdOrderByCreatedAtDesc(
-				currentUser.requireId(), PageRequest.of(page, Math.min(size, 100)))
-				.map(NotificationResponse::from);
+		Page<Notification> found = notifications.findByUserIdOrderByCreatedAtDesc(
+				currentUser.requireId(), PageRequest.of(page, Math.min(size, 100)));
+		// Redacted, never re-counted: a frozen source withholds the body and keeps the
+		// row, so the pager stays honest and the recipient still sees that something
+		// happened. That is the opposite trade from the list endpoints, and it is the
+		// right one here — this page is the reader's own history, and silently losing
+		// entries from it looks like the product forgetting rather than withholding.
+		redactor.redact(found.getContent());
+		return found.map(NotificationResponse::from);
 	}
 
 	@GetMapping("/unread-count")
@@ -54,16 +64,28 @@ public class NotificationController {
 
 	@PostMapping("/{id}/read")
 	public NotificationResponse markRead(@PathVariable String id) {
-		Notification notification = owned(id);
-		notification.setRead(true);
-		return NotificationResponse.from(notifications.save(notification));
+		return NotificationResponse.from(setRead(id, true));
 	}
 
 	@PostMapping("/{id}/unread")
 	public NotificationResponse markUnread(@PathVariable String id) {
+		return NotificationResponse.from(setRead(id, false));
+	}
+
+	/**
+	 * Saves the read flag and returns the row as the caller may see it.
+	 *
+	 * <p>Redacted AFTER the save, which is the whole reason this is one method and
+	 * not two copies: the redaction is a view of the row, not an edit of it, and
+	 * saving a redacted entity would write the withheld string into the database
+	 * where releasing the freeze could never bring the text back.
+	 */
+	private Notification setRead(String id, boolean read) {
 		Notification notification = owned(id);
-		notification.setRead(false);
-		return NotificationResponse.from(notifications.save(notification));
+		notification.setRead(read);
+		Notification saved = notifications.save(notification);
+		redactor.redact(saved);
+		return saved;
 	}
 
 	/**

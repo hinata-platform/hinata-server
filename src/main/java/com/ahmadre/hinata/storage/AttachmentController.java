@@ -4,6 +4,8 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ContentDisposition;
@@ -28,6 +30,7 @@ public class AttachmentController {
 	private final StorageService storage;
 	private final AttachmentStore store;
 	private final AttachmentEvents events;
+	private final FrozenContentService frozen;
 	private final CurrentUser currentUser;
 
 	@PostMapping
@@ -93,6 +96,26 @@ public class AttachmentController {
 				.body(object.data());
 	}
 
+	/**
+	 * Removes the attachment from the issue and deletes its bytes.
+	 *
+	 * <p>Refuses (409) when the attachment is frozen. The byte guard inside
+	 * {@code StorageService.delete} is not enough on its own and never was: it skips
+	 * the object, so the bytes survive, but {@code store.remove} has already pulled
+	 * the subdocument — fileName, size, uploader, uploadedAt and the {@code objectKey}
+	 * itself — out of {@code Issue.attachments}. What is left is a file in the bucket
+	 * with nothing in the database pointing at it, which is evidence that technically
+	 * exists and is practically unfindable. That is the outcome
+	 * {@code FrozenContentService.assertNotFrozen}'s javadoc calls "technically
+	 * present and practically unusable", and it is why a destructive path refuses
+	 * rather than partially succeeding.
+	 *
+	 * <p>Both halves are asserted. The {@code ATTACHMENT} row covers a file an
+	 * operator froze by name; the {@code OBJECT} row covers the same bytes reached
+	 * from a freeze on the issue, the comment or an inline image that resolved to this
+	 * key — a moderator freezing the parent issue must not leave the one destructive
+	 * route to its files open.
+	 */
 	@DeleteMapping("/{attachmentId}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String issueId, @PathVariable String attachmentId) {
@@ -101,6 +124,11 @@ public class AttachmentController {
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
 				.orElseThrow(() -> ApiException.notFound("attachment"));
+		frozen.assertNotFrozen(FrozenTargetType.ATTACHMENT, attachmentId);
+		// singletonList, not List.of: a legacy row can carry a null objectKey, which
+		// List.of rejects with an NPE — turning a refusal into a 500 on the one path
+		// that must answer 409.
+		frozen.assertNoObjectFrozen(java.util.Collections.singletonList(attachment.getObjectKey()));
 		Issue saved = store.remove(issue.getId(), attachmentId);
 		storage.delete(attachment.getObjectKey());
 		events.publishRemoved(saved.getId(), attachmentId);

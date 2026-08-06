@@ -117,17 +117,30 @@ public class FrozenContent {
 	private String reason;
 
 	/**
-	 * Whether the author was told their content was restricted.
+	 * When the author was given a statement of reasons for the restriction, or
+	 * {@code null} when they were not.
 	 *
-	 * <p>DSA Art. 17 requires a statement of reasons for a restriction, and this is
-	 * a restriction. It is also, for this category, a tip-off: telling a suspect
-	 * their upload was matched against a hash list tells them the match happened.
-	 * The two obligations genuinely conflict and the resolution is not a code
-	 * decision — so the row records which way the operator went instead of
-	 * silently skipping the notice and leaving no trace that it was ever owed.
+	 * <p>DSA Art. 17 requires a statement of reasons for a restriction, and this is a
+	 * restriction. <b>This product does not issue one for a freeze.</b> There is no
+	 * notice path, no template and no channel for one, so the field is null on every
+	 * row this code writes and an operator who owes a statement has to issue it
+	 * themselves. It records that rather than fixing it.
+	 *
+	 * <p>A nullable timestamp and not a boolean, and the difference is the point. The
+	 * field this replaces was {@code boolean statementWithheld = true}: a constant
+	 * asserting a fact about every freeze past and future, indistinguishable from a
+	 * field nobody had thought about, and impossible to make true again the day a
+	 * notice path exists. "No statement was issued" is now the <em>absence</em> of
+	 * data — the shape that cannot be wrong, because nothing has to write it — and a
+	 * statement that is issued has somewhere honest to be recorded.
+	 *
+	 * <p>There is a second reason for the timestamp over a flag. The obligation is
+	 * conditional and the conflict is real: telling a suspect their upload was matched
+	 * against a hash list tells them the match happened. That is a decision an operator
+	 * makes per freeze, not a policy this code can hold, and <em>when</em> the notice
+	 * went out is what an appeal months later is answered from.
 	 */
-	@Builder.Default
-	private boolean statementWithheld = true;
+	private Instant statementIssuedAt;
 
 	/** The admin who released it; {@code null} while the freeze stands. */
 	private String unfrozenBy;

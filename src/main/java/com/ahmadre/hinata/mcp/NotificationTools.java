@@ -3,12 +3,14 @@ package com.ahmadre.hinata.mcp;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.mcp.McpViews.PageResult;
 import com.ahmadre.hinata.notification.Notification;
+import com.ahmadre.hinata.notification.NotificationRedactor;
 import com.ahmadre.hinata.notification.NotificationRepository;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
@@ -20,6 +22,15 @@ import java.time.Instant;
  * user's id, so an MCP caller can never read another user's notifications.
  * Reading here never marks anything as read — the inbox badge in the app stays
  * accurate.
+ *
+ * <p>The page goes through {@link NotificationRedactor}, the same as
+ * {@code NotificationController}'s. A notification row stores a verbatim preview of
+ * what somebody wrote — the mention, the reply, the comment teaser — and this tool
+ * reads the repository directly, so without the redactor it was the one remaining
+ * door through which a frozen comment's text kept being served, indefinitely, to
+ * any model with the scope. Every argument in that class's javadoc applies here
+ * unchanged; what does not carry over automatically is the call, which is why it is
+ * made explicitly rather than left to the repository.
  */
 @Service
 @RequiredArgsConstructor
@@ -28,6 +39,7 @@ public class NotificationTools {
 	private final ScopeGuard scopeGuard;
 	private final CurrentUser currentUser;
 	private final NotificationRepository notifications;
+	private final NotificationRedactor redactor;
 
 	@McpTool(name = "list_my_notifications", title = "List my notifications",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
@@ -40,10 +52,13 @@ public class NotificationTools {
 		User me = currentUser.require();
 		int pageIndex = page == null || page < 0 ? 0 : page;
 		int pageSize = size == null || size <= 0 ? 25 : Math.min(size, 100);
-		PageResult<NotificationView> items = PageResult.of(
-				notifications.findByUserIdOrderByCreatedAtDesc(me.getId(),
-						PageRequest.of(pageIndex, pageSize)),
-				NotificationView::of);
+		Page<Notification> found = notifications.findByUserIdOrderByCreatedAtDesc(me.getId(),
+				PageRequest.of(pageIndex, pageSize));
+		// Before the mapping, not after: NotificationView copies the body out, and a
+		// redaction applied to a copy is a redaction applied to nothing. The entities
+		// are mutated in place and never saved — see NotificationRedactor.redact.
+		redactor.redact(found.getContent());
+		PageResult<NotificationView> items = PageResult.of(found, NotificationView::of);
 		return new InboxView(notifications.countByUserIdAndReadFalse(me.getId()), items);
 	}
 

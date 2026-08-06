@@ -22,6 +22,11 @@ public class UserController {
 	private final UserRepository users;
 	private final CurrentUser currentUser;
 	private final UserService userService;
+	// Every directory read goes through here, not through the repository: it is
+	// where "active, matching, and not frozen" is defined once. See
+	// UserDirectoryService — FrozenTargetType.USER was checked from no read path
+	// at all until it existed.
+	private final UserDirectoryService directory;
 
 	public record DirectoryUser(String id, String username, String displayName, String avatarUrl,
 			String title) {
@@ -47,13 +52,12 @@ public class UserController {
 	 * paged type-ahead in large orgs.
 	 */
 	@GetMapping("/api/v1/users")
-	public List<DirectoryUser> directory(
+	public List<DirectoryUser> list(
 			@RequestParam(required = false, defaultValue = "") String q) {
 		currentUser.require();
-		String regex = java.util.regex.Pattern.quote(q.trim());
 		Pageable pageable = PageRequest.of(0, DIRECTORY_CAP,
 				Sort.by(Sort.Direction.ASC, "displayName"));
-		return users.searchActive(regex, pageable).map(DirectoryUser::from).getContent();
+		return directory.search(q, pageable).map(DirectoryUser::from).getContent();
 	}
 
 	/**
@@ -67,8 +71,7 @@ public class UserController {
 		if (ids == null || ids.isEmpty()) return List.of();
 		List<String> capped = ids.stream().filter(java.util.Objects::nonNull).distinct()
 				.limit(DIRECTORY_CAP).toList();
-		return users.findAllById(capped).stream().filter(User::isActive)
-				.map(DirectoryUser::from).toList();
+		return directory.byIds(capped).stream().map(DirectoryUser::from).toList();
 	}
 
 	/**
@@ -83,10 +86,9 @@ public class UserController {
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
 		currentUser.require();
-		String regex = java.util.regex.Pattern.quote(q.trim());
 		Pageable pageable = PageRequest.of(page, Math.min(size, 100),
 				Sort.by(Sort.Direction.ASC, "displayName"));
-		return users.searchActive(regex, pageable).map(DirectoryUser::from);
+		return directory.search(q, pageable).map(DirectoryUser::from);
 	}
 
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,

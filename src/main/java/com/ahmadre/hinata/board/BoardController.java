@@ -7,6 +7,7 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.moderation.ModerationService;
+import com.ahmadre.hinata.moderation.freeze.FrozenIssues;
 import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -48,6 +49,7 @@ public class BoardController {
 	private final CurrentUser currentUser;
 	private final com.ahmadre.hinata.team.TeamRepository teams;
 	private final ModerationService moderation;
+	private final FrozenIssues frozenIssues;
 
 	public record CreateBoardRequest(@NotBlank @Size(max = 120) String name,
 			@NotEmpty List<String> projectIds, AgileBoard.Type type) {
@@ -233,6 +235,12 @@ public class BoardController {
 		}
 		// Archived issues are soft-deleted — they never appear on the board.
 		candidates.removeIf(Issue::isArchived);
+		// And frozen ones are preserved and unreachable. The board reaches its rows
+		// through the derived finders above rather than IssueService.search, so it
+		// inherited none of that method's filters — a frozen issue's title and key
+		// carried on being rendered on a card, which is the most-read surface in the
+		// product and the one nobody has to open anything to see.
+		candidates = frozenIssues.readable(candidates);
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
 		// Stamp each card with its direct-child (sub-task) count/progress so the
 		// board can show the indicator + expander without a per-card lookup. The

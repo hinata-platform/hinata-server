@@ -23,8 +23,15 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class MediaService {
 
-	/** Bucket "folder" that isolates inline media from attachments/avatars. */
-	static final String PREFIX = "media/";
+	/**
+	 * Bucket "folder" that isolates inline media from attachments/avatars.
+	 *
+	 * <p>Public because the freeze path has to name it: an inline image has no
+	 * database row, so the only way to stop serving one is to freeze its storage
+	 * key, and the key is this prefix plus the id in the URL. See
+	 * {@link MediaReferences#objectKeysIn}.
+	 */
+	public static final String PREFIX = "media/";
 
 	/** Raster images only; {@code image/svg+xml} is excluded (stored-XSS risk). */
 	private static final Set<String> ALLOWED_TYPES =

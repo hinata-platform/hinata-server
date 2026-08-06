@@ -16,8 +16,6 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -32,14 +30,18 @@ import java.util.stream.Stream;
  * unreferenced and older than a grace window (so a freshly uploaded image whose
  * content has not been saved yet is never reaped). This is the same
  * reference-scan approach mature tools use for embedded attachments.
+ *
+ * <p>The scan itself lives in {@link MediaReferences}, shared with the freeze
+ * path, which asks the identical question for the opposite reason — see that
+ * class. A frozen object is additionally safe from this sweep whatever the scan
+ * says, because {@code StorageService.delete} refuses one; that guard and this
+ * one are independent on purpose, since a reference scan that has drifted is
+ * exactly the failure this sweep has already had once.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class MediaGarbageCollector {
-
-	/** Every {@code /api/v1/media/{uuid}} reference in a chunk of content. */
-	private static final Pattern REFERENCE = Pattern.compile("/api/v1/media/([0-9a-fA-F-]{36})");
 
 	/**
 	 * (collection, field) pairs that can embed inline media.
@@ -124,19 +126,10 @@ public class MediaGarbageCollector {
 			Query query = new Query(Criteria.where(field).regex("/api/v1/media/"));
 			query.fields().include(field);
 			try (Stream<Document> stream = mongo.stream(query, Document.class, collection)) {
-				stream.forEach(document -> extractIds(document.getString(field), ids));
+				stream.forEach(document -> MediaReferences.collect(document.getString(field), ids));
 			}
 		}
 		return ids;
 	}
 
-	private static void extractIds(String content, Set<String> into) {
-		if (content == null || content.isEmpty()) {
-			return;
-		}
-		Matcher matcher = REFERENCE.matcher(content);
-		while (matcher.find()) {
-			into.add(matcher.group(1));
-		}
-	}
 }

@@ -10,6 +10,8 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
@@ -32,6 +34,7 @@ import org.springframework.data.mongodb.core.aggregation.ArrayOperators;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -43,6 +46,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -68,6 +72,13 @@ import java.util.Set;
  * <p>Authorization and pre-flight validation happen on the request thread in the
  * controllers (where the security context and request locale live); this service
  * is handed already-authorized entities plus resolved options.
+ *
+ * <p>One invariant is <em>not</em> the controller's: a project cascade refuses
+ * outright when anything in its radius is frozen — see
+ * {@link #assertNothingFrozenIn}. It lives here because this is where the radius
+ * is known, and because "authorized" and "permissible" are different questions;
+ * the person deleting a project is entitled to, and still must not destroy
+ * material a freeze is preserving for an authority.
  */
 @Slf4j
 @Service
@@ -87,6 +98,7 @@ public class DeletionService {
 	private final StorageService storage;
 	private final MongoTemplate mongo;
 	private final MessageSource messages;
+	private final FrozenContentService frozen;
 
 	// ── public types ────────────────────────────────────────────────────────
 
@@ -294,6 +306,8 @@ public class DeletionService {
 		String pid = project.getId();
 		List<Issue> projectIssues = issues.findByProjectId(pid, Pageable.unpaged()).getContent();
 
+		assertNothingFrozenIn(pid, projectIssues, options.strategy());
+
 		switch (options.strategy()) {
 			case DELETE -> deleteIssues(projectIssues, pid, progress);
 			case MIGRATE -> migrateIssues(projectIssues, options.target(), progress);
@@ -326,6 +340,67 @@ public class DeletionService {
 		return summary(Map.of(
 				"members", team.getMembers().size(),
 				"projects", team.getProjectIds().size()));
+	}
+
+	/**
+	 * Refuses a project deletion that would destroy frozen content.
+	 *
+	 * <p>The cascade below is the widest destructive operation in the product: it
+	 * removes every issue in a project with its comments, activity, work items and
+	 * stored attachments, and every article. A freeze on any one of those is a
+	 * preservation obligation the operator has not yet discharged — an authority has
+	 * been told, or is about to be — and losing that material to a routine project
+	 * cleanup is the harm {@link com.ahmadre.hinata.moderation.freeze.FrozenContent}
+	 * exists to prevent. So this throws, and the whole cascade stops before its first
+	 * write; the {@code ApiException} surfaces as a localized {@code error} on the
+	 * progress stream, exactly like a validation failure.
+	 *
+	 * <p><b>What is checked depends on the strategy</b>, because what is destroyed
+	 * does. {@code MIGRATE} moves the issues to another project rather than removing
+	 * them, so their freezes travel with them and only the articles are at risk;
+	 * {@code DELETE} puts everything in the radius. Refusing a migration because of a
+	 * frozen issue would block the one operation that preserves it.
+	 *
+	 * <p>Skipped entirely when nothing is frozen, which is the normal case — the cost
+	 * to an ordinary project deletion is one set-emptiness test.
+	 *
+	 * <p>Team deletion has no check of its own and needs none: that cascade removes
+	 * the team and its activity feed, and its projects, boards, issues and articles
+	 * all survive. Nothing frozen is in its radius.
+	 */
+	private void assertNothingFrozenIn(String pid, List<Issue> projectIssues,
+			IssueStrategy strategy) {
+		if (!frozen.anythingFrozen()) {
+			return;
+		}
+		Set<String> frozenArticles = frozen.frozenIds(FrozenTargetType.ARTICLE);
+		if (!frozenArticles.isEmpty() && mongo.exists(new Query(Criteria.where("projectId").is(pid)
+				.and("_id").in(frozenArticles)), Article.class)) {
+			throw refuseFrozen();
+		}
+		if (strategy != IssueStrategy.DELETE) {
+			return;
+		}
+		List<String> issueIds = projectIssues.stream().map(Issue::getId).toList();
+		frozen.assertNoneFrozen(FrozenTargetType.ISSUE, issueIds);
+		for (Issue issue : projectIssues) {
+			if (issue.getAttachments() != null) {
+				frozen.assertNoObjectFrozen(issue.getAttachments().stream()
+						.map(Issue.Attachment::getObjectKey)
+						.filter(Objects::nonNull)
+						.toList());
+			}
+		}
+		Set<String> frozenComments = frozen.frozenIds(FrozenTargetType.COMMENT);
+		if (!issueIds.isEmpty() && !frozenComments.isEmpty() && mongo.exists(
+				new Query(Criteria.where("issueId").in(issueIds).and("_id").in(frozenComments)),
+				IssueComment.class)) {
+			throw refuseFrozen();
+		}
+	}
+
+	private static ApiException refuseFrozen() {
+		return new ApiException(HttpStatus.CONFLICT, "error.moderation.frozenPreserved");
 	}
 
 	// ── project sub-steps ─────────────────────────────────────────────────────

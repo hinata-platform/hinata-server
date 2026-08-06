@@ -34,6 +34,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -51,6 +52,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -427,6 +429,25 @@ public class IssueService {
 	 * Hard delete — restricted to platform admins, project leads and Team-Admins
 	 * of a team owning the project (see {@link ProjectService#canDeleteIssues}).
 	 * Regular members must archive instead.
+	 *
+	 * <p>Refuses outright when anything in the blast radius is frozen. That is the
+	 * promise {@link com.ahmadre.hinata.moderation.freeze.FrozenContent} makes in its
+	 * own javadoc — "a row here is what lets the deletion and garbage-collection
+	 * paths refuse" — and it was not kept: this resolves through {@link #get} rather
+	 * than {@link #getForUser}, so no freeze check ran, and one call from an admin or
+	 * a project lead destroyed a frozen issue along with every frozen comment on it.
+	 *
+	 * <p>The blast radius, not just the issue. A standard issue cascades to its
+	 * sub-tasks and every issue here cascades to its comments, so a frozen sub-task
+	 * or a frozen comment under an unfrozen issue was reachable by deleting the
+	 * parent — which is how this kind of guard is usually got round, deliberately or
+	 * not.
+	 *
+	 * <p>Refuse and not skip: deleting the issue while stepping over one frozen
+	 * comment would leave a comment with no thread, which is evidence that survives
+	 * and cannot be read in context. And after the authorization checks, so a
+	 * non-member still learns nothing — the 409 is only ever seen by somebody who
+	 * could otherwise have gone through with it.
 	 */
 	public void delete(String id, User user) {
 		Issue issue = get(id);
@@ -435,6 +456,7 @@ public class IssueService {
 		if (!projects.canDeleteIssues(project, user)) {
 			throw ApiException.forbidden("error.issue.deleteForbidden");
 		}
+		assertNothingFrozenUnder(issue);
 		if (issue.getType().isEpic()) {
 			// Standard children survive as top-level issues — just drop the epic link.
 			mongo.updateMulti(new Query(Criteria.where("parentId").is(issue.getId())),
@@ -462,13 +484,56 @@ public class IssueService {
 	}
 
 	/**
+	 * Everything a delete of [issue] would destroy that a freeze is holding.
+	 *
+	 * <p>Ordered cheapest first, and the whole check is skipped when nothing is
+	 * frozen at all — which is every install that has never had an incident, so the
+	 * ordinary delete pays one set-emptiness test.
+	 */
+	private void assertNothingFrozenUnder(Issue issue) {
+		if (!frozen.anythingFrozen()) {
+			return;
+		}
+		List<String> cascade = new ArrayList<>(List.of(issue.getId()));
+		if (issue.getType().isStandard()) {
+			// Sub-tasks are deleted with their parent, so a freeze on one of them
+			// blocks the parent. An epic's children survive as top-level issues and
+			// are therefore not in the radius.
+			issues.findByParentId(issue.getId()).forEach(child -> cascade.add(child.getId()));
+		}
+		frozen.assertNoneFrozen(FrozenTargetType.ISSUE, cascade);
+		for (String issueId : cascade) {
+			Issue target = issueId.equals(issue.getId()) ? issue : findOrNull(issueId);
+			if (target != null && target.getAttachments() != null) {
+				frozen.assertNoObjectFrozen(target.getAttachments().stream()
+						.map(Issue.Attachment::getObjectKey).filter(Objects::nonNull).toList());
+			}
+		}
+		Set<String> frozenComments = frozen.frozenIds(FrozenTargetType.COMMENT);
+		if (!frozenComments.isEmpty() && mongo.exists(
+				Query.query(Criteria.where("issueId").in(cascade).and("_id").in(frozenComments)),
+				IssueComment.class)) {
+			throw new ApiException(HttpStatus.CONFLICT, "error.moderation.frozenPreserved");
+		}
+	}
+
+	/**
 	 * Archives or restores an issue (soft delete). Open to every project member
 	 * — the safe alternative to the role-gated hard {@link #delete}. Sub-tasks
 	 * can't stand alone, so a standard issue takes its sub-tasks along.
+	 *
+	 * <p>Resolves through {@link #getForUser}, so a frozen issue answers 404 here
+	 * exactly as it does on a read. Archiving is <em>not</em> refused because it
+	 * destroys evidence — it destroys none, it is a flag, and the row and its bytes
+	 * are untouched. It is refused because the alternative is an oracle: this used
+	 * to resolve through {@link #get}, so a member who got 404 opening an issue and
+	 * 200 archiving the same id had learned that it exists and is restricted, which
+	 * is precisely the inference {@code assertReadable} answers 404 rather than 403
+	 * to prevent. A frozen issue has to be uniformly indistinguishable from a
+	 * deleted one, on writes as well as reads.
 	 */
 	public Issue setArchived(String id, boolean archived, User user) {
-		Issue issue = get(id);
-		assertAccess(issue, user);
+		Issue issue = getForUser(id, user);
 		if (issue.isArchived() == archived) return issue;
 		Instant at = archived ? Instant.now() : null;
 		if (issue.getType().isStandard()) {
@@ -541,18 +606,41 @@ public class IssueService {
 	public record Hierarchy(List<Issue> ancestors, List<Issue> children) {
 	}
 
+	/**
+	 * The breadcrumb and children, with frozen relatives left out.
+	 *
+	 * <p>{@link #getForUser} guards the issue this is asked about; it says nothing
+	 * about the issues around it, and both directions leaked. The walk up loaded
+	 * ancestors with {@code findById} and the walk down loaded children with
+	 * {@code findByParentId}, neither of which knows about freeze — so a frozen epic
+	 * rendered in the breadcrumb of every story under it, and a frozen sub-task
+	 * rendered under its unfrozen parent, title and key and all.
+	 *
+	 * <p>A frozen ancestor <b>truncates</b> the chain rather than being skipped over.
+	 * Skipping would render grandparent → child as if that were the relationship,
+	 * which is a claim about the hierarchy that is not true; truncating says only
+	 * "here is as much of the chain as there is to show", which is what a breadcrumb
+	 * already means for an issue whose parent was deleted.
+	 */
 	public Hierarchy hierarchyOf(String idOrReadableId, User user) {
 		Issue issue = getForUser(idOrReadableId, user);
+		Set<String> frozenIssues = frozen.frozenIds(FrozenTargetType.ISSUE);
 		LinkedList<Issue> ancestors = new LinkedList<>();
 		String parentId = issue.getParentId();
 		int guard = 0; // cycle guard — the hierarchy is at most 3 levels deep
 		while (parentId != null && !parentId.isBlank() && guard++ < 5) {
 			Issue parent = issues.findById(parentId).orElse(null);
-			if (parent == null) break;
+			if (parent == null || frozenIssues.contains(parent.getId())) break;
 			ancestors.addFirst(parent);
 			parentId = parent.getParentId();
 		}
-		List<Issue> children = new ArrayList<>(issues.findByParentId(issue.getId()));
+		// Filtered in memory rather than in the query: the children of one issue are
+		// its sub-tasks, a bounded handful, and this list is not paged — so there is
+		// no short-page or wrong-total problem to avoid, and no second query to pay
+		// for one.
+		List<Issue> children = issues.findByParentId(issue.getId()).stream()
+				.filter(child -> !frozenIssues.contains(child.getId()))
+				.collect(Collectors.toCollection(ArrayList::new));
 		children.sort(Comparator.comparingLong(Issue::getNumberInProject));
 		return new Hierarchy(ancestors, children);
 	}
@@ -577,9 +665,17 @@ public class IssueService {
 		if (parentIds.isEmpty()) return;
 
 		List<Issue> children = issues.findByParentIdIn(parentIds);
+		// A frozen sub-task is not counted. The badge promises what opening the parent
+		// delivers, and hierarchyOf now drops frozen children — a count that included
+		// them would read "3 sub-tasks" over a list of two, which is the same
+		// badge-versus-page mismatch attachReplyCounts corrects for replies.
+		Set<String> frozenIssues = frozen.frozenIds(FrozenTargetType.ISSUE);
 		Map<String, int[]> byParent = new HashMap<>(); // parentId -> [total, done]
 		Map<String, Set<String>> resolvedByProject = new HashMap<>();
 		for (Issue child : children) {
+			if (frozenIssues.contains(child.getId())) {
+				continue;
+			}
 			int[] tally = byParent.computeIfAbsent(child.getParentId(), k -> new int[2]);
 			tally[0]++;
 			Set<String> resolved = resolvedByProject.computeIfAbsent(
@@ -1003,6 +1099,33 @@ public class IssueService {
 					Criteria.where("title").regex(quoted, "i"),
 					Criteria.where("readableId").regex("^" + quoted, "i")));
 		}
+		// The freeze exclusion goes in the QUERY, not after it. This is the issue list
+		// and the backlog, plus the MCP search_issues and list_my_issues tools, which
+		// is why it is the one place a frozen title most visibly leaked.
+		//
+		// It is NOT the board and NOT the timeline, which this comment used to claim.
+		// BoardController reaches its rows through IssueRepository.findByProjectId /
+		// findByProjectIdAndSprintId and GanttController through findScheduled, so
+		// neither ever executed this query — the exclusion here protected a surface
+		// they do not use while their cards and bars kept rendering frozen titles.
+		// Both now filter through moderation.freeze.FrozenIssues, which is the shared
+		// seam for every issue read that does not come through this method.
+		//
+		// Post-filtering the returned page would
+		// be wrong twice over: it yields a short page, and it leaves `total` counting
+		// rows nobody can open, so "load more" walks a pager that never reaches its
+		// own count. Both failures are the ones IssueCommentRepository and
+		// SearchService already argued through for their own filters.
+		//
+		// Composed alongside the project scope rather than inside it: an admin's scope
+		// is "every active project", i.e. no restriction, and a freeze that travelled
+		// inside such a value would evaporate for exactly the account it most applies
+		// to. FrozenContentService.exclusion never answers null for that reason.
+		//
+		// Below the `count`/`find` pair on purpose: `count` runs before `.with(...)`
+		// mutates the query with skip/limit, so both see the same criteria and the
+		// total stays honest.
+		query.addCriteria(frozen.exclusion("_id", FrozenTargetType.ISSUE));
 		long total = mongo.count(query, Issue.class);
 		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
 		return new org.springframework.data.domain.PageImpl<>(content, pageable, total);
@@ -1061,8 +1184,14 @@ public class IssueService {
 		List<String> normalized = capped.stream()
 				.map(key -> key.toUpperCase(java.util.Locale.ROOT))
 				.toList();
+		// A {{issue:KEY}} chip renders the referenced issue's title, state, assignee
+		// and labels inline, wherever the reference was written — so without the
+		// exclusion, embedding a frozen issue's key in any comment republishes its
+		// title to everyone reading that comment. The chip degrades to unresolved,
+		// which is exactly what it does for an issue the reader cannot see.
 		Query query = Query.query(new Criteria().andOperator(
 				Criteria.where("projectId").in(scope),
+				frozen.exclusion("_id", FrozenTargetType.ISSUE),
 				new Criteria().orOperator(
 						Criteria.where("readableId").in(capped),
 						Criteria.where("formerReadableIds").in(normalized))));

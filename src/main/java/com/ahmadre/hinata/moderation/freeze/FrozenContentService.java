@@ -11,6 +11,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -18,9 +19,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Freeze: content that is preserved and unreachable, to everyone, until a named
@@ -56,19 +59,77 @@ import java.util.Set;
  *
  * <p>A registry cannot be joined into a plain {@code find}, and post-filtering is
  * off the table for the reason above. So the whole active set is held in a
- * volatile snapshot, refreshed on startup and after every write — the same shape
- * {@code ModerationPolicy} already uses for the resolved policy block. That is
- * affordable because the set is empty in every healthy install: {@link #exclusion}
- * on an empty set is a {@code $nin: []}, which matches everything, so a workspace
- * with nothing frozen runs byte-for-byte the queries it always ran.
+ * volatile snapshot, refreshed on startup, after every write, and on a timer — the
+ * same shape {@code ModerationPolicy} already uses for the resolved policy block.
+ * That is affordable because the set is empty in every healthy install:
+ * {@link #exclusion} on an empty set is a {@code $nin: []}, which matches
+ * everything, so a workspace with nothing frozen runs byte-for-byte the queries it
+ * always ran.
+ *
+ * <h2>A freeze is not instant across replicas, and this is the bound</h2>
+ *
+ * <p>The snapshot is <b>per JVM</b>. When the product runs as more than one
+ * replica — a scaled service in Compose or Portainer, two containers behind a
+ * proxy — a freeze raised on instance A is enforced on A immediately, because A
+ * refreshes at the end of its own write, and on every other instance only when
+ * that instance next polls. {@link #refreshPeriodically} is that poll, and
+ * {@code hinata.moderation.freeze-refresh-interval} (default 30s) is therefore
+ * <b>the worst-case window in which an instance that did not perform the write
+ * still serves the frozen content</b>. It is not zero and this class must not be
+ * read as claiming it is.
+ *
+ * <p>The alternative that would make it zero is a message bus, and this product
+ * has none — {@code SettingsService} holds its resolved settings the same
+ * in-process way and has the same limitation, so polling is the established shape
+ * here rather than a shortcut taken to avoid one. What polling buys over reading
+ * the registry per request is the reason the snapshot exists at all: this is
+ * consulted on every read of every entity and every byte in the product, and a
+ * database round trip per read is not a cost the product can carry to answer a
+ * question whose answer is "no" in every install that has never had an incident.
+ *
+ * <p>Two things bound the damage of the window. The freeze is written to Mongo
+ * <em>before</em> the refresh, so no instance is ever more than one interval
+ * behind the database rather than behind another instance's memory; and the
+ * failure inside the window is that content stays readable, which is what it was
+ * a moment earlier — not that a released freeze keeps applying.
  *
  * <p><b>The single most important line in this class is {@link Snapshot#loaded}.</b>
  * It distinguishes "loaded, and nothing is frozen" from "we do not know". If the
- * registry cannot be read, every guard here answers 503 rather than "nothing is
- * frozen" — a mechanism whose failure mode is silently serving the material it
+ * registry has never been read, every guard here answers 503 rather than "nothing
+ * is frozen" — a mechanism whose failure mode is silently serving the material it
  * exists to withhold is worse than one that stops. The same applies to
- * {@link #MAX_FROZEN}: over the cap the snapshot fails rather than truncating,
- * because a truncated set is a set that answers "not frozen" for real rows.
+ * {@link #MAX_FROZEN}: over the cap the snapshot is never truncated, because a
+ * truncated set is a set that answers "not frozen" for real rows.
+ *
+ * <h2>A failed refresh is not a failed first load, and they must not be treated alike</h2>
+ *
+ * <p>Fail-closed on the <em>first</em> load is not negotiable and is exactly the
+ * paragraph above: with no set at all, "nothing is frozen" is a guess, and the cost
+ * of guessing wrong is serving the material. But once a set <em>has</em> been read,
+ * a refresh that fails is a different question with a different answer. The last
+ * loaded set is still almost certainly correct — freezes are single-digit events in
+ * the life of an install, so the probability that one was raised inside the seconds
+ * a transient Mongo error lasted is close to zero — while dropping it takes the
+ * comment feed, the search, the issue list, the board and every byte in the product
+ * to 503 for everybody. That trades a hypothetical miss for a certain outage, and it
+ * is the wrong way round.
+ *
+ * <p>So {@link #degrade} keeps the last loaded snapshot across a failing refresh and
+ * drops it only after <b>{@link #MAX_REFRESH_FAILURES} consecutive failures</b> —
+ * with the default 30s interval, five minutes of a registry nobody can read. Every
+ * one of those attempts logs at {@code ERROR} naming the last good read, so a stuck
+ * registry is loud from the first failure rather than only at the end.
+ *
+ * <p><b>The window this opens, stated plainly.</b> While a refresh is failing, this
+ * instance enforces the set as of {@code loadedAt} and nothing newer. A freeze
+ * raised elsewhere in that period — by an operator, by a report trigger, or by this
+ * very instance if its own post-write refresh was the call that failed — is
+ * <em>not</em> enforced here until a refresh succeeds, or until the staleness budget
+ * runs out and everything fails closed. The bound is
+ * {@code MAX_REFRESH_FAILURES × hinata.moderation.freeze-refresh-interval}. That is
+ * the same kind of window as the per-JVM one above, deliberately: both say "this
+ * instance is behind the database by at most N", and both end in the database
+ * winning rather than in a freeze being lost.
  *
  * <p><b>What no state model can do</b> is make a <em>forgotten</em> read path fail
  * closed. A registry and a per-entity flag are equally silent when a new endpoint
@@ -92,10 +153,45 @@ public class FrozenContentService {
 	 */
 	public static final int MAX_FROZEN = 5_000;
 
+	/**
+	 * How many refreshes in a row may fail before the last loaded set is dropped and
+	 * every guard goes back to answering 503.
+	 *
+	 * <p>The number is a staleness budget expressed in refresh intervals rather than
+	 * in seconds, because the interval is the operator's knob and the two have to move
+	 * together: at the 30s default this is five minutes, and an install that polls
+	 * every 5s gets fifty seconds of tolerance from the same constant. Ten is chosen
+	 * to be comfortably longer than a Mongo failover or a rolling restart — the
+	 * failures this is meant to ride out — and comfortably shorter than a shift, so a
+	 * registry that is genuinely broken stops the product while somebody is still
+	 * around to notice.
+	 */
+	public static final int MAX_REFRESH_FAILURES = 10;
+
 	private final FrozenContentRepository repository;
 	private final AuditService audit;
+	/**
+	 * Resolves the bytes a target owns, so no caller has to remember to.
+	 *
+	 * <p>Held here rather than asked at each call site because forgetting is exactly
+	 * what happened: the admin hand-freeze passed {@code List.of()} and therefore
+	 * froze a row and not one byte. A collaborator on this class makes the complete
+	 * freeze the only freeze there is.
+	 */
+	private final FrozenObjectKeys objectKeys;
 
 	private volatile Snapshot snapshot = Snapshot.unknown();
+
+	/**
+	 * Consecutive failed refreshes since the last good one.
+	 *
+	 * <p>Atomic rather than volatile-int because {@link #degrade} increments it, and
+	 * two callers can be in there at once: the scheduled poll and the refresh at the
+	 * end of a {@link #freeze} both run this method. A lost increment would silently
+	 * extend the staleness budget past its bound, which is the one thing the counter
+	 * exists to prevent.
+	 */
+	private final AtomicInteger consecutiveFailures = new AtomicInteger();
 
 	/**
 	 * The active set, as one immutable value.
@@ -105,14 +201,20 @@ public class FrozenContentService {
 	 * object keys of another, which is the interleaving that would let a freeze be
 	 * half applied for the duration of a request.
 	 *
-	 * @param loaded whether this snapshot reflects a successful read. {@code false}
-	 *               is not "nothing is frozen" — it is "the question cannot be
-	 *               answered", and every guard turns it into a 503.
+	 * @param loaded   whether this snapshot reflects a successful read. {@code false}
+	 *                 is not "nothing is frozen" — it is "the question cannot be
+	 *                 answered", and every guard turns it into a 503.
+	 * @param loadedAt when that read happened, or {@code null} when there has not been
+	 *                 one. Carried so the ERROR logged on every failed refresh can name
+	 *                 how old the set being served is — "the registry is unreachable"
+	 *                 is not actionable on its own, and "and we are serving the set
+	 *                 from 14:02" is
 	 */
-	private record Snapshot(boolean loaded, Map<FrozenTargetType, Set<String>> ids) {
+	private record Snapshot(boolean loaded, Map<FrozenTargetType, Set<String>> ids,
+			Instant loadedAt) {
 
 		static Snapshot unknown() {
-			return new Snapshot(false, Map.of());
+			return new Snapshot(false, Map.of(), null);
 		}
 
 		Set<String> of(FrozenTargetType type) {
@@ -141,11 +243,16 @@ public class FrozenContentService {
 			if (active.size() > MAX_FROZEN) {
 				// Deliberately NOT truncated. A partial set answers "not frozen" for
 				// every row past the cap, which is the one answer this class must
-				// never give by accident.
-				log.error("The frozen-content registry holds {} active rows, above the {} cap — "
-						+ "refusing to load a partial set. Content reads will fail closed until an "
-						+ "administrator resolves this.", active.size(), MAX_FROZEN);
-				snapshot = Snapshot.unknown();
+				// never give by accident. Routed through degrade() rather than
+				// straight to unknown() because the honest description of the state
+				// is the same as an unreadable registry's — "this read produced no
+				// usable set" — and it is a state an operator has to be given time to
+				// act on rather than one that takes the product down at the instant a
+				// runaway trigger crosses the line.
+				degrade(String.format(
+						"the registry holds %d active rows, above the %d cap, and a truncated set "
+								+ "would answer \"not frozen\" for every row past it",
+						active.size(), MAX_FROZEN));
 				return;
 			}
 			Map<FrozenTargetType, Set<String>> ids = new EnumMap<>(FrozenTargetType.class);
@@ -155,19 +262,97 @@ public class FrozenContentService {
 				}
 				ids.computeIfAbsent(row.getTargetType(), key -> new HashSet<>()).add(row.getTargetId());
 			}
-			snapshot = new Snapshot(true, Map.copyOf(ids));
+			snapshot = new Snapshot(true, Map.copyOf(ids), Instant.now());
+			// Reset after the volatile write, never before: a reader that saw the
+			// counter at zero while the old snapshot was still published would be
+			// told the set is fresh when it is not.
+			int recovered = consecutiveFailures.getAndSet(0);
+			if (recovered > 0) {
+				log.error("The frozen-content registry is readable again after {} failed refresh(es)",
+						recovered);
+			}
 			if (!active.isEmpty()) {
 				log.warn("Frozen-content registry loaded: {} active freeze(s)", active.size());
 			}
 		}
 		catch (RuntimeException ex) {
-			// Fail closed. An unreachable registry is indistinguishable from an empty
-			// one only if you are willing to guess, and the cost of guessing wrong
-			// here is serving material a freeze exists to withhold.
-			log.error("Could not load the frozen-content registry — content reads will fail closed: {}",
-					ex.toString());
-			snapshot = Snapshot.unknown();
+			degrade("the registry could not be read: " + ex);
 		}
+	}
+
+	/**
+	 * What a refresh that produced no usable set does to the one already published.
+	 *
+	 * <p>Three outcomes, and the split between them is the whole point — see this
+	 * class's javadoc for the argument.
+	 *
+	 * <ol>
+	 *   <li><b>Nothing loaded yet.</b> Stay unknown; every guard answers 503. There is
+	 *       no set to keep and "nothing is frozen" would be a guess.</li>
+	 *   <li><b>Within the staleness budget.</b> Keep the last loaded set. It is almost
+	 *       certainly still correct, and dropping it would trade a hypothetical miss
+	 *       for a certain product-wide outage.</li>
+	 *   <li><b>Budget exhausted.</b> Drop it. Past
+	 *       {@link #MAX_REFRESH_FAILURES} intervals the set is no longer "a moment
+	 *       old", and a mechanism that keeps serving from a snapshot it can no longer
+	 *       confirm has stopped being a guard.</li>
+	 * </ol>
+	 *
+	 * <p>Every branch logs at {@code ERROR}, including the ones that keep working. A
+	 * degraded freeze registry is not a warning: nothing else in the product will
+	 * report it, the symptom is invisible by construction, and the failure it leads to
+	 * is the one this package exists to prevent.
+	 */
+	private void degrade(String cause) {
+		int failures = consecutiveFailures.incrementAndGet();
+		Snapshot current = snapshot;
+		if (!current.loaded()) {
+			log.error("Could not load the frozen-content registry and there is no earlier set to "
+					+ "fall back on — content reads fail closed. Consecutive failures: {}. Cause: {}",
+					failures, cause);
+			return;
+		}
+		if (failures >= MAX_REFRESH_FAILURES) {
+			log.error("The frozen-content registry has failed {} consecutive refreshes since the "
+					+ "last good read at {} — dropping the stale set; content reads now fail closed "
+					+ "until it can be read again. Cause: {}",
+					failures, current.loadedAt(), cause);
+			snapshot = Snapshot.unknown();
+			return;
+		}
+		log.error("Refresh of the frozen-content registry failed ({} of {} before the set is "
+				+ "dropped) — still enforcing the set loaded at {}, so a freeze raised since then "
+				+ "is NOT enforced on this instance. Cause: {}",
+				failures, MAX_REFRESH_FAILURES, current.loadedAt(), cause);
+	}
+
+	/**
+	 * Re-reads the registry on a timer, so an instance learns about a freeze it did
+	 * not perform.
+	 *
+	 * <p>This is the <b>only</b> thing that makes the feature work behind more than
+	 * one replica, and the interval is the exposure window — see this class's
+	 * javadoc, which states that bound rather than implying a freeze is instant. The
+	 * shape follows {@code MediaGarbageCollector}, {@code AuditRetentionJob} and
+	 * {@code WeeklyDigestJob}; {@code @EnableScheduling} is already on the
+	 * application class.
+	 *
+	 * <p>{@code fixedDelay} and not {@code fixedRate}: a slow or failing read must
+	 * not queue a second one behind it, because the recovery path for a database
+	 * that has just come back is the one where a pile-up would hurt. The initial
+	 * delay is one interval so the first load stays
+	 * {@link ApplicationReadyEvent}'s — a scheduled read firing during context
+	 * refresh is what that listener exists to avoid.
+	 *
+	 * <p>Separate from {@link #refresh} rather than a second annotation on it so the
+	 * scheduling decision has somewhere to be explained, and so a test can find the
+	 * poll by its annotation instead of trusting that one is configured.
+	 */
+	@Scheduled(
+			fixedDelayString = "${hinata.moderation.freeze-refresh-interval:30s}",
+			initialDelayString = "${hinata.moderation.freeze-refresh-interval:30s}")
+	public void refreshPeriodically() {
+		refresh();
 	}
 
 	// --- asking ----------------------------------------------------------------
@@ -209,6 +394,61 @@ public class FrozenContentService {
 		if (isFrozenObject(objectKey)) {
 			throw ApiException.notFound("media");
 		}
+	}
+
+	/**
+	 * Refuses a <em>destructive</em> operation on frozen content.
+	 *
+	 * <p>The mirror image of {@link #assertReadable}, and deliberately the opposite
+	 * shape in both respects. It says <b>409 and not 404</b>, because the actor here
+	 * is an administrator or a project lead performing a delete they are otherwise
+	 * entitled to, and answering "no such issue" to someone who is looking straight
+	 * at it produces a bug report rather than a decision. And it says <b>why</b>,
+	 * where a read says nothing: this is the paragraph in {@link FrozenContent}'s
+	 * javadoc — "a row here is what lets the deletion and garbage-collection paths
+	 * refuse" — and a refusal nobody can explain is one somebody works around by
+	 * deleting the parent instead.
+	 *
+	 * <p>The message names preservation pending review and not a match, a category
+	 * or a reporter. That is the same line {@code AdminModerationController} draws:
+	 * an operator needs to know the content is held, and nobody needs to be told
+	 * what it was held for.
+	 *
+	 * <p>Refuse rather than skip, which is the whole of the harm model here. A
+	 * cascade that quietly stepped over the frozen row would delete everything
+	 * around it and leave a comment with no issue, an attachment with no ticket —
+	 * evidence that is technically present and practically unusable. The one
+	 * exception is {@code StorageService.delete}, which skips: it is called from
+	 * three best-effort housekeeping paths that must not turn a nightly job into a
+	 * failed one, and it is the last line of defence rather than the first.
+	 *
+	 * @throws ApiException 409 when [id] of [type] is frozen
+	 */
+	public void assertNotFrozen(FrozenTargetType type, String id) {
+		if (isFrozen(type, id)) {
+			throw new ApiException(HttpStatus.CONFLICT, "error.moderation.frozenPreserved");
+		}
+	}
+
+	/** As {@link #assertNotFrozen}, for a set of candidates of one kind. */
+	public void assertNoneFrozen(FrozenTargetType type, Collection<String> ids) {
+		if (ids == null || ids.isEmpty()) {
+			return;
+		}
+		Set<String> active = require().of(type);
+		if (active.isEmpty()) {
+			return;
+		}
+		for (String id : ids) {
+			if (id != null && active.contains(id)) {
+				throw new ApiException(HttpStatus.CONFLICT, "error.moderation.frozenPreserved");
+			}
+		}
+	}
+
+	/** As {@link #assertNotFrozen}, for stored bytes. */
+	public void assertNoObjectFrozen(Collection<String> objectKeys) {
+		assertNoneFrozen(FrozenTargetType.OBJECT, objectKeys);
 	}
 
 	/**
@@ -260,9 +500,13 @@ public class FrozenContentService {
 	/**
 	 * What to freeze.
 	 *
-	 * @param objectKeys every stored object the target owns. Each becomes its own
-	 *                   {@link FrozenTargetType#OBJECT} row, because the byte guard
-	 *                   is a set lookup on the key and cannot walk back to an entity
+	 * @param objectKeys extra stored objects to freeze alongside the ones
+	 *                   {@link FrozenObjectKeys} finds on its own. Normally empty:
+	 *                   {@link #freeze} resolves the target's bytes itself, precisely
+	 *                   so that a caller passing nothing still freezes everything.
+	 *                   Each key becomes its own {@link FrozenTargetType#OBJECT} row,
+	 *                   because the byte guard is a set lookup on the key and cannot
+	 *                   walk back to an entity
 	 * @param actor      the admin who did it by hand, or {@code null} when a trigger
 	 *                   raised it
 	 */
@@ -291,23 +535,41 @@ public class FrozenContentService {
 	 */
 	public FrozenContent freeze(Request request) {
 		Instant now = Instant.now();
+		// Resolved here rather than trusted from the caller. Both halves matter: the
+		// union means a caller that already knows a key (the report path, holding the
+		// entity) loses nothing, and the resolution means a caller that knows none
+		// (the admin hand-freeze) no longer freezes a row and zero bytes.
+		List<String> owned = ownedKeys(request);
 		FrozenContent row;
 		// The refresh is in a finally because a half-written freeze is the worst of
 		// the three outcomes: the target row is already persisted, so the database
 		// says frozen, while the in-memory snapshot every read path consults still
 		// says readable — and the caller swallows the failure. Refreshing whatever
 		// did get written keeps the two from disagreeing until the next restart.
+		//
+		// If THIS refresh is itself the one that fails, degrade() keeps the previous
+		// set and the freeze just written is not enforced here until a later poll
+		// succeeds. That is the window named in the class javadoc, and it is the same
+		// window every other replica is already in — which is why the freeze goes to
+		// the database first and the snapshot second.
 		try {
-			row = repository.findByTargetTypeAndTargetId(
+			FrozenContent target = repository.findByTargetTypeAndTargetId(
 							request.targetType(), request.targetId())
 					.filter(FrozenContent::active)
-					.orElseGet(() -> upsert(request, now));
-			for (String objectKey : keys(request.objectKeys())) {
+					.orElse(null);
+			// An already-standing freeze still has its object list rewritten. An
+			// operator who freezes the same issue a second time is usually doing it
+			// *because* something was missed — an attachment added since, or a body
+			// edited to embed an image — and returning the old row unchanged would
+			// make the one gesture that fixes that a no-op.
+			row = target == null ? upsert(request, owned, now) : widen(target, owned, now);
+			for (String objectKey : owned) {
 				repository.findByTargetTypeAndTargetId(FrozenTargetType.OBJECT, objectKey)
 						.filter(FrozenContent::active)
 						.orElseGet(() -> upsert(new Request(FrozenTargetType.OBJECT, objectKey,
 								request.targetId(), List.of(), request.category(), request.reportId(),
-								request.reporterId(), request.actor(), request.reason()), now));
+								request.reporterId(), request.actor(), request.reason()),
+								List.of(), now));
 			}
 		}
 		finally {
@@ -320,8 +582,57 @@ public class FrozenContentService {
 				.meta("category", request.category() == null ? null : request.category().name())
 				.meta("reportId", request.reportId())
 				.meta("reason", request.reason())
+				.meta("objectKeys", String.valueOf(owned.size()))
+				// The DSA Art. 17 obligation, in the log an operator answers from. Null
+				// today for every freeze, because nothing in this product issues the
+				// statement — see FrozenContent.statementIssuedAt. Carried as null
+				// rather than omitted so the day a notice path exists the log
+				// distinguishes the freezes that got one from the freezes that did not,
+				// including retrospectively.
+				.meta("statementIssuedAt",
+						row.getStatementIssuedAt() == null ? null : row.getStatementIssuedAt().toString())
 				.log();
+		if (row.getStatementIssuedAt() == null) {
+			log.warn("Froze {} {} without a statement of reasons to its author — DSA Art. 17 owes "
+					+ "one and no code path in this product issues it. The freeze row records the "
+					+ "omission; discharging the obligation is an operator action.",
+					request.targetType(), request.targetId());
+		}
 		return row;
+	}
+
+	/**
+	 * Every stored object this freeze covers: what the caller named, plus what the
+	 * target actually owns.
+	 *
+	 * <p>Never throws. {@link FrozenObjectKeys} already swallows its own lookup
+	 * failures, and the argument is the same one step up: a freeze that cannot
+	 * enumerate the bytes still has to reach the row, because a partial restriction
+	 * beats none.
+	 */
+	private List<String> ownedKeys(Request request) {
+		Set<String> all = new LinkedHashSet<>(keys(request.objectKeys()));
+		all.addAll(objectKeys.of(request.targetType(), request.targetId(), request.contextId()));
+		return List.copyOf(all);
+	}
+
+	/**
+	 * Adds newly discovered objects to a freeze that is already standing.
+	 *
+	 * <p>Only ever adds. Dropping a key that a re-resolution no longer finds — an
+	 * image removed from the body since — would release bytes the freeze is holding,
+	 * by a path with no note and no audit entry, which is precisely what
+	 * {@link #unfreeze} exists to be the only way to do.
+	 */
+	private FrozenContent widen(FrozenContent row, List<String> owned, Instant now) {
+		Set<String> merged = new LinkedHashSet<>(keys(row.getObjectKeys()));
+		if (!merged.addAll(owned)) {
+			return row;
+		}
+		row.setObjectKeys(List.copyOf(merged));
+		log.warn("Widened the standing freeze on {} {} to {} stored object(s) at {}",
+				row.getTargetType(), row.getTargetId(), merged.size(), now);
+		return repository.save(row);
 	}
 
 	/**
@@ -332,7 +643,7 @@ public class FrozenContentService {
 	 * document for the same target would violate it. The previous release stays
 	 * readable in the audit log, which is where the history belongs.
 	 */
-	private FrozenContent upsert(Request request, Instant now) {
+	private FrozenContent upsert(Request request, List<String> owned, Instant now) {
 		FrozenContent row = repository
 				.findByTargetTypeAndTargetId(request.targetType(), request.targetId())
 				.orElseGet(() -> FrozenContent.builder()
@@ -340,7 +651,13 @@ public class FrozenContentService {
 						.targetId(request.targetId())
 						.build());
 		row.setContextId(request.contextId());
-		row.setObjectKeys(keys(request.objectKeys()));
+		row.setObjectKeys(List.copyOf(owned));
+		// Deliberately NOT assigned. FrozenContent.statementIssuedAt records when the
+		// author was given a DSA Art. 17 statement of reasons, and this product issues
+		// none — so the honest record is no data, not a constant claiming there is
+		// some. A revived row is cleared for the same reason the release fields below
+		// are: it is a new restriction and it has had no notice of its own.
+		row.setStatementIssuedAt(null);
 		row.setCategory(request.category());
 		row.setReportId(request.reportId());
 		row.setReporterId(request.reporterId());

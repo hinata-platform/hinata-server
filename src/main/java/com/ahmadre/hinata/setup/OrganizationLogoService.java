@@ -95,8 +95,14 @@ public class OrganizationLogoService {
 		// it is the highest-reach surface in the product — and putObject below
 		// bypasses the checks the HTTP upload path applies, which leaves this the
 		// only place the bytes are looked at at all.
-		ModerationVerdict verdict = moderation.checkImage(png, "image/png",
-				file.getOriginalFilename(), ModerationSurface.ORGANISATION_LOGO);
+		//
+		// Both versions, for the reason AvatarService gives: the classifier judges the
+		// normalised PNG that will be served, the known-illegal hash tier judges the
+		// bytes that arrived. Hashing the server's own re-encode is hashing a file no
+		// programme has ever adjudicated, which made the check unable to match here.
+		ModerationVerdict verdict = moderation.checkImage(uploaded(file), contentType,
+				png, "image/png", file.getOriginalFilename(),
+				ModerationSurface.ORGANISATION_LOGO);
 		// The bucket stays private; bytes are served back through the /meta/logo
 		// proxy, so storage credentials never leave the server.
 		storage.putObject(LOGO_OBJECT_KEY, png, "image/png");
@@ -109,6 +115,20 @@ public class OrganizationLogoService {
 		current.getGeneral().setLogoUrl(url);
 		settings.save(current);
 		return url;
+	}
+
+	/**
+	 * The bytes exactly as they arrived, for the hash tier. Empty rather than
+	 * throwing, for the reason {@code AvatarService.uploaded} gives.
+	 */
+	private byte[] uploaded(MultipartFile file) {
+		try {
+			return file.getBytes();
+		}
+		catch (java.io.IOException ex) {
+			log.warn("Could not re-read the uploaded logo for hashing: {}", ex.toString());
+			return new byte[0];
+		}
 	}
 
 	/**

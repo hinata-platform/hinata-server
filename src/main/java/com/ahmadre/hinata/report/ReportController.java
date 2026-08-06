@@ -3,6 +3,7 @@ package com.ahmadre.hinata.report;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.moderation.freeze.FrozenIssues;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.timetracking.WorkItem;
@@ -45,6 +46,7 @@ public class ReportController {
 	private final MongoTemplate mongo;
 	private final CurrentUser currentUser;
 	private final ProjectService projects;
+	private final FrozenIssues frozenIssues;
 
 	@GetMapping("/issues-by-state")
 	public Map<String, Long> issuesByState(@RequestParam String projectId) {
@@ -74,8 +76,12 @@ public class ReportController {
 		assertAccess(projectId);
 		int range = Math.min(days, 180);
 		LocalDate today = LocalDate.now(ZoneOffset.UTC);
-		List<Issue> issues = mongo.find(
-				Query.query(Criteria.where("projectId").is(projectId)), Issue.class);
+		// Counts only — no title reaches the response — but a frozen issue still
+		// inflates every bar of the trend, and the same exclusion that keeps the issue
+		// list honest costs one call here. Scoped for consistency with
+		// SearchService.counts rather than because a chart leaks.
+		List<Issue> issues = mongo.find(frozenIssues.scoped(
+				Query.query(Criteria.where("projectId").is(projectId))), Issue.class);
 		return today.minusDays(range - 1).datesUntil(today.plusDays(1))
 				.map(day -> new TrendPoint(day,
 						issues.stream().filter(i -> isOn(i.getCreatedAt(), day)).count(),
@@ -138,8 +144,8 @@ public class ReportController {
 	}
 
 	private Map<String, Long> countBy(String projectId, java.util.function.Function<Issue, String> classifier) {
-		List<Issue> issues = mongo.find(
-				Query.query(Criteria.where("projectId").is(projectId)), Issue.class);
+		List<Issue> issues = mongo.find(frozenIssues.scoped(
+				Query.query(Criteria.where("projectId").is(projectId))), Issue.class);
 		Map<String, Long> result = new LinkedHashMap<>();
 		issues.forEach(issue -> result.merge(classifier.apply(issue), 1L, Long::sum));
 		return result;

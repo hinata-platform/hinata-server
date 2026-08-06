@@ -72,7 +72,9 @@ class ReportAccessTest {
 		currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(member);
 
-		controller = new ReportController(mongo, currentUser, projects);
+		controller = new ReportController(mongo, currentUser, projects,
+				new com.ahmadre.hinata.moderation.freeze.FrozenIssues(
+						com.ahmadre.hinata.moderation.freeze.FreezeFixtures.nothingFrozen()));
 	}
 
 	// --- the guard ------------------------------------------------------------

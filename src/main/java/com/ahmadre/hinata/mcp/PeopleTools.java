@@ -4,7 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.mcp.McpViews.PageResult;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.user.User;
-import com.ahmadre.hinata.user.UserRepository;
+import com.ahmadre.hinata.user.UserDirectoryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
@@ -14,7 +14,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.regex.Pattern;
 
 /**
  * Read-only MCP tools over the user directory. Gates on {@code users:read} and
@@ -29,7 +28,9 @@ public class PeopleTools {
 
 	private final ScopeGuard scopeGuard;
 	private final CurrentUser currentUser;
-	private final UserRepository users;
+	// The same collaborator the app's directory endpoints use, so this tool cannot
+	// answer a question the app would not — including about a frozen account.
+	private final UserDirectoryService directory;
 
 	@McpTool(name = "search_users", title = "Search users",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
@@ -42,12 +43,11 @@ public class PeopleTools {
 			@McpToolParam(required = false, description = "Page size, max 100 (default 25)") Integer size) {
 		scopeGuard.require(Scopes.USERS_READ);
 		currentUser.require();
-		String regex = Pattern.quote(query == null ? "" : query.trim());
 		int pageIndex = page == null || page < 0 ? 0 : page;
 		int pageSize = size == null || size <= 0 ? 25 : Math.min(size, 100);
 		Pageable pageable = PageRequest.of(pageIndex, pageSize,
 				Sort.by(Sort.Direction.ASC, "displayName"));
-		return PageResult.of(users.searchActive(regex, pageable), PersonView::of);
+		return PageResult.of(directory.search(query, pageable), PersonView::of);
 	}
 
 	@McpTool(name = "get_me", title = "Who am I",

@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.moderation.freeze.FrozenContent;
 import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
 import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
@@ -172,23 +173,46 @@ public class AdminModerationController {
 	 */
 	public record FreezeResponse(String id, FrozenTargetType targetType, String targetId,
 			ModerationCategory category, String reportId, String reporterId, Instant frozenAt,
-			boolean statementWithheld) {
+			Instant statementIssuedAt) {
 
 		static FreezeResponse of(FrozenContent row) {
 			return new FreezeResponse(row.getId(), row.getTargetType(), row.getTargetId(),
 					row.getCategory(), row.getReportId(), row.getReporterId(), row.getFrozenAt(),
-					row.isStatementWithheld());
+					row.getStatementIssuedAt());
 		}
 	}
 
 	/**
 	 * Freezes a target by hand — the path for content an authority named directly,
 	 * or that a moderator recognised from a report on something else.
+	 *
+	 * <p>The empty object-key list is not a shortcut and used to be a hole. It said
+	 * "this freeze covers no stored bytes", which made a hand-freeze of an
+	 * {@code ATTACHMENT} or a {@code USER} a complete no-op and left every attachment
+	 * of a hand-frozen issue downloadable by anyone holding the URL. The keys are now
+	 * resolved inside {@code FrozenContentService.freeze}, from the target, by the
+	 * same {@code FrozenObjectKeys} the report-triggered path uses — so the two ways
+	 * a freeze is raised cover exactly the same bytes, and neither can be given an
+	 * incomplete list by a caller.
+	 *
+	 * <p>{@code contextId} still matters and is still the caller's to supply: an
+	 * attachment is a subdocument of its issue and cannot be located by id alone.
+	 * <b>For an {@code ATTACHMENT} it is required, and its absence is a 400 rather
+	 * than a warning.</b> {@code FrozenObjectKeys.ofAttachment} cannot find the file
+	 * without it, so the freeze would write a row, return 200, appear in the queue and
+	 * protect not one byte — the exact "wired on paper, dead in practice" shape this
+	 * endpoint was fixed for once already. A refusal the operator can act on beats a
+	 * success they have no reason to doubt; every other kind is locatable by id alone
+	 * and is unaffected.
 	 */
 	@Operation(summary = "Freeze content: preserved, and unreachable to everyone including admins")
 	@PostMapping("/freeze")
 	public FreezeResponse freeze(@RequestBody @Valid FreezeRequest request) {
 		User admin = currentUser.require();
+		if (request.targetType() == FrozenTargetType.ATTACHMENT
+				&& (request.contextId() == null || request.contextId().isBlank())) {
+			throw ApiException.badRequest("error.moderation.freezeContextRequired");
+		}
 		return FreezeResponse.of(frozen.freeze(new FrozenContentService.Request(
 				request.targetType(), request.targetId(), request.contextId(), List.of(),
 				ModerationCategory.SEXUAL_MINORS, null, null, admin,

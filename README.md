@@ -74,6 +74,13 @@
 - 🧱 Hardened headers (HSTS, CSP, no-referrer), **localized** stable JSON errors without stack traces, regex-escaped search input
 - 📎 Content-type &amp; size-validated uploads with randomized S3 object keys, presigned downloads
 - 🙈 Secrets are write-only in the admin API (never echoed back)
+- 🧹 **Content moderation** for user-generated text, images and uploads, with in-app reporting, user blocking and a moderator queue
+
+> **If you run a Hinata server, read [OPERATORS.md](OPERATORS.md).** The obligations
+> around hosted content attach to whoever does the hosting — that is you, not this
+> project. It covers what is switched on by default (and what is not), how to turn
+> on image classification and verify it is actually running, and what to do when
+> the escalation webhook fires.
 
 ---
 

@@ -4,6 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueLinkGraphService;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.moderation.freeze.FrozenIssues;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.User;
@@ -33,6 +34,7 @@ public class GanttController {
 	private final IssueRepository issues;
 	private final ProjectService projects;
 	private final IssueLinkGraphService graph;
+	private final FrozenIssues frozenIssues;
 	private final CurrentUser currentUser;
 
 	/**
@@ -54,7 +56,11 @@ public class GanttController {
 		User user = currentUser.require();
 		Project project = projects.get(projectId);
 		projects.assertMember(project, user);
-		List<Issue> scheduled = issues.findScheduled(projectId);
+		// findScheduled is a derived @Query, so this view inherits none of
+		// IssueService.search's filters — a frozen issue's title and readable id were
+		// rendered on its bar, and its id appeared in the connector graph below.
+		// Filtered once, here, so both halves of the response see the same set.
+		List<Issue> scheduled = frozenIssues.readable(issues.findScheduled(projectId));
 		return new GanttView(scheduled.stream().map(issue -> toTask(issue, project)).toList(),
 				graph.among(scheduled));
 	}

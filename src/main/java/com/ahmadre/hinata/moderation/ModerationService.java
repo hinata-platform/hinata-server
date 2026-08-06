@@ -192,11 +192,43 @@ public class ModerationService {
 	 */
 	public ModerationVerdict checkImage(byte[] data, String contentType, String fileName,
 			ModerationSurface surface) {
-		Judgement judgement = judgeImage(data, contentType, fileName, surface);
+		return checkImage(data, contentType, data, contentType, fileName, surface);
+	}
+
+	/**
+	 * As {@link #checkImage(byte[], String, String, ModerationSurface)}, for the two
+	 * surfaces that <b>re-encode before storing</b>: the hash tier judges
+	 * {@code uploaded}, the classifiers judge {@code stored}.
+	 *
+	 * <p>Avatars are recompressed to JPEG and the organisation logo is normalised to
+	 * PNG, and both used to hand the re-encoded result to the whole pipeline. For a
+	 * classifier that is right — the stored image is what every colleague will
+	 * actually see, and it is the version certain to be a decodable raster. For the
+	 * hash tier it is wrong in a way that silently disables it: an exact-hash
+	 * programme matches a byte-for-byte digest of a known file, and a JPEG this
+	 * server just re-encoded is byte-for-byte nothing at all. The check ran, cost a
+	 * metered call, and could not have matched on those two surfaces however many
+	 * known files were uploaded. Perceptual providers were unaffected, which is
+	 * exactly why nobody would have noticed.
+	 *
+	 * <p>Two arrays rather than a second call, because the tier is a network call to
+	 * a metered external programme — {@link #judgeImage} already refuses to run it
+	 * twice per upload for that reason, and adding a separate "check the original"
+	 * entry point would have reintroduced precisely that cost.
+	 *
+	 * @throws ModerationException when the file is refused
+	 */
+	public ModerationVerdict checkImage(byte[] uploaded, String uploadedType, byte[] stored,
+			String storedType, String fileName, ModerationSurface surface) {
+		Judgement judgement =
+				judgeImage(uploaded, uploadedType, stored, storedType, fileName, surface);
 		ModerationVerdict verdict = judgement.verdict();
 		if (verdict.isBlocking()) {
 			if (!judgement.recorded()) {
-				recorder.record(verdict, surface, refusal(fileName), data);
+				// The stored bytes, matching what the classifiers judged. A refusal on
+				// this path is a classifier refusal; the hash path records its own row,
+				// with the uploaded bytes, inside recordKnownIllegal.
+				recorder.record(verdict, surface, refusal(fileName), stored);
 			}
 			throw ModerationException.blockedFile(verdict, surface, fileName);
 		}
@@ -276,7 +308,7 @@ public class ModerationService {
 	 * is no verdict that honestly represents "the mandatory check did not happen".
 	 */
 	public ModerationVerdict assessImage(byte[] data, String contentType, ModerationSurface surface) {
-		return judgeImage(data, contentType, null, surface).verdict();
+		return judgeImage(data, contentType, data, contentType, null, surface).verdict();
 	}
 
 	/**
@@ -288,10 +320,17 @@ public class ModerationService {
 	 * for a call-graph shape. The consequence — that neither entry point can skip
 	 * it — is the whole point: a check that only the enforcing caller runs is a
 	 * check any future non-enforcing caller silently walks around.
+	 *
+	 * @param uploaded the bytes as they arrived, which is what the hash tier has to
+	 *                 see; equal to {@code stored} for every caller that does not
+	 *                 re-encode
+	 * @param stored   the bytes that will be kept, which is what a classifier should
+	 *                 score — it is what readers will see, and it is the version
+	 *                 certain to be a decodable raster
 	 */
-	private Judgement judgeImage(byte[] data, String contentType, String fileName,
-			ModerationSurface surface) {
-		if (data == null || data.length == 0) {
+	private Judgement judgeImage(byte[] uploaded, String uploadedType, byte[] stored,
+			String storedType, String fileName, ModerationSurface surface) {
+		if (stored == null || stored.length == 0) {
 			return Judgement.of(ModerationVerdict.disabled());
 		}
 		// Before the classifiers, and before the imageEnabled switch. A hash match is
@@ -300,10 +339,21 @@ public class ModerationService {
 		// not "accept material an accredited body has already adjudicated". The
 		// category is non-overridable, so the switch that could disable this is one
 		// the policy already refuses to honour.
+		//
+		// And on the UPLOADED bytes, which for every caller but two are the same array.
+		// For the two that re-encode — the avatar and the organisation logo — an exact
+		// hash of the server's own JPEG could never have matched anything, so this
+		// check was running and unable to succeed on exactly the surfaces whose images
+		// are seen most widely.
+		byte[] toHash = uploaded == null || uploaded.length == 0 ? stored : uploaded;
+		String hashType = uploaded == null || uploaded.length == 0 ? storedType : uploadedType;
 		Optional<KnownIllegalHashProvider.HashMatch> illegal =
-				matchKnownIllegal(data, contentType, surface);
+				matchKnownIllegal(toHash, hashType, surface);
 		if (illegal.isPresent()) {
-			return recordKnownIllegal(illegal.get(), data, fileName, surface);
+			// The uploaded bytes, not the stored ones: the row exists so that "the same
+			// file was retried forty times" is one row, and the digest that identifies
+			// the file is the one of what arrived.
+			return recordKnownIllegal(illegal.get(), toHash, fileName, surface);
 		}
 		if (!policy.imageEnabled()) {
 			return Judgement.of(ModerationVerdict.disabled());
@@ -312,11 +362,11 @@ public class ModerationService {
 		boolean degraded = false;
 		boolean ran = false;
 		for (ImageModerator moderator : imageModerators) {
-			if (!moderator.supports(contentType) || !moderator.available()) {
+			if (!moderator.supports(storedType) || !moderator.available()) {
 				continue;
 			}
 			try {
-				moderator.score(data, contentType)
+				moderator.score(stored, storedType)
 						.forEach((category, score) -> scores.merge(category, score, Math::max));
 				ran = true;
 			}

@@ -4,6 +4,7 @@ import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.git.GitDevInfo;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.moderation.freeze.FrozenIssues;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.team.Team;
@@ -47,6 +48,7 @@ public class DashboardService {
 	private final ProjectService projects;
 	private final UserRepository users;
 	private final MongoTemplate mongo;
+	private final FrozenIssues frozenIssues;
 	private final TeamService teamService;
 	private final DashboardPrefsRepository prefsRepo;
 
@@ -234,7 +236,10 @@ public class DashboardService {
 				Criteria.where("projectId").in(projectIds),
 				Criteria.where("resolvedAt").is(null),
 				Criteria.where("dueDate").lt(endOfToday)));
-		return mongo.find(query, Issue.class).stream()
+		// The dashboard renders these as full Issue entities — title, description and
+		// all — so this is a serve path and not a count. Scoped in the query so the
+		// KPI above the card counts what the card can actually show.
+		return mongo.find(frozenIssues.scoped(query), Issue.class).stream()
 				.sorted(Comparator.comparing(Issue::getPriority))
 				.toList();
 	}
@@ -245,11 +250,15 @@ public class DashboardService {
 		}
 		List<String> resolvedStates = visible.stream()
 				.flatMap(p -> p.getResolvedStates().stream()).distinct().toList();
-		long total = mongo.count(Query.query(Criteria.where("projectId").in(projectIds)), Issue.class);
-		long done = mongo.count(Query.query(Criteria.where("projectId").in(projectIds)
-				.and("state").in(resolvedStates)), Issue.class);
-		long backlog = mongo.count(Query.query(Criteria.where("projectId").in(projectIds)
-				.and("state").in("Backlog", "Open")), Issue.class);
+		long total = mongo.count(
+				frozenIssues.scoped(Query.query(Criteria.where("projectId").in(projectIds))),
+				Issue.class);
+		long done = mongo.count(frozenIssues.scoped(Query.query(
+				Criteria.where("projectId").in(projectIds).and("state").in(resolvedStates))),
+				Issue.class);
+		long backlog = mongo.count(frozenIssues.scoped(Query.query(
+				Criteria.where("projectId").in(projectIds).and("state").in("Backlog", "Open"))),
+				Issue.class);
 		return new ProjectCompletion(done, Math.max(0, total - done - backlog), backlog, total);
 	}
 
@@ -263,8 +272,9 @@ public class DashboardService {
 			return List.of();
 		}
 		Instant since = Instant.now().minus(30, ChronoUnit.DAYS);
-		List<Issue> resolved = mongo.find(Query.query(Criteria.where("projectId").in(projectIds)
-				.and("resolvedAt").gte(since).and("assigneeId").ne(null)), Issue.class);
+		List<Issue> resolved = mongo.find(frozenIssues.scoped(
+				Query.query(Criteria.where("projectId").in(projectIds)
+						.and("resolvedAt").gte(since).and("assigneeId").ne(null))), Issue.class);
 		Map<String, Long> points = resolved.stream()
 				.filter(i -> teamUsers == null || teamUsers.contains(i.getAssigneeId()))
 				.collect(Collectors.groupingBy(Issue::getAssigneeId, Collectors.counting()));
@@ -357,7 +367,8 @@ public class DashboardService {
 	private BoardSummary sprintBoard(AgileBoard board, Sprint sprint,
 			Map<String, Set<String>> resolvedByProject) {
 		List<Issue> inSprint = mongo.find(
-				Query.query(Criteria.where("sprintId").is(sprint.getId())), Issue.class);
+				frozenIssues.scoped(Query.query(Criteria.where("sprintId").is(sprint.getId()))),
+				Issue.class);
 		int pointsTotal = 0;
 		int points = 0;
 		int issuesDone = 0;
@@ -394,7 +405,8 @@ public class DashboardService {
 			boardProjects = visibleIds;
 		}
 		List<Issue> onBoard = mongo.find(
-				Query.query(Criteria.where("projectId").in(boardProjects)), Issue.class);
+				frozenIssues.scoped(Query.query(Criteria.where("projectId").in(boardProjects))),
+				Issue.class);
 		int issuesDone = 0;
 		LinkedHashSet<String> members = new LinkedHashSet<>();
 		for (Issue issue : onBoard) {

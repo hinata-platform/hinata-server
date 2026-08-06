@@ -5,6 +5,8 @@ import com.ahmadre.hinata.moderation.ModerationRecorder;
 import com.ahmadre.hinata.moderation.ModerationService;
 import com.ahmadre.hinata.moderation.ModerationSurface;
 import com.ahmadre.hinata.moderation.ModerationVerdict;
+import com.ahmadre.hinata.moderation.freeze.FrozenContentService;
+import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -61,10 +63,23 @@ public class AvatarService {
 	private final UserRepository users;
 	private final ModerationService moderation;
 	private final ModerationRecorder moderationRecorder;
+	private final FrozenContentService frozen;
 
-	/** Object key for a user's avatar, e.g. {@code avatars/{userId}.jpg}. */
-	private String objectKey(String userId) {
+	/**
+	 * Object key for a user's avatar, e.g. {@code avatars/{userId}.jpg}.
+	 *
+	 * <p>Static and public because the freeze path has to derive it without this
+	 * service: {@code /api/v1/users/*&#47;avatar} is one of the two unauthenticated
+	 * content routes, so an account's avatar is the one image in the product that is
+	 * served to the open internet, and freezing the account has to reach those bytes.
+	 * The key is deterministic, which is what makes deriving it safe.
+	 */
+	public static String objectKeyFor(String userId) {
 		return AVATAR_PREFIX + userId + ".jpg";
+	}
+
+	private String objectKey(String userId) {
+		return objectKeyFor(userId);
 	}
 
 	/** Compresses + stores [file] as [user]'s avatar in S3 and returns the URL. */
@@ -81,14 +96,17 @@ public class AvatarService {
 		}
 
 		byte[] jpeg = compress(file);
-		// Judged after normalization, not before: the re-encoded JPEG is what every
-		// colleague will actually see next to this person's name in every list,
-		// comment and mention. It is also the only version that is certainly a
-		// decodable raster image, which is what a classifier can answer about.
-		// putObject bypasses every check in StorageService, so this is the only
-		// gate an avatar ever passes.
-		ModerationVerdict verdict = moderation.checkImage(jpeg, "image/jpeg",
-				file.getOriginalFilename(), ModerationSurface.AVATAR);
+		// Both versions, and each tier gets the one it can answer about. The
+		// CLASSIFIER judges the re-encoded JPEG: that is what every colleague will
+		// actually see next to this person's name in every list, comment and mention,
+		// and it is the only version certain to be a decodable raster. The HASH tier
+		// judges the bytes that arrived, because an exact-hash programme matches a
+		// digest of a known file and a JPEG this server just produced is not that
+		// file — passing only the re-encode meant the check ran on every avatar upload
+		// and could not have matched. putObject bypasses every check in
+		// StorageService, so this is the only gate an avatar ever passes.
+		ModerationVerdict verdict = moderation.checkImage(uploaded(file), contentType,
+				jpeg, "image/jpeg", file.getOriginalFilename(), ModerationSurface.AVATAR);
 		storage.putObject(objectKey(user.getId()), jpeg, "image/jpeg");
 		moderationRecorder.record(verdict, ModerationSurface.AVATAR,
 				new ModerationRecorder.Target("user", user.getId(), null, user.getId(),
@@ -106,12 +124,47 @@ public class AvatarService {
 		users.save(user);
 	}
 
-	/** The stored avatar bytes for [userId], or empty when none / unset. */
+	/**
+	 * The stored avatar bytes for [userId], or empty when none / unset.
+	 *
+	 * <p>Answers empty for a frozen account, which is the 404 the route already
+	 * gives for a user with no avatar. {@code GET /api/v1/users/*&#47;avatar} is
+	 * unauthenticated — it is on the {@code permitAll} list because avatars have to
+	 * render in an e-mail — so there is no viewer for any per-viewer rule to be
+	 * parameterised by, and this is the last check before the bytes leave.
+	 *
+	 * <p>Belt and braces with the byte chokepoint: freezing a {@code USER} also
+	 * freezes {@link #objectKeyFor(String)} as its own {@code OBJECT} row, so
+	 * {@code StorageService.getObject} would refuse these bytes anyway. Both exist
+	 * because they fail differently — the object row depends on the freeze having
+	 * resolved keys correctly, this one only on the account id — and for the one
+	 * route in the product that serves user content to the open internet, one guard
+	 * is not a margin.
+	 */
 	public Optional<StorageService.StoredObject> load(String userId) {
-		if (!storage.isConfigured()) {
+		if (!storage.isConfigured() || frozen.isFrozen(FrozenTargetType.USER, userId)) {
 			return Optional.empty();
 		}
 		return storage.getObject(objectKey(userId));
+	}
+
+	/**
+	 * The bytes exactly as they arrived, for the hash tier.
+	 *
+	 * <p>Empty rather than throwing when the part cannot be re-read: the compression
+	 * below has already read it once and will fail loudly if it cannot, and
+	 * {@code judgeImage} falls back to the stored bytes for an empty upload — the
+	 * behaviour this surface had before, rather than a refused avatar because a
+	 * temp file went missing.
+	 */
+	private byte[] uploaded(MultipartFile file) {
+		try {
+			return file.getBytes();
+		}
+		catch (java.io.IOException ex) {
+			log.warn("Could not re-read the uploaded avatar for hashing: {}", ex.toString());
+			return new byte[0];
+		}
 	}
 
 	/** A relative, cache-busted URL the client resolves against its API base. */

@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -49,6 +50,7 @@ class FrozenContentServiceTest {
 
 	private FrozenContentRepository repository;
 	private AuditService audit;
+	private FrozenObjectKeys objectKeys;
 	private FrozenContentService service;
 
 	private final User admin = User.builder().id("u-admin").displayName("Ada")
@@ -58,10 +60,12 @@ class FrozenContentServiceTest {
 	void setUp() {
 		repository = mock(FrozenContentRepository.class);
 		audit = mock(AuditService.class, RETURNS_DEEP_STUBS);
+		objectKeys = mock(FrozenObjectKeys.class);
+		when(objectKeys.of(any(), any(), any())).thenReturn(List.of());
 		when(repository.findByUnfrozenAtIsNull()).thenReturn(List.of());
 		when(repository.findByTargetTypeAndTargetId(any(), any())).thenReturn(Optional.empty());
 		when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
-		service = new FrozenContentService(repository, audit);
+		service = new FrozenContentService(repository, audit, objectKeys);
 	}
 
 	// --- fail closed -----------------------------------------------------------
@@ -73,7 +77,7 @@ class FrozenContentServiceTest {
 	 */
 	@Test
 	void anUnloadedSnapshotRefusesInsteadOfAnsweringNothingIsFrozen() {
-		FrozenContentService cold = new FrozenContentService(repository, audit);
+		FrozenContentService cold = new FrozenContentService(repository, audit, objectKeys);
 
 		assertThatThrownBy(() -> cold.isFrozen(FrozenTargetType.ISSUE, "i-1"))
 				.isInstanceOf(ApiException.class)
@@ -129,6 +133,131 @@ class FrozenContentServiceTest {
 		service.refresh();
 
 		assertThatThrownBy(() -> service.isFrozen(FrozenTargetType.ISSUE, "i-0"))
+				.isInstanceOf(ApiException.class);
+	}
+
+	// --- fail closed, but not at the cost of the product -----------------------
+
+	/**
+	 * A refresh that fails <em>after</em> a good load keeps the last known set.
+	 *
+	 * <p>This is the availability half of the contract and it used to be missing:
+	 * every failed refresh collapsed the snapshot to unknown, so one transient Mongo
+	 * error took the comment feed, the search, the issue list, the board and every
+	 * byte in the product to 503 for everybody, for up to a refresh interval. That
+	 * trades a certain outage for a hypothetical miss — the last loaded set is still
+	 * almost certainly correct, because a freeze is a single-digit event in the life
+	 * of an install and the odds one was raised inside the seconds the error lasted
+	 * are close to zero.
+	 *
+	 * <p>Both halves are asserted, and the second is the one that bites: it is not
+	 * enough that the service still answers, it has to still answer <em>frozen</em>
+	 * for what was frozen. A fallback that kept an empty set would pass an
+	 * "it doesn't throw" assertion while serving exactly the material at issue.
+	 */
+	@Test
+	void aRefreshThatFailsAfterAGoodLoadKeepsTheLastKnownSet() {
+		doReturn(List.of(FreezeFixtures.row(FrozenTargetType.ISSUE, "i-frozen")))
+				.when(repository).findByUnfrozenAtIsNull();
+		service.refresh();
+
+		doThrow(new IllegalStateException("mongo down")).when(repository).findByUnfrozenAtIsNull();
+		service.refresh();
+
+		assertThat(service.isFrozen(FrozenTargetType.ISSUE, "i-frozen"))
+				.as("the set loaded a moment ago is still the best answer available")
+				.isTrue();
+		assertThat(service.isFrozen(FrozenTargetType.ISSUE, "i-other")).isFalse();
+	}
+
+	/**
+	 * But only for a bounded number of intervals. Past the budget the set is no
+	 * longer "a moment old", and a mechanism serving from a snapshot it can no longer
+	 * confirm has stopped being a guard — so it goes back to failing closed.
+	 */
+	@Test
+	void aRegistryThatStaysUnreadableEventuallyFailsClosedAgain() {
+		doReturn(List.of(FreezeFixtures.row(FrozenTargetType.ISSUE, "i-frozen")))
+				.when(repository).findByUnfrozenAtIsNull();
+		service.refresh();
+		doThrow(new IllegalStateException("mongo down")).when(repository).findByUnfrozenAtIsNull();
+
+		for (int attempt = 1; attempt < FrozenContentService.MAX_REFRESH_FAILURES; attempt++) {
+			service.refresh();
+			assertThat(service.isFrozen(FrozenTargetType.ISSUE, "i-frozen"))
+					.as("still inside the staleness budget after %d failure(s)", attempt)
+					.isTrue();
+		}
+		service.refresh();
+
+		assertThatThrownBy(() -> service.isFrozen(FrozenTargetType.ISSUE, "i-frozen"))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> assertThat(((ApiException) ex).getStatus())
+						.isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+	}
+
+	/**
+	 * A recovery resets the budget, or a registry that flaps once an hour would drift
+	 * into a permanent outage without ever having been unreadable for long.
+	 */
+	@Test
+	void aSuccessfulRefreshResetsTheStalenessBudget() {
+		doReturn(List.of(FreezeFixtures.row(FrozenTargetType.ISSUE, "i-frozen")))
+				.when(repository).findByUnfrozenAtIsNull();
+		service.refresh();
+
+		for (int cycle = 0; cycle < 3; cycle++) {
+			doThrow(new IllegalStateException("mongo down")).when(repository).findByUnfrozenAtIsNull();
+			for (int attempt = 0; attempt < FrozenContentService.MAX_REFRESH_FAILURES - 1; attempt++) {
+				service.refresh();
+			}
+			doReturn(List.of(FreezeFixtures.row(FrozenTargetType.ISSUE, "i-frozen")))
+					.when(repository).findByUnfrozenAtIsNull();
+			service.refresh();
+		}
+
+		assertThat(service.isFrozen(FrozenTargetType.ISSUE, "i-frozen")).isTrue();
+	}
+
+	/**
+	 * The first load is untouched by all of the above. With no set at all there is
+	 * nothing to keep, "nothing is frozen" would be a guess, and the cost of guessing
+	 * wrong is serving the material — so a cold service that cannot read the registry
+	 * refuses, exactly as before.
+	 */
+	@Test
+	void aFirstLoadThatFailsStillHasNothingToFallBackOn() {
+		doThrow(new IllegalStateException("mongo down")).when(repository).findByUnfrozenAtIsNull();
+
+		service.refresh();
+
+		assertThatThrownBy(() -> service.isFrozen(FrozenTargetType.ISSUE, "i-1"))
+				.isInstanceOf(ApiException.class);
+	}
+
+	/**
+	 * And a registry that grows past the cap gets the same bounded grace rather than
+	 * taking the product down at the instant a runaway trigger crosses the line — but
+	 * it does not get to stay there, because the condition never clears on its own.
+	 */
+	@Test
+	void aRegistryOverTheCapKeepsTheLastGoodSetOnlyForTheBudget() {
+		doReturn(List.of(FreezeFixtures.row(FrozenTargetType.ISSUE, "i-frozen")))
+				.when(repository).findByUnfrozenAtIsNull();
+		service.refresh();
+		doReturn(new ArrayList<>(IntStream.rangeClosed(0, FrozenContentService.MAX_FROZEN)
+				.mapToObj(i -> FreezeFixtures.row(FrozenTargetType.ISSUE, "i-" + i))
+				.toList()))
+				.when(repository).findByUnfrozenAtIsNull();
+
+		service.refresh();
+		assertThat(service.isFrozen(FrozenTargetType.ISSUE, "i-frozen")).isTrue();
+
+		for (int attempt = 1; attempt < FrozenContentService.MAX_REFRESH_FAILURES; attempt++) {
+			service.refresh();
+		}
+
+		assertThatThrownBy(() -> service.isFrozen(FrozenTargetType.ISSUE, "i-frozen"))
 				.isInstanceOf(ApiException.class);
 	}
 
@@ -233,13 +362,16 @@ class FrozenContentServiceTest {
 	 * recorded rather than silently resolved.
 	 */
 	@Test
-	void aFreezeRecordsThatTheStatementOfReasonsWasWithheld() {
+	void aFreezeRecordsThatNoStatementOfReasonsWasIssued() {
 		List<FrozenContent> stored = captureSaves();
 
 		service.freeze(new FrozenContentService.Request(FrozenTargetType.ISSUE, "i-1", null,
 				List.of(), ModerationCategory.SEXUAL_MINORS, null, "u-reporter", null, "report"));
 
-		assertThat(stored.getFirst().isStatementWithheld()).isTrue();
+		assertThat(stored.getFirst().getStatementIssuedAt())
+				.as("no statement is issued for a freeze in this product, and the record of that "
+						+ "is the absence of a timestamp rather than a flag asserting it")
+				.isNull();
 	}
 
 	@Test

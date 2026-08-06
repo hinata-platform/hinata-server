@@ -28,7 +28,29 @@ public enum FrozenTargetType {
 	/** One attachment, which is a subdocument of an issue rather than a row. */
 	ATTACHMENT,
 
-	/** An account — its profile and its avatar. */
+	/**
+	 * An account — its profile and its avatar.
+	 *
+	 * <p>Enforced on four surfaces: the three directory endpoints
+	 * ({@code /api/v1/users}, {@code /users/by-ids}, {@code /users/search}), the
+	 * {@code PEOPLE} category of global search, and {@code AvatarService.load}. The
+	 * account's avatar object key is additionally resolved and frozen as its own
+	 * {@link #OBJECT} row, so the bytes are refused at the storage chokepoint even
+	 * if a new route reaches them another way.
+	 *
+	 * <p>It was almost deleted instead, and the case for keeping it is the avatar.
+	 * {@code /api/v1/users/*&#47;avatar} is one of only two unauthenticated content
+	 * routes in the product, and it does not check whether the account is active —
+	 * so deactivating a user, which is otherwise the right answer to a person
+	 * problem, leaves their uploaded image served to the open internet. That is a
+	 * surface no other mechanism here closes.
+	 *
+	 * <p>What this is <b>not</b> is a suspension. It does not deactivate the account,
+	 * revoke sessions or stop the person working; {@code ContentReportService} spells
+	 * out why a report about a person deliberately does not freeze them, and that is
+	 * unchanged — this constant is reachable only from the admin hand-freeze, for an
+	 * account whose profile or avatar is itself the material.
+	 */
 	USER,
 
 	/**
