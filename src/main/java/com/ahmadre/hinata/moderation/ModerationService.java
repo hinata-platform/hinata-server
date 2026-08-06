@@ -263,13 +263,22 @@ public class ModerationService {
 		if (!policy.imageEnabled()) {
 			return ImageTierState.DISABLED_BY_POLICY;
 		}
-		if (imageModerators.isEmpty()) {
+		// Not `imageModerators.isEmpty()`. That was the test while the HTTP tier was
+		// @ConditionalOnProperty on its endpoint — no env key, no bean, empty list.
+		// The endpoint can now come from the admin panel, so the bean is always here
+		// and an empty list no longer means "nobody installed one"; the tier itself
+		// says whether it has an address, and a bean with none must report
+		// NOT_CONFIGURED rather than the ACTIVE it would otherwise imply.
+		List<ImageModerator> installed = imageModerators.stream()
+				.filter(ImageModerator::configured)
+				.toList();
+		if (installed.isEmpty()) {
 			return ImageTierState.NOT_CONFIGURED;
 		}
 		// Availability, not mere presence: a sidecar whose model failed to load is a
-		// bean that exists and classifies nothing, which is the case an operator most
+		// tier that exists and classifies nothing, which is the case an operator most
 		// needs told apart from a working one.
-		return imageModerators.stream().anyMatch(ImageModerator::available)
+		return installed.stream().anyMatch(ImageModerator::available)
 				? ImageTierState.ACTIVE
 				: ImageTierState.CONFIGURED_UNAVAILABLE;
 	}
@@ -287,9 +296,9 @@ public class ModerationService {
 		ImageTierState state = imageTierState();
 		if (state == ImageTierState.NOT_CONFIGURED) {
 			log.warn("Image moderation is enabled but no classifier is installed — uploaded images "
-					+ "are NOT being checked. Set hinata.moderation.image.endpoint to a running "
-					+ "moderation sidecar, or set hinata.moderation.image-enabled=false to make "
-					+ "this explicit.");
+					+ "are NOT being checked. Point the admin area's Moderation panel (or "
+					+ "hinata.moderation.image.endpoint) at a running moderation sidecar, or switch "
+					+ "image classification off to make this explicit.");
 		}
 		else if (state == ImageTierState.CONFIGURED_UNAVAILABLE) {
 			log.warn("An image classifier is configured but reports itself unavailable — uploaded "

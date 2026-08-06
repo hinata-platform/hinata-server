@@ -48,4 +48,23 @@ public interface ImageModerator {
 	default boolean available() {
 		return true;
 	}
+
+	/**
+	 * Whether this tier has been given somewhere to work at all.
+	 *
+	 * <p>Distinct from {@link #available()}, and the distinction is the difference
+	 * between the two {@link ImageTierState} constants an operator acts on
+	 * differently: an unconfigured tier needs somebody to install one, an
+	 * unavailable tier needs somebody to fix the one already there. It exists
+	 * because {@code HttpImageModerator} stopped being conditional on its endpoint
+	 * — the address can now arrive from the admin panel, so the bean is always in
+	 * the context and "is a classifier installed" can no longer be answered by
+	 * counting beans.
+	 *
+	 * <p>Defaults to true: an implementation with nothing to configure is
+	 * configured by existing.
+	 */
+	default boolean configured() {
+		return true;
+	}
 }

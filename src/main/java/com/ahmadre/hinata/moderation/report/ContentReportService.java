@@ -295,7 +295,11 @@ public class ContentReportService {
 	 * name, which for this category is potentially the violating material itself.
 	 */
 	private void escalate(ContentReport report, ContentReport.TargetType targetType, Target target) {
-		if (report.getReason() == null || !report.getReason().urgent() || escalations.isEmpty()) {
+		// `configured()` rather than `isEmpty()`: the webhook adapter is always in the
+		// context now that its address can come from the admin panel, so an injected
+		// list is never empty and "nobody to escalate to" has to be asked, not counted.
+		if (report.getReason() == null || !report.getReason().urgent()
+				|| escalations.stream().noneMatch(ModerationEscalation::configured)) {
 			return;
 		}
 		ModerationEscalation.Event event = new ModerationEscalation.Event(report.getId(),

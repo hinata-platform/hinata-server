@@ -4,10 +4,11 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.moderation.ModerationPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -45,6 +46,24 @@ import java.util.concurrent.Executors;
  * formatting differs by one character, and the failure looks like an attack
  * rather than a bug. The body is therefore serialised once, hashed, and sent.
  *
+ * <h2>Where "a URL without a secret" is refused now</h2>
+ *
+ * <p>It used to be refused at startup: the bean was
+ * {@code @ConditionalOnProperty} on the URL and its constructor threw when the
+ * secret was missing, so a misconfigured deployment did not boot. Neither half
+ * survives an address that can arrive from the admin panel — the condition is
+ * evaluated before Mongo is read, and there is no startup left to fail at when
+ * the value changes at 3pm on a Tuesday. The guarantee did not change, only its
+ * location: {@code AdminSettingsController} refuses to <em>save</em> a URL with
+ * no secret behind it, and {@link #escalate} refuses to <em>send</em> one, with
+ * the undelivered notice audited exactly like any other failure. An unsigned
+ * notice claiming content was frozen is a claim its recipient cannot attribute,
+ * and acting on an unattributable one is worse than having no webhook at all.
+ *
+ * <p>No URL anywhere is a different case and stays silent. A small install with
+ * nobody to notify is supported, the freeze happened regardless, and auditing a
+ * failure for an operator's deliberate choice would bury the ones that matter.
+ *
  * <h2>Why delivery is off the calling thread</h2>
  *
  * <p>The call site is a refused upload or a filed report — someone is waiting on
@@ -57,7 +76,6 @@ import java.util.concurrent.Executors;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "hinata.moderation.escalation", name = "url")
 public class WebhookModerationEscalation implements ModerationEscalation {
 
 	/** Recorded on audit rows so a failure names its destination. */
@@ -76,16 +94,33 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 	 */
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
-	private final String url;
-	private final byte[] secret;
-	private final int maxAttempts;
-	private final Duration retryDelay;
-	private final RestClient http;
+	private final ModerationPolicy policy;
+
+	/**
+	 * For the retry delay only, which is env-only: how long a failed attempt waits
+	 * is infrastructure tuning, it changes nothing about what is escalated, and
+	 * three tries is not a backoff curve worth a form field.
+	 */
+	private final HinataProperties properties;
+
 	private final AuditService audit;
 	private final Executor executor;
 
-	public WebhookModerationEscalation(HinataProperties properties, AuditService audit) {
-		this(properties, audit, Executors.newSingleThreadExecutor(runnable -> {
+	/** Guards the client rebuild; see {@link #target()}. */
+	private final Object lock = new Object();
+
+	private volatile Target target;
+
+	/**
+	 * Carries {@code @Autowired} because the package-private constructor below
+	 * exists: two candidates make the container's "single constructor" rule stop
+	 * applying, and it then looks for a no-arg one and fails. It went unnoticed
+	 * while the bean was conditional on an environment key no test sets.
+	 */
+	@Autowired
+	public WebhookModerationEscalation(ModerationPolicy policy, HinataProperties properties,
+			AuditService audit) {
+		this(policy, properties, audit, Executors.newSingleThreadExecutor(runnable -> {
 			Thread thread = new Thread(runnable, "moderation-escalation");
 			// Daemon: an undelivered notice must not hold a shutdown open. The
 			// bounded retry means the window is seconds, and a notice lost to a
@@ -95,30 +130,12 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 		}));
 	}
 
-	WebhookModerationEscalation(HinataProperties properties, AuditService audit, Executor executor) {
-		HinataProperties.Moderation.Escalation config = properties.getModeration().getEscalation();
-		this.url = config.getUrl() == null ? "" : config.getUrl().trim();
-		String configured = config.getSecret() == null ? "" : config.getSecret().trim();
-		if (this.url.isEmpty()) {
-			throw new IllegalStateException(
-					"hinata.moderation.escalation.url is set but empty — unset it, or point it at an endpoint");
-		}
-		if (configured.isEmpty()) {
-			// Refused at startup rather than degraded to unsigned delivery: an
-			// unsigned notice claiming content was frozen is a claim the recipient
-			// cannot attribute, and acting on an unattributable one is worse than
-			// having no webhook at all.
-			throw new IllegalStateException("hinata.moderation.escalation.secret is required when "
-					+ "hinata.moderation.escalation.url is set — an unsigned escalation cannot be trusted "
-					+ "by its recipient");
-		}
-		this.secret = configured.getBytes(StandardCharsets.UTF_8);
-		this.maxAttempts = Math.max(1, config.getMaxAttempts());
-		this.retryDelay = config.getRetryDelay() == null ? Duration.ZERO : config.getRetryDelay();
-		this.http = client(this.url, config.getTimeout());
+	WebhookModerationEscalation(ModerationPolicy policy, HinataProperties properties,
+			AuditService audit, Executor executor) {
+		this.policy = policy;
+		this.properties = properties;
 		this.audit = audit;
 		this.executor = executor;
-		log.info("Moderation escalation webhook configured at {}", this.url);
 	}
 
 	@Override
@@ -127,21 +144,40 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 	}
 
 	@Override
+	public boolean configured() {
+		return !target().url().isEmpty();
+	}
+
+	@Override
 	public void escalate(Event event) {
 		if (event == null) {
 			return;
 		}
+		Target destination = target();
+		if (destination.url().isEmpty()) {
+			// Nobody to tell, by the operator's choice. Not a failure and not audited.
+			return;
+		}
+		byte[] secret = policy.escalationSecret().getBytes(StandardCharsets.UTF_8);
+		int maxAttempts = policy.escalationMaxAttempts();
+		if (secret.length == 0) {
+			log.error("A moderation escalation endpoint is configured with no signing secret — the "
+					+ "notice for {} was NOT sent. An unsigned notice cannot be attributed by its "
+					+ "recipient; set the escalation secret.", event.recordId());
+			failed(event, "no signing secret configured", 0);
+			return;
+		}
 		try {
 			String body = body(event);
-			String signature = sign(body);
-			executor.execute(() -> deliver(event, body, signature));
+			String signature = hmac(secret, body);
+			executor.execute(() -> deliver(destination, maxAttempts, event, body, signature));
 		}
 		catch (RuntimeException ex) {
 			// Assembling or signing failed, which is a bug rather than an outage —
 			// but it is still an escalation that never left, so it is audited as one
 			// instead of surfacing as an exception in an upload the caller has
 			// already refused.
-			failed(event, ex.toString());
+			failed(event, ex.toString(), 0);
 		}
 	}
 
@@ -152,12 +188,18 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 	 * a 404 all mean "the person who has to act on this has not been told", and
 	 * distinguishing them would only produce a rule under which some of them are
 	 * quietly not retried.
+	 *
+	 * <p>The destination and the attempt budget are parameters rather than fields
+	 * because this runs on another thread: resolving them here would let a notice
+	 * queued against one endpoint be delivered to whatever an admin changed it to
+	 * while it waited.
 	 */
-	private void deliver(Event event, String body, String signature) {
+	private void deliver(Target destination, int maxAttempts, Event event, String body,
+			String signature) {
 		String lastFailure = null;
 		for (int attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
-				http.post()
+				destination.http().post()
 						.contentType(MediaType.APPLICATION_JSON)
 						.header(SIGNATURE_HEADER, signature)
 						.body(body)
@@ -180,7 +222,7 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 				}
 			}
 		}
-		failed(event, lastFailure);
+		failed(event, lastFailure, maxAttempts);
 	}
 
 	/**
@@ -189,21 +231,22 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 	 * nobody was told, and a log line is not something an operator can be asked
 	 * about afterwards.
 	 */
-	private void failed(Event event, String reason) {
+	private void failed(Event event, String reason, int attempts) {
 		audit.event(AuditAction.MODERATION_ESCALATION_FAILED)
 				.outcome(AuditLog.Outcome.FAILURE)
 				.target(event.recordId(), event.reference())
 				.meta("destination", ID)
 				.meta("category", event.category() == null ? null : event.category().name())
-				.meta("attempts", String.valueOf(maxAttempts))
+				.meta("attempts", String.valueOf(attempts))
 				.meta("reason", reason)
 				.log();
 		log.error("Moderation escalation for {} could not be delivered after {} attempt(s)",
-				event.recordId(), maxAttempts);
+				event.recordId(), attempts);
 	}
 
 	private void sleep() {
-		if (retryDelay.isZero() || retryDelay.isNegative()) {
+		Duration retryDelay = properties.getModeration().getEscalation().getRetryDelay();
+		if (retryDelay == null || retryDelay.isZero() || retryDelay.isNegative()) {
 			return;
 		}
 		try {
@@ -211,6 +254,39 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 		}
 		catch (InterruptedException interrupted) {
 			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * The client for the address currently configured, rebuilt when that changed.
+	 *
+	 * <p>Same shape and same reason as {@code HttpImageModerator.target()}: an
+	 * address that an admin can edit must not be captured once, or the product goes
+	 * on signing notices about frozen material and posting them to whoever used to
+	 * be at the old URL.
+	 */
+	private Target target() {
+		String url = policy.escalationUrl();
+		Duration timeout = policy.escalationTimeout();
+		Target current = target;
+		if (current != null && current.matches(url, timeout)) {
+			return current;
+		}
+		synchronized (lock) {
+			current = target;
+			if (current != null && current.matches(url, timeout)) {
+				return current;
+			}
+			Target rebuilt = new Target(url, timeout, client(url, timeout));
+			target = rebuilt;
+			if (!url.isEmpty()) {
+				log.info("Moderation escalation webhook is now {} (timeout {})", url, timeout);
+			}
+			else if (current != null && !current.url().isEmpty()) {
+				log.warn("The moderation escalation webhook was cleared — freezes will no longer "
+						+ "notify anybody outside the product.");
+			}
+			return rebuilt;
 		}
 	}
 
@@ -235,11 +311,6 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 		catch (Exception ex) {
 			throw new IllegalStateException("could not serialise the escalation payload");
 		}
-	}
-
-	/** Lowercase hex HMAC-SHA256 of [body] under the configured secret. */
-	String sign(String body) {
-		return hmac(secret, body);
 	}
 
 	/**
@@ -268,15 +339,24 @@ public class WebhookModerationEscalation implements ModerationEscalation {
 	 * A client with both timeouts set explicitly, for the reason
 	 * {@code HttpImageModerator} gives: an unset read timeout against an endpoint
 	 * that accepted the connection and then stopped talking holds the retry thread
-	 * forever, and the notice after it never leaves.
+	 * forever, and the notice after it never leaves. The budget is already
+	 * sanitised by {@link ModerationPolicy#escalationTimeout()}.
 	 */
 	private static RestClient client(String url, Duration timeout) {
-		Duration budget = timeout == null || timeout.isNegative() || timeout.isZero()
-				? Duration.ofSeconds(5)
-				: timeout;
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(
-				HttpClient.newBuilder().connectTimeout(budget).build());
-		factory.setReadTimeout(budget);
-		return RestClient.builder().baseUrl(url).requestFactory(factory).build();
+				HttpClient.newBuilder().connectTimeout(timeout).build());
+		factory.setReadTimeout(timeout);
+		return RestClient.builder()
+				.baseUrl(url.isEmpty() ? "http://unconfigured.invalid" : url)
+				.requestFactory(factory)
+				.build();
+	}
+
+	/** One address and the client built for it; see {@link #target()}. */
+	private record Target(String url, Duration timeout, RestClient http) {
+
+		boolean matches(String otherUrl, Duration otherTimeout) {
+			return url.equals(otherUrl) && timeout.equals(otherTimeout);
+		}
 	}
 }

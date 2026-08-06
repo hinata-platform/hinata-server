@@ -58,8 +58,7 @@ malware. There is no admin control for them, by construction.
 Without this, uploaded images are checked for type and size and nothing else.
 
 The classifier runs as a separate container so that installs which never receive
-an image do not carry a few hundred megabytes of model. Add the service and point
-one key at it:
+an image do not carry a few hundred megabytes of model. Start the service:
 
 ```yaml
 # docker-compose.override.yml — a ready-made fragment ships in hinata-moderation/
@@ -69,11 +68,16 @@ services:
     read_only: true
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
-
-  hinata-server:
-    environment:
-      HINATA_MODERATION_IMAGE_ENDPOINT: http://hinata-moderation:8081
 ```
+
+…then point Hinata at it, either way round:
+
+- **Admin area → Moderation → Image classifier.** Paste the address, save. It takes
+  effect on the next upload; no restart, and the status line above it changes as
+  soon as the server can reach the sidecar.
+- Or `HINATA_MODERATION_IMAGE_ENDPOINT: http://hinata-moderation:8081` in the
+  server's environment, which is the default the panel falls back to when its field
+  is left empty. An address entered in the panel wins over this one.
 
 **Then verify it is actually classifying**, because "the container is running" and
 "images are being checked" are different facts:
@@ -82,10 +86,17 @@ services:
    of four states you are in. `Active` is the only one that means images are being
    examined.
 2. The server logs a `WARN` at startup when image moderation is enabled and no
-   classifier is installed, naming the key that would fix it.
+   classifier is installed, and an `INFO` naming every address it is pointed at.
 
-If you decide not to run it, set `HINATA_MODERATION_IMAGE_ENABLED=false` so the
-panel says so plainly rather than implying a check that is not happening.
+If you decide not to run it, switch *classify images* off (or set
+`HINATA_MODERATION_IMAGE_ENABLED=false`) so the panel says so plainly rather than
+implying a check that is not happening.
+
+Which content types the sidecar is sent is **not** a panel setting: that list has to
+match what the deployed sidecar build can decode, so it stays with the deployment
+(`hinata.moderation.image.supported-types`). Adding a type the sidecar cannot read
+would not teach it to; it would only turn an honest "not judged" into a failed round
+trip on every such upload.
 
 ---
 
@@ -120,12 +131,19 @@ maintains your deployment.
 ## 5. When the escalation fires
 
 Configure a webhook so you find out immediately rather than the next time someone
-opens the admin panel:
+opens the admin panel. Admin area → Moderation → Escalation, or:
 
-```
+```sh
 HINATA_MODERATION_ESCALATION_URL=https://…      # your alerting endpoint
 HINATA_MODERATION_ESCALATION_SECRET=…           # verify X-Hinata-Signature (HMAC-SHA256)
 ```
+
+Both halves are required and the address is refused without a secret — from the
+panel with an error, and by the adapter, which will not deliver unsigned. A notice
+claiming content was frozen that its recipient cannot attribute is worse than no
+notice at all. The secret is write-only: the panel accepts a new one and never
+shows you the stored one back, so leaving the field empty keeps what is already
+there.
 
 The payload carries a record id, a category, a surface and a timestamp. **No
 content, no file name, no bytes.** That is deliberate: the alert travels further

@@ -4,18 +4,25 @@ import com.ahmadre.hinata.moderation.freeze.FrozenContent;
 import com.ahmadre.hinata.moderation.freeze.FrozenIssues;
 import com.ahmadre.hinata.moderation.freeze.FrozenTargetType;
 import com.ahmadre.hinata.moderation.report.ContentReport;
+import com.ahmadre.hinata.setup.ServerSettings;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.annotation.Transient;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -104,6 +111,78 @@ class ModerationWiringTest {
 
 		assertThat(locked).containsExactlyInAnyOrder(
 				ModerationCategory.SEXUAL_MINORS, ModerationCategory.MALWARE);
+	}
+
+	// --- the admin panel actually reaching enforcement ---------------------------
+
+	/**
+	 * Every override on {@link ServerSettings.Moderation} is read by a resolver of
+	 * the same name on {@link ModerationPolicy}.
+	 *
+	 * <p>A nullable field nobody resolves is a switch that does nothing: it saves,
+	 * it round-trips through the API, the panel renders it with the value the admin
+	 * chose, and not one line of enforcement ever asks. This feature has shipped that
+	 * twice, which is why the check is structural rather than a behavioural test per
+	 * field — a behavioural test can only be written for a resolver somebody
+	 * remembered to write, and the ones that were forgotten had no test to fail.
+	 *
+	 * <p>Matching on the name is enough here, and deliberately so. It cannot prove
+	 * the resolver is any good — {@code ModerationPolicyTest} and
+	 * {@code HttpImageModeratorTest} do that — but it is the only thing that fails
+	 * when a field is added and nothing is written at all.
+	 */
+	@Test
+	void everyModerationSettingIsReadByAResolverOfTheSameName() {
+		Set<String> resolvers = Stream.of(ModerationPolicy.class.getMethods())
+				.filter(method -> method.getDeclaringClass() == ModerationPolicy.class)
+				.map(Method::getName)
+				.collect(Collectors.toSet());
+
+		assertThat(adminSettableModerationFields())
+				.as("a nullable override nothing reads is a switch that does nothing")
+				.allSatisfy(field -> assertThat(resolvers).contains(field));
+	}
+
+	/**
+	 * And the knobs that are deliberately <em>not</em> settable stay that way.
+	 *
+	 * <p>Two of them are the reason this test is not just a mirror of the one above.
+	 * {@code strictBlockThreshold} and {@code strictFlagThreshold} govern the
+	 * categories {@link ModerationPolicy#isOverridable} returns false for — child
+	 * sexual content and malware — and the invariant that they cannot be weakened is
+	 * the single strongest claim this subsystem makes. Adding them to the settings
+	 * document would keep every other test green while handing that claim to a web
+	 * form, and to whoever gets hold of an admin session.
+	 *
+	 * <p>The other two are smaller but still not tenant policy:
+	 * {@code supportedTypes} has to match what the deployed sidecar build actually
+	 * decodes, and {@code freezeRefreshInterval} is bound to a {@code @Scheduled}
+	 * placeholder that cannot be re-read at runtime anyway.
+	 */
+	@Test
+	void theEnvOnlyModerationKnobsAreNotAdminSettable() {
+		assertThat(adminSettableModerationFields())
+				.as("see this test's javadoc before adding any of these")
+				.doesNotContain("strictBlockThreshold", "strictFlagThreshold",
+						"imageSupportedTypes", "supportedTypes",
+						"freezeRefreshInterval", "escalationRetryDelay");
+	}
+
+	/**
+	 * The persisted fields of the moderation settings block.
+	 *
+	 * <p>{@code @Transient} ones are excluded because they are derived status the
+	 * controller computes for the UI ({@code escalationSecretConfigured}), not
+	 * overrides anything is meant to resolve.
+	 */
+	private static List<String> adminSettableModerationFields() {
+		return Stream.of(ServerSettings.Moderation.class.getDeclaredFields())
+				.filter(field -> !field.isSynthetic())
+				.filter(field -> !Modifier.isStatic(field.getModifiers()))
+				.filter(field -> field.getAnnotation(Transient.class) == null)
+				.map(Field::getName)
+				.sorted()
+				.toList();
 	}
 
 	/**

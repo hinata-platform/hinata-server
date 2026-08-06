@@ -3,8 +3,10 @@ package com.ahmadre.hinata.setup;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
+import com.ahmadre.hinata.moderation.ModerationPolicy;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -38,6 +40,7 @@ public class AdminSettingsController {
 	private final AuditService audit;
 	private final CurrentUser currentUser;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
+	private final ModerationPolicy moderationPolicy;
 	private final OrganizationLogoService logoService;
 
 	@GetMapping
@@ -85,7 +88,48 @@ public class AdminSettingsController {
 		prefillGitIntegration(current);
 		prefillMcp(current);
 		prefillSecurity(current);
+		prefillModeration(current);
 		return current;
+	}
+
+	/**
+	 * Pre-fill the two out-of-process moderation tiers from the effective values and
+	 * surface whether the escalation secret is set at all.
+	 *
+	 * <p>Only the addresses and their budgets. The thresholds and switches above them
+	 * are deliberately left as stored — the client renders the env defaults for those,
+	 * and pre-filling them here would put the same number in two places that have to
+	 * agree without anything making them.
+	 *
+	 * <p>{@code escalationSecretConfigured} is the whole of what the UI may learn
+	 * about the secret, exactly like {@code tokenSecretConfigured}: the value itself
+	 * is {@code WRITE_ONLY} and is never echoed. It is resolved against the document
+	 * being returned rather than the policy's cache, so the flag describes <em>this</em>
+	 * response instead of whatever was last saved.
+	 */
+	private void prefillModeration(ServerSettings current) {
+		ServerSettings.Moderation moderation = current.getModeration();
+		if (moderation == null) {
+			moderation = new ServerSettings.Moderation();
+			current.setModeration(moderation);
+		}
+		if (isBlank(moderation.getImageEndpoint())) {
+			moderation.setImageEndpoint(moderationPolicy.imageEndpoint());
+		}
+		if (moderation.getImageTimeout() == null) {
+			moderation.setImageTimeout(moderationPolicy.imageTimeout());
+		}
+		if (isBlank(moderation.getEscalationUrl())) {
+			moderation.setEscalationUrl(moderationPolicy.escalationUrl());
+		}
+		if (moderation.getEscalationTimeout() == null) {
+			moderation.setEscalationTimeout(moderationPolicy.escalationTimeout());
+		}
+		if (moderation.getEscalationMaxAttempts() == null) {
+			moderation.setEscalationMaxAttempts(moderationPolicy.escalationMaxAttempts());
+		}
+		moderation.setEscalationSecretConfigured(
+				!moderationPolicy.escalationSecret(moderation).isBlank());
 	}
 
 	/**
@@ -173,6 +217,7 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
+		assertEscalationCanBeSigned(updated);
 		// A settings PUT that carries an external/blank logo URL means the admin is
 		// no longer using an uploaded logo — drop the stored object so it can't
 		// shadow the URL in the /meta/logo proxy and doesn't linger as an orphan.
@@ -206,7 +251,49 @@ public class AdminSettingsController {
 		if (isBlank(updated.getSmtp().getPassword())) {
 			updated.getSmtp().setPassword(current.getSmtp().getPassword());
 		}
+		keepModerationSecretsIfBlank(updated, current);
 		keepGitSecretsIfBlank(updated, current);
+	}
+
+	/** The escalation HMAC secret is WRITE_ONLY; keep the stored one on blank. */
+	private void keepModerationSecretsIfBlank(ServerSettings updated, ServerSettings current) {
+		ServerSettings.Moderation moderation = updated.getModeration();
+		if (moderation == null) {
+			moderation = new ServerSettings.Moderation();
+			updated.setModeration(moderation);
+		}
+		ServerSettings.Moderation stored = current.getModeration() != null
+				? current.getModeration()
+				: new ServerSettings.Moderation();
+		if (isBlank(moderation.getEscalationSecret())) {
+			moderation.setEscalationSecret(stored.getEscalationSecret());
+		}
+	}
+
+	/**
+	 * Refuses a save that would leave the escalation webhook unable to sign.
+	 *
+	 * <p>This is where a guarantee moved to, rather than a new rule. It used to be a
+	 * startup failure: {@code WebhookModerationEscalation} was conditional on its URL
+	 * and threw from its constructor when no secret was set, so a deployment
+	 * configured that way did not boot. An address that arrives from this form has no
+	 * startup to fail at, and an unsigned notice claiming content was frozen is a
+	 * claim its recipient cannot attribute — acting on an unattributable one is worse
+	 * than having no webhook at all.
+	 *
+	 * <p>Checked against the <em>effective</em> pair, so an operator whose secret
+	 * lives in the environment is not asked to retype it into a form that never
+	 * echoes it. The adapter refuses to deliver unsigned as well, because the
+	 * environment can be changed without ever passing through here.
+	 */
+	private void assertEscalationCanBeSigned(ServerSettings updated) {
+		ServerSettings.Moderation moderation = updated.getModeration();
+		if (moderationPolicy.escalationUrl(moderation).isBlank()) {
+			return;
+		}
+		if (moderationPolicy.escalationSecret(moderation).isBlank()) {
+			throw ApiException.badRequest("error.moderation.escalationSecretRequired");
+		}
 	}
 
 	/** Git client secrets + token secret are WRITE_ONLY; keep stored on blank. */

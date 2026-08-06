@@ -64,6 +64,24 @@ public interface ModerationEscalation {
 	 */
 	void escalate(Event event);
 
+	/**
+	 * Whether this target has been given somewhere to deliver to.
+	 *
+	 * <p>Needed because the webhook adapter stopped being conditional on its URL:
+	 * that address can now be set from the admin panel, so the bean is always in
+	 * the context and "is there anybody to escalate to" can no longer be answered
+	 * by an empty injected list. A target that answers false is a supported
+	 * configuration — a small self-hosted install may genuinely have nobody to
+	 * notify — and it must stay distinguishable from one that is configured and
+	 * failing, which is audited.
+	 *
+	 * <p>Defaults to true: an implementation with nothing to configure is
+	 * configured by existing.
+	 */
+	default boolean configured() {
+		return true;
+	}
+
 	/** Identifier for logs and audit metadata, so a failure names its destination. */
 	String id();
 }

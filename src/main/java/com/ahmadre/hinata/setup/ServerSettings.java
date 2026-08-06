@@ -7,6 +7,7 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -132,10 +133,32 @@ public class ServerSettings {
 	 * over env), which is also where the floors live that stop a setting from
 	 * making the filter useless.
 	 *
-	 * <p>Note what is <em>not</em> here: there is no per-category switch for child
-	 * sexual content or malware. Those categories are non-overridable by
-	 * construction, so no admin panel, and no compromised admin account, can turn a
-	 * Hinata instance into a safe place to put either.
+	 * <h2>What is deliberately absent, and why</h2>
+	 *
+	 * <p><b>No per-category switch for child sexual content or malware, and no
+	 * strict thresholds.</b> Those two categories are non-overridable by
+	 * construction — {@code ModerationPolicy.isOverridable} returns false for them,
+	 * so they are neither relieved on technical surfaces, nor covered by the
+	 * long-form flag-only trade, nor degradable. Exposing
+	 * {@code strictBlockThreshold} / {@code strictFlagThreshold} would hand exactly
+	 * that guarantee to a web form: an admin — or a compromised admin account —
+	 * could set them to 100 and turn a Hinata instance into a safe place to put
+	 * either, while every other part of the code carried on claiming they could not
+	 * be weakened. They stay env-only so the invariant remains one.
+	 *
+	 * <p><b>No {@code supportedTypes} for the image sidecar.</b> That list has to
+	 * match what the deployed sidecar build actually decodes; it is a property of
+	 * the container that is running, not a policy a tenant chooses. An admin who
+	 * added {@code image/gif} here would not teach the sidecar to read GIFs, they
+	 * would only convert an honest "not judged" into a round trip that ends in a
+	 * 415 and a degraded verdict on every animated image.
+	 *
+	 * <p><b>No {@code freezeRefreshInterval} and no escalation {@code retryDelay}.</b>
+	 * Both are infrastructure tuning rather than policy — how often each replica
+	 * re-reads the freeze registry, and how long a failed webhook attempt waits.
+	 * Neither changes what is moderated or what a verdict means, and the first is
+	 * bound to a {@code @Scheduled} placeholder that cannot be re-read at runtime
+	 * anyway.
 	 */
 	@Data
 	public static class Moderation {
@@ -153,6 +176,61 @@ public class ServerSettings {
 		private Boolean longFormFlagOnly;
 		/** Proceed when an optional tier is unavailable; null ⇒ env default. */
 		private Boolean failOpen;
+
+		// ── The two out-of-process tiers ──────────────────────────────────────
+		// Settable here because they are the two things an operator most needs to
+		// change and the two that used to require editing the container
+		// environment and restarting — while the panel sat there reporting that
+		// the image tier was not configured and offering no way to fix it.
+
+		/**
+		 * Base URL of the image classification sidecar, e.g.
+		 * {@code http://hinata-moderation:8081}; blank ⇒
+		 * {@code hinata.moderation.image.endpoint}. Changing it re-points the client
+		 * without a restart — see {@code HttpImageModerator}.
+		 */
+		private String imageEndpoint;
+		/**
+		 * Budget for one call to the sidecar, applied to the connect and the read;
+		 * null ⇒ {@code hinata.moderation.image.timeout}. This sits on the upload
+		 * path of every attachment, so it is a user-visible wait.
+		 */
+		private Duration imageTimeout;
+		/**
+		 * Endpoint the signed freeze notice is POSTed to; blank ⇒
+		 * {@code hinata.moderation.escalation.url}. Blank everywhere is a supported
+		 * configuration: a small install may genuinely have nobody to notify, and
+		 * the freeze happens either way.
+		 */
+		private String escalationUrl;
+		/**
+		 * Shared secret for the {@code X-Hinata-Signature} HMAC; blank ⇒
+		 * {@code hinata.moderation.escalation.secret}.
+		 *
+		 * <p>{@code WRITE_ONLY} like every other secret in this document: accepted
+		 * on input, never echoed back, and preserved when the panel PUTs it blank
+		 * (see {@code AdminSettingsController.keepSecretsIfBlank}). What the UI can
+		 * learn about it is {@link #escalationSecretConfigured} and nothing else.
+		 */
+		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+		private String escalationSecret;
+		/** Budget for one delivery attempt; null ⇒ {@code hinata.moderation.escalation.timeout}. */
+		private Duration escalationTimeout;
+		/**
+		 * Attempts before one notice is audited as undelivered; null ⇒
+		 * {@code hinata.moderation.escalation.max-attempts}.
+		 */
+		private Integer escalationMaxAttempts;
+
+		// ── Derived, read-only status (never persisted) ───────────────────────
+		/**
+		 * Whether a signing secret is in effect, from either source. The only thing
+		 * the panel can be told about the secret — the same shape as
+		 * {@code GitIntegration.tokenSecretConfigured}, for the same reason.
+		 */
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		private boolean escalationSecretConfigured;
 	}
 
 	/** OpenID Connect (e.g. Synology SSO, Keycloak, Authentik). */

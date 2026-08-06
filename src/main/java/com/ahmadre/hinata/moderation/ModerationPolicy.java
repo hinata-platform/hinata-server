@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.EnumSet;
 import java.util.Set;
 
@@ -46,6 +47,17 @@ import java.util.Set;
  * {@link ModerationCategory#SEXUAL_MINORS}: it is not relieved on technical
  * surfaces, not loosenable by an admin, and not subject to the degrade path. See
  * {@link #isOverridable}.
+ *
+ * <h2>Addresses resolve here too, and that has a consequence</h2>
+ *
+ * <p>{@link #imageEndpoint()} and {@link #escalationUrl()} are resolved the same
+ * way a threshold is, so an operator can switch either tier on from the admin
+ * panel instead of editing the container environment and restarting. The price is
+ * that no consumer may read one of them once and keep it: a {@code RestClient}
+ * built in a constructor still points at the old host after an admin edits it,
+ * and it fails by quietly classifying nothing rather than by throwing. Both
+ * adapters therefore compare what they resolve against what they built with, and
+ * rebuild when it differs.
  */
 @Component
 @RequiredArgsConstructor
@@ -92,6 +104,17 @@ public class ModerationPolicy {
 	 */
 	public static final int EXTERNAL_STRICTNESS = 15;
 
+	/**
+	 * Budget used for an out-of-process tier when nothing configures one.
+	 *
+	 * <p>Applied here rather than in the two adapters so a nonsense value — zero,
+	 * negative, the empty field an admin left behind — cannot reach a client
+	 * builder. An unset read timeout against a sidecar that accepted the connection
+	 * and then stopped talking holds the uploading request open forever, which is a
+	 * worse outage than the classifier being down.
+	 */
+	public static final Duration DEFAULT_TIER_TIMEOUT = Duration.ofSeconds(5);
+
 	/** Categories no admin setting may weaken or disable. */
 	private static final Set<ModerationCategory> NON_OVERRIDABLE =
 			EnumSet.of(ModerationCategory.SEXUAL_MINORS, ModerationCategory.MALWARE);
@@ -105,8 +128,17 @@ public class ModerationPolicy {
 
 	private volatile ServerSettings.Moderation cached;
 
+	/**
+	 * Adopts the saved block, so an admin edit takes effect without a restart.
+	 *
+	 * <p>Public rather than package-private, unlike its twin on
+	 * {@code SecurityPolicy}: the two adapters that depend on this refresh —
+	 * {@code HttpImageModerator} and {@code WebhookModerationEscalation} — live in
+	 * sub-packages, and the tests that prove they re-point at runtime have to be
+	 * able to deliver the event the container would.
+	 */
 	@EventListener
-	void onSettingsChanged(SettingsService.SettingsChangedEvent event) {
+	public void onSettingsChanged(SettingsService.SettingsChangedEvent event) {
 		cached = event.settings().getModeration();
 	}
 
@@ -234,6 +266,106 @@ public class ModerationPolicy {
 		Boolean override = db().getFailOpen();
 		boolean open = override != null ? override : properties.getModeration().isFailOpen();
 		return open && !surface.external();
+	}
+
+	// --- where the two out-of-process tiers live ---------------------------------
+	//
+	// These resolve exactly like every threshold above, and that is the whole
+	// point: an address that can only be set in the container environment is an
+	// address an operator cannot fix from the panel that is telling them it is
+	// missing. The consequence is that neither adapter may capture what it reads
+	// here — see HttpImageModerator and WebhookModerationEscalation, both of which
+	// rebuild their client when the value they resolved last time changes.
+
+	/**
+	 * Base URL of the image classification sidecar, or {@code ""} when there is
+	 * none. Trimmed, because a value typed into a web form arrives with whatever
+	 * whitespace the browser kept.
+	 */
+	public String imageEndpoint() {
+		return resolve(db().getImageEndpoint(), properties.getModeration().getImage().getEndpoint());
+	}
+
+	/** Budget for one call to the sidecar, applied to the connect and the read. */
+	public Duration imageTimeout() {
+		return resolve(db().getImageTimeout(), properties.getModeration().getImage().getTimeout());
+	}
+
+	/** Endpoint a signed freeze notice is POSTed to, or {@code ""} when there is nobody to notify. */
+	public String escalationUrl() {
+		return escalationUrl(db());
+	}
+
+	/**
+	 * The endpoint [block] would resolve to.
+	 *
+	 * <p>Takes the block rather than reading the cache for one caller:
+	 * {@code AdminSettingsController} has to validate the document an admin is
+	 * submitting, and at that moment the cache here still holds the previous one.
+	 * Resolving it anywhere else would put this fallback rule in a second place,
+	 * which is how a "DB wins over env" and a "non-blank DB wins over env" end up
+	 * in the same codebase disagreeing about a trailing space.
+	 */
+	public String escalationUrl(ServerSettings.Moderation block) {
+		return resolve(block == null ? null : block.getEscalationUrl(),
+				properties.getModeration().getEscalation().getUrl());
+	}
+
+	/**
+	 * Shared secret the {@code X-Hinata-Signature} HMAC is taken under, or
+	 * {@code ""} when none is configured — which is a refusal to deliver, not a
+	 * licence to deliver unsigned. See {@code WebhookModerationEscalation}.
+	 */
+	public String escalationSecret() {
+		return escalationSecret(db());
+	}
+
+	/** The secret [block] would resolve to; see {@link #escalationUrl(ServerSettings.Moderation)}. */
+	public String escalationSecret(ServerSettings.Moderation block) {
+		return resolve(block == null ? null : block.getEscalationSecret(),
+				properties.getModeration().getEscalation().getSecret());
+	}
+
+	/** Budget for one delivery attempt of a freeze notice. */
+	public Duration escalationTimeout() {
+		return resolve(db().getEscalationTimeout(),
+				properties.getModeration().getEscalation().getTimeout());
+	}
+
+	/**
+	 * Attempts one notice gets before it is audited as undelivered. Floored at one:
+	 * a zero here would mean the webhook is configured, nothing is ever sent, and
+	 * the audit row says it was tried zero times.
+	 */
+	public int escalationMaxAttempts() {
+		Integer override = db().getEscalationMaxAttempts();
+		int value = override != null ? override : properties.getModeration().getEscalation().getMaxAttempts();
+		return Math.max(1, value);
+	}
+
+	/** DB override wins when it says something; a blank field is not an answer. */
+	private static String resolve(String override, String fallback) {
+		String preferred = override == null ? "" : override.trim();
+		if (!preferred.isEmpty()) {
+			return preferred;
+		}
+		return fallback == null ? "" : fallback.trim();
+	}
+
+	/**
+	 * DB override wins when it is a usable budget. Zero and negative are treated as
+	 * "unset" rather than honoured — a client built with them either never waits or
+	 * waits forever, and both are worse than the default.
+	 */
+	private static Duration resolve(Duration override, Duration fallback) {
+		if (usable(override)) {
+			return override;
+		}
+		return usable(fallback) ? fallback : DEFAULT_TIER_TIMEOUT;
+	}
+
+	private static boolean usable(Duration value) {
+		return value != null && !value.isZero() && !value.isNegative();
 	}
 
 	private int baseBlockThreshold(ModerationCategory category) {

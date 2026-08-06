@@ -21,15 +21,18 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -63,18 +66,37 @@ class HttpImageModeratorTest {
 	/** Short enough that a hung sidecar is a fast test rather than a slow one. */
 	private static final Duration IMPATIENT = Duration.ofMillis(250);
 
+	/** The first sidecar; tests that need a second address ask for {@link #anotherSidecar()}. */
 	private Sidecar sidecar;
+
+	/** Every sidecar this test started, so none of them outlives it. */
+	private final List<Sidecar> sidecars = new ArrayList<>();
+
+	/** The environment half of the configuration, mutated per test. */
+	private HinataProperties properties;
+
+	/** The database half — an admin's overrides, as stored on the settings document. */
+	private ServerSettings settings;
+
 	private ModerationPolicy policy;
 
 	/**
-	 * Registers the tier the way production does — a bean guarded by the real
-	 * condition, bound from real properties — so the "no endpoint, no tier" test
-	 * exercises the annotation rather than a hand-rolled restatement of it.
+	 * Registers the tier the way production does — an unconditional bean over the
+	 * real policy — so the "no endpoint" test exercises the wiring rather than a
+	 * hand-rolled restatement of it.
 	 */
 	@Configuration(proxyBeanMethods = false)
 	@EnableConfigurationProperties(HinataProperties.class)
 	@Import(HttpImageModerator.class)
 	static class TierConfiguration {
+
+		/** The real resolver over an empty settings document, i.e. environment only. */
+		@Bean
+		ModerationPolicy moderationPolicy(HinataProperties properties) {
+			SettingsService settings = mock(SettingsService.class);
+			when(settings.get()).thenReturn(new ServerSettings());
+			return new ModerationPolicy(settings, properties);
+		}
 	}
 
 	private final ApplicationContextRunner contexts = new ApplicationContextRunner()
@@ -82,39 +104,196 @@ class HttpImageModeratorTest {
 
 	@BeforeEach
 	void setUp() throws IOException {
-		sidecar = new Sidecar();
+		sidecar = anotherSidecar();
+		properties = new HinataProperties();
+		settings = new ServerSettings();
 		SettingsService settingsService = mock(SettingsService.class);
-		when(settingsService.get()).thenReturn(new ServerSettings());
-		policy = new ModerationPolicy(settingsService, new HinataProperties());
+		when(settingsService.get()).thenReturn(settings);
+		policy = new ModerationPolicy(settingsService, properties);
 	}
 
 	@AfterEach
 	void tearDown() {
-		sidecar.close();
+		sidecars.forEach(Sidecar::close);
 	}
 
 	// --- installation ------------------------------------------------------------
 
 	/**
-	 * The default for every self-hosted install: no endpoint, no bean, and a service
+	 * The default for every self-hosted install: no endpoint anywhere, and a service
 	 * that says so out loud instead of reporting a classifier nobody configured.
+	 *
+	 * <p>The bean is present, which is the change: it used to be
+	 * {@code @ConditionalOnProperty} on the endpoint, and an address that can arrive
+	 * from the admin panel cannot be a condition evaluated before Mongo is read. So
+	 * "not configured" is now the tier's own answer rather than an empty bean list,
+	 * and this asserts both halves — an unconditional bean that still reported
+	 * {@code ACTIVE} would be the original bug with extra steps.
 	 */
 	@Test
-	void withNoEndpointNoTierIsInstalledAndTheServiceSaysNotConfigured() {
+	void withNoEndpointTheTierIsStillRegisteredAndReportsItselfUnconfigured() {
 		contexts.run(context -> {
-			assertThat(context).doesNotHaveBean(ImageModerator.class);
+			assertThat(context).hasSingleBean(ImageModerator.class);
+			assertThat(context.getBean(HttpImageModerator.class).configured()).isFalse();
 			assertThat(serviceWith(context).imageTierState()).isEqualTo(ImageTierState.NOT_CONFIGURED);
 		});
 	}
 
 	@Test
-	void configuringAnEndpointInstallsTheTierAndTheServiceReportsItActive() {
+	void configuringAnEndpointMakesTheTierReportItselfActive() {
 		contexts.withPropertyValues("hinata.moderation.image.endpoint=" + sidecar.baseUrl())
 				.run(context -> {
 					assertThat(context).hasSingleBean(HttpImageModerator.class);
 					assertThat(context.getBean(HttpImageModerator.class).id()).isEqualTo("http-nsfw");
 					assertThat(serviceWith(context).imageTierState()).isEqualTo(ImageTierState.ACTIVE);
 				});
+	}
+
+	// --- where the address comes from ---------------------------------------------
+
+	/**
+	 * The case the whole change exists for: an operator who has never touched the
+	 * container environment switches the tier on from the admin panel, and uploads
+	 * start being classified.
+	 */
+	@Test
+	void anEndpointSetOnlyInTheDatabaseIsUsed() {
+		settings.getModeration().setImageEndpoint(sidecar.baseUrl());
+		sidecar.classifyReturns(200, """
+				{"scores": {"SEXUAL": 91}, "model": "stub", "version": "1.0.0"}""");
+
+		ModerationVerdict verdict = serviceWith(tier())
+				.assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+
+		assertThat(properties.getModeration().getImage().getEndpoint())
+				.as("no environment key is set — the address came from the database alone")
+				.isEmpty();
+		assertThat(sidecar.classifyCalls()).isEqualTo(1);
+		assertThat(verdict.decision()).isEqualTo(ModerationDecision.BLOCK);
+	}
+
+	/** DB over env, the same precedence every other setting in this product has. */
+	@Test
+	void aDatabaseEndpointOverridesTheEnvironmentOne() {
+		Sidecar fromEnvironment = sidecar;
+		Sidecar fromDatabase = anotherSidecar();
+		properties.getModeration().getImage().setEndpoint(fromEnvironment.baseUrl());
+		settings.getModeration().setImageEndpoint(fromDatabase.baseUrl());
+
+		serviceWith(tier()).assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+
+		assertThat(fromDatabase.classifyCalls()).isEqualTo(1);
+		assertThat(fromEnvironment.classifyCalls()).isZero();
+		assertThat(fromEnvironment.healthCalls())
+				.as("the environment sidecar is not even probed while an override is in force")
+				.isZero();
+	}
+
+	/**
+	 * Clearing the field in the panel means "stop overriding", not "switch the tier
+	 * off" — the environment value is still the deployment's own default.
+	 */
+	@Test
+	void clearingTheDatabaseEndpointFallsBackToTheEnvironmentOne() {
+		Sidecar fromEnvironment = sidecar;
+		Sidecar fromDatabase = anotherSidecar();
+		properties.getModeration().getImage().setEndpoint(fromEnvironment.baseUrl());
+		settings.getModeration().setImageEndpoint(fromDatabase.baseUrl());
+		ModerationService service = serviceWith(tier());
+		service.assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+
+		repoint("");
+
+		service.assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+
+		assertThat(fromEnvironment.classifyCalls()).isEqualTo(1);
+		assertThat(fromDatabase.classifyCalls()).isEqualTo(1);
+	}
+
+	/** Neither source set is the documented default, and it must not pretend otherwise. */
+	@Test
+	void withNeitherSourceSetTheTierIsUnconfiguredAndSendsNothing() {
+		HttpImageModerator moderator = tier();
+		ModerationService service = serviceWith(moderator);
+
+		ModerationVerdict verdict = service.assessImage(IMAGE, "image/jpeg",
+				ModerationSurface.ATTACHMENT);
+
+		assertThat(moderator.configured()).isFalse();
+		assertThat(moderator.available()).isFalse();
+		assertThat(service.imageTierState()).isEqualTo(ImageTierState.NOT_CONFIGURED);
+		assertThat(verdict.tier()).isEqualTo(ModerationVerdict.ModerationTier.DISABLED);
+		assertThat(sidecar.classifyCalls()).isZero();
+	}
+
+	/** The budget is a setting too, and the override has to reach the client that waits. */
+	@Test
+	void aTimeoutSetInTheDatabaseIsTheOneTheUploadWaitsFor() {
+		properties.getModeration().getImage().setEndpoint(sidecar.baseUrl());
+		properties.getModeration().getImage().setTimeout(Duration.ofSeconds(30));
+		settings.getModeration().setImageTimeout(IMPATIENT);
+		sidecar.classifyDelay(Duration.ofSeconds(3));
+
+		ModerationVerdict verdict = serviceWith(tier())
+				.assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+
+		assertThat(verdict.degraded())
+				.as("the environment's 30s budget would have waited out the delay and passed clean")
+				.isTrue();
+	}
+
+	// --- re-pointing without a restart ----------------------------------------------
+
+	/**
+	 * The point of the whole change, asserted where it can actually fail: on the
+	 * socket.
+	 *
+	 * <p>A client captured in the constructor keeps its base URL forever, and the
+	 * symptom is not an exception — it is bytes arriving at the host the operator
+	 * just moved away from, or at nothing at all, while the panel reports the new
+	 * address back to them. So this counts requests at two sidecars rather than
+	 * reading a getter, which would pass against exactly that bug.
+	 */
+	@Test
+	void repointingTheEndpointMovesTheNextUploadToTheNewSidecarWithoutARestart() {
+		Sidecar before = sidecar;
+		Sidecar after = anotherSidecar();
+		properties.getModeration().getImage().setEndpoint(before.baseUrl());
+		ModerationService service = serviceWith(tier());
+		service.assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+
+		repoint(after.baseUrl());
+
+		service.assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+
+		assertThat(after.classifyCalls())
+				.as("the same instance, no restart — the bytes have to reach the new host")
+				.isEqualTo(1);
+		assertThat(before.classifyCalls()).isEqualTo(1);
+	}
+
+	/**
+	 * And the cached probe moves with it.
+	 *
+	 * <p>Health is cached for {@link HttpImageModerator#HEALTH_TTL}, so an operator
+	 * who re-points away from a sidecar whose model never loaded would otherwise be
+	 * shown that sidecar's answer — and have every upload skipped — for up to half a
+	 * minute after fixing the thing they opened the panel to fix.
+	 */
+	@Test
+	void repointingAwayFromABrokenSidecarDoesNotInheritItsCachedHealth() {
+		Sidecar broken = sidecar;
+		broken.healthReturns(503);
+		Sidecar working = anotherSidecar();
+		properties.getModeration().getImage().setEndpoint(broken.baseUrl());
+		ModerationService service = serviceWith(tier());
+		assertThat(service.imageTierState()).isEqualTo(ImageTierState.CONFIGURED_UNAVAILABLE);
+
+		repoint(working.baseUrl());
+
+		assertThat(service.imageTierState()).isEqualTo(ImageTierState.ACTIVE);
+		service.assessImage(IMAGE, "image/jpeg", ModerationSurface.ATTACHMENT);
+		assertThat(working.classifyCalls()).isEqualTo(1);
 	}
 
 	// --- the happy path ------------------------------------------------------------
@@ -347,12 +526,43 @@ class HttpImageModeratorTest {
 
 	// --- helpers ---------------------------------------------------------------------
 
+	/** The tier pointed at {@link #sidecar} by the environment, with [timeout] as the budget. */
 	private HttpImageModerator moderator(Duration timeout) {
-		HinataProperties properties = new HinataProperties();
 		HinataProperties.Moderation.Image image = properties.getModeration().getImage();
 		image.setEndpoint(sidecar.baseUrl());
 		image.setTimeout(timeout);
-		return new HttpImageModerator(properties);
+		return tier();
+	}
+
+	/** The tier over whatever the two configuration halves currently say. */
+	private HttpImageModerator tier() {
+		return new HttpImageModerator(properties, policy);
+	}
+
+	/**
+	 * An admin saving a new sidecar address, delivered the way the container would.
+	 *
+	 * <p>A <em>fresh</em> settings document rather than a mutation of the one the
+	 * repository stub returns, deliberately: the policy caches the block it last
+	 * resolved, so a test that edited that block in place would pass even if the
+	 * event listener were deleted.
+	 */
+	private void repoint(String endpoint) {
+		ServerSettings saved = new ServerSettings();
+		saved.getModeration().setImageEndpoint(endpoint);
+		policy.onSettingsChanged(new SettingsService.SettingsChangedEvent(saved));
+	}
+
+	/** A second (third…) sidecar, so "which host got the bytes" is answerable. */
+	private Sidecar anotherSidecar() {
+		try {
+			Sidecar started = new Sidecar();
+			sidecars.add(started);
+			return started;
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
 	}
 
 	private ModerationService serviceWith(ImageModerator tier) {
