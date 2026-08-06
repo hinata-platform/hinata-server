@@ -78,9 +78,12 @@
 
 > **If you run a Hinata server, read [OPERATORS.md](OPERATORS.md).** The obligations
 > around hosted content attach to whoever does the hosting — that is you, not this
-> project. It covers what is switched on by default (and what is not), how to turn
-> on image classification and verify it is actually running, and what to do when
-> the escalation webhook fires.
+> project. It covers what is switched on by default (and what is not), and what to
+> do when the escalation webhook fires.
+>
+> For the step-by-step setup — adding the classifier container, connecting it and
+> confirming it is genuinely classifying — see the illustrated guide:
+> **[English](docs/moderation-setup-en.pdf)** · **[Deutsch](docs/moderation-setup-de.pdf)**
 
 ---
 

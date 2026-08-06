@@ -1,0 +1,487 @@
+<!doctype html>
+<!--
+  Source for the PDF edition in docs/moderation-setup-en.pdf.
+  Rebuild it (macOS, Chrome):
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless --disable-gpu --no-pdf-header-footer \
+      --print-to-pdf=docs/moderation-setup-en.pdf docs/moderation-setup-en.html
+
+  Everything is deliberately in this one file: no build step, no dependency,
+  and anyone who has to change the guide needs nothing but a browser.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hinata — Setting up moderation</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 16mm 16mm; }
+  :root{
+    --navy:#1e2749; --ink:#1a1d29; --soft:#4a5068; --faint:#7b819a;
+    --amber:#e0a83a; --amber-bg:#fdf6e6; --line:#dfe2ea; --paper:#fbfaf7;
+    --ok:#2f7d5a; --warn:#b3701c; --bad:#a83232; --code-bg:#f4f5f8;
+  }
+  *{box-sizing:border-box}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); font-size:10.2pt; line-height:1.55; margin:0;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1{font-size:24pt;margin:0 0 4pt;letter-spacing:-.5pt;color:var(--navy)}
+  h2{font-size:14pt;margin:22pt 0 7pt;color:var(--navy);letter-spacing:-.2pt;
+     padding-bottom:4pt;border-bottom:2px solid var(--amber)}
+  h3{font-size:11.2pt;margin:14pt 0 5pt;color:var(--navy)}
+  p{margin:0 0 7pt}
+  ul,ol{margin:0 0 8pt; padding-left:16pt}
+  li{margin-bottom:3pt}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+       font-size:8.8pt;background:var(--code-bg);padding:1px 4px;border-radius:3px}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:6px;
+      padding:9pt 11pt;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:8.4pt;line-height:1.5;overflow:visible;white-space:pre-wrap;margin:0 0 9pt}
+  pre .c{color:var(--faint)}
+  pre .k{color:var(--navy);font-weight:600}
+  table{width:100%;border-collapse:collapse;margin:0 0 10pt;font-size:9.2pt}
+  th{text-align:left;background:var(--navy);color:#fff;padding:5pt 7pt;font-weight:600}
+  td{padding:5pt 7pt;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:nth-child(even) td{background:var(--paper)}
+  .lead{font-size:11pt;color:var(--soft);margin-bottom:2pt}
+  .meta{font-size:8.6pt;color:var(--faint);margin-bottom:16pt}
+  .box{border:1px solid var(--line);border-left:4px solid var(--amber);
+       background:var(--amber-bg);border-radius:5px;padding:9pt 12pt;margin:0 0 11pt}
+  .box.stop{border-left-color:var(--bad);background:#fdf1f1}
+  .box.ok{border-left-color:var(--ok);background:#f1f8f4}
+  .box p:last-child{margin-bottom:0}
+  .box .t{font-weight:700;display:block;margin-bottom:3pt;color:var(--navy)}
+  .step{display:flex;gap:9pt;align-items:baseline;margin:16pt 0 6pt}
+  .step .n{flex:0 0 auto;width:20pt;height:20pt;border-radius:50%;background:var(--navy);
+           color:#fff;font-weight:700;font-size:10pt;display:flex;align-items:center;
+           justify-content:center}
+  .step h2{margin:0;border:0;padding:0;flex:1}
+  figure{margin:0 0 12pt;page-break-inside:avoid}
+  figcaption{font-size:8.4pt;color:var(--faint);margin-top:4pt;text-align:center}
+  .pill{display:inline-block;font-size:8pt;font-weight:700;padding:1px 6px;border-radius:9px;
+        vertical-align:1px}
+  .pill.on{background:#e2f2ea;color:var(--ok)}
+  .pill.off{background:#f2e6e6;color:var(--bad)}
+  .pill.warnp{background:#faeed8;color:var(--warn)}
+  .pagebreak{page-break-before:always}
+  .avoid{page-break-inside:avoid}
+  .cols{display:flex;gap:14pt}
+  .cols>div{flex:1}
+  .tiny{font-size:8.6pt;color:var(--soft)}
+  .kbd{font-family:ui-monospace,monospace;font-size:8.6pt;background:#fff;
+       border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:1px 5px}
+</style>
+</head>
+<body>
+
+<h1>Setting up moderation</h1>
+<p class="lead">How <code>hinata-moderation</code> gets into a running Hinata installation — and how to check that it is actually doing something.</p>
+<p class="meta">For anyone running their own Hinata instance · As of 6 August 2026 · applies from the server version that carries the moderation package</p>
+
+<div class="box">
+  <span class="t">In one sentence</span>
+  <p>Hinata checks text out of the box; <strong>it only checks images once you add a second container</strong>. This guide adds it, connects it, and shows you how to tell that it is genuinely classifying rather than merely running.</p>
+</div>
+
+<h2>What you already have — and what is missing</h2>
+
+<figure class="avoid">
+<svg viewBox="0 0 760 240" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <!-- VORHER -->
+  <text x="14" y="18" font-size="12" font-weight="700" fill="#1e2749">BEFORE — what you have today</text>
+  <rect x="14" y="30" width="340" height="190" rx="8" fill="#fbfaf7" stroke="#dfe2ea"/>
+  <rect x="34" y="52" width="140" height="42" rx="6" fill="#1e2749"/>
+  <text x="104" y="72" font-size="11" fill="#fff" text-anchor="middle" font-weight="600">hinata-server</text>
+  <text x="104" y="86" font-size="8.5" fill="#b9c0d8" text-anchor="middle">Spring Boot</text>
+
+  <rect x="200" y="52" width="130" height="42" rx="6" fill="#fff" stroke="#dfe2ea"/>
+  <text x="265" y="72" font-size="10" fill="#1a1d29" text-anchor="middle">MongoDB</text>
+  <text x="265" y="86" font-size="8.5" fill="#7b819a" text-anchor="middle">+ MinIO</text>
+  <line x1="174" y1="73" x2="200" y2="73" stroke="#7b819a" stroke-width="1.4"/>
+
+  <rect x="34" y="112" width="296" height="30" rx="5" fill="#e2f2ea" stroke="#2f7d5a"/>
+  <text x="44" y="131" font-size="9.5" fill="#2f7d5a" font-weight="600">✓ Text filter · Reporting · Blocking · Queue</text>
+
+  <rect x="34" y="150" width="296" height="30" rx="5" fill="#f2e6e6" stroke="#a83232" stroke-dasharray="4 3"/>
+  <text x="44" y="169" font-size="9.5" fill="#a83232" font-weight="600">✗ Images are NOT checked for content</text>
+  <text x="44" y="199" font-size="8.5" fill="#7b819a">Type, signature and size only.</text>
+
+  <!-- Pfeil -->
+  <path d="M368 125 L400 125" stroke="#e0a83a" stroke-width="2.5" marker-end="url(#ar)"/>
+  <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#e0a83a"/></marker></defs>
+
+  <!-- NACHHER -->
+  <text x="416" y="18" font-size="12" font-weight="700" fill="#1e2749">AFTER — one more container</text>
+  <rect x="416" y="30" width="330" height="190" rx="8" fill="#fdf6e6" stroke="#e0a83a"/>
+  <rect x="436" y="52" width="130" height="42" rx="6" fill="#1e2749"/>
+  <text x="501" y="72" font-size="11" fill="#fff" text-anchor="middle" font-weight="600">hinata-server</text>
+  <text x="501" y="86" font-size="8.5" fill="#b9c0d8" text-anchor="middle">Spring Boot</text>
+
+  <rect x="592" y="52" width="134" height="42" rx="6" fill="#e0a83a"/>
+  <text x="659" y="70" font-size="10.5" fill="#3a2d08" text-anchor="middle" font-weight="700">hinata-</text>
+  <text x="659" y="83" font-size="10.5" fill="#3a2d08" text-anchor="middle" font-weight="700">moderation</text>
+  <line x1="566" y1="73" x2="592" y2="73" stroke="#b3701c" stroke-width="1.6"/>
+  <text x="579" y="66" font-size="7.5" fill="#b3701c" text-anchor="middle">HTTP</text>
+
+  <rect x="436" y="112" width="290" height="30" rx="5" fill="#e2f2ea" stroke="#2f7d5a"/>
+  <text x="446" y="131" font-size="9.5" fill="#2f7d5a" font-weight="600">✓ Text filter · Reporting · Blocking · Queue</text>
+
+  <rect x="436" y="150" width="290" height="30" rx="5" fill="#e2f2ea" stroke="#2f7d5a"/>
+  <text x="446" y="169" font-size="9.5" fill="#2f7d5a" font-weight="600">✓ Images are classified</text>
+  <text x="446" y="199" font-size="8.5" fill="#7b819a">No internet needed. No image leaves your server.</text>
+</svg>
+<figcaption>The sidecar runs on the same compose network. It deliberately publishes no port.</figcaption>
+</figure>
+
+<p>The classifier is <em>not</em> in the server image, because a ViT model plus its runtime weighs a few hundred megabytes — which every installation would otherwise carry, including the many that never receive an image.</p>
+
+<h2>What runs out of the box</h2>
+
+<table>
+<tr><th style="width:38%">Feature</th><th style="width:14%">Default</th><th>What it does</th></tr>
+<tr><td>Text filter</td><td><span class="pill on">on</span></td><td>German + English, over titles, descriptions, comments, articles, project and team names. No model, no network.</td></tr>
+<tr><td>Reporting &amp; blocking</td><td><span class="pill on">on</span></td><td>Anyone can report and block content <em>and</em> people.</td></tr>
+<tr><td>Moderation queue</td><td><span class="pill on">on</span></td><td>Admin area → Moderation.</td></tr>
+<tr><td>Image classification (NSFW)</td><td><span class="pill off">off</span></td><td>Needs the sidecar. <strong>That is what this guide is for.</strong></td></tr>
+<tr><td>Hash matching (known material)</td><td><span class="pill off">off</span></td><td>Needs access to one of the programmes — see step&nbsp;5.</td></tr>
+<tr><td>Voice notes</td><td><span class="pill off">unchecked</span></td><td>Stored and served without ever being examined.</td></tr>
+<tr><td>PDF / Office files</td><td><span class="pill off">unchecked</span></td><td>Type and file signature are checked; the contents are not read.</td></tr>
+</table>
+
+<div class="box">
+  <span class="t">Two things that are easy to misread</span>
+  <p><strong>The text filter is deliberately reluctant.</strong> Long text is put in front of a human rather than refused — a wrongly refused bug report does not get rewritten, it gets abandoned. Short fields that everyone sees, like a project name, are refused outright.</p>
+  <p><strong>No setting can weaken two categories:</strong> child sexual abuse material and malware. There is deliberately no control for them.</p>
+</div>
+
+<div class="pagebreak"></div>
+
+<div class="step"><span class="n">1</span><h2>Add the sidecar</h2></div>
+
+<p>Put the file next to your <code>docker-compose.yml</code> (or merge it into an override you already have). A ready-made version ships at <code>hinata-moderation/docker-compose.override.yml</code>.</p>
+
+<pre><span class="c"># docker-compose.override.yml</span>
+services:
+  <span class="k">hinata-moderation</span>:
+    image: ghcr.io/hinata-platform/hinata-moderation:1.0.0
+    restart: unless-stopped
+    networks: [hinata-moderation]
+
+    <span class="c"># No `ports:` — deliberately. Nobody outside has any business posting</span>
+    <span class="c"># here, and a published port is how a classifier with no auth ends up</span>
+    <span class="c"># reachable on a NAS that also forwards 80 and 443.</span>
+    security_opt: [ "no-new-privileges:true" ]
+    cap_drop: [ ALL ]
+    read_only: true
+    tmpfs: [ "/tmp:size=64m,mode=1777" ]
+
+    environment:
+      MAX_BYTES: "16777216"        <span class="c"># 16 MB</span>
+      MAX_CONCURRENT: "1"
+      MAX_QUEUED: "8"
+      <span class="c"># INTRA_OP_THREADS: "2"      # auf einer NAS setzen: ONNX nimmt sonst alle Kerne</span>
+
+    deploy:
+      resources:
+        limits:   { memory: 1g }
+        reservations: { memory: 512m }
+
+  <span class="k">hinata-server</span>:
+    networks: [hinata-moderation]
+
+networks:
+  hinata-moderation:
+</pre>
+
+<div class="box">
+  <span class="t">Check once before restarting</span>
+  <p>The fragment <em>adds</em> a network to <code>hinata-server</code>. Whether your base file keeps its existing ones is answered by:</p>
+  <pre style="margin:6pt 0 0"><span class="k">docker compose config</span> | grep -A6 "hinata-server:"</pre>
+  <p class="tiny" style="margin-top:5pt">A server that loses its database network to a merge surprise is a much worse afternoon than a classifier that never got wired up.</p>
+</div>
+
+<pre><span class="k">docker compose up -d hinata-moderation</span>
+<span class="k">docker compose ps hinata-moderation</span>     <span class="c"># must report "healthy"</span>
+</pre>
+
+<div class="step"><span class="n">2</span><h2>Connect the server — from the admin area</h2></div>
+
+<p>This needs <strong>no</strong> environment variable and no server restart. The endpoint lives in the admin area and takes effect immediately.</p>
+
+<figure class="avoid">
+<svg viewBox="0 0 760 292" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <rect x="10" y="10" width="740" height="272" rx="8" fill="#fff" stroke="#dfe2ea"/>
+  <rect x="10" y="10" width="740" height="30" rx="8" fill="#1e2749"/>
+  <rect x="10" y="32" width="740" height="8" fill="#1e2749"/>
+  <text x="26" y="30" font-size="11" fill="#fff" font-weight="600">Admin area  ›  Moderation</text>
+
+  <!-- policy card -->
+  <rect x="26" y="54" width="708" height="80" rx="6" fill="#fbfaf7" stroke="#dfe2ea"/>
+  <text x="40" y="74" font-size="10" font-weight="700" fill="#1e2749">Content checking</text>
+
+  <text x="40" y="99" font-size="9" fill="#4a5068">Moderation active</text>
+  <rect x="668" y="90" width="32" height="17" rx="8.5" fill="#2f7d5a"/>
+  <circle cx="691.5" cy="98.5" r="6.4" fill="#fff"/>
+
+  <text x="40" y="124" font-size="9" fill="#4a5068">Classify images</text>
+  <rect x="668" y="115" width="32" height="17" rx="8.5" fill="#2f7d5a"/>
+  <circle cx="691.5" cy="123.5" r="6.4" fill="#fff"/>
+
+  <!-- tier notice -->
+  <rect x="26" y="146" width="708" height="36" rx="6" fill="#faeed8" stroke="#b3701c"/>
+  <text x="42" y="162" font-size="9.5" font-weight="700" fill="#b3701c">&#9888;  No image classifier installed</text>
+  <text x="42" y="175" font-size="8.6" fill="#7b5a1c">Uploaded images are not being checked.</text>
+
+  <!-- endpoint card -->
+  <rect x="26" y="194" width="708" height="70" rx="6" fill="#fff" stroke="#e0a83a" stroke-width="1.6"/>
+  <text x="40" y="213" font-size="10" font-weight="700" fill="#1e2749">Image classifier</text>
+  <text x="40" y="229" font-size="8.6" fill="#7b819a">Address of the moderation sidecar</text>
+  <rect x="40" y="236" width="470" height="19" rx="4" fill="#f4f5f8" stroke="#dfe2ea"/>
+  <text x="48" y="249.5" font-size="8.8" fill="#1a1d29" font-family="monospace">http://hinata-moderation:8081</text>
+  <rect x="524" y="236" width="76" height="19" rx="4" fill="#f4f5f8" stroke="#dfe2ea"/>
+  <text x="532" y="249.5" font-size="8.8" fill="#1a1d29" font-family="monospace">5 s</text>
+  <text x="610" y="249.5" font-size="8.4" fill="#7b819a">Timeout</text>
+</svg>
+<figcaption>Schematic of the panel (derived from the widget code, not a screenshot). The warning sits directly above the field that resolves it.</figcaption>
+</figure>
+
+<p>Use the service name from your compose file as the address, not <code>localhost</code>:</p>
+<pre>http://hinata-moderation:8081</pre>
+
+<p class="tiny">Still settable by environment variable if you prefer (<code>HINATA_MODERATION_IMAGE_ENDPOINT</code>). What the admin area holds wins — as with every other moderation setting.</p>
+
+<div class="step"><span class="n">3</span><h2>Verify that it is genuinely classifying</h2></div>
+
+<div class="box stop">
+  <span class="t">The step that matters most</span>
+  <p>"The container is running" and "images are being checked" are two different facts. That confusion is exactly why the admin area now carries a status line of its own.</p>
+</div>
+
+<figure class="avoid">
+<svg viewBox="0 0 760 132" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <g>
+    <rect x="8" y="14" width="176" height="104" rx="7" fill="#e2f2ea" stroke="#2f7d5a"/>
+    <text x="96" y="38" font-size="10.5" font-weight="700" fill="#2f7d5a" text-anchor="middle">ACTIVE</text>
+    <text x="96" y="60" font-size="8.6" fill="#28624a" text-anchor="middle">Images are</text>
+    <text x="96" y="73" font-size="8.6" fill="#28624a" text-anchor="middle">being checked.</text>
+    <text x="96" y="99" font-size="8.4" font-weight="700" fill="#2f7d5a" text-anchor="middle">nothing to do</text>
+  </g>
+  <g>
+    <rect x="200" y="14" width="176" height="104" rx="7" fill="#faeed8" stroke="#b3701c"/>
+    <text x="288" y="38" font-size="10.5" font-weight="700" fill="#b3701c" text-anchor="middle">NOT_CONFIGURED</text>
+    <text x="288" y="60" font-size="8.6" fill="#7b5a1c" text-anchor="middle">No classifier</text>
+    <text x="288" y="73" font-size="8.6" fill="#7b5a1c" text-anchor="middle">configured.</text>
+    <text x="288" y="99" font-size="8.4" font-weight="700" fill="#b3701c" text-anchor="middle">→ step 2</text>
+  </g>
+  <g>
+    <rect x="392" y="14" width="176" height="104" rx="7" fill="#f2e6e6" stroke="#a83232"/>
+    <text x="480" y="38" font-size="10.5" font-weight="700" fill="#a83232" text-anchor="middle">CONFIGURED_</text>
+    <text x="480" y="50" font-size="10.5" font-weight="700" fill="#a83232" text-anchor="middle">UNAVAILABLE</text>
+    <text x="480" y="70" font-size="8.6" fill="#8a2b2b" text-anchor="middle">Configured, but</text>
+    <text x="480" y="83" font-size="8.6" fill="#8a2b2b" text-anchor="middle">not responding.</text>
+    <text x="480" y="105" font-size="8.4" font-weight="700" fill="#a83232" text-anchor="middle">→ Troubleshooting</text>
+  </g>
+  <g>
+    <rect x="584" y="14" width="168" height="104" rx="7" fill="#f0f1f5" stroke="#7b819a"/>
+    <text x="668" y="38" font-size="10.5" font-weight="700" fill="#4a5068" text-anchor="middle">DISABLED_BY_POLICY</text>
+    <text x="668" y="60" font-size="8.6" fill="#4a5068" text-anchor="middle">You switched</text>
+    <text x="668" y="73" font-size="8.6" fill="#4a5068" text-anchor="middle">it off.</text>
+    <text x="668" y="99" font-size="8.4" font-weight="700" fill="#4a5068" text-anchor="middle">deliberate</text>
+  </g>
+</svg>
+<figcaption>The four states. Only <strong>ACTIVE</strong> means images are actually being looked at.</figcaption>
+</figure>
+
+<p>Three independent ways to confirm it:</p>
+<ol>
+  <li><strong>Admin area → Moderation.</strong> The line under the <em>classify images</em> switch names one of the four states.</li>
+  <li><strong>The server log at startup.</strong> If image moderation is on and no classifier is reachable, there is a <code>WARN</code> line naming the missing key.</li>
+  <li><strong>Straight at the sidecar</strong> (from a container on the same network):
+<pre style="margin:5pt 0 0">docker compose exec hinata-server \
+  curl -s http://hinata-moderation:8081/v1/health</pre>
+  </li>
+</ol>
+
+<div class="box ok">
+  <span class="t">Make it a decision</span>
+  <p>If you do <em>not</em> want image checking, switch it off in the admin area. The panel then says "off" instead of implying a check that is not happening — and nobody relies on it later.</p>
+</div>
+
+<div class="pagebreak"></div>
+
+<h2>What happens to an uploaded image</h2>
+
+<figure class="avoid">
+<svg viewBox="0 0 760 330" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#7b819a"/></marker>
+    <marker id="a3" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#a83232"/></marker></defs>
+
+  <rect x="14" y="10" width="126" height="36" rx="6" fill="#1e2749"/>
+  <text x="77" y="33" font-size="10" fill="#fff" text-anchor="middle" font-weight="600">Upload</text>
+
+  <g font-size="9" fill="#1a1d29">
+    <rect x="14" y="66" width="270" height="32" rx="5" fill="#fff" stroke="#dfe2ea"/>
+    <text x="26" y="86">1 · Type allowed?</text>
+    <rect x="14" y="106" width="270" height="32" rx="5" fill="#fff" stroke="#dfe2ea"/>
+    <text x="26" y="126">2 · Signature matches the type?</text>
+    <rect x="14" y="146" width="270" height="32" rx="5" fill="#fff" stroke="#dfe2ea"/>
+    <text x="26" y="166">3 · Dimensions within budget?</text>
+    <rect x="14" y="186" width="270" height="32" rx="5" fill="#fdf6e6" stroke="#e0a83a"/>
+    <text x="26" y="206">4 · Hash matching (if configured)</text>
+    <rect x="14" y="226" width="270" height="32" rx="5" fill="#fdf6e6" stroke="#e0a83a"/>
+    <text x="26" y="246">5 · NSFW classifier (sidecar)</text>
+    <rect x="14" y="266" width="270" height="32" rx="5" fill="#e2f2ea" stroke="#2f7d5a"/>
+    <text x="26" y="286">6 · Threshold → decision</text>
+  </g>
+
+  <line x1="77" y1="46" x2="77" y2="66" stroke="#7b819a" marker-end="url(#a2)"/>
+  <line x1="77" y1="98" x2="77" y2="106" stroke="#7b819a" marker-end="url(#a2)"/>
+  <line x1="77" y1="138" x2="77" y2="146" stroke="#7b819a" marker-end="url(#a2)"/>
+  <line x1="77" y1="178" x2="77" y2="186" stroke="#7b819a" marker-end="url(#a2)"/>
+  <line x1="77" y1="218" x2="77" y2="226" stroke="#7b819a" marker-end="url(#a2)"/>
+  <line x1="77" y1="258" x2="77" y2="266" stroke="#7b819a" marker-end="url(#a2)"/>
+
+  <!-- Ablehnungen rechts -->
+  <g font-size="8.6" fill="#a83232">
+    <line x1="284" y1="82" x2="330" y2="82" stroke="#a83232" marker-end="url(#a3)"/>
+    <text x="336" y="85">refused — wrong type</text>
+    <line x1="284" y1="122" x2="330" y2="122" stroke="#a83232" marker-end="url(#a3)"/>
+    <text x="336" y="125">refused — content ≠ type</text>
+    <line x1="284" y1="162" x2="330" y2="162" stroke="#a83232" marker-end="url(#a3)"/>
+    <text x="336" y="165">refused — pixel bomb</text>
+    <line x1="284" y1="202" x2="330" y2="202" stroke="#a83232" marker-end="url(#a3)"/>
+    <text x="336" y="205" font-weight="700">blocked + escalation raised</text>
+  </g>
+
+  <!-- Ergebnisse -->
+  <g font-size="8.8">
+    <rect x="336" y="240" width="118" height="26" rx="5" fill="#f2e6e6" stroke="#a83232"/>
+    <text x="395" y="257" fill="#a83232" text-anchor="middle" font-weight="700">BLOCK</text>
+    <rect x="464" y="240" width="118" height="26" rx="5" fill="#faeed8" stroke="#b3701c"/>
+    <text x="523" y="257" fill="#b3701c" text-anchor="middle" font-weight="700">FLAG → Queue</text>
+    <rect x="592" y="240" width="118" height="26" rx="5" fill="#e2f2ea" stroke="#2f7d5a"/>
+    <text x="651" y="257" fill="#2f7d5a" text-anchor="middle" font-weight="700">ALLOW</text>
+    <line x1="284" y1="282" x2="330" y2="266" stroke="#7b819a" marker-end="url(#a2)"/>
+  </g>
+
+  <!-- Hinweis Sidecar aus -->
+  <rect x="336" y="180" width="410" height="0.6" fill="#dfe2ea"/>
+  <text x="336" y="300" font-size="8.4" fill="#7b819a">Without the sidecar, 4 and 5 fall away — steps 1 to 3 still run.</text>
+  <text x="336" y="313" font-size="8.4" fill="#7b819a">The server sees every byte itself; there is no direct upload that bypasses it.</text>
+</svg>
+<figcaption>Step 3 protects the sidecar too: a pixel bomb is refused before anything decodes it.</figcaption>
+</figure>
+
+<div class="pagebreak"></div>
+
+<div class="step"><span class="n">4</span><h2>Set up the escalation webhook</h2></div>
+
+<p>This is how you find out <em>immediately</em> that something serious was reported, rather than the next time somebody opens the admin area. Admin area → Moderation → <em>Escalation</em>:</p>
+
+<table>
+<tr><th style="width:26%">Field</th><th>What it is</th></tr>
+<tr><td><strong>URL</strong></td><td>Where the notice goes — alerting, a chat webhook, a ticket inbox.</td></tr>
+<tr><td><strong>Secret</strong></td><td>Signs the message (<code>X-Hinata-Signature</code>, HMAC-SHA256). <strong>Required</strong> — a URL without a secret is refused on save, and the adapter will not deliver unsigned. A "content frozen" notice its recipient cannot attribute is worse than none. Never echoed back; an empty field means "keep the stored one", not "clear it".</td></tr>
+<tr><td><strong>Timeout / attempts</strong></td><td>Delivery with a bounded retry. Failures are audited, never swallowed.</td></tr>
+</table>
+
+<div class="box ok">
+  <span class="t">The payload is deliberately boring</span>
+  <p>It carries a record id, a category, a surface and a timestamp. <strong>No content, no file name, no bytes.</strong> That is why you can safely point it at a chat channel — the alert travels further than the content ever should.</p>
+</div>
+
+<div class="step"><span class="n">5</span><h2>Apply for hash matching (optional, takes weeks)</h2></div>
+
+<p>Hinata has a slot for this and <strong>ships no implementation, and never will</strong>. These programmes vet the <em>operator organisation</em>, not the software; their terms forbid passing credentials on; and their hash lists live on their servers precisely so nobody holds a local copy to test evasion against.</p>
+
+<p>Worth doing above all if your instance accepts content from outside your organisation — an inbound e-mail address that creates tickets, for example.</p>
+
+<ul>
+  <li>Microsoft <strong>PhotoDNA Cloud Service</strong> — microsoft.com/photodna</li>
+  <li><strong>Thorn Safer</strong> — safer.io</li>
+  <li>Google <strong>Child Safety Toolkit</strong> — protectingchildren.google</li>
+  <li>Cloudflare <strong>CSAM Scanning Tool</strong> — only inspects what passes through Cloudflare's cache; private attachments streamed from your own object storage may be invisible to it. Confirm coverage before treating it as protection.</li>
+</ul>
+
+<p class="tiny">The credentials are then yours and are not transferable. The integration itself is a small adapter against the existing port.</p>
+
+<h2>When the escalation fires</h2>
+
+<div class="box stop">
+  <span class="t">Do not open the content to check.</span>
+  <p>This is the most important line in the guide. Looking is not verification — it does not make the report more accurate, and for one category it is itself the harm. The software will not show it to you either: frozen content is unreachable for administrators as well.</p>
+</div>
+
+<figure class="avoid">
+<svg viewBox="0 0 760 118" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+  <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#1e2749"/></marker></defs>
+  <g font-size="8.8">
+    <rect x="6" y="30" width="132" height="52" rx="6" fill="#1e2749"/>
+    <text x="72" y="52" fill="#fff" text-anchor="middle" font-weight="700">1 · Freeze</text>
+    <text x="72" y="67" fill="#b9c0d8" text-anchor="middle" font-size="8">happens automatically</text>
+
+    <rect x="158" y="30" width="132" height="52" rx="6" fill="#fff" stroke="#a83232" stroke-width="1.4"/>
+    <text x="224" y="52" fill="#a83232" text-anchor="middle" font-weight="700">2 · Do not delete</text>
+    <text x="224" y="67" fill="#8a2b2b" text-anchor="middle" font-size="8">deletion paths refuse</text>
+
+    <rect x="310" y="30" width="132" height="52" rx="6" fill="#fff" stroke="#dfe2ea"/>
+    <text x="376" y="52" fill="#1e2749" text-anchor="middle" font-weight="700">3 · Escalate</text>
+    <text x="376" y="67" fill="#7b819a" text-anchor="middle" font-size="8">to the named person</text>
+
+    <rect x="462" y="30" width="132" height="52" rx="6" fill="#fff" stroke="#dfe2ea"/>
+    <text x="528" y="52" fill="#1e2749" text-anchor="middle" font-weight="700">4 · Authority</text>
+    <text x="528" y="67" fill="#7b819a" text-anchor="middle" font-size="8">that person reports</text>
+
+    <rect x="614" y="30" width="140" height="52" rx="6" fill="#fff" stroke="#dfe2ea"/>
+    <text x="684" y="52" fill="#1e2749" text-anchor="middle" font-weight="700">5 · Record it</text>
+    <text x="684" y="67" fill="#7b819a" text-anchor="middle" font-size="8">what, when, by whom</text>
+  </g>
+  <line x1="138" y1="56" x2="158" y2="56" stroke="#1e2749" marker-end="url(#a4)"/>
+  <line x1="290" y1="56" x2="310" y2="56" stroke="#1e2749" marker-end="url(#a4)"/>
+  <line x1="442" y1="56" x2="462" y2="56" stroke="#1e2749" marker-end="url(#a4)"/>
+  <line x1="594" y1="56" x2="614" y2="56" stroke="#1e2749" marker-end="url(#a4)"/>
+  <text x="6" y="106" font-size="8.4" fill="#7b819a">Freezing hides, it does not delete. Evidence is preserved; access ends — for admins too.</text>
+</svg>
+<figcaption>Hinata reports to nobody on your behalf. It does not know your jurisdiction and is not the reporting party.</figcaption>
+</figure>
+
+<p><strong>Before you go live:</strong> write this chain down and <em>name the person</em>. One named person, with a deputy. "The admins" is not an answer at 23:00 on a Friday.</p>
+
+<h2>Troubleshooting</h2>
+
+<table>
+<tr><th style="width:34%">Symptom</th><th>Cause and fix</th></tr>
+<tr><td><code>NOT_CONFIGURED</code> even though the container is running</td><td>The endpoint is empty or wrong. Use the service name, not <code>localhost</code>. Check with: <code>docker compose exec hinata-server curl -s http://hinata-moderation:8081/v1/health</code></td></tr>
+<tr><td><code>CONFIGURED_UNAVAILABLE</code></td><td>Address reachable, but the sidecar reports itself unhealthy — usually a failed model load. <code>docker compose logs hinata-moderation</code></td></tr>
+<tr><td>Uploads suddenly slow</td><td>The sidecar runs one worker. On a NAS, set <code>INTRA_OP_THREADS</code> so ONNX does not take every core and compete with the database.</td></tr>
+<tr><td>Images are abgelehnt, die harmlos sind</td><td>Thresholds are in the admin area. The "flag long text only" control affects text, not images.</td></tr>
+<tr><td>The sidecar is OOM-killed</td><td>The memory limit is the point — this container holds the attacker-supplied pixel buffers. Better it than the database beside it.</td></tr>
+</table>
+
+<h2>What is still not checked afterwards</h2>
+
+<p>So you do not rely on something that is not happening:</p>
+
+<table>
+<tr><th style="width:34%">Area</th><th>Status</th></tr>
+<tr><td>Voice notes</td><td>Not transcribed and not checked.</td></tr>
+<tr><td>PDF and Office contents</td><td>Type and signature only, no text content.</td></tr>
+<tr><td>Video</td><td>No frame analysis.</td></tr>
+<tr><td>Statement of reasons on a freeze</td><td>Not generated automatically. If you need one, it is a manual step in your procedure.</td></tr>
+<tr><td>Notifications already sent</td><td>A freeze cannot recall what already went out by mail or push. It only stops what would follow.</td></tr>
+</table>
+
+<div class="box">
+  <span class="t">And the legal side?</span>
+  <p>Deliberately not here, but as <em>questions</em> in <code>OPERATORS.md</code> — because the answers depend on how your instance is configured, and because the field moves quickly. A document that states them as settled is wrong for some operators immediately and for all of them eventually.</p>
+  <p style="margin-top:5pt"><strong>One sentence always holds:</strong> whoever hosts carries the obligations. That is you, not the Hinata project.</p>
+</div>
+
+</body>
+</html>

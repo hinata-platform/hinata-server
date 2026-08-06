@@ -60,6 +60,11 @@ Without this, uploaded images are checked for type and size and nothing else.
 The classifier runs as a separate container so that installs which never receive
 an image do not carry a few hundred megabytes of model. Start the service:
 
+> There is an illustrated step-by-step version of this section, with diagrams of
+> the upload path and the four tier states:
+> [`docs/moderation-setup-en.pdf`](docs/moderation-setup-en.pdf) ·
+> [`docs/moderation-setup-de.pdf`](docs/moderation-setup-de.pdf)
+
 ```yaml
 # docker-compose.override.yml — a ready-made fragment ships in hinata-moderation/
 services:
