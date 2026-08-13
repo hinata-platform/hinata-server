@@ -28,7 +28,8 @@ public class HinataPrompts {
 				2. Summarise the issue in two or three sentences: what is being asked, \
 				and the current state.
 				3. Recommend a triage:
-				   - a priority (LOW, NORMAL, HIGH, URGENT) with a one-line justification;
+				   - a priority (SHOWSTOPPER, CRITICAL, MAJOR, NORMAL, MINOR, TRIVIAL) \
+				with a one-line justification;
 				   - a short list of labels that would help categorise it;
 				   - whether it looks like a duplicate or is missing information needed \
 				to act on it.

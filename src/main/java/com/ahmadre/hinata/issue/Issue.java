@@ -55,7 +55,9 @@ public class Issue {
 		}
 	}
 
-	public enum Priority { SHOWSTOPPER, CRITICAL, MAJOR, NORMAL, MINOR }
+	/** Declaration order = descending severity; sorting relies on the ordinal, so
+	 *  new values must be appended at the matching severity position only. */
+	public enum Priority { SHOWSTOPPER, CRITICAL, MAJOR, NORMAL, MINOR, TRIVIAL }
 
 	@Id
 	private String id;
