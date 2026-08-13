@@ -34,7 +34,7 @@ class McpMarkdownRoundTripTest {
 
 			| Umgebung | Ziel |
 			|---|---|
-			| prod | `track.asta.hn` |
+			| prod | `track.example.com` |
 
 			> Im Zweifel: nicht deployen.
 			""";
@@ -62,7 +62,7 @@ class McpMarkdownRoundTripTest {
 				.build();
 
 		assertThat(KnowledgeReadTools.ArticleView.of(article).content())
-				.contains("# Runbook").contains(":::info").contains("`track.asta.hn`");
+				.contains("# Runbook").contains(":::info").contains("`track.example.com`");
 		assertThat(KnowledgeWriteTools.ArticleView.of(article).content())
 				.as("the write tool's return view must agree with the read tool's")
 				.isEqualTo(KnowledgeReadTools.ArticleView.of(article).content());

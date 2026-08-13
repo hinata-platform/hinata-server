@@ -104,7 +104,7 @@
             <span th:unless="${locale == 'de'}">Completed highlights</span>
           </div>
           <div th:each="h : ${highlights}" style="padding:10px 0;border-bottom:1px solid #F1F0F7">
-            <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#B9831F;font-weight:600" th:text="${h.readableId}">ASTA-42</span>
+            <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#B9831F;font-weight:600" th:text="${h.readableId}">ACME-42</span>
             <span style="font-size:14px;color:#33314F;margin-left:8px" th:text="${h.title}">Ship the thing</span>
           </div>
         </div>
@@ -129,7 +129,7 @@
           <div th:each="t : ${upcoming}" style="padding:11px 14px;border:1px solid #EDECF4;border-radius:14px;margin-bottom:8px">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
               <td style="vertical-align:middle">
-                <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8886A2;font-weight:600" th:text="${t.readableId}">ASTA-51</span>
+                <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8886A2;font-weight:600" th:text="${t.readableId}">ACME-51</span>
                 <div style="font-size:14px;color:#33314F;margin-top:3px" th:text="${t.title}">Review the pull request</div>
               </td>
               <td align="right" style="vertical-align:middle;white-space:nowrap">

@@ -42,3 +42,10 @@ server:
 logging:
   level:
     org.springframework.security: ${HINATA_LOG_SECURITY:WARN}
+    # SSO attribute diagnostics are pinned OFF in production. The mapper logs the
+    # claim *names* at DEBUG and their *values* — personal data — at TRACE, both
+    # of which are silent at INFO. Naming the package explicitly means a broad
+    # troubleshooting level (LOGGING_LEVEL_COM_AHMADRE_HINATA=DEBUG) cannot drag
+    # it along: in Logback the more specific logger wins. Raising HINATA_LOG_SSO
+    # stays possible, but only as a deliberate, single-purpose act.
+    com.ahmadre.hinata.auth.sso: ${HINATA_LOG_SSO:INFO}

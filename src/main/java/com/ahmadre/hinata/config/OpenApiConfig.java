@@ -22,7 +22,7 @@ import java.util.List;
 				version     = "1.0",
 				description = "Self-hosted project management REST API. All endpoints except the ones "
 						+ "listed under *Public* require a Bearer access token obtained from `POST /api/v1/auth/login`.",
-				contact     = @Contact(name = "AStA Hochschule Niederrhein", url = "https://asta.hn"),
+				contact     = @Contact(name = "Hinata", url = "https://hinata.ahmadre.com"),
 				license     = @License(name = "GPL-3.0", url = "https://www.gnu.org/licenses/gpl-3.0.html")
 		),
 		servers = @Server(url = "/", description = "Current server")

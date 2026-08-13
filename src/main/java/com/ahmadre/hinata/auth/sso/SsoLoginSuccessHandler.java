@@ -2,6 +2,8 @@ package com.ahmadre.hinata.auth.sso;
 
 import com.ahmadre.hinata.auth.TokenService;
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.setup.ServerSettings;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticatedPrincipal;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
@@ -34,6 +37,8 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 	private final UserService userService;
 	private final TokenService tokens;
 	private final HinataProperties properties;
+	private final SettingsService settings;
+	private final SsoProfileMapper mapper;
 	private final com.ahmadre.hinata.me.SessionService sessions;
 	private final com.ahmadre.hinata.config.ClientIpResolver clientIpResolver;
 	private final com.ahmadre.hinata.audit.AuditService audit;
@@ -69,38 +74,45 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 		response.sendRedirect(target);
 	}
 
+	/**
+	 * Turns the authenticated principal into an account. Which attribute carries
+	 * the display name or the position differs per IdP, so the mapping is read
+	 * from the provider's own block in the admin settings instead of being
+	 * hardcoded here (see {@link SsoProfileMapper}).
+	 */
 	private User provision(Authentication authentication) {
+		ServerSettings current = settings.get();
 		if (authentication.getPrincipal() instanceof Saml2AuthenticatedPrincipal saml) {
-			String email = firstAttribute(saml, "email", "mail", "urn:oid:0.9.2342.19200300.100.1.3")
-					.orElse(saml.getName());
-			String name = firstAttribute(saml, "displayName", "cn", "name").orElse(email);
-			return userService.provisionSso(email, name, User.Origin.SAML);
+			ServerSettings.Saml config = current.getSaml();
+			SsoProfileMapper.SsoProfile profile =
+					mapper.map(attributesOf(saml), config, saml.getName());
+			return userService.provisionSso(profile, User.Origin.SAML, config.isSyncProfileOnLogin());
 		}
 		if (authentication.getPrincipal() instanceof OAuth2User oauth) {
-			String email = stringAttr(oauth, "email").orElse(oauth.getName());
-			String name = stringAttr(oauth, "name")
-					.or(() -> stringAttr(oauth, "preferred_username"))
-					.orElse(email);
-			return userService.provisionSso(email, name, User.Origin.OIDC);
+			// One principal type covers both registrations; the registration id says
+			// whose mapping applies (discovered OIDC vs. hand-configured OAuth2).
+			ServerSettings.AttributeMapping config = isPlainOAuth2(authentication)
+					? current.getOauth2()
+					: current.getOidc();
+			SsoProfileMapper.SsoProfile profile =
+					mapper.map(oauth.getAttributes(), config, oauth.getName());
+			return userService.provisionSso(profile, User.Origin.OIDC, config.isSyncProfileOnLogin());
 		}
 		throw new IllegalStateException("Unsupported SSO principal type");
 	}
 
-	private java.util.Optional<String> firstAttribute(Saml2AuthenticatedPrincipal principal,
-			String... names) {
-		for (String name : names) {
-			String value = principal.getFirstAttribute(name);
-			if (value != null && !value.isBlank()) {
-				return java.util.Optional.of(value);
-			}
-		}
-		return java.util.Optional.empty();
+	private boolean isPlainOAuth2(Authentication authentication) {
+		return authentication instanceof OAuth2AuthenticationToken token
+				&& DynamicClientRegistrationRepository.OAUTH2_ID
+						.equals(token.getAuthorizedClientRegistrationId());
 	}
 
-	private java.util.Optional<String> stringAttr(OAuth2User user, String name) {
-		Object value = user.getAttributes().get(name);
-		return value instanceof String s && !s.isBlank()
-				? java.util.Optional.of(s)
-				: java.util.Optional.empty();
+	/**
+	 * A SAML assertion holds every attribute as a list. Widening the map to the
+	 * mapper's {@code Map<String, Object>} (which flattens the lists) needs the
+	 * wildcard of {@code unmodifiableMap} — a plain cast would not compile.
+	 */
+	private java.util.Map<String, Object> attributesOf(Saml2AuthenticatedPrincipal principal) {
+		return java.util.Collections.unmodifiableMap(principal.getAttributes());
 	}
 }

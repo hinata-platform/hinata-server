@@ -47,6 +47,30 @@ public class ServerSettings {
 	@LastModifiedDate
 	private Instant updatedAt;
 
+	/**
+	 * Implemented by every identity-provider block, so
+	 * {@link com.ahmadre.hinata.auth.sso.SsoProfileMapper} can read the profile
+	 * mapping of any provider through one contract. Each block ships the defaults
+	 * that suit its protocol; an admin overrides them per provider in the admin
+	 * area. Syntax of an attribute field: comma-separated alternatives (first
+	 * non-blank wins), spaces inside one alternative join its parts.
+	 */
+	public interface AttributeMapping {
+		String getEmailAttribute();
+
+		String getDisplayNameAttribute();
+
+		String getTitleAttribute();
+
+		/**
+		 * Whether the directory stays the source of truth for display name and
+		 * position on <em>every</em> login. When off, an SSO profile is filled on
+		 * first provisioning only (blank fields are still backfilled). Either way an
+		 * attribute the IdP omits never clears a stored value.
+		 */
+		boolean isSyncProfileOnLogin();
+	}
+
 	/** General organization settings. */
 	@Data
 	public static class General {
@@ -126,7 +150,7 @@ public class ServerSettings {
 
 	/** OpenID Connect (e.g. Synology SSO, Keycloak, Authentik). */
 	@Data
-	public static class Oidc {
+	public static class Oidc implements AttributeMapping {
 		private boolean enabled = false;
 		private String displayName = "OpenID Connect";
 		private String issuerUri;
@@ -134,11 +158,27 @@ public class ServerSettings {
 		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
 		private String clientSecret;
 		private String scopes = "openid,profile,email";
+		/**
+		 * PKCE (RFC 7636) for the code exchange. Discovery decides whether it is
+		 * used, so leaving this on keeps the protection wherever the provider
+		 * announces support. Switch it off only for a provider that advertises
+		 * {@code code_challenge_methods_supported} but then rejects the exchange —
+		 * Synology's SSO Server answers such a request with a bare
+		 * {@code 400 {"error":"server_error"}}.
+		 */
+		private boolean pkceEnabled = true;
+		// Standard OIDC claims only. Providers that ship their own (Synology's
+		// "username", Authentik's "job_title") are opt-in: an admin adds the name
+		// here rather than us guessing per vendor.
+		private String emailAttribute = "email";
+		private String displayNameAttribute = "name,preferred_username,given_name family_name,nickname";
+		private String titleAttribute = "title,job_title,jobTitle,position";
+		private boolean syncProfileOnLogin = true;
 	}
 
 	/** Plain OAuth2 provider without OIDC discovery. */
 	@Data
-	public static class OAuth2 {
+	public static class OAuth2 implements AttributeMapping {
 		private boolean enabled = false;
 		private String displayName = "OAuth 2.0";
 		private String clientId;
@@ -149,19 +189,29 @@ public class ServerSettings {
 		private String userInfoUri;
 		private String userNameAttribute = "email";
 		private String scopes = "profile,email";
+		private String emailAttribute = "email";
+		private String displayNameAttribute = "name,preferred_username,given_name family_name,nickname";
+		private String titleAttribute = "title,job_title,jobTitle,position";
+		private boolean syncProfileOnLogin = true;
 	}
 
 	@Data
-	public static class Saml {
+	public static class Saml implements AttributeMapping {
 		private boolean enabled = false;
 		private String displayName = "SAML";
 		/** IdP metadata URL (preferred) – e.g. Synology SSO metadata endpoint. */
 		private String idpMetadataUri;
 		private String entityId;
+		// Friendly names plus the X.500 OIDs assertions commonly use instead.
+		private String emailAttribute = "email,mail,urn:oid:0.9.2342.19200300.100.1.3";
+		private String displayNameAttribute =
+				"displayName,cn,name,urn:oid:2.16.840.1.113730.3.1.241,givenName sn";
+		private String titleAttribute = "title,jobTitle,urn:oid:2.5.4.12";
+		private boolean syncProfileOnLogin = true;
 	}
 
 	@Data
-	public static class Ldap {
+	public static class Ldap implements AttributeMapping {
 		private boolean enabled = false;
 		private String url; // ldap(s)://host:389
 		private String baseDn;
@@ -171,7 +221,10 @@ public class ServerSettings {
 		private String userSearchBase = "ou=people";
 		private String userSearchFilter = "(uid={0})";
 		private String emailAttribute = "mail";
-		private String displayNameAttribute = "cn";
+		private String displayNameAttribute = "cn,displayName,givenName sn";
+		/** {@code description} carries the position in Synology/DSM directories. */
+		private String titleAttribute = "title,description";
+		private boolean syncProfileOnLogin = true;
 	}
 
 	/** Kerberos/SPNEGO – configuration only; see docs for the required keytab. */

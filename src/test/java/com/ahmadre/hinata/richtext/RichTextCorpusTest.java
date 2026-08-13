@@ -81,7 +81,7 @@ class RichTextCorpusTest {
 
 						| Umgebung | Ziel |
 						|---|---|
-						| prod | `track.asta.hn` |
+						| prod | `track.example.com` |
 
 						> Im Zweifel: nicht deployen.
 						""");

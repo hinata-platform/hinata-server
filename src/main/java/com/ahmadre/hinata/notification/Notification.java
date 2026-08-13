@@ -34,7 +34,7 @@ public class Notification {
 
 	private String body;
 
-	/** In-app deep link, e.g. /issues/ASTA-42. */
+	/** In-app deep link, e.g. /issues/ACME-42. */
 	private String link;
 
 	@Builder.Default

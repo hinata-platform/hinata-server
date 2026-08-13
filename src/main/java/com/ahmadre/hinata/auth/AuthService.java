@@ -146,9 +146,10 @@ public class AuthService {
 	}
 
 	private Optional<User> ldapLogin(String identifier, String password) {
-		return ldap.authenticate(settings.get().getLdap(), identifier, password)
-				.map(ldapUser -> userService.provisionSso(
-						ldapUser.email(), ldapUser.displayName(), User.Origin.LDAP));
+		com.ahmadre.hinata.setup.ServerSettings.Ldap config = settings.get().getLdap();
+		return ldap.authenticate(config, identifier, password)
+				.map(profile -> userService.provisionSso(
+						profile, User.Origin.LDAP, config.isSyncProfileOnLogin()));
 	}
 
 	/**

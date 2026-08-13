@@ -160,21 +160,73 @@ public class UserService {
 	/** Languages we ship email templates for; anything else keeps the default. */
 	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de");
 
-	/** Find-or-create for accounts arriving via OIDC, SAML or LDAP. */
-	public User provisionSso(String email, String displayName, User.Origin origin) {
-		return users.findByEmailIgnoreCase(email).orElseGet(() -> {
-			// New SSO users inherit the browser language from the login redirect
-			// (Accept-Language) so their emails are localized from the start.
-			User.UserBuilder builder = User.builder()
-					.email(email.toLowerCase(Locale.ROOT))
-					.username(uniqueUsernameFrom(email))
-					.displayName(displayName != null && !displayName.isBlank() ? displayName : email)
-					.roles(Set.of(Role.MEMBER))
-					.origin(origin);
-			String lang = LocaleContextHolder.getLocale().getLanguage();
-			if (SUPPORTED_LOCALES.contains(lang)) builder.locale(lang);
-			return users.save(builder.build());
-		});
+	/**
+	 * Find-or-create for accounts arriving via OIDC, SAML or LDAP. The profile is
+	 * whatever {@link com.ahmadre.hinata.auth.sso.SsoProfileMapper} could resolve
+	 * from the IdP's attributes.
+	 *
+	 * <p>On a later login the directory stays the source of truth while
+	 * [syncProfile] is on: display name and position follow the IdP. Two rules
+	 * hold regardless — an attribute the IdP does <em>not</em> send never clears a
+	 * stored value, and only SSO-provisioned accounts are touched, so an IdP can
+	 * never rewrite the profile of a local account that happens to share the
+	 * address.
+	 */
+	public User provisionSso(com.ahmadre.hinata.auth.sso.SsoProfileMapper.SsoProfile profile,
+			User.Origin origin, boolean syncProfile) {
+		String email = profile.email();
+		return users.findByEmailIgnoreCase(email)
+				.map(existing -> applyIdpProfile(existing, profile, syncProfile))
+				.orElseGet(() -> {
+					// New SSO users inherit the browser language from the login redirect
+					// (Accept-Language) so their emails are localized from the start.
+					String displayName = profile.displayName();
+					User.UserBuilder builder = User.builder()
+							.email(email.toLowerCase(Locale.ROOT))
+							.username(uniqueUsernameFrom(email))
+							.displayName(displayName != null && !displayName.isBlank() ? displayName : email)
+							.title(trimToNull(profile.title()))
+							.roles(Set.of(Role.MEMBER))
+							.origin(origin);
+					String lang = LocaleContextHolder.getLocale().getLanguage();
+					if (SUPPORTED_LOCALES.contains(lang)) builder.locale(lang);
+					return users.save(builder.build());
+				});
+	}
+
+	/** Re-applies the IdP profile to an existing SSO account; see {@link #provisionSso}. */
+	private User applyIdpProfile(User user, com.ahmadre.hinata.auth.sso.SsoProfileMapper.SsoProfile profile,
+			boolean syncProfile) {
+		if (!user.isSso()) {
+			return user;
+		}
+		boolean changed = false;
+		// A display name that is just the address was our fallback for an IdP that
+		// sent no name — never something the user chose — so it is replaced even
+		// when the admin has switched continuous syncing off.
+		boolean placeholderName = user.getDisplayName() == null || user.getDisplayName().isBlank()
+				|| user.getDisplayName().equalsIgnoreCase(user.getEmail());
+		String displayName = trimToNull(profile.displayName());
+		if (displayName != null && !displayName.equals(user.getDisplayName())
+				&& (syncProfile || placeholderName)) {
+			user.setDisplayName(displayName);
+			changed = true;
+		}
+		String title = trimToNull(profile.title());
+		if (title != null && !title.equals(user.getTitle())
+				&& (syncProfile || user.getTitle() == null || user.getTitle().isBlank())) {
+			user.setTitle(title);
+			changed = true;
+		}
+		return changed ? users.save(user) : user;
+	}
+
+	private String trimToNull(String value) {
+		if (value == null) {
+			return null;
+		}
+		String trimmed = value.trim();
+		return trimmed.isEmpty() ? null : trimmed;
 	}
 
 	public void changePassword(User user, String currentPassword, String newPassword) {

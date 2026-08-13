@@ -183,7 +183,7 @@ public class HinataProperties {
 	@Getter
 	@Setter
 	public static class Setup {
-		/** Organization shown in the app, e.g. "AStA Hochschule Niederrhein". */
+		/** Organization shown in the app, e.g. "Example Organization". */
 		private String organizationName;
 		private String adminEmail;
 		private String adminUsername;
