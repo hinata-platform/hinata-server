@@ -53,6 +53,13 @@ public class User {
 	@Builder.Default
 	private Origin origin = Origin.LOCAL;
 
+	/**
+	 * Where this user's picture is served from, or null. The URL carries the
+	 * picture's {@code bh} BlurHash as a query parameter — see
+	 * {@code AvatarService}, which is also what generates it: every response
+	 * that mentions an avatar already carries this string, so the placeholder
+	 * needs no new field in a dozen DTOs to reach the client.
+	 */
 	private String avatarUrl;
 
 	/** Job title shown e.g. in the dashboard performance ranking. */

@@ -23,6 +23,9 @@ val bucket4jVersion = "8.10.1"
 val minioVersion = "8.6.0"
 val azureStorageBlobVersion = "12.31.3"
 val openpdfVersion = "2.0.3"
+// PDF *rasterizing* (first-page thumbnails). openpdf above writes PDFs and
+// cannot render them; PDFBox is the mature reader/renderer for that side.
+val pdfboxVersion = "3.0.3"
 val springdocScalarVersion = "3.0.3"
 // Spring AI provides the MCP (Model Context Protocol) server: it embeds the
 // official io.modelcontextprotocol Java SDK and auto-configures the WebMVC
@@ -97,6 +100,8 @@ dependencies {
 
     // PDF generation: GDPR (Art. 15) self-service data report
     implementation("com.github.librepdf:openpdf:$openpdfVersion")
+    // PDF rendering: first-page thumbnails for PDF attachments
+    implementation("org.apache.pdfbox:pdfbox:$pdfboxVersion")
 
     // Security & SSO
     implementation("org.springframework.boot:spring-boot-starter-security")

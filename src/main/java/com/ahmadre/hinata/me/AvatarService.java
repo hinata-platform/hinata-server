@@ -2,6 +2,7 @@ package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.storage.ImageOps;
+import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -11,6 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.awt.image.BufferedImage;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.Set;
 
@@ -46,6 +49,7 @@ public class AvatarService {
 
 	private final StorageService storage;
 	private final UserRepository users;
+	private final ImagePreviewService previews;
 
 	/** Object key for a user's avatar, e.g. {@code avatars/{userId}.jpg}. */
 	private String objectKey(String userId) {
@@ -72,7 +76,7 @@ public class AvatarService {
 		// server and no public bucket policy is required.
 		storage.putObject(objectKey(user.getId()), jpeg, "image/jpeg");
 
-		String url = urlFor(user.getId());
+		String url = withBlurHash(urlFor(user.getId()), blurHashOf(jpeg));
 		user.setAvatarUrl(url);
 		users.save(user);
 		return url;
@@ -84,17 +88,70 @@ public class AvatarService {
 		users.save(user);
 	}
 
-	/** The stored avatar bytes for [userId], or empty when none / unset. */
+	/**
+	 * The stored avatar bytes for [userId], or empty when none / unset.
+	 *
+	 * <p>Also fills in a missing BlurHash on the way out: pictures uploaded
+	 * before placeholders existed have no hash in their URL, and this is the one
+	 * moment the server holds their bytes anyway. The refreshed URL reaches
+	 * clients with the next response that mentions this user.
+	 */
 	public Optional<StorageService.StoredObject> load(String userId) {
 		if (!storage.isConfigured()) {
 			return Optional.empty();
 		}
-		return storage.getObject(objectKey(userId));
+		Optional<StorageService.StoredObject> object = storage.getObject(objectKey(userId));
+		object.ifPresent(stored -> backfillBlurHash(userId, stored.data()));
+		return object;
+	}
+
+	private void backfillBlurHash(String userId, byte[] jpeg) {
+		users.findById(userId)
+				.filter(user -> user.getAvatarUrl() != null && !user.getAvatarUrl().contains(BLUR_PARAM))
+				.ifPresent(user -> {
+					String hash = blurHashOf(jpeg);
+					if (hash == null) {
+						return;
+					}
+					// The existing URL is kept verbatim apart from the new parameter:
+					// re-stamping its cache-buster would make every client refetch a
+					// picture that has not changed.
+					user.setAvatarUrl(withBlurHash(user.getAvatarUrl(), hash));
+					users.save(user);
+				});
 	}
 
 	/** A relative, cache-busted URL the client resolves against its API base. */
 	private String urlFor(String userId) {
 		return "/api/v1/users/" + userId + "/avatar?v=" + System.currentTimeMillis();
+	}
+
+	/** Query parameter carrying the avatar's BlurHash. */
+	private static final String BLUR_PARAM = "bh=";
+
+	/**
+	 * Appends the BlurHash to an avatar URL.
+	 *
+	 * <p>In the URL rather than in a response field, because an avatar's address
+	 * already travels in every DTO that mentions a person — the directory, a
+	 * board card, a search hit, an audit row. A separate field would have to be
+	 * added to each of them and threaded through every widget that draws a
+	 * circle; the address is the one thing they all already carry.
+	 *
+	 * <p>The hash is percent-encoded: base-83 includes {@code # $ % + ? &}, all
+	 * of which would otherwise cut the URL short or invent a parameter.
+	 */
+	private static String withBlurHash(String url, String blurHash) {
+		if (blurHash == null || blurHash.isBlank()) {
+			return url;
+		}
+		return url + (url.contains("?") ? "&" : "?") + BLUR_PARAM
+				+ URLEncoder.encode(blurHash, StandardCharsets.UTF_8);
+	}
+
+	/** BlurHash of already-compressed avatar bytes, or null when unreadable. */
+	private String blurHashOf(byte[] jpeg) {
+		return previews.create(jpeg).map(ImagePreviewService.Preview::blurHash).orElse(null);
 	}
 
 	// --- image pipeline -------------------------------------------------------

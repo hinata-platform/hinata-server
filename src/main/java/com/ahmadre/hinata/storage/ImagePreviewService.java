@@ -57,11 +57,17 @@ public class ImagePreviewService {
 	}
 
 	/**
-	 * Builds the preview for [source], or empty when the bytes are not a raster
-	 * image this JVM can decode.
+	 * Builds the preview for [source]: a raster image, or the first page of a
+	 * PDF. Empty when the bytes are neither — a Word file or a ZIP has no page
+	 * to draw, and the client shows its file-type glyph as it always did.
+	 *
+	 * <p>The kind is decided by the payload's own magic bytes, not by a
+	 * client-declared content type, so a mislabelled upload is previewed as what
+	 * it actually is (or not at all).
 	 */
 	public Optional<Preview> create(byte[] source) {
-		BufferedImage image = ImageOps.read(source);
+		BufferedImage image = isPdf(source) ? PdfPageRenderer.firstPage(source)
+				: ImageOps.read(source);
 		if (image == null) {
 			return Optional.empty();
 		}
@@ -80,6 +86,12 @@ public class ImagePreviewService {
 			log.warn("Preview generation failed: {}", ex.toString());
 			return Optional.empty();
 		}
+	}
+
+	/** {@code %PDF-} — the only signature a PDF is allowed to start with. */
+	private static boolean isPdf(byte[] source) {
+		return source != null && source.length > 4
+				&& source[0] == '%' && source[1] == 'P' && source[2] == 'D' && source[3] == 'F';
 	}
 
 	/**

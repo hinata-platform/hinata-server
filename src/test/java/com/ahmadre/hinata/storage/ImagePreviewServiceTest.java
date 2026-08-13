@@ -76,10 +76,54 @@ class ImagePreviewServiceTest {
 
 	@Test
 	void undecodableBytesYieldNoPreviewInsteadOfFailing() {
-		// A PDF, a webp (no JDK reader) or a truncated upload must degrade to "no
-		// preview" — the caller then serves the original, as it always did.
-		assertThat(previews.create("%PDF-1.7 not an image".getBytes())).isEmpty();
+		// A webp (no JDK reader), a Word file, a truncated upload: all must
+		// degrade to "no preview" — the caller then serves the original or shows
+		// its file-type glyph, exactly as before.
+		assertThat(previews.create("PK not a picture".getBytes())).isEmpty();
+		assertThat(previews.create("%PDF-1.7 truncated".getBytes())).isEmpty();
 		assertThat(previews.create(new byte[0])).isEmpty();
 		assertThat(previews.create(null)).isEmpty();
+	}
+
+	// --- PDF ------------------------------------------------------------------
+
+	/** A one-page A4 document, written with the PDF library the server ships. */
+	private static byte[] pdf() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		com.lowagie.text.Document document =
+				new com.lowagie.text.Document(com.lowagie.text.PageSize.A4);
+		com.lowagie.text.pdf.PdfWriter.getInstance(document, out);
+		document.open();
+		document.add(new com.lowagie.text.Paragraph("Hinata"));
+		document.close();
+		return out.toByteArray();
+	}
+
+	@Test
+	void aPdfIsPreviewedByRenderingItsFirstPage() {
+		Optional<ImagePreviewService.Preview> preview = previews.create(pdf());
+
+		assertThat(preview).isPresent();
+		BufferedImage page = ImageOps.read(preview.get().bytes());
+		assertThat(page).isNotNull();
+		assertThat(Math.max(page.getWidth(), page.getHeight()))
+				.isLessThanOrEqualTo(ImagePreviewService.THUMBNAIL_MAX_EDGE);
+		// A4 is portrait: a transposed render would come back wider than tall.
+		assertThat(page.getHeight()).isGreaterThan(page.getWidth());
+		assertThat(preview.get().contentType()).isEqualTo("image/jpeg");
+		// Mostly white paper — the placeholder must not be a black rectangle.
+		assertThat(preview.get().blurHash()).isNotEmpty();
+		assertThat(brightness(page)).isGreaterThan(200);
+	}
+
+	private static double brightness(BufferedImage image) {
+		double sum = 0;
+		for (int y = 0; y < image.getHeight(); y++) {
+			for (int x = 0; x < image.getWidth(); x++) {
+				int rgb = image.getRGB(x, y);
+				sum += (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3.0;
+			}
+		}
+		return sum / (image.getWidth() * (double) image.getHeight());
 	}
 }

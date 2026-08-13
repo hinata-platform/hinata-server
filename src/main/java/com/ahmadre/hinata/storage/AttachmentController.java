@@ -81,8 +81,7 @@ public class AttachmentController {
 	 * client without a preview simply falls back to the full image.
 	 */
 	private String storePreview(String attachmentId, MultipartFile file) {
-		String contentType = file.getContentType();
-		if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
+		if (!isPreviewable(file.getContentType())) {
 			return null;
 		}
 		try {
@@ -144,7 +143,7 @@ public class AttachmentController {
 	 */
 	private StorageService.StoredObject generateMissingPreview(Issue issue,
 			Issue.Attachment attachment) {
-		if (!isImage(attachment)) {
+		if (!isPreviewable(attachment.getContentType())) {
 			return null;
 		}
 		StorageService.StoredObject original = storage.getObject(attachment.getObjectKey())
@@ -172,9 +171,18 @@ public class AttachmentController {
 		return new StorageService.StoredObject(preview.get().bytes(), preview.get().contentType());
 	}
 
-	private static boolean isImage(Issue.Attachment attachment) {
-		return attachment.getContentType() != null
-				&& attachment.getContentType().toLowerCase().startsWith("image/");
+	/**
+	 * Whether a preview is worth attempting for this content type: pictures, and
+	 * PDFs (whose first page is rendered). A Word file or an archive has no page
+	 * to draw, and reading a 20 MB ZIP back out of storage to discover that is
+	 * exactly the work this check avoids.
+	 */
+	private static boolean isPreviewable(String contentType) {
+		if (contentType == null) {
+			return false;
+		}
+		String type = contentType.toLowerCase();
+		return type.startsWith("image/") || type.startsWith("application/pdf");
 	}
 
 	/**
