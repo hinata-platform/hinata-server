@@ -158,15 +158,6 @@ public class ServerSettings {
 		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
 		private String clientSecret;
 		private String scopes = "openid,profile,email";
-		/**
-		 * PKCE (RFC 7636) for the code exchange. Discovery decides whether it is
-		 * used, so leaving this on keeps the protection wherever the provider
-		 * announces support. Switch it off only for a provider that advertises
-		 * {@code code_challenge_methods_supported} but then rejects the exchange —
-		 * Synology's SSO Server answers such a request with a bare
-		 * {@code 400 {"error":"server_error"}}.
-		 */
-		private boolean pkceEnabled = true;
 		// Standard OIDC claims only. Providers that ship their own (Synology's
 		// "username", Authentik's "job_title") are opt-in: an admin adds the name
 		// here rather than us guessing per vendor.

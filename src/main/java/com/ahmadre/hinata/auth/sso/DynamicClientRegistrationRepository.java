@@ -70,25 +70,16 @@ public class DynamicClientRegistrationRepository implements ClientRegistrationRe
 		ServerSettings.Oidc oidc = current.getOidc();
 		if (oidc.isEnabled() && notBlank(oidc.getIssuerUri()) && notBlank(oidc.getClientId())) {
 			try {
-				ClientRegistration.Builder registration =
-						ClientRegistrations.fromIssuerLocation(oidc.getIssuerUri())
-								.registrationId(OIDC_ID)
-								.clientId(oidc.getClientId())
-								.clientSecret(oidc.getClientSecret())
-								.redirectUri(redirectUri(OIDC_ID))
-								.scope(oidc.getScopes().split("\\s*,\\s*"));
-				// Discovery turns PKCE on by itself whenever the provider announces
-				// code_challenge_methods_supported, so the protection is on by
-				// default and this only opts out a provider that announces it and
-				// then fails the exchange anyway (Synology's SSO Server answers
-				// 400 {"error":"server_error"} once a code_verifier arrives).
-				if (!oidc.isPkceEnabled()) {
-					log.warn("OIDC PKCE disabled by configuration for issuer {}", oidc.getIssuerUri());
-					registration.clientSettings(ClientRegistration.ClientSettings.builder()
-							.requireProofKey(false)
-							.build());
-				}
-				cache.put(OIDC_ID, registration.build());
+				// PKCE is not configured here on purpose: discovery turns it on
+				// wherever the provider announces code_challenge_methods_supported,
+				// which is the protection we want and where it belongs.
+				cache.put(OIDC_ID, ClientRegistrations.fromIssuerLocation(oidc.getIssuerUri())
+						.registrationId(OIDC_ID)
+						.clientId(oidc.getClientId())
+						.clientSecret(oidc.getClientSecret())
+						.redirectUri(redirectUri(OIDC_ID))
+						.scope(oidc.getScopes().split("\\s*,\\s*"))
+						.build());
 			}
 			catch (Exception ex) {
 				log.error("OIDC discovery failed for {}: {}", oidc.getIssuerUri(), ex.getMessage());
