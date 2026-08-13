@@ -7,6 +7,7 @@ import com.ahmadre.hinata.issue.IssueService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.CacheControl;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -20,9 +21,11 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.zip.Deflater;
@@ -43,6 +46,7 @@ public class AttachmentController {
 	private final StorageService storage;
 	private final AttachmentStore store;
 	private final AttachmentEvents events;
+	private final ImagePreviewService previews;
 	private final CurrentUser currentUser;
 
 	@PostMapping
@@ -52,20 +56,125 @@ public class AttachmentController {
 		Issue issue = issueService.getForUser(issueId, currentUser.require());
 		String userId = currentUser.requireId();
 		String objectKey = storage.upload(file);
+		String attachmentId = UUID.randomUUID().toString();
 		Issue.Attachment attachment = Issue.Attachment.builder()
-				.id(UUID.randomUUID().toString())
+				.id(attachmentId)
 				.fileName(file.getOriginalFilename())
 				.contentType(file.getContentType())
 				.size(file.getSize())
 				.objectKey(objectKey)
 				.uploaderId(userId)
 				.uploadedAt(Instant.now())
+				.blurHash(storePreview(attachmentId, file))
 				.build();
 		// Atomic $push so parallel uploads to the same issue can't lose each other.
 		Issue saved = store.add(issue.getId(), attachment);
 		// Notify everyone viewing this issue so the new tile appears live.
 		events.publishAdded(saved.getId(), attachment);
 		return saved;
+	}
+
+	/**
+	 * Generates and stores the thumbnail for a freshly uploaded image, returning
+	 * its BlurHash (null when the upload is not a decodable image). Never lets a
+	 * preview problem fail the upload: the file itself is already stored, and a
+	 * client without a preview simply falls back to the full image.
+	 */
+	private String storePreview(String attachmentId, MultipartFile file) {
+		String contentType = file.getContentType();
+		if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
+			return null;
+		}
+		try {
+			Optional<ImagePreviewService.Preview> preview = previews.create(file.getBytes());
+			if (preview.isEmpty()) {
+				return null;
+			}
+			storage.putObject(ImagePreviewService.attachmentThumbnailKey(attachmentId),
+					preview.get().bytes(), preview.get().contentType());
+			return preview.get().blurHash();
+		}
+		catch (IOException | RuntimeException ex) {
+			log.warn("Preview for attachment {} failed: {}", attachmentId, ex.toString());
+			return null;
+		}
+	}
+
+	/**
+	 * The small, re-encoded preview of an image attachment — what a grid of tiles
+	 * loads instead of the originals. Falls back to the full image for pictures
+	 * uploaded before previews existed (and for formats this JVM cannot decode),
+	 * so the endpoint always answers with something renderable.
+	 */
+	@GetMapping("/{attachmentId}/thumbnail")
+	public ResponseEntity<byte[]> thumbnail(@PathVariable String issueId,
+			@PathVariable String attachmentId) {
+		Issue issue = issueService.getForUser(issueId, currentUser.require());
+		Issue.Attachment attachment = issue.getAttachments().stream()
+				.filter(a -> a.getId().equals(attachmentId))
+				.findFirst()
+				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
+		StorageService.StoredObject object = storage
+				.getObject(ImagePreviewService.attachmentThumbnailKey(attachmentId))
+				.orElseGet(() -> generateMissingPreview(issue, attachment));
+		if (object == null) {
+			throw ApiException.notFound(ATTACHMENT);
+		}
+		String contentType = object.contentType() == null || object.contentType().isBlank()
+				? MediaType.APPLICATION_OCTET_STREAM_VALUE : object.contentType();
+		return ResponseEntity.ok()
+				// Immutable: the key contains the attachment id and an attachment's
+				// bytes never change, so a client may keep this until it is deleted.
+				.cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePrivate().immutable())
+				.contentType(MediaType.parseMediaType(contentType))
+				.header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline().build().toString())
+				.header("X-Content-Type-Options", "nosniff")
+				.body(object.data());
+	}
+
+	/**
+	 * Builds the preview for an image that has none yet — everything uploaded
+	 * before previews existed, plus anything whose generation failed at the time.
+	 * Doing it on first view instead of in a boot-time migration keeps startup
+	 * free of a job that would re-encode every picture in the installation, and
+	 * limits the work to images somebody actually looks at.
+	 *
+	 * <p>Returns the preview bytes, the original when the format cannot be
+	 * decoded (webp), or null when there is nothing to show.
+	 */
+	private StorageService.StoredObject generateMissingPreview(Issue issue,
+			Issue.Attachment attachment) {
+		if (!isImage(attachment)) {
+			return null;
+		}
+		StorageService.StoredObject original = storage.getObject(attachment.getObjectKey())
+				.orElse(null);
+		if (original == null) {
+			return null;
+		}
+		Optional<ImagePreviewService.Preview> preview = previews.create(original.data());
+		if (preview.isEmpty()) {
+			return original;
+		}
+		try {
+			storage.putObject(ImagePreviewService.attachmentThumbnailKey(attachment.getId()),
+					preview.get().bytes(), preview.get().contentType());
+			if (attachment.getBlurHash() == null) {
+				store.setBlurHash(issue.getId(), attachment.getId(), preview.get().blurHash());
+			}
+		}
+		catch (RuntimeException ex) {
+			// Storing the result is an optimisation for the next viewer; failing at
+			// it must not deny this one the preview that is already in hand.
+			log.warn("Storing late preview for attachment {} failed: {}",
+					attachment.getId(), ex.toString());
+		}
+		return new StorageService.StoredObject(preview.get().bytes(), preview.get().contentType());
+	}
+
+	private static boolean isImage(Issue.Attachment attachment) {
+		return attachment.getContentType() != null
+				&& attachment.getContentType().toLowerCase().startsWith("image/");
 	}
 
 	/**
@@ -202,8 +311,17 @@ public class AttachmentController {
 				.findFirst()
 				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
 		Issue saved = store.remove(issue.getId(), attachmentId);
-		storage.delete(attachment.getObjectKey());
+		deleteObjects(attachment);
 		events.publishRemoved(saved.getId(), attachmentId);
+	}
+
+	/** Drops an attachment's stored bytes and its derived thumbnail. */
+	private void deleteObjects(Issue.Attachment attachment) {
+		storage.delete(attachment.getObjectKey());
+		// Unconditional: a thumbnail that was never generated is a no-op delete,
+		// and skipping it based on the content type would leak the object for an
+		// attachment whose type was recorded differently than it was previewed.
+		storage.delete(ImagePreviewService.attachmentThumbnailKey(attachment.getId()));
 	}
 
 	/**
@@ -229,7 +347,7 @@ public class AttachmentController {
 		List<String> targetIds = targets.stream().map(Issue.Attachment::getId).toList();
 		Issue saved = store.removeAll(issue.getId(), targetIds);
 		for (Issue.Attachment attachment : targets) {
-			storage.delete(attachment.getObjectKey());
+			deleteObjects(attachment);
 			events.publishRemoved(saved.getId(), attachment.getId());
 		}
 	}

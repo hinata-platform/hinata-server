@@ -53,6 +53,17 @@ public class AttachmentStore {
 				.pull(FIELD, new Document("id", new Document("$in", List.copyOf(attachmentIds)))));
 	}
 
+	/**
+	 * Records a late-computed BlurHash on one embedded attachment. Targets the
+	 * single array element by id ({@code $[a]} + array filter) rather than
+	 * rewriting the list, so it cannot clobber an attachment added in parallel.
+	 */
+	public void setBlurHash(String issueId, String attachmentId, String blurHash) {
+		Update update = new Update().set(FIELD + ".$[a].blurHash", blurHash);
+		update.filterArray(Criteria.where("a.id").is(attachmentId));
+		mongo.updateFirst(new Query(Criteria.where("_id").is(issueId)), update, Issue.class);
+	}
+
 	private Issue apply(String issueId, Update update) {
 		Issue updated = mongo.findAndModify(
 				new Query(Criteria.where("_id").is(issueId)),

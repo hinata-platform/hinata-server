@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.media;
 
 import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -104,6 +105,10 @@ public class MediaGarbageCollector {
 					&& !object.lastModified().isAfter(cutoff);
 			if (orphan) {
 				storage.delete(object.key());
+				// The generated thumbnail lives under its own prefix (deliberately
+				// outside media/, or this very sweep would reap it — nothing
+				// references a thumbnail). It has to go with its image.
+				storage.delete(ImagePreviewService.mediaThumbnailKey(id));
 				deleted++;
 			}
 		}

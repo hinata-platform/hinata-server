@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.storage.ImageOps;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -9,16 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import javax.imageio.stream.ImageOutputStream;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.util.Optional;
 import java.util.Set;
 
@@ -109,7 +101,9 @@ public class AvatarService {
 
 	private byte[] compress(MultipartFile file) {
 		try {
-			BufferedImage source = ImageIO.read(new ByteArrayInputStream(file.getBytes()));
+			// Bounded decode: a small file can declare enormous dimensions, and an
+			// avatar is not worth the heap that would take (see ImageOps.read).
+			BufferedImage source = ImageOps.read(file.getBytes());
 			if (source == null) {
 				throw ApiException.badRequest("error.avatar.unreadable");
 			}
@@ -117,8 +111,10 @@ public class AvatarService {
 			int target = Math.min(MAX_SIZE, Math.max(MIN_SIZE, square.getWidth()));
 			// Never upscale: a small source keeps its size (target capped at source).
 			target = Math.min(target, square.getWidth());
-			BufferedImage scaled = resize(square, target);
-			return encodeJpeg(scaled);
+			// keepAlpha=false: JPEG has no alpha channel, so a transparent source is
+			// flattened onto white rather than turned black.
+			BufferedImage scaled = ImageOps.scaleTo(square, target, target, false);
+			return ImageOps.encodeJpeg(scaled, JPEG_QUALITY);
 		}
 		catch (ApiException ex) {
 			throw ex;
@@ -135,57 +131,5 @@ public class AvatarService {
 		int x = (src.getWidth() - side) / 2;
 		int y = (src.getHeight() - side) / 2;
 		return src.getSubimage(x, y, side, side);
-	}
-
-	/**
-	 * Bicubic downscale with progressive halving (best quality for large ratios):
-	 * repeatedly halve toward the target, then a final bicubic pass to the exact
-	 * size. Output is flattened onto white so transparent PNGs encode cleanly to
-	 * JPEG (which has no alpha channel).
-	 */
-	private BufferedImage resize(BufferedImage src, int target) {
-		BufferedImage current = src;
-		int width = src.getWidth();
-		int height = src.getHeight();
-		while (width / 2 >= target) {
-			width /= 2;
-			height /= 2;
-			current = drawScaled(current, width, height, false);
-		}
-		return drawScaled(current, target, target, true);
-	}
-
-	private BufferedImage drawScaled(BufferedImage src, int w, int h, boolean flattenWhite) {
-		BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-		Graphics2D g = out.createGraphics();
-		if (flattenWhite) {
-			g.setColor(java.awt.Color.WHITE);
-			g.fillRect(0, 0, w, h);
-		}
-		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-				RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-		g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		g.drawImage(src, 0, 0, w, h, null);
-		g.dispose();
-		return out;
-	}
-
-	private byte[] encodeJpeg(BufferedImage image) throws Exception {
-		ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg").next();
-		try {
-			ImageWriteParam param = writer.getDefaultWriteParam();
-			param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-			param.setCompressionQuality(JPEG_QUALITY);
-			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-			try (ImageOutputStream out = ImageIO.createImageOutputStream(bytes)) {
-				writer.setOutput(out);
-				writer.write(null, new IIOImage(image, null, null), param);
-			}
-			return bytes.toByteArray();
-		}
-		finally {
-			writer.dispose();
-		}
 	}
 }

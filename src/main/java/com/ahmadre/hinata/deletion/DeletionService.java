@@ -13,6 +13,7 @@ import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.team.ProjectAccess;
 import com.ahmadre.hinata.team.Team;
@@ -459,6 +460,11 @@ public class DeletionService {
 		for (Issue.Attachment attachment : issue.getAttachments()) {
 			if (attachment.getObjectKey() != null) {
 				storage.delete(attachment.getObjectKey());
+			}
+			// The generated thumbnail is a second object under its own key; without
+			// this it would outlive the issue with nothing left to reference it.
+			if (attachment.getId() != null) {
+				storage.delete(ImagePreviewService.attachmentThumbnailKey(attachment.getId()));
 			}
 		}
 	}

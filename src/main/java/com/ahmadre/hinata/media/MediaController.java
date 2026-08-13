@@ -46,6 +46,19 @@ public class MediaController {
 		return inline(media.load(id), CacheControl.maxAge(Duration.ofDays(30)).cachePrivate());
 	}
 
+	/**
+	 * The small preview of an inline image. A document full of pictures can paint
+	 * from these in a fraction of the bytes and then swap in the full images —
+	 * instead of showing empty boxes until the originals have all arrived.
+	 */
+	@Operation(summary = "Read the thumbnail of an uploaded inline image")
+	@GetMapping("/{id:[0-9a-fA-F-]{36}}/thumbnail")
+	public ResponseEntity<byte[]> thumbnail(@PathVariable String id) {
+		// Immutable: an id addresses one set of bytes for its whole lifetime.
+		return inline(media.loadThumbnail(id),
+				CacheControl.maxAge(Duration.ofDays(30)).cachePrivate().immutable());
+	}
+
 	@Operation(summary = "Proxy an external image URL server-side (bypasses CORS)")
 	@GetMapping("/proxy")
 	public ResponseEntity<byte[]> proxy(@RequestParam("url") String url) {

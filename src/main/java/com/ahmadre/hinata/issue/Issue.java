@@ -278,5 +278,11 @@ public class Issue {
 		private String objectKey;
 		private String uploaderId;
 		private Instant uploadedAt;
+		/**
+		 * BlurHash of the picture (null for non-images and for anything the server
+		 * could not decode). It travels with the issue JSON so a client paints a
+		 * blurred stand-in in the first frame, before requesting any image bytes.
+		 */
+		private String blurHash;
 	}
 }

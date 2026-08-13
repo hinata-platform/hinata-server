@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.storage;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.user.User;
@@ -22,8 +23,10 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -49,7 +52,8 @@ class AttachmentControllerTest {
 		events = mock(AttachmentEvents.class);
 		CurrentUser currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(mock(User.class));
-		controller = new AttachmentController(issues, storage, store, events, currentUser);
+		controller = new AttachmentController(issues, storage, store, events,
+				new ImagePreviewService(), currentUser);
 	}
 
 	private static Issue.Attachment attachment(String id, String fileName, String objectKey) {
@@ -133,6 +137,82 @@ class AttachmentControllerTest {
 		storedAs("k2", "here");
 
 		assertThat(unzip(controller.archive("i1"))).containsOnlyKeys("here.txt");
+	}
+
+	// --- thumbnails -----------------------------------------------------------
+
+	private static byte[] pngBytes(int width, int height) throws Exception {
+		java.awt.image.BufferedImage image =
+				new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_RGB);
+		java.awt.Graphics2D g = image.createGraphics();
+		g.setColor(new java.awt.Color(20, 140, 90));
+		g.fillRect(0, 0, width, height);
+		g.dispose();
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		javax.imageio.ImageIO.write(image, "png", out);
+		return out.toByteArray();
+	}
+
+	private static Issue.Attachment image(String id, String objectKey) {
+		Issue.Attachment attachment = attachment(id, "photo.png", objectKey);
+		attachment.setContentType("image/png");
+		return attachment;
+	}
+
+	@Test
+	void thumbnailServesTheStoredPreview() {
+		issueWith(image("a1", "k1"));
+		when(storage.getObject(ImagePreviewService.attachmentThumbnailKey("a1")))
+				.thenReturn(Optional.of(new StorageService.StoredObject("thumb".getBytes(), "image/jpeg")));
+
+		ResponseEntity<byte[]> response = controller.thumbnail("i1", "a1");
+
+		assertThat(response.getBody()).isEqualTo("thumb".getBytes());
+		assertThat(response.getHeaders().getCacheControl()).contains("max-age");
+		// The full image must not be touched when a preview exists — that is the
+		// entire point of the endpoint.
+		verify(storage, never()).getObject("k1");
+	}
+
+	@Test
+	void thumbnailIsGeneratedOnFirstViewForImagesThatPredateThem() throws Exception {
+		byte[] original = pngBytes(1200, 600);
+		issueWith(image("a1", "k1"));
+		when(storage.getObject(ImagePreviewService.attachmentThumbnailKey("a1")))
+				.thenReturn(Optional.empty());
+		when(storage.getObject("k1"))
+				.thenReturn(Optional.of(new StorageService.StoredObject(original, "image/png")));
+
+		ResponseEntity<byte[]> response = controller.thumbnail("i1", "a1");
+
+		// Served as a real preview, stored for the next viewer, and the BlurHash
+		// recorded on the attachment so the placeholder works from then on.
+		assertThat(response.getBody()).isNotEmpty().isNotEqualTo(original);
+		verify(storage).putObject(eq(ImagePreviewService.attachmentThumbnailKey("a1")),
+				any(byte[].class), eq("image/jpeg"));
+		verify(store).setBlurHash(eq("i1"), eq("a1"), anyString());
+	}
+
+	@Test
+	void thumbnailOfANonImageIsNotFound() {
+		issueWith(attachment("a1", "report.pdf", "k1"));
+		when(storage.getObject(anyString())).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> controller.thumbnail("i1", "a1"))
+				.isInstanceOf(ApiException.class);
+		// No pointless read of a PDF that could never become a picture.
+		verify(storage, never()).getObject("k1");
+	}
+
+	@Test
+	void deletingAnAttachmentAlsoDropsItsThumbnail() {
+		Issue issue = issueWith(image("a1", "k1"));
+		when(store.remove(anyString(), anyString())).thenReturn(issue);
+
+		controller.delete("i1", "a1");
+
+		verify(storage).delete("k1");
+		verify(storage).delete(ImagePreviewService.attachmentThumbnailKey("a1"));
 	}
 
 	@Test
