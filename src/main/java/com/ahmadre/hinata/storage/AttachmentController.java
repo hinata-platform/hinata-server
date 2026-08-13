@@ -5,6 +5,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -14,15 +15,29 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.zip.Deflater;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
+@Slf4j
 @Tag(name = "Attachments")
 @RestController
 @RequestMapping("/api/v1/issues/{issueId}/attachments")
 @RequiredArgsConstructor
 public class AttachmentController {
+
+	private static final String ATTACHMENT = "attachment";
+	private static final String ZIP_MIME = "application/zip";
 
 	private final IssueService issueService;
 	private final StorageService storage;
@@ -77,9 +92,9 @@ public class AttachmentController {
 		Issue.Attachment attachment = issue.getAttachments().stream()
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
-				.orElseThrow(() -> ApiException.notFound("attachment"));
+				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
 		StorageService.StoredObject object = storage.getObject(attachment.getObjectKey())
-				.orElseThrow(() -> ApiException.notFound("attachment"));
+				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
 		String fileName = attachment.getFileName() != null ? attachment.getFileName() : "download";
 		// attachment; filename*=UTF-8'' so umlauts/special chars survive.
 		ContentDisposition disposition = ContentDisposition.attachment()
@@ -93,6 +108,91 @@ public class AttachmentController {
 				.body(object.data());
 	}
 
+	/**
+	 * Streams every attachment of the issue as one ZIP archive ("download all").
+	 * The entries are written one object at a time, so only a single attachment
+	 * is ever held in memory. Entry names are derived from the stored file names
+	 * but stripped of any path component — a crafted upload name must not be able
+	 * to escape the extraction directory on whoever opens the archive (zip slip).
+	 */
+	// No `produces` here on purpose: the app sends a blanket `Accept:
+	// application/json`, so restricting the mapping to application/zip would make
+	// it unmatchable (406 before the handler runs). The response still declares
+	// the ZIP content type below.
+	@GetMapping("/archive")
+	public ResponseEntity<StreamingResponseBody> archive(@PathVariable String issueId) {
+		Issue issue = issueService.getForUser(issueId, currentUser.require());
+		List<Issue.Attachment> attachments = issue.getAttachments() == null
+				? List.of() : List.copyOf(issue.getAttachments());
+		if (attachments.isEmpty()) {
+			throw ApiException.notFound(ATTACHMENT);
+		}
+		String base = issue.getReadableId() != null && !issue.getReadableId().isBlank()
+				? issue.getReadableId() : "issue";
+		ContentDisposition disposition = ContentDisposition.attachment()
+				.filename(base + "-attachments.zip", StandardCharsets.UTF_8)
+				.build();
+		return ResponseEntity.ok()
+				.header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+				.contentType(MediaType.parseMediaType(ZIP_MIME))
+				.body(out -> writeArchive(attachments, out));
+	}
+
+	private void writeArchive(List<Issue.Attachment> attachments, OutputStream out) throws IOException {
+		try (ZipOutputStream zip = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
+			// Attachments are mostly already-compressed media; the cheapest level
+			// keeps a large archive from burning CPU for a few percent of size.
+			zip.setLevel(Deflater.BEST_SPEED);
+			Set<String> used = new HashSet<>();
+			for (Issue.Attachment attachment : attachments) {
+				StorageService.StoredObject object = readForArchive(attachment);
+				if (object != null) {
+					zip.putNextEntry(new ZipEntry(uniqueEntryName(used, attachment.getFileName())));
+					zip.write(object.data());
+					zip.closeEntry();
+				}
+			}
+		}
+	}
+
+	/**
+	 * Reads one attachment's bytes for the archive, or null when the object is
+	 * gone or unreadable. The response is already committed at this point, so a
+	 * single bad object must not abort (and truncate) the whole archive.
+	 */
+	private StorageService.StoredObject readForArchive(Issue.Attachment attachment) {
+		try {
+			return storage.getObject(attachment.getObjectKey()).orElse(null);
+		}
+		catch (RuntimeException ex) {
+			log.warn("Skipping attachment {} in archive: {}", attachment.getId(), ex.getMessage());
+			return null;
+		}
+	}
+
+	/**
+	 * A safe, collision-free ZIP entry name for [fileName]: directory components
+	 * and control characters are dropped, and a numeric suffix is appended when
+	 * two attachments share a name (otherwise the second would overwrite the
+	 * first on extraction).
+	 */
+	private static String uniqueEntryName(Set<String> used, String fileName) {
+		String name = fileName == null ? "" : fileName;
+		int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+		name = name.substring(slash + 1).replaceAll("[\\p{Cntrl}]", "").trim();
+		if (name.isEmpty() || ".".equals(name) || "..".equals(name)) {
+			name = "file";
+		}
+		String candidate = name;
+		int dot = name.lastIndexOf('.');
+		String stem = dot > 0 ? name.substring(0, dot) : name;
+		String extension = dot > 0 ? name.substring(dot) : "";
+		for (int i = 2; !used.add(candidate); i++) {
+			candidate = stem + " (" + i + ")" + extension;
+		}
+		return candidate;
+	}
+
 	@DeleteMapping("/{attachmentId}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String issueId, @PathVariable String attachmentId) {
@@ -100,9 +200,37 @@ public class AttachmentController {
 		Issue.Attachment attachment = issue.getAttachments().stream()
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
-				.orElseThrow(() -> ApiException.notFound("attachment"));
+				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
 		Issue saved = store.remove(issue.getId(), attachmentId);
 		storage.delete(attachment.getObjectKey());
 		events.publishRemoved(saved.getId(), attachmentId);
+	}
+
+	/**
+	 * Bulk delete ("delete all"). [ids] carries the attachments the client
+	 * actually sees; only those are removed, so a file uploaded by someone else
+	 * between the client's last render and this call survives. Omitting [ids]
+	 * removes every attachment of the issue. Idempotent: ids that are already
+	 * gone are simply skipped.
+	 */
+	@DeleteMapping
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void deleteAll(@PathVariable String issueId,
+			@RequestParam(name = "ids", required = false) List<String> ids) {
+		Issue issue = issueService.getForUser(issueId, currentUser.require());
+		List<Issue.Attachment> present = issue.getAttachments() == null
+				? List.of() : issue.getAttachments();
+		List<Issue.Attachment> targets = ids == null || ids.isEmpty()
+				? List.copyOf(present)
+				: present.stream().filter(a -> ids.contains(a.getId())).toList();
+		if (targets.isEmpty()) {
+			return;
+		}
+		List<String> targetIds = targets.stream().map(Issue.Attachment::getId).toList();
+		Issue saved = store.removeAll(issue.getId(), targetIds);
+		for (Issue.Attachment attachment : targets) {
+			storage.delete(attachment.getObjectKey());
+			events.publishRemoved(saved.getId(), attachment.getId());
+		}
 	}
 }
