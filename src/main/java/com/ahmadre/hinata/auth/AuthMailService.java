@@ -27,6 +27,8 @@ public class AuthMailService {
 	/** Sign-up: confirm the email address to activate the account. */
 	public void sendVerification(User user, String verifyUrl) {
 		Map<String, Object> model = base(user);
+		// Arriving is a moment; the sign-up confirmation gets the illustrated band.
+		model.put("masthead", "welcome");
 		model.put("verifyUrl", verifyUrl);
 		model.put("expiresHours", 24);
 		String subject = de(user) ? "Bestätige deine E-Mail-Adresse" : "Confirm your email address";

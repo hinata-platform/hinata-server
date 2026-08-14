@@ -31,6 +31,7 @@ public class AdminMailService {
 		boolean de = "de".equalsIgnoreCase(invitee.getLocale());
 		Map<String, Object> model = new HashMap<>();
 		model.put("locale", de ? "de" : "en");
+		model.put("masthead", "invite");
 		model.put("inviteUrl", inviteUrl);
 		model.put("inviterName", inviterName);
 		model.put("message", message);

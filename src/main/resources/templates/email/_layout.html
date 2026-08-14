@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<!--/*
+  Hinata e-mail design system — the shell every transactional mail is built on.
+
+  Tokens are lifted verbatim from hinata-app/lib/core/theme/app_colors.dart and
+  app_theme.dart, so an inbox and the app read as one product: warm-paper canvas,
+  white card on a hairline border at radius 14, navy + honey-amber accents, a
+  display face for headlines, IBM Plex Mono for ids, labels and metrics.
+
+  Constraints this file works within — they explain every "odd" choice below:
+   * Tables and inline styles, because Outlook renders through Word: no flexbox,
+     no grid, no border-radius, no box-shadow. Those degrade, they never break.
+   * The <style> block carries only what inline styles cannot express — the dark
+     scheme and the narrow breakpoint. Inline styles win over a stylesheet, so
+     every override in there needs !important.
+   * No web fonts. Pulling Sora from Google Fonts would leak every recipient's IP
+     to a third party on open, which a self-hosted, GDPR-facing product must not
+     do. Sora ships inside the masthead image; text uses system stacks.
+   * Images arrive as inlined cid: parts (see MailService), so mail still renders
+     on an instance that the recipient's network cannot reach.
+
+  Fragments: page · cta · fallback · panel · note · copy · sectionLabel · fineprint · rule
+  (names deliberately avoid HTML element names — a `:: meta` selector would
+  match the <meta> tags in this very <head> instead of the fragment.)
+*/-->
+<html xmlns:th="http://www.thymeleaf.org" th:fragment="page(eyebrow, headline, preheader, footerNote, content)"
+      th:lang="${locale}" lang="en" style="margin:0;padding:0">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="x-apple-disable-message-reformatting"/>
+  <meta name="color-scheme" content="light dark"/>
+  <meta name="supported-color-schemes" content="light dark"/>
+  <title th:text="${headline}">Hinata</title>
+  <style>
+    /* separate, NOT collapse: a collapsed table makes browsers ignore
+       border-radius on its cells, so every panel, note and tile would draw a
+       square border around its own rounded content. Zero gaps are already
+       guaranteed by cellpadding="0" cellspacing="0" on every table here, which
+       is also the only thing Outlook's Word engine reads. */
+    table { border-collapse: separate; border-spacing: 0; }
+    img { border: 0; line-height: 100%; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+    .hn-btn a { mso-padding-alt: 14px 32px; }
+
+    @media (max-width: 620px) {
+      .hn-pad  { padding: 24px 20px 26px 20px !important; }
+      .hn-h1   { font-size: 22px !important; }
+      .hn-stat { display: block !important; width: 100% !important; padding: 0 0 8px 0 !important; }
+    }
+
+    /* Honoured by Apple Mail, Outlook for Mac/iOS and Thunderbird. Gmail applies
+       its own inversion instead and ignores this block — which is why the light
+       palette below has to be contrast-safe on its own. */
+    @media (prefers-color-scheme: dark) {
+      .hn-canvas  { background: #131119 !important; }
+      .hn-card    { background: #1C1B25 !important; border-color: #2E2D3B !important; }
+      .hn-ink     { color: #ECEBF3 !important; }
+      .hn-soft    { color: #A8A6C2 !important; }
+      .hn-faint   { color: #6F6D88 !important; }
+      .hn-eyebrow { color: #D9A032 !important; }
+      .hn-rule    { background: #27262F !important; }
+      /* For cells that draw a separator as a border, not a fill. */
+      .hn-sep     { border-color: #27262F !important; }
+      .hn-panel   { background: #232231 !important; border-color: #2E2D3B !important; }
+      .hn-accent  { background: #2E2716 !important; border-color: #4A3C1C !important; }
+      .hn-accent .hn-soft { color: #E4CE96 !important; }
+      .hn-mono    { color: #D9A032 !important; }
+      /* The app flips its primary to amber on dark surfaces; the button follows. */
+      .hn-btn     { background: #D9A032 !important; }
+      .hn-btn a   { background: #D9A032 !important; color: #23223F !important; }
+      .hn-ok      { background: #16291F !important; border-color: #24503A !important; }
+      .hn-ok-ink  { color: #6FCF9B !important; }
+      .hn-danger  { background: #33201E !important; color: #E8877E !important; }
+      /* Text-only variant: the pill wants the fill, a bare date does not. */
+      .hn-danger-ink { color: #E8877E !important; }
+    }
+  </style>
+</head>
+<body class="hn-canvas" style="margin:0;padding:0;width:100%;background:#F4F3EF">
+
+  <!--/* Inbox preview line: shown beside the subject, never in the body. The
+       nbsp/zwnj run stops clients from trailing body copy in after it. */-->
+  <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#F4F3EF">
+    <span th:text="${preheader}">Preview</span>
+    &#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;
+  </div>
+
+  <table role="presentation" class="hn-canvas" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="background:#F4F3EF">
+    <tr>
+      <td align="center" style="padding:28px 12px 40px 12px">
+        <!--/* The inline border-collapse repeats the stylesheet on purpose: this
+             is the one table whose cell carries the card's rounded border, and
+             Gmail strips <style> in some contexts. */-->
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+               style="width:600px;max-width:600px;border-collapse:separate;border-spacing:0">
+
+          <!--/* ---- card --------------------------------------------------- */-->
+          <tr>
+            <td class="hn-card"
+                style="background:#FFFFFF;border:1px solid #E7E5DE;border-radius:14px;overflow:hidden">
+
+              <!--/* Aurora Hive masthead. bgcolor carries the navy, so a blocked
+                   image still reads as the brand band with the alt text on it. */-->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td bgcolor="#211F3D" align="left"
+                      th:style="'background:#211F3D;line-height:0;font-size:0;height:' + ${mastheadHeight} + 'px'"
+                      style="background:#211F3D;line-height:0;font-size:0;height:118px">
+                    <img th:src="${mastheadSrc}" src="masthead.jpg" width="600"
+                         th:attr="height=${mastheadHeight}" height="118"
+                         th:alt="#{email.masthead.alt}" alt="Hinata"
+                         style="display:block;width:100%;max-width:600px;height:auto;border:0;
+                                font-family:Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;
+                                letter-spacing:0.4px;color:#F4F3EF"/>
+                  </td>
+                </tr>
+              </table>
+
+              <!--/* ---- body ---------------------------------------------- */-->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td class="hn-pad" style="padding:32px 34px 34px 34px">
+
+                    <div th:if="${eyebrow != null}" class="hn-eyebrow"
+                         style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                                font-size:11px;font-weight:600;letter-spacing:1.6px;text-transform:uppercase;
+                                color:#B9831F;margin:0 0 10px 0"
+                         th:text="${eyebrow}">EYEBROW</div>
+
+                    <h1 class="hn-ink hn-h1"
+                        style="margin:0 0 18px 0;font-family:'Sora','Avenir Next','Segoe UI',system-ui,
+                               -apple-system,'Helvetica Neue',Arial,sans-serif;font-size:25px;line-height:1.24;
+                               font-weight:700;letter-spacing:-0.5px;color:#23223F"
+                        th:text="${headline}">Headline</h1>
+
+                    <th:block th:replace="${content}">body</th:block>
+
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!--/* ---- footer, outside the card ------------------------------- */-->
+          <tr>
+            <td align="left" style="padding:20px 8px 0 8px">
+              <div class="hn-faint"
+                   style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+                          font-size:12px;line-height:1.7;color:#9A99B0">
+                <strong class="hn-soft" style="color:#6B6A85;font-weight:600"
+                        th:text="#{email.brand}">Hinata</strong>
+                <span> · </span><span th:text="#{email.brand.tagline}">Self-hosted project tracking</span>
+                <br/>
+                <span th:text="${footerNote}">This is an automated message from Hinata.</span>
+              </div>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+
+
+<!--/* =====================================================================
+       cta(href, label) — the primary action.
+       A table-cell button rather than a styled <a>: Outlook drops padding on
+       inline anchors but honours it on a cell. The pill radius is the one
+       thing Outlook will not do, so it lands there as a navy rectangle.
+       ===================================================================== */-->
+<table xmlns:th="http://www.thymeleaf.org" th:fragment="cta(href, label)" role="presentation"
+       cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 20px 0">
+  <tr>
+    <td class="hn-btn" bgcolor="#2D2B55" style="background:#2D2B55;border-radius:999px">
+      <a th:href="${href}" href="#"
+         style="display:inline-block;padding:14px 32px;border-radius:999px;background:#2D2B55;
+                font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+                font-size:15px;font-weight:600;line-height:1.1;color:#FFFFFF;text-decoration:none"
+         th:text="${label}">Open</a>
+    </td>
+  </tr>
+</table>
+
+
+<!--/* =====================================================================
+       fallback(href) — the copy-paste escape hatch under a CTA. Corporate
+       gateways rewrite or strip buttons; the raw URL always survives.
+       ===================================================================== */-->
+<div xmlns:th="http://www.thymeleaf.org" th:fragment="fallback(href)"
+     style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif">
+  <div class="hn-faint" style="font-size:12px;line-height:1.6;color:#9A99B0;margin:0 0 3px 0"
+       th:text="#{email.cta.fallback}">Button not working?</div>
+  <!--/* Muted, not amber: a signed token URL runs three lines, and in the brand
+       accent it out-shouts the eyebrow and the button it is a fallback for. */-->
+  <a th:href="${href}" href="#" class="hn-soft"
+     style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px;
+            line-height:1.5;color:#6B6A85;text-decoration:underline;word-break:break-all"
+     th:text="${href}">https://…</a>
+</div>
+
+
+<!--/* =====================================================================
+       panel(label, value) — a muted card for the one piece of data the
+       recipient has to verify: the new address, the applicant, the roles.
+       ===================================================================== */-->
+<table xmlns:th="http://www.thymeleaf.org" th:fragment="panel(label, value)" role="presentation" width="100%"
+       cellpadding="0" cellspacing="0" border="0" style="margin:0 0 6px 0">
+  <tr>
+    <td class="hn-panel"
+        style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:14px 16px">
+      <div class="hn-faint"
+           style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10.5px;
+                  font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#9A99B0;margin:0 0 5px 0"
+           th:text="${label}">LABEL</div>
+      <div class="hn-ink"
+           style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+                  font-size:15.5px;font-weight:600;line-height:1.4;color:#23223F;word-break:break-word"
+           th:text="${value}">Value</div>
+    </td>
+  </tr>
+</table>
+
+
+<!--/* =====================================================================
+       note(text) — the amber advisory for the one caveat that must not be
+       missed (link lifetime, "do not share this"). Deliberately rare: if
+       every mail shouts, none of them does.
+       ===================================================================== */-->
+<table xmlns:th="http://www.thymeleaf.org" th:fragment="note(text)" role="presentation" width="100%"
+       cellpadding="0" cellspacing="0" border="0" style="margin:0 0 6px 0">
+  <tr>
+    <td class="hn-accent"
+        style="background:#F3E9D2;border:1px solid #E4CE96;border-radius:12px;padding:13px 16px">
+      <div class="hn-soft"
+           style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+                  font-size:13.5px;line-height:1.6;color:#6B4E12"
+           th:text="${text}">Note</div>
+    </td>
+  </tr>
+</table>
+
+
+<!--/* copy(text) — one paragraph of body copy. Every template composes its body
+       out of these, so the reading rhythm (15/1.65) is identical everywhere. */-->
+<p xmlns:th="http://www.thymeleaf.org" th:fragment="copy(text)" class="hn-soft"
+   style="margin:0 0 14px 0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,
+          sans-serif;font-size:15px;line-height:1.65;color:#6B6A85"
+   th:text="${text}">Body copy</p>
+
+
+<!--/* sectionLabel(text) — an uppercase divider label inside a long mail. Same
+       treatment as the eyebrow but neutral, so it groups without competing. */-->
+<div xmlns:th="http://www.thymeleaf.org" th:fragment="sectionLabel(text)" class="hn-faint"
+     style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10.5px;
+            font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#9A99B0;margin:26px 0 12px 0"
+     th:text="${text}">SECTION</div>
+
+
+<!--/* fineprint(text) — small print under the fold: expiry, "wasn't you", contact. */-->
+<p xmlns:th="http://www.thymeleaf.org" th:fragment="fineprint(text)" class="hn-faint"
+   style="margin:0 0 8px 0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,
+          sans-serif;font-size:12.5px;line-height:1.65;color:#9A99B0"
+   th:text="${text}">Small print</p>
+
+
+<!--/* rule — a hairline separator inside the card. */-->
+<div xmlns:th="http://www.thymeleaf.org" th:fragment="rule" class="hn-rule"
+     style="height:1px;line-height:1px;font-size:0;background:#EFEDE6;margin:24px 0 18px 0">&nbsp;</div>

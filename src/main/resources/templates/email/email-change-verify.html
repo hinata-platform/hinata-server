@@ -1,48 +1,25 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" th:lang="${locale}">
-<head><meta charset="UTF-8"/></head>
-<body style="margin:0;padding:0;background:#F2F1F8">
-  <div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F2F1F8;padding:32px">
-    <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #E7E5F0">
-      <div style="height:4px;background:#F5A623"></div>
-      <div style="padding:32px">
-        <div style="font-weight:800;font-size:18px;color:#2D2B55;letter-spacing:0.5px;margin-bottom:24px">Hinata</div>
+<!--/* Confirm a new sign-in address. Sent to the NEW address. AccountMailService. */-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{email/_layout :: page(
+          #{email.emailChange.eyebrow},
+          #{email.emailChange.headline},
+          #{email.emailChange.body},
+          #{email.footer.automated},
+          ~{::content})}">
+<body>
+<th:block th:fragment="content">
+  <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
+  <th:block th:replace="~{email/_layout :: copy(#{email.emailChange.body})}"/>
 
-        <h1 style="color:#2D2B55;font-size:20px;margin:0 0 16px">
-          <span th:if="${locale == 'de'}">Bestätige deine neue E-Mail-Adresse</span>
-          <span th:unless="${locale == 'de'}">Confirm your new email address</span>
-        </h1>
+  <th:block th:replace="~{email/_layout :: panel(#{email.emailChange.newAddress}, ${newEmail})}"/>
 
-        <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0 0 12px">
-          <span th:if="${locale == 'de'}">Hallo <strong th:text="${displayName}">Name</strong>,</span>
-          <span th:unless="${locale == 'de'}">Hi <strong th:text="${displayName}">Name</strong>,</span>
-        </p>
+  <th:block th:replace="~{email/_layout :: cta(${confirmUrl}, #{email.emailChange.cta})}"/>
+  <th:block th:replace="~{email/_layout :: fallback(${confirmUrl})}"/>
 
-        <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0 0 4px">
-          <span th:if="${locale == 'de'}">du hast angefragt, deine Anmelde-E-Mail zu ändern zu:</span>
-          <span th:unless="${locale == 'de'}">you asked to change your sign-in email to:</span>
-        </p>
-        <p style="color:#2D2B55;font-size:15px;font-weight:600;margin:0 0 20px" th:text="${newEmail}">new@example.com</p>
-
-        <p style="margin:0 0 24px">
-          <a th:href="${confirmUrl}"
-             style="display:inline-block;background:#2D2B55;color:#ffffff;padding:13px 26px;border-radius:24px;text-decoration:none;font-weight:600">
-            <span th:if="${locale == 'de'}">E-Mail-Adresse bestätigen</span>
-            <span th:unless="${locale == 'de'}">Confirm email address</span>
-          </a>
-        </p>
-
-        <p style="color:#6B6A85;font-size:13px;line-height:1.6;margin:0">
-          <span th:if="${locale == 'de'}">Dieser Link ist <strong th:text="${expiresHours}">24</strong> Stunden gültig. Bis zur Bestätigung bleibt deine bisherige E-Mail aktiv. Wenn du das nicht warst, ignoriere diese Nachricht.</span>
-          <span th:unless="${locale == 'de'}">This link is valid for <strong th:text="${expiresHours}">24</strong> hours. Until confirmed, your current email stays active. If this wasn't you, you can ignore this message.</span>
-        </p>
-
-        <p style="color:#9794AE;font-size:12px;line-height:1.6;margin:32px 0 0;border-top:1px solid #EFEEF5;padding-top:16px">
-          <span th:if="${locale == 'de'}">Diese Nachricht wurde automatisch von Hinata gesendet.</span>
-          <span th:unless="${locale == 'de'}">This is an automated message from Hinata.</span>
-        </p>
-      </div>
-    </div>
-  </div>
+  <th:block th:replace="~{email/_layout :: rule}"/>
+  <th:block th:replace="~{email/_layout :: fineprint(#{email.emailChange.expiry(${expiresHours})})}"/>
+  <th:block th:replace="~{email/_layout :: fineprint(#{email.emailChange.ignore})}"/>
+</th:block>
 </body>
 </html>

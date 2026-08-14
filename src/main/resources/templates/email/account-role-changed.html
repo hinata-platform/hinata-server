@@ -1,44 +1,19 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" th:lang="${locale}">
-<head><meta charset="UTF-8"/></head>
-<body style="margin:0;padding:0;background:#F2F1F8">
-  <div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F2F1F8;padding:32px">
-    <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #E7E5F0">
-      <div style="height:4px;background:#F5A623"></div>
-      <div style="padding:32px">
-        <div style="font-weight:800;font-size:18px;color:#2D2B55;letter-spacing:0.5px;margin-bottom:24px">Hinata</div>
+<!--/* Admin privileges granted or revoked. NotificationService. */-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{email/_layout :: page(
+          #{email.account.eyebrow},
+          #{email.account.roles.headline},
+          ${isAdmin} ? #{email.account.roles.granted} : #{email.account.roles.revoked},
+          #{email.footer.automatedAdmin},
+          ~{::content})}">
+<body>
+<th:block th:fragment="content">
+  <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
+  <th:block th:if="${isAdmin}" th:replace="~{email/_layout :: copy(#{email.account.roles.granted})}"/>
+  <th:block th:unless="${isAdmin}" th:replace="~{email/_layout :: copy(#{email.account.roles.revoked})}"/>
 
-        <h1 style="color:#2D2B55;font-size:20px;margin:0 0 16px">
-          <span th:if="${locale == 'de'}">Deine Rollen wurden aktualisiert</span>
-          <span th:unless="${locale == 'de'}">Your roles have been updated</span>
-        </h1>
-
-        <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0 0 12px">
-          <span th:if="${locale == 'de'}">Hallo <strong th:text="${displayName}">Name</strong>,</span>
-          <span th:unless="${locale == 'de'}">Hi <strong th:text="${displayName}">Name</strong>,</span>
-        </p>
-
-        <p th:if="${isAdmin}" style="color:#4A4866;font-size:15px;line-height:1.6;margin:0">
-          <span th:if="${locale == 'de'}">dir wurden Administrator-Rechte für Hinata erteilt. Du hast jetzt Zugriff auf den Adminbereich und die Benutzerverwaltung.</span>
-          <span th:unless="${locale == 'de'}">you have been granted administrator privileges in Hinata. You now have access to the admin area and user management.</span>
-        </p>
-        <p th:unless="${isAdmin}" style="color:#4A4866;font-size:15px;line-height:1.6;margin:0">
-          <span th:if="${locale == 'de'}">deine Administrator-Rechte für Hinata wurden entfernt. Du hast weiterhin Zugriff als reguläres Mitglied.</span>
-          <span th:unless="${locale == 'de'}">your administrator privileges in Hinata have been removed. You still have access as a regular member.</span>
-        </p>
-
-        <p style="color:#4A4866;font-size:14px;line-height:1.6;margin:16px 0 0">
-          <span th:if="${locale == 'de'}">Aktuelle Rollen: </span>
-          <span th:unless="${locale == 'de'}">Current roles: </span>
-          <strong style="color:#2D2B55" th:text="${roles}">Member</strong>
-        </p>
-
-        <p style="color:#9794AE;font-size:12px;line-height:1.6;margin:32px 0 0;border-top:1px solid #EFEEF5;padding-top:16px">
-          <span th:if="${locale == 'de'}">Diese Benachrichtigung wurde automatisch von Hinata gesendet.</span>
-          <span th:unless="${locale == 'de'}">This is an automated notification from Hinata.</span>
-        </p>
-      </div>
-    </div>
-  </div>
+  <th:block th:replace="~{email/_layout :: panel(#{email.account.roles.current}, ${roles})}"/>
+</th:block>
 </body>
 </html>

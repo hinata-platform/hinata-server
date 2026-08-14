@@ -10,14 +10,19 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.web.util.HtmlUtils;
 import org.thymeleaf.context.Context;
 import org.thymeleaf.spring6.SpringTemplateEngine;
 
 import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.util.StreamUtils;
 
+import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Sends transactional HTML mails via the configured SMTP server (Mailpit in dev). */
 @Slf4j
@@ -25,9 +30,36 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class MailService {
 
+	/**
+	 * Content-ID of the masthead that opens every templated mail. The artwork is
+	 * inlined into the message rather than linked: Hinata is self-hosted, so an
+	 * instance is regularly unreachable from wherever the recipient reads their
+	 * mail, and a linked masthead would render as a broken image on exactly those
+	 * installs.
+	 */
+	static final String MASTHEAD_CID = "hinata-masthead";
+
+	/** A masthead variant: the classpath artwork and the height it displays at. */
+	private record Masthead(String resource, int height) {}
+
+	/**
+	 * Which band heads which mail. Nearly everything gets the plain aurora — that
+	 * repetition is what a masthead is for. Only the two mails that mark a
+	 * beginning carry an illustration; a picture on a password reset is noise, and
+	 * the band is inlined into every message it heads. Selected by the model's
+	 * {@code masthead} key (see AuthMailService / AdminMailService).
+	 */
+	private static final Map<String, Masthead> MASTHEADS = Map.of(
+			"default", new Masthead("email/masthead.jpg", 118),
+			"welcome", new Masthead("email/masthead-welcome.jpg", 200),
+			"invite", new Masthead("email/masthead-invite.jpg", 200));
+
 	private final ObjectProvider<JavaMailSender> mailSender;
 	private final ObjectProvider<SpringTemplateEngine> templateEngine;
 	private final SmtpMailSenderProvider smtp;
+
+	/** Artwork read from the classpath on first use and kept; 28-50 KB each. */
+	private final Map<String, byte[]> artCache = new ConcurrentHashMap<>();
 
 	@Value("${hinata.mail.from:hinata@localhost}")
 	private String from;
@@ -84,16 +116,23 @@ public class MailService {
 		}
 	}
 
+	/**
+	 * Sends a bell notification by mail. {@code eyebrowKey} names an
+	 * {@code email.eyebrow.<TYPE>} message so the recipient can tell an
+	 * assignment from a mention before reading a word; pass {@code null} for the
+	 * neutral label. Title and body arrive already localized from the caller.
+	 */
 	@Async
-	public void send(String to, String subject, String headline, String body, String link) {
-		dispatch(to, subject, html(headline, body, link, "Open in Hinata"));
-	}
-
-	/** As {@link #send}, with a localized call-to-action button label. */
-	@Async
-	public void send(String to, String subject, String headline, String body, String link,
-			String buttonLabel) {
-		dispatch(to, subject, html(headline, body, link, buttonLabel));
+	public void sendNotification(String to, String subject, String headline, String body, String link,
+			String buttonLabel, String locale, String eyebrowKey) {
+		Map<String, Object> model = new HashMap<>();
+		model.put("locale", locale);
+		model.put("headline", headline);
+		model.put("body", body);
+		model.put("ctaLink", link);
+		model.put("ctaLabel", buttonLabel);
+		model.put("eyebrowKey", eyebrowKey);
+		sendTemplateSync(to, subject, "email/notification", model);
 	}
 
 	/**
@@ -116,12 +155,37 @@ public class MailService {
 			log.warn("No template engine available; cannot send mail to {}", to);
 			return false;
 		}
-		Context context = new Context();
-		context.setVariables(model);
-		return dispatch(to, subject, engine.process(template, context));
+		Masthead art = mastheadFor(model);
+		return dispatch(to, subject, render(engine, template, model), art);
 	}
 
-	private boolean dispatch(String to, String subject, String html) {
+	private static Masthead mastheadFor(Map<String, Object> model) {
+		Object variant = model.get("masthead");
+		return MASTHEADS.getOrDefault(variant instanceof String s ? s : "default",
+				MASTHEADS.get("default"));
+	}
+
+	/**
+	 * Renders {@code template} against {@code model}. The Thymeleaf {@link Context}
+	 * is built with an explicit {@link Locale} taken from the model's {@code locale}
+	 * key, because the copy lives in {@code email-messages[_de].properties} and is
+	 * resolved with {@code #{...}} — a default-locale context would silently mail
+	 * everyone English (or, with fallback-to-system-locale on, the host's language).
+	 */
+	public String render(SpringTemplateEngine engine, String template, Map<String, Object> model) {
+		Object locale = model.get("locale");
+		Locale resolved = (locale instanceof String tag && !tag.isBlank())
+				? Locale.forLanguageTag(tag)
+				: Locale.ENGLISH;
+		Map<String, Object> vars = new HashMap<>(model);
+		// The masthead rides along as an inlined part (see dispatch), so the
+		// template addresses it by Content-ID rather than by URL.
+		vars.putIfAbsent("mastheadSrc", "cid:" + MASTHEAD_CID);
+		vars.putIfAbsent("mastheadHeight", mastheadFor(model).height());
+		return engine.process(template, new Context(resolved, vars));
+	}
+
+	private boolean dispatch(String to, String subject, String html, Masthead art) {
 		// Prefer the admin-area SMTP (configured at runtime), falling back to a
 		// Spring-autoconfigured sender if present.
 		JavaMailSender sender = smtp.sender();
@@ -132,7 +196,9 @@ public class MailService {
 		}
 		try {
 			var message = sender.createMimeMessage();
-			MimeMessageHelper helper = new MimeMessageHelper(message, "UTF-8");
+			// multipart/related, so the masthead can travel with the body as an
+			// inlined part instead of being fetched from the instance.
+			MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 			String fromAddress = smtp.fromAddress() != null ? smtp.fromAddress() : from;
 			String fromName = smtp.fromName();
 			helper.setFrom(fromName != null
@@ -141,6 +207,14 @@ public class MailService {
 			helper.setTo(to);
 			helper.setSubject(subject);
 			helper.setText(html, true);
+			// Must follow setText: MimeMessageHelper builds the related part around
+			// the body that is already there.
+			if (html.contains("cid:" + MASTHEAD_CID)) {
+				byte[] bytes = artwork(art.resource());
+				if (bytes != null) {
+					helper.addInline(MASTHEAD_CID, new ByteArrayResource(bytes), "image/jpeg");
+				}
+			}
 			sender.send(message);
 			log.info("Mail sent to {} (subject: {})", to, subject);
 			return true;
@@ -151,24 +225,20 @@ public class MailService {
 		}
 	}
 
-	/** Minimal, accessible HTML template matching the Hinata design system. */
-	private String html(String headline, String body, String link, String buttonLabel) {
-		String safeHeadline = HtmlUtils.htmlEscape(headline);
-		String safeBody = HtmlUtils.htmlEscape(body);
-		String button = link != null
-				? "<p style=\"margin-top:24px\"><a href=\"" + HtmlUtils.htmlEscape(link)
-						+ "\" style=\"background:#2D2B55;color:#ffffff;padding:12px 24px;"
-						+ "border-radius:24px;text-decoration:none\">"
-						+ HtmlUtils.htmlEscape(buttonLabel) + "</a></p>"
-				: "";
-		return """
-				<div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F2F1F8;padding:32px">
-				  <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:24px;padding:32px">
-				    <h1 style="color:#2D2B55;font-size:20px;margin:0 0 16px">%s</h1>
-				    <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0">%s</p>
-				    %s
-				  </div>
-				</div>
-				""".formatted(safeHeadline, safeBody, button);
+	/**
+	 * Artwork bytes, read from the classpath on first use. A missing or unreadable
+	 * asset degrades to a mail without the band (the template's bgcolor and alt
+	 * text still carry the brand) rather than to a failed send.
+	 */
+	private byte[] artwork(String resource) {
+		return artCache.computeIfAbsent(resource, path -> {
+			try (var in = new ClassPathResource(path).getInputStream()) {
+				return StreamUtils.copyToByteArray(in);
+			}
+			catch (IOException ex) {
+				log.warn("E-mail artwork {} unreadable: {}", path, ex.getMessage());
+				return new byte[0];
+			}
+		});
 	}
 }

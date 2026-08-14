@@ -294,8 +294,8 @@ public class NotificationService {
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
 		// In-app notifications keep the relative route; the e-mail button needs an
 		// absolute deep link that the native app intercepts as a Universal/App Link.
-		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link),
-				buttonLabel(de(user)));
+		mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link),
+				buttonLabel(de(user)), localeOf(user), eyebrowKey(type));
 		push.sendToUser(user.getId(), title, body, link);
 	}
 
@@ -313,7 +313,8 @@ public class NotificationService {
 		NotificationPreferences prefs = prefsOf(user);
 		boolean de = de(user);
 		if (prefs.deliversEmail(eventId)) {
-			mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link), buttonLabel(de));
+			mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link),
+					buttonLabel(de), localeOf(user), eyebrowKey(type));
 		}
 		if (prefs.deliversPush(eventId)) {
 			push.sendToUser(user.getId(), title, body, link);
@@ -509,6 +510,19 @@ public class NotificationService {
 		return "de".equalsIgnoreCase(user.getLocale());
 	}
 
+	private String localeOf(User user) {
+		return de(user) ? "de" : "en";
+	}
+
+	/**
+	 * The message key for the notification's eyebrow label, so the mail can say
+	 * "Assigned to you" or "You were mentioned" above the headline. Falls back to
+	 * the neutral label in the template if the key is missing from the bundle.
+	 */
+	private String eyebrowKey(Notification.Type type) {
+		return type != null ? "email.eyebrow." + type.name() : null;
+	}
+
 	private String roleLabels(User user) {
 		String member = de(user) ? "Mitglied" : "Member";
 		return user.getRoles().stream()
@@ -579,8 +593,8 @@ public class NotificationService {
 				// an absolute deep link that the native app intercepts as a
 				// Universal/App Link, straight to the issue.
 				if (prefs.deliversEmail(eventId)) {
-					mail.send(user.getEmail(), SUBJECT_PREFIX + t, t, b, appLink(userLink),
-							buttonLabel(de));
+					mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + t, t, b, appLink(userLink),
+							buttonLabel(de), localeOf(user), eyebrowKey(type));
 				}
 				if (prefs.deliversPush(eventId)) {
 					push.sendToUser(user.getId(), t, b, userLink);

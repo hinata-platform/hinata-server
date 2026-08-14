@@ -8,11 +8,13 @@ spring:
   # serialize as ISO-8601 strings without any extra configuration.
   jackson:
     time-zone: UTC
-  # Localized error messages (messages.properties / messages_de.properties).
+  # Localized error messages (messages.properties / messages_de.properties) and
+  # transactional e-mail copy (email-messages[_de].properties, resolved by the
+  # Thymeleaf templates under templates/email/ via #{...}).
   # fallback-to-system-locale=false so unsupported languages use the English
   # default bundle rather than the server's OS locale.
   messages:
-    basename: messages
+    basename: messages,email-messages
     encoding: UTF-8
     fallback-to-system-locale: false
   # Use the dev profile unless one is explicitly selected (SPRING_PROFILES_ACTIVE).

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!--/*
+  The workhorse: every bell notification that also goes out by mail — assigned,
+  mentioned, commented, due soon, sprint started, security alert. Title and body
+  are composed and localized by NotificationService; this template only dresses
+  them. `eyebrowKey` names an email.eyebrow.<TYPE> message so the recipient can
+  tell an assignment from a mention before reading a word.
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{email/_layout :: page(
+          ${eyebrowKey != null} ? #{__${eyebrowKey}__} : #{email.notification.eyebrow},
+          ${headline},
+          ${body},
+          #{email.footer.automated},
+          ~{::content})}">
+<body>
+<th:block th:fragment="content">
+  <th:block th:replace="~{email/_layout :: copy(${body})}"/>
+
+  <th:block th:if="${ctaLink != null}"
+            th:replace="~{email/_layout :: cta(${ctaLink}, ${ctaLabel != null} ? ${ctaLabel} : #{email.cta.open})}"/>
+  <th:block th:if="${ctaLink != null}" th:replace="~{email/_layout :: fallback(${ctaLink})}"/>
+</th:block>
+</body>
+</html>

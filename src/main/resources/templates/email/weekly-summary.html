@@ -1,165 +1,213 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" th:lang="${locale}">
-<head><meta charset="UTF-8"/></head>
-<body style="margin:0;padding:0;background:#F2F1F8">
-  <div style="font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F2F1F8;padding:32px">
-    <div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #E7E5F0">
+<!--/*
+  The weekly digest — the one mail that is a report rather than a prompt, so it
+  is the only place the design system spends its whole vocabulary: metric tiles,
+  a sprint card with a progress bar, contributor rows, and the week ahead.
 
-      <!-- Header -->
-      <div style="height:4px;background:#D9A032"></div>
-      <div style="background:#2D2B55;padding:28px 32px">
-        <div style="font-weight:800;font-size:16px;color:#ffffff;letter-spacing:0.5px">Hinata</div>
-        <h1 style="color:#ffffff;font-size:24px;margin:14px 0 4px;font-weight:800;letter-spacing:-0.3px">
-          <span th:if="${locale == 'de'}">Deine Wochenübersicht</span>
-          <span th:unless="${locale == 'de'}">Your Weekly Summary</span>
-        </h1>
-        <div style="color:#C9C7E0;font-size:13px" th:text="${weekRange}">Jun 30 – Jul 7</div>
-      </div>
+  Model is built by WeeklyDigestJob and reaches Thymeleaf as flat map keys; see
+  NotificationService#notifyWeeklySummary for the CTA injection.
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{email/_layout :: page(
+          #{email.weekly.eyebrow},
+          #{email.weekly.headline},
+          #{email.weekly.intro},
+          #{email.weekly.footer},
+          ~{::content})}">
+<body>
+<th:block th:fragment="content">
 
-      <div style="padding:28px 32px">
-        <p style="color:#4A4866;font-size:15px;line-height:1.6;margin:0 0 22px">
-          <span th:if="${locale == 'de'}">Hallo <strong th:text="${displayName}">Name</strong>, hier ist, was in der letzten Woche passiert ist — und was als Nächstes ansteht.</span>
-          <span th:unless="${locale == 'de'}">Hi <strong th:text="${displayName}">Name</strong>, here's what happened over the past week — and what's coming up next.</span>
-        </p>
+  <!--/* Date range, as a mono chip: it is a data label, not a sentence. */-->
+  <div class="hn-mono"
+       style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;
+              font-weight:500;color:#B9831F;margin:-8px 0 16px 0"
+       th:text="${weekRange}">Jun 30 – Jul 7</div>
 
-        <!-- The week behind -->
-        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;color:#9794AE;text-transform:uppercase;margin:0 0 12px">
-          <span th:if="${locale == 'de'}">Die Woche hinter uns</span>
-          <span th:unless="${locale == 'de'}">The week behind</span>
+  <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
+  <th:block th:replace="~{email/_layout :: copy(#{email.weekly.intro})}"/>
+
+  <!--/* ---- the week behind ------------------------------------------------ */-->
+  <th:block th:replace="~{email/_layout :: sectionLabel(#{email.weekly.behind})}"/>
+
+  <!--/* Three metric tiles. Fixed 33% cells rather than a flex row, and each cell
+       is switched to display:block under 620px by the .hn-stat breakpoint. */-->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 4px 0">
+    <tr>
+      <td class="hn-stat" width="33.33%" style="padding:0 5px 0 0;vertical-align:top">
+        <div class="hn-panel"
+             style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:15px 16px">
+          <div style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                      font-size:29px;font-weight:600;line-height:1;color:#2FA06E" th:text="${completed}">12</div>
+          <div class="hn-faint"
+               style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;
+                      line-height:1.4;color:#9A99B0;margin-top:6px" th:text="#{email.weekly.completed}">Completed</div>
         </div>
+      </td>
+      <td class="hn-stat" width="33.33%" style="padding:0 5px;vertical-align:top">
+        <div class="hn-panel"
+             style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:15px 16px">
+          <div style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                      font-size:29px;font-weight:600;line-height:1;color:#5B86D6" th:text="${created}">8</div>
+          <div class="hn-faint"
+               style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;
+                      line-height:1.4;color:#9A99B0;margin-top:6px" th:text="#{email.weekly.created}">Created</div>
+        </div>
+      </td>
+      <td class="hn-stat" width="33.33%" style="padding:0 0 0 5px;vertical-align:top">
+        <div class="hn-panel"
+             style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:15px 16px">
+          <div style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                      font-size:29px;font-weight:600;line-height:1;color:#B9831F" th:text="${focusLabel}">3h</div>
+          <div class="hn-faint"
+               style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;
+                      line-height:1.4;color:#9A99B0;margin-top:6px" th:text="#{email.weekly.focus}">Focus time</div>
+        </div>
+      </td>
+    </tr>
+  </table>
 
-        <!-- Stat tiles -->
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:separate;border-spacing:0 0;margin:0 0 8px">
+  <!--/* ---- active sprint -------------------------------------------------- */-->
+  <table th:if="${sprint != null}" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="margin:12px 0 0 0">
+    <tr>
+      <td class="hn-accent"
+          style="background:#F3E9D2;border:1px solid #E4CE96;border-radius:12px;padding:15px 18px">
+        <div class="hn-eyebrow"
+             style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10.5px;
+                    font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#B9831F;margin:0 0 6px 0"
+             th:text="#{email.weekly.sprint}">ACTIVE SPRINT</div>
+        <div class="hn-ink"
+             style="font-family:'Sora','Avenir Next','Segoe UI',system-ui,-apple-system,Arial,sans-serif;
+                    font-size:17px;font-weight:700;line-height:1.3;color:#23223F" th:text="${sprint.name}">Sprint 4</div>
+
+        <!--/* Burn-down as a two-cell table: the only bar Outlook renders reliably. */-->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:11px 0 8px 0">
           <tr>
-            <td width="33%" style="padding:0 6px 0 0;vertical-align:top">
-              <div style="background:#F7F6FB;border:1px solid #EDECF4;border-radius:16px;padding:16px">
-                <div style="font-size:30px;font-weight:800;color:#2E8B62;line-height:1" th:text="${completed}">12</div>
-                <div style="font-size:12px;color:#6B6A85;margin-top:5px">
-                  <span th:if="${locale == 'de'}">Abgeschlossen</span>
-                  <span th:unless="${locale == 'de'}">Completed</span>
-                </div>
-              </div>
-            </td>
-            <td width="33%" style="padding:0 6px;vertical-align:top">
-              <div style="background:#F7F6FB;border:1px solid #EDECF4;border-radius:16px;padding:16px">
-                <div style="font-size:30px;font-weight:800;color:#4E6FD0;line-height:1" th:text="${created}">8</div>
-                <div style="font-size:12px;color:#6B6A85;margin-top:5px">
-                  <span th:if="${locale == 'de'}">Erstellt</span>
-                  <span th:unless="${locale == 'de'}">Created</span>
-                </div>
-              </div>
-            </td>
-            <td width="33%" style="padding:0 0 0 6px;vertical-align:top">
-              <div style="background:#F7F6FB;border:1px solid #EDECF4;border-radius:16px;padding:16px">
-                <div style="font-size:30px;font-weight:800;color:#B9831F;line-height:1" th:text="${focusLabel}">3h</div>
-                <div style="font-size:12px;color:#6B6A85;margin-top:5px">
-                  <span th:if="${locale == 'de'}">Deine Fokuszeit</span>
-                  <span th:unless="${locale == 'de'}">Your focus time</span>
-                </div>
-              </div>
+            <td th:with="pct=${sprint.issuesTotal > 0 ? (sprint.issuesDone * 100 / sprint.issuesTotal) : 0}"
+                style="height:6px;line-height:6px;font-size:0;background:#E4CE96;border-radius:999px">
+              <div th:style="'width:' + ${pct} + '%;height:6px;line-height:6px;font-size:0;background:#B9831F;border-radius:999px'"
+                   style="height:6px;line-height:6px;font-size:0;background:#B9831F;border-radius:999px">&nbsp;</div>
             </td>
           </tr>
         </table>
 
-        <!-- Active sprint -->
-        <div th:if="${sprint != null}" style="background:#F3EEDF;border:1px solid #E9DEBE;border-radius:16px;padding:16px;margin:16px 0 0">
-          <div style="font-size:11px;font-weight:700;letter-spacing:0.5px;color:#B9831F;text-transform:uppercase;margin-bottom:6px">
-            <span th:if="${locale == 'de'}">Aktiver Sprint</span>
-            <span th:unless="${locale == 'de'}">Active sprint</span>
-          </div>
-          <div style="font-size:16px;font-weight:700;color:#2D2B55" th:text="${sprint.name}">Sprint 4</div>
-          <div style="font-size:13px;color:#6B6A85;margin-top:4px">
-            <span th:if="${sprint.days > 0}" th:text="${'Day ' + sprint.day + ' / ' + sprint.days + ' · '}">Day 3 / 10 · </span>
-            <span th:text="${sprint.issuesDone + ' / ' + sprint.issuesTotal + ' '}">6 / 14 </span>
-            <span th:if="${locale == 'de'}">Vorgänge erledigt</span>
-            <span th:unless="${locale == 'de'}">issues done</span>
-          </div>
+        <div style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;
+                    line-height:1.5;color:#6B4E12">
+          <span th:if="${sprint.days > 0}" th:text="#{email.weekly.sprintDay(${sprint.day}, ${sprint.days})} + ' · '">Day 3 of 10 · </span>
+          <span th:text="#{email.weekly.sprintIssues(${sprint.issuesDone}, ${sprint.issuesTotal})}">6 of 14 issues done</span>
         </div>
+      </td>
+    </tr>
+  </table>
 
-        <!-- Top contributors -->
-        <div th:if="${!contributors.isEmpty()}" style="margin:24px 0 0">
-          <div style="font-size:13px;font-weight:700;color:#2D2B55;margin-bottom:10px">
-            <span th:if="${locale == 'de'}">Top-Mitwirkende</span>
-            <span th:unless="${locale == 'de'}">Top contributors</span>
-          </div>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-            <tr th:each="c : ${contributors}">
-              <td style="padding:6px 0;border-bottom:1px solid #F1F0F7">
-                <span style="display:inline-block;width:28px;height:28px;line-height:28px;text-align:center;background:#2D2B55;color:#fff;border-radius:50%;font-size:12px;font-weight:700" th:text="${c.initials}">AB</span>
-                <span style="font-size:14px;color:#33314F;margin-left:10px;font-weight:600" th:text="${c.displayName}">Alex Beck</span>
+  <!--/* ---- top contributors ----------------------------------------------- */-->
+  <th:block th:if="${!contributors.isEmpty()}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(#{email.weekly.contributors})}"/>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr th:each="c, s : ${contributors}">
+        <td class="hn-sep" th:styleappend="${s.last} ? ';border-bottom:0' : ''"
+            style="padding:9px 0;border-bottom:1px solid #EFEDE6">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="30" bgcolor="#2D2B55" align="center"
+                  style="width:30px;height:30px;background:#2D2B55;border-radius:999px;
+                         font-family:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;
+                         font-weight:600;color:#FFFFFF;line-height:30px" th:text="${c.initials}">AB</td>
+              <td class="hn-ink"
+                  style="padding-left:11px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;
+                         font-size:14.5px;font-weight:600;color:#23223F" th:text="${c.displayName}">Alex Beck</td>
+            </tr>
+          </table>
+        </td>
+        <td class="hn-faint hn-sep" align="right"
+            th:styleappend="${s.last} ? ';border-bottom:0' : ''"
+            style="padding:9px 0;border-bottom:1px solid #EFEDE6;white-space:nowrap;
+                   font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;color:#9A99B0">
+          <span th:text="${c.completed} + ' ' + #{email.weekly.contributorDone}">5 done</span>
+        </td>
+      </tr>
+    </table>
+  </th:block>
+
+  <!--/* ---- completed highlights ------------------------------------------- */-->
+  <th:block th:if="${!highlights.isEmpty()}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(#{email.weekly.highlights})}"/>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr th:each="h, s : ${highlights}">
+        <td class="hn-sep" th:styleappend="${s.last} ? ';border-bottom:0' : ''"
+            style="padding:9px 0;border-bottom:1px solid #EFEDE6">
+          <span class="hn-mono"
+                style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px;
+                       font-weight:600;color:#B9831F" th:text="${h.readableId}">ACME-42</span>
+          <span class="hn-ink"
+                style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:14.5px;
+                       color:#23223F;padding-left:9px" th:text="${h.title}">Ship the thing</span>
+        </td>
+      </tr>
+    </table>
+  </th:block>
+
+  <!--/* ---- the week ahead -------------------------------------------------- */-->
+  <th:block th:replace="~{email/_layout :: sectionLabel(#{email.weekly.ahead})}"/>
+
+  <table th:if="${upcoming.isEmpty()}" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td class="hn-ok" align="center"
+          style="background:#E4F2EC;border:1px solid #C9E4D8;border-radius:12px;padding:18px 16px">
+        <span class="hn-ok-ink"
+              style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:14px;
+                     font-weight:600;color:#2FA06E" th:text="#{email.weekly.empty}">All caught up.</span>
+      </td>
+    </tr>
+  </table>
+
+  <th:block th:unless="${upcoming.isEmpty()}">
+    <table th:if="${overdueCount > 0}" role="presentation" cellpadding="0" cellspacing="0" border="0"
+           style="margin:0 0 10px 0">
+      <tr>
+        <td class="hn-danger"
+            style="background:#FBE7E4;border-radius:999px;padding:5px 13px;
+                   font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;
+                   font-weight:700;color:#C0392B" th:text="#{email.weekly.overdue(${overdueCount})}">2 overdue</td>
+      </tr>
+    </table>
+
+    <table th:each="t : ${upcoming}" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+           style="margin:0 0 7px 0">
+      <tr>
+        <td class="hn-panel"
+            style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:11px 14px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="vertical-align:middle">
+                <div class="hn-faint"
+                     style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                            font-size:11px;font-weight:600;color:#9A99B0" th:text="${t.readableId}">ACME-51</div>
+                <div class="hn-ink"
+                     style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:14.5px;
+                            line-height:1.4;color:#23223F;margin-top:2px" th:text="${t.title}">Review the pull request</div>
               </td>
-              <td align="right" style="padding:6px 0;border-bottom:1px solid #F1F0F7;font-size:13px;color:#6B6A85;white-space:nowrap">
-                <span th:text="${c.completed}">5</span>
-                <span th:if="${locale == 'de'}"> erledigt</span>
-                <span th:unless="${locale == 'de'}"> done</span>
+              <td align="right" style="vertical-align:middle;white-space:nowrap;padding-left:10px">
+                <!--/* styleappend, not style: th:style replaces the whole attribute
+                     and the date would lose its mono face along with it. */-->
+                <span th:if="${t.due != null}" th:class="${t.overdue} ? 'hn-danger-ink' : 'hn-faint'"
+                      th:styleappend="${t.overdue} ? ';color:#C0392B' : ''"
+                      style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                             font-size:12px;font-weight:600;color:#9A99B0" th:text="${t.due}">Jul 9</span>
               </td>
             </tr>
           </table>
-        </div>
+        </td>
+      </tr>
+    </table>
 
-        <!-- Highlights -->
-        <div th:if="${!highlights.isEmpty()}" style="margin:24px 0 0">
-          <div style="font-size:13px;font-weight:700;color:#2D2B55;margin-bottom:10px">
-            <span th:if="${locale == 'de'}">Erledigte Highlights</span>
-            <span th:unless="${locale == 'de'}">Completed highlights</span>
-          </div>
-          <div th:each="h : ${highlights}" style="padding:10px 0;border-bottom:1px solid #F1F0F7">
-            <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#B9831F;font-weight:600" th:text="${h.readableId}">ACME-42</span>
-            <span style="font-size:14px;color:#33314F;margin-left:8px" th:text="${h.title}">Ship the thing</span>
-          </div>
-        </div>
+    <div th:if="${upcomingTotal > upcomingShown}" class="hn-faint"
+         style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12.5px;
+                color:#9A99B0;margin:2px 0 0 2px"
+         th:text="#{email.weekly.more(${upcomingTotal - upcomingShown})}">3 more in the app</div>
+  </th:block>
 
-        <!-- The week ahead -->
-        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;color:#9794AE;text-transform:uppercase;margin:28px 0 12px">
-          <span th:if="${locale == 'de'}">Deine anstehenden To-Dos</span>
-          <span th:unless="${locale == 'de'}">Your upcoming to-dos</span>
-        </div>
-
-        <div th:if="${upcoming.isEmpty()}" style="background:#F1F7F3;border:1px solid #D8EADF;border-radius:16px;padding:18px;text-align:center;color:#2E8B62;font-size:14px">
-          <span th:if="${locale == 'de'}">🎉 Nichts Offenes — du bist auf dem neuesten Stand!</span>
-          <span th:unless="${locale == 'de'}">🎉 Nothing on your plate — you're all caught up!</span>
-        </div>
-
-        <div th:unless="${upcoming.isEmpty()}">
-          <div th:if="${overdueCount > 0}" style="display:inline-block;background:#FBE9E7;color:#C0392B;font-size:12px;font-weight:700;padding:5px 12px;border-radius:999px;margin-bottom:12px">
-            <span th:text="${overdueCount}">2</span>
-            <span th:if="${locale == 'de'}"> überfällig</span>
-            <span th:unless="${locale == 'de'}"> overdue</span>
-          </div>
-          <div th:each="t : ${upcoming}" style="padding:11px 14px;border:1px solid #EDECF4;border-radius:14px;margin-bottom:8px">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-              <td style="vertical-align:middle">
-                <span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8886A2;font-weight:600" th:text="${t.readableId}">ACME-51</span>
-                <div style="font-size:14px;color:#33314F;margin-top:3px" th:text="${t.title}">Review the pull request</div>
-              </td>
-              <td align="right" style="vertical-align:middle;white-space:nowrap">
-                <span th:if="${t.due != null}"
-                      th:styleappend="${t.overdue} ? 'color:#C0392B' : 'color:#6B6A85'"
-                      style="font-size:12px;font-weight:600" th:text="${t.due}">Jul 9</span>
-              </td>
-            </tr></table>
-          </div>
-          <div style="font-size:12px;color:#9794AE;margin-top:4px" th:if="${upcomingTotal > upcomingShown}">
-            <span th:if="${locale == 'de'}">+ <span th:text="${upcomingTotal - upcomingShown}">3</span> weitere in der App</span>
-            <span th:unless="${locale == 'de'}">+ <span th:text="${upcomingTotal - upcomingShown}">3</span> more in the app</span>
-          </div>
-        </div>
-
-        <!-- CTA -->
-        <p style="margin:28px 0 0;text-align:center">
-          <a th:href="${ctaLink}"
-             style="display:inline-block;background:#2D2B55;color:#ffffff;padding:14px 32px;border-radius:999px;text-decoration:none;font-weight:700;font-size:15px">
-            <span th:if="${locale == 'de'}">Vollständige Übersicht öffnen</span>
-            <span th:unless="${locale == 'de'}">Open full summary</span>
-          </a>
-        </p>
-
-        <p style="color:#9794AE;font-size:12px;line-height:1.6;margin:28px 0 0;border-top:1px solid #EFEEF5;padding-top:16px;text-align:center">
-          <span th:if="${locale == 'de'}">Diese Zusammenfassung wird wöchentlich von Hinata gesendet. Du kannst sie in deinen Benachrichtigungseinstellungen anpassen.</span>
-          <span th:unless="${locale == 'de'}">This summary is sent weekly by Hinata. You can adjust it in your notification settings.</span>
-        </p>
-      </div>
-    </div>
-  </div>
+  <th:block th:replace="~{email/_layout :: cta(${ctaLink}, #{email.weekly.cta})}"/>
+</th:block>
 </body>
 </html>

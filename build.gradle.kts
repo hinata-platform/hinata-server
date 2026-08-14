@@ -197,6 +197,22 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
+// Renders every transactional e-mail (12 templates x de/en x light/dark) into
+// build/email-preview/index.html so the designs can be reviewed in a browser
+// without a running server or an SMTP round-trip.
+//   ./gradlew emailPreview && open hinata-server/build/email-preview/index.html
+tasks.register<Test>("emailPreview") {
+    group = "documentation"
+    description = "Renders all transactional e-mail templates to build/email-preview/."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter { includeTestsMatching("com.ahmadre.hinata.notification.EmailPreviewTest") }
+    // The gallery is the whole point of running this, so never skip it as
+    // up-to-date or serve it FROM-CACHE after a template edit.
+    outputs.upToDateWhen { false }
+    testLogging { showStandardStreams = true }
+}
+
 // Local debugging: when BOOTRUN_DEBUG_PORT is set, attach a JDWP agent to the
 // forked application JVM ONLY (not the Gradle daemon), on that port. Env-gated,
 // so CI/normal builds are unaffected. Used by the mono-repo "Full Stack — Local"

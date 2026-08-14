@@ -165,8 +165,8 @@ class NotificationServiceTest {
 			assertThat(n.getLink()).as("no bell entry pointing at a 403").isNull();
 		});
 		// The e-mail is sent without a CTA, the push without a deep link.
-		verify(mail).send(eq("ext@example.org"), anyString(), anyString(), anyString(),
-				isNull(), anyString());
+		verify(mail).sendNotification(eq("ext@example.org"), anyString(), anyString(), anyString(),
+				isNull(), anyString(), anyString(), anyString());
 		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), isNull());
 	}
 

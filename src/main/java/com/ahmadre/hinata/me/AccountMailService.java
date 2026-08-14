@@ -48,7 +48,8 @@ public class AccountMailService {
 
 	/** Security alert: 2FA enabled/disabled, password or email changed. */
 	public void sendSecurityAlert(User user, String headline, String body) {
-		mail.send(user.getEmail(), SUBJECT_PREFIX + headline, headline, body, null);
+		mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + headline, headline, body, null, null,
+				de(user) ? "de" : "en", "email.eyebrow.SECURITY_ALERT");
 	}
 
 	private Map<String, Object> base(User user) {
