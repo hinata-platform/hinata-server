@@ -13,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -21,6 +22,23 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public class RateLimitFilter extends OncePerRequestFilter {
+
+	/**
+	 * Paths that live under the auth prefix but are not credential traffic:
+	 * unauthenticated, side-effect-free lookups that reveal nothing an attacker
+	 * could guess at. They stay on the general API budget instead of competing
+	 * with sign-in attempts for the deliberately tiny auth one.
+	 *
+	 * <p>{@code /sso/providers} is what every visit to the sign-in screen calls to
+	 * decide which buttons to draw. On the strict budget a couple of app starts
+	 * within a minute — or several clients behind one proxy IP, which is what a
+	 * reverse proxy or tunnel looks like — answered it with 429, and a client
+	 * cannot tell that apart from "this server has no SSO": the buttons simply
+	 * went missing. Matched by exact equality, so anything unusual (a trailing
+	 * slash, a traversal attempt) still falls through to the strict bucket.
+	 */
+	private static final Set<String> PUBLIC_AUTH_LOOKUPS = Set.of(
+			"/api/v1/auth/sso/providers");
 
 	private final HinataProperties properties;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
@@ -66,7 +84,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 			bucket = mcpBuckets.computeIfAbsent(ip,
 					k -> newBucket(properties.getRateLimit().getMcpPerMinute()));
 		}
-		else if (uri.startsWith("/api/v1/auth/")) {
+		else if (uri.startsWith("/api/v1/auth/") && !PUBLIC_AUTH_LOOKUPS.contains(uri)) {
 			bucket = authBuckets.computeIfAbsent(ip,
 					k -> newBucket(properties.getRateLimit().getAuthPerMinute()));
 		}
