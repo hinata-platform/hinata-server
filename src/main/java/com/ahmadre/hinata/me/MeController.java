@@ -36,6 +36,7 @@ public class MeController {
 	private final UserEvents userEvents;
 	private final DataExportPdfService dataExportPdf;
 	private final com.ahmadre.hinata.user.UserService users;
+	private final com.ahmadre.hinata.issue.IssueWatchService watchedIssues;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
 
@@ -260,6 +261,21 @@ public class MeController {
 		User user = currentUser.require();
 		return me.projectsOf(user).stream().map(p -> new AccessProjectDto(p.getId(), p.getKey(),
 				p.getName(), p.getColor(), me.projectRole(p, user.getId()))).toList();
+	}
+
+	/**
+	 * The issues the caller subscribed to, newest-touched first.
+	 *
+	 * <p>Only from projects they can still see: a subscription outlives the access
+	 * that allowed it, and this list must never be the place where a former member
+	 * still reads an issue's title.
+	 */
+	@Operation(summary = "Issues I watch")
+	@GetMapping("/watched")
+	public org.springframework.data.domain.Page<com.ahmadre.hinata.issue.Issue> watched(
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "20") int size) {
+		return watchedIssues.watchedBy(currentUser.require(), page, size);
 	}
 
 	// --- GDPR -----------------------------------------------------------------

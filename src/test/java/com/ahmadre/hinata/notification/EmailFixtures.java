@@ -42,6 +42,7 @@ final class EmailFixtures {
 			"email/account-role-changed",
 			"email/account-deactivated",
 			"email/account-deleted",
+			"email/issue-changes",
 			"email/weekly-summary");
 
 	private static final String BASE = "https://track.asta.hn";
@@ -145,6 +146,28 @@ final class EmailFixtures {
 				m.put("roles", de ? "Administrator, Mitglied" : "Administrator, Member");
 			}
 			case "email/account-deactivated", "email/account-deleted" -> m.put("ctaLink", null);
+			case "email/issue-changes" -> {
+				m.put("headline", de
+						? "HIN-142 · Kalenderansicht: Woche beginnt am falschen Tag"
+						: "HIN-142 · Calendar view: week starts on the wrong day");
+				m.put("preheader", de
+						? "Status: Open → In Arbeit · Priorität: NORMAL → MAJOR"
+						: "Status: Open → In Progress · Priority: NORMAL → MAJOR");
+				m.put("lines", List.of(
+						new IssueChangeRenderer.Line(de ? "Status" : "Status",
+								de ? "Open → In Arbeit" : "Open → In Progress"),
+						new IssueChangeRenderer.Line(de ? "Priorität" : "Priority",
+								"NORMAL → MAJOR"),
+						new IssueChangeRenderer.Line(de ? "Fällig" : "Due",
+								de ? "20.08.2026 → 23.08.2026" : "Aug 20, 2026 → Aug 23, 2026"),
+						new IssueChangeRenderer.Line(de ? "Zuständig" : "Assignees",
+								"+Marek Wilczyński, −Jördis Brandt"),
+						new IssueChangeRenderer.Line(de ? "Beschreibung" : "Description",
+								de ? "geändert" : "changed")));
+				// No ctaLabel: the change mail lets the layout fall back to
+				// email.cta.open, exactly as it does in production.
+				m.put("ctaLink", BASE + "/issues/HIN-142");
+			}
 			case "email/weekly-summary" -> weekly(m, de);
 			default -> throw new IllegalArgumentException("No sample model for " + template);
 		}

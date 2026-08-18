@@ -68,6 +68,38 @@ public class HinataProperties {
 	private Gateway gateway = new Gateway();
 	private GitIntegration gitIntegration = new GitIntegration();
 	private Mcp mcp = new Mcp();
+	private Notification notification = new Notification();
+
+	/** Tuning for the notification fan-out that is not a per-user preference. */
+	@Getter
+	@Setter
+	public static class Notification {
+		private Watch watch = new Watch();
+	}
+
+	/**
+	 * How long the e-mail for a watched issue waits before it is sent. Only the
+	 * watcher stream is bundled — every other notification mail stays immediate.
+	 *
+	 * <p>Both windows are properties rather than constants because the right
+	 * values depend on how an instance is used: a team that edits in long focused
+	 * sessions wants a longer quiet window than one that touches issues in
+	 * passing, and neither should need a deployment to find that out.
+	 */
+	@Getter
+	@Setter
+	public static class Watch {
+		/**
+		 * Nothing more happened to the issue for this long ⇒ the editing has
+		 * settled, send what accumulated.
+		 */
+		private java.time.Duration quietWindow = java.time.Duration.ofMinutes(5);
+		/**
+		 * Ceiling measured from the first unsent change, so continuous editing
+		 * cannot starve the debounce and hold a mail back indefinitely.
+		 */
+		private java.time.Duration maxDelay = java.time.Duration.ofMinutes(30);
+	}
 
 	/**
 	 * Hinata Connect — the single central service every Hinata server uses for the

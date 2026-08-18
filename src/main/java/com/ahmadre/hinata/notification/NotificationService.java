@@ -13,8 +13,10 @@ import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -36,8 +38,12 @@ public class NotificationService {
 	// Decides per recipient whether a project-scoped link resolves for them. Injected as
 	// the rule component, not ProjectService — that service depends on this one.
 	private final ProjectReach reach;
+	private final IssueChangeRenderer changeRenderer;
+	// Where the watchers' change mails go instead of the mail server; the bell and
+	// the push still fire from here, immediately.
+	private final IssueDigestService digests;
 
-	private static final String SUBJECT_PREFIX = "[Hinata] ";
+	static final String SUBJECT_PREFIX = "[Hinata] ";
 
 	/** Notify each given assignee (except the actor) that the issue is theirs. */
 	public void notifyAssigned(Issue issue, User actor, java.util.Collection<String> assigneeIds) {
@@ -72,14 +78,63 @@ public class NotificationService {
 				issueLink(issue), issue.getProjectId());
 	}
 
-	/** Notify the issue's watchers that its workflow state changed. */
-	public void notifyStateChanged(Issue issue, User editor, String newState) {
-		deliver(watchersWithout(issue, editor), Notification.Type.ISSUE_UPDATED,
+	/**
+	 * The one notice an update sends: everything that changed, in a single
+	 * message, to everyone with a stake in the issue.
+	 *
+	 * <p>One notification per update operation, not one per field — a user who
+	 * re-prioritises an issue and moves it to another sprint in the same save
+	 * causes one interruption, not two. And the interruption says what happened:
+	 * the previous behaviour let an assignment silently swallow a state change and
+	 * ignored every other field entirely.
+	 *
+	 * <p>{@code alreadyNotified} names the recipients this same update has already
+	 * reached with a more specific notice (an assignment, a mention). They are
+	 * skipped rather than told twice, exactly as {@code notifyComment} treats a
+	 * mention as superseding the watcher notice.
+	 */
+	public void notifyUpdated(Issue issue, List<FieldChange> changes, User actor,
+			Set<String> alreadyNotified) {
+		List<FieldChange> collapsed = FieldChange.collapse(changes);
+		if (collapsed.isEmpty()) return;
+		Audience audience = audienceFor(issue, actor);
+		Set<String> watchers = new HashSet<>(audience.watchers());
+		Set<String> stakeholders = new HashSet<>(audience.stakeholders());
+		if (alreadyNotified != null) {
+			watchers.removeAll(alreadyNotified);
+			stakeholders.removeAll(alreadyNotified);
+		}
+		Set<String> recipients = new HashSet<>(watchers);
+		recipients.addAll(stakeholders);
+		if (recipients.isEmpty()) return;
+		// Rendered twice for the whole fan-out, not once per recipient. Resolving a
+		// change list costs a point read per value — a display name, a sprint name,
+		// a parent's key — and there are only ever two distinct results, one per
+		// language, however many watchers an issue has.
+		String summaryDe = changeRenderer.summary(collapsed, true);
+		String summaryEn = changeRenderer.summary(collapsed, false);
+		deliver(recipients, Notification.Type.ISSUE_UPDATED,
 				de -> de ? issue.getReadableId() + " aktualisiert"
 						: issue.getReadableId() + " updated",
-				de -> de ? "Status geändert zu \"" + newState + "\""
-						: "State changed to \"" + newState + "\"",
-				issueLink(issue), issue.getProjectId());
+				de -> de ? summaryDe : summaryEn,
+				issueLink(issue), issue.getProjectId(),
+				new Routing(
+						// A watcher subscribed themselves and switches that off under
+						// "watching"; an assignee or the reporter is on the issue by
+						// assignment, which is the "status" setting. Same notification,
+						// two different reasons to receive it — so two different toggles.
+						userId -> watchers.contains(userId)
+								? NotificationPreferences.WATCHING
+								: eventId(Notification.Type.ISSUE_UPDATED),
+						// Only the watcher stream is bundled. An assignee's mail keeps
+						// arriving at the moment of the change, as it always has.
+						recipient -> watchers.contains(recipient.getId())
+								&& digests.queue(issue, recipient, collapsed)));
+	}
+
+	/** As {@link #notifyUpdated(Issue, List, User, Set)} with nobody pre-notified. */
+	public void notifyUpdated(Issue issue, List<FieldChange> changes, User actor) {
+		notifyUpdated(issue, changes, actor, Set.of());
 	}
 
 	/**
@@ -187,12 +242,16 @@ public class NotificationService {
 	 * Notifies users who are mentioned in {@code after} but were not already
 	 * mentioned in {@code before} — so creating or editing a description pings only
 	 * the newly added mentions, never re-pinging existing ones on unrelated edits.
+	 *
+	 * @return the ids that were pinged, so the caller can keep the broader change
+	 *         notice from reaching the same people twice for one save
 	 */
-	public void notifyNewMentions(Issue issue, User actor, String before, String after) {
+	public Set<String> notifyNewMentions(Issue issue, User actor, String before, String after) {
 		Set<String> added = new HashSet<>(richText.mentionedUsers(after));
 		added.removeAll(richText.mentionedUsers(before));
-		if (added.isEmpty()) return;
+		if (added.isEmpty()) return Set.of();
 		notifyMentions(issue, actor, added, preview(after));
+		return added;
 	}
 
 	/** Max characters of comment/description text surfaced in a notification preview. */
@@ -547,11 +606,63 @@ public class NotificationService {
 		return gateway.relayLink(link, null);
 	}
 
+	/**
+	 * Who hears about a change to an issue, split by <em>why</em>.
+	 *
+	 * <p>{@code stakeholders} are the assignees and the reporter — people the
+	 * issue was handed to or who raised it. {@code watchers} are the people who
+	 * subscribed themselves. The split matters twice over: it decides which
+	 * preference toggle gates each recipient, and only the watcher half is
+	 * filtered for access.
+	 */
+	private record Audience(Set<String> watchers, Set<String> stakeholders) {
+	}
+
+	/**
+	 * Splits the issue's audience and — for the subscribed half only — drops
+	 * anyone who can no longer see the project.
+	 *
+	 * <p>Watching grants nothing, so a watcher who loses project access must stop
+	 * hearing about the issue; this is the check that guarantees it, because a
+	 * subscription can outlive the access that allowed it (a removed member, a
+	 * revoked team grant) and the cleanup that prunes those lists is best-effort
+	 * hygiene, not a promise.
+	 *
+	 * <p>Assignees and the reporter stay unfiltered on purpose (see
+	 * {@link #linkFor}): an e-mail-ingested ticket is attributed to its sender's
+	 * account whether or not they belong to the project, and they must still hear
+	 * that their own request moved. They get the notice without a working link,
+	 * never silence.
+	 *
+	 * <p>The filter is one bulk question about one project rather than a
+	 * {@code canSee} per watcher — a hundred-watcher issue would otherwise re-read
+	 * the project and re-query the teams a hundred times per event.
+	 */
+	private Audience audienceFor(Issue issue, User exclude) {
+		Set<String> stakeholders = new HashSet<>();
+		if (issue.getAssigneeIds() != null) stakeholders.addAll(issue.getAssigneeIds());
+		if (issue.getReporterId() != null) stakeholders.add(issue.getReporterId());
+		Set<String> watchers = new HashSet<>(
+				issue.getWatcherIds() != null ? issue.getWatcherIds() : Set.of());
+		// Someone who is both counts as a stakeholder: the stronger relationship
+		// wins, so an assignee who also subscribed keeps the immediate mail their
+		// assignment earns them rather than being quietly moved into the digest.
+		watchers.removeAll(stakeholders);
+		if (!watchers.isEmpty()) {
+			watchers = new HashSet<>(reach.whoCanSee(issue.getProjectId(), watchers));
+		}
+		if (exclude != null) {
+			stakeholders.remove(exclude.getId());
+			watchers.remove(exclude.getId());
+		}
+		return new Audience(watchers, stakeholders);
+	}
+
+	/** Everyone {@link #audienceFor} found, for the notices that treat them alike. */
 	private Set<String> watchersWithout(Issue issue, User exclude) {
-		Set<String> recipients = new HashSet<>(issue.getWatcherIds());
-		if (issue.getAssigneeIds() != null) recipients.addAll(issue.getAssigneeIds());
-		if (issue.getReporterId() != null) recipients.add(issue.getReporterId());
-		if (exclude != null) recipients.remove(exclude.getId());
+		Audience audience = audienceFor(issue, exclude);
+		Set<String> recipients = new HashSet<>(audience.stakeholders());
+		recipients.addAll(audience.watchers());
 		return recipients;
 	}
 
@@ -576,14 +687,31 @@ public class NotificationService {
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link, String linkProjectId) {
-		String eventId = eventId(type);
+		deliver(userIds, type, title, body, link, linkProjectId, Routing.of(type));
+	}
+
+	/**
+	 * As above, with the two per-recipient decisions the plain fan-out cannot
+	 * make: which preference event gates this particular recipient, and whether
+	 * their e-mail is bundled instead of sent now (see {@link Routing}).
+	 */
+	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
+			String link, String linkProjectId, Routing routing) {
+		// Who may follow the link, asked once for the whole set. The per-recipient
+		// question costs a project read and, for anyone who is not a direct member,
+		// a team query — so on a busy issue it re-asks the very thing the bulk
+		// primitive exists to answer, once per watcher, on every single edit.
+		Set<String> canFollowLink = (link == null || linkProjectId == null)
+				? Set.of()
+				: reach.whoCanSee(linkProjectId, userIds);
 		for (String userId : userIds) {
 			if (userId == null) continue;
 			users.findById(userId).filter(User::isActive).ifPresent(user -> {
 				boolean de = de(user);
 				String t = title.of(de);
 				String b = body.of(de);
-				String userLink = linkFor(user, link, linkProjectId);
+				String userLink = linkFor(user, link, linkProjectId, canFollowLink);
+				String eventId = routing.eventFor().apply(user.getId());
 				// The in-app (bell) notification is always recorded; e-mail and push
 				// are gated by the recipient's per-event channel preferences.
 				notifications.save(Notification.builder()
@@ -592,7 +720,7 @@ public class NotificationService {
 				// In-app notifications keep the relative route; the e-mail button gets
 				// an absolute deep link that the native app intercepts as a
 				// Universal/App Link, straight to the issue.
-				if (prefs.deliversEmail(eventId)) {
+				if (prefs.deliversEmail(eventId) && !routing.emailSink().takeOver(user)) {
 					mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + t, t, b, appLink(userLink),
 							buttonLabel(de), localeOf(user), eyebrowKey(type));
 				}
@@ -604,21 +732,75 @@ public class NotificationService {
 	}
 
 	/**
-	 * The link this recipient can actually follow — {@code null} when they cannot see
-	 * the project it points into.
+	 * Per-recipient delivery routing for one fan-out.
 	 *
-	 * <p>A watcher does not have to be a project member: an e-mail-ingested ticket is
-	 * attributed to the sender's account whether or not they belong to the project, and
-	 * anyone can be removed from a project after subscribing to one of its issues. They
-	 * should still hear that their own request moved, so the notice goes out either way —
-	 * only the CTA is dropped, because the e-mail button, the push deep link and the bell
-	 * entry would all land on a 403. Both delivery layers already render nothing for a
-	 * null link (no button in the mail, no {@code data.link} in the push), and the app
-	 * simply doesn't navigate.
+	 * <p>{@code eventId} answers which preference toggle governs this recipient —
+	 * the same notification can reach two people for two different reasons (a
+	 * watcher and an assignee), and honesty demands each be switchable by the
+	 * reason they actually have. {@code emailSink} answers where their e-mail goes
+	 * instead of the mail server, which keeps the bundling decision here rather
+	 * than duplicating the whole fan-out for one type.
 	 */
-	private String linkFor(User user, String link, String linkProjectId) {
+	private record Routing(Function<String, String> eventFor, EmailSink emailSink) {
+
+		/** The ordinary case: one event for everyone, every mail sent at once. */
+		static Routing of(Notification.Type type) {
+			String fixed = NotificationService.eventId(type);
+			return new Routing(userId -> fixed, EmailSink.NONE);
+		}
+	}
+
+	/**
+	 * Somewhere a recipient's e-mail can be handed to instead of being sent now.
+	 *
+	 * <p>Deliberately <em>not</em> a {@code Predicate}: taking a mail over
+	 * <strong>writes to the database</strong> — it upserts the change into that
+	 * recipient's open digest bundle. {@code Predicate.test} is side-effect free
+	 * by universal convention, so as one it read like a question and answered like
+	 * a command: reordering the {@code &&} for readability, logging the answer, or
+	 * wrapping the fan-out in a dry run would each have doubled or invented queue
+	 * writes without looking like a behaviour change at all.
+	 */
+	@FunctionalInterface
+	private interface EmailSink {
+
+		/** Nobody takes anything over — every mail is sent at the moment of the change. */
+		EmailSink NONE = recipient -> false;
+
+		/**
+		 * Offers this recipient's mail to the sink. <strong>Writes.</strong> Call it
+		 * exactly once per recipient, and only where the mail would otherwise be
+		 * sent.
+		 *
+		 * @return {@code true} when the mail has been persisted to the digest queue
+		 *         and must therefore not be sent now
+		 */
+		boolean takeOver(User recipient);
+	}
+
+	/**
+	 * The link this recipient can actually follow — {@code null} when they cannot see
+	 * the project it points into. {@code canFollowLink} is that answer for the whole
+	 * fan-out, resolved once by {@link #deliver}, so this is a set lookup.
+	 *
+	 * <p>Who reaches here <em>without</em> access is a short and deliberate list:
+	 * the assignees and the reporter. An e-mail-ingested ticket is attributed to
+	 * the sender's account whether or not they belong to the project, and they must
+	 * still hear that their own request moved — so the notice goes out either way
+	 * and only the CTA is dropped, because the e-mail button, the push deep link
+	 * and the bell entry would all land on a 403. Both delivery layers already
+	 * render nothing for a null link (no button in the mail, no {@code data.link}
+	 * in the push), and the app simply doesn't navigate.
+	 *
+	 * <p>Watchers are <em>not</em> on that list, and this method is not what stops
+	 * them: {@link #audienceFor} removes every watcher who cannot see the project
+	 * before delivery begins. A watcher arriving here therefore always has access.
+	 * That split is load-bearing — dropping the filter upstream on the assumption
+	 * that this one covers it would turn a missing CTA into a leaked issue title.
+	 */
+	private String linkFor(User user, String link, String linkProjectId, Set<String> canFollowLink) {
 		if (link == null || linkProjectId == null) return link;
-		return reach.canSee(linkProjectId, user) ? link : null;
+		return canFollowLink.contains(user.getId()) ? link : null;
 	}
 
 	/** Produces a string in the recipient's language ({@code true} ⇒ German). */
@@ -642,6 +824,13 @@ public class NotificationService {
 	 * Maps a notification type to its preference event id (see
 	 * {@link NotificationPreferences#EVENTS}). Transactional account/team/system
 	 * events map to the locked {@code security} event, so they always deliver.
+	 *
+	 * <p>This is the default per type. {@code ISSUE_UPDATED} is the one type whose
+	 * event depends on the recipient rather than only on the type — a watcher's
+	 * copy is gated by {@code watching}, an assignee's or the reporter's by
+	 * {@code status} — which {@link #notifyUpdated} decides through its
+	 * {@link Routing}. Every type must appear here or fall into {@code default},
+	 * where it becomes locked-on and the user can never switch it off.
 	 */
 	private static String eventId(Notification.Type type) {
 		return switch (type) {

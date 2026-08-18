@@ -6,6 +6,9 @@ import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.notification.FieldChange;
+import com.ahmadre.hinata.notification.IssueChangeDiff;
+import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.Role;
@@ -52,6 +55,8 @@ class IssueMoveServiceTest {
 	private ProjectService projects;
 	private AgileBoardRepository boards;
 	private SprintRepository sprints;
+	private NotificationService notifications;
+	private IssueWatcherCleanup watcherCleanup;
 	private IssueMoveService service;
 
 	private final Map<String, Issue> store = new HashMap<>();
@@ -69,6 +74,8 @@ class IssueMoveServiceTest {
 		IssueActivityRepository activities = mock(IssueActivityRepository.class);
 		AuditService audit = mock(AuditService.class, RETURNS_DEEP_STUBS);
 		MongoTemplate mongo = mock(MongoTemplate.class);
+		notifications = mock(NotificationService.class);
+		watcherCleanup = mock(IssueWatcherCleanup.class);
 
 		user = User.builder().id("u1").email("a@b.c").roles(java.util.Set.of(Role.MEMBER)).build();
 
@@ -83,7 +90,7 @@ class IssueMoveServiceTest {
 		when(sprints.findById(anyString())).thenReturn(Optional.empty());
 
 		service = new IssueMoveService(issues, activities, issueService, projects, boards,
-				sprints, audit, mongo);
+				sprints, audit, mongo, notifications, watcherCleanup);
 	}
 
 	private static Project project(String id, String key, List<String> states, List<Integer> hues,

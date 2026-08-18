@@ -92,6 +92,7 @@ public class DeletionService {
 	private final StorageService storage;
 	private final MongoTemplate mongo;
 	private final MessageSource messages;
+	private final com.ahmadre.hinata.issue.IssueWatcherCleanup watcherCleanup;
 
 	// ── public types ────────────────────────────────────────────────────────
 
@@ -298,6 +299,21 @@ public class DeletionService {
 			DeletionStream progress) {
 		String pid = project.getId();
 		List<Issue> projectIssues = issues.findByProjectId(pid, Pageable.unpaged()).getContent();
+		// Anything still queued for a watcher of this project would otherwise be
+		// mailed minutes after the project stopped existing. Run first, so a
+		// migration strategy carries no stale subscriptions into the target either.
+		//
+		// When the issues are about to be deleted outright there is nothing to carry
+		// anywhere: clearing their watcher lists would be one write per issue,
+		// discarded microseconds later by the removal itself — twenty thousand
+		// updates, oplog entries and index writes for a twenty-thousand-issue
+		// project, for no effect. Only the queued mail outlives them.
+		if (options.strategy() == IssueStrategy.DELETE) {
+			watcherCleanup.discardQueuedMail(pid);
+		}
+		else {
+			watcherCleanup.clearProject(pid);
+		}
 
 		switch (options.strategy()) {
 			case DELETE -> deleteIssues(projectIssues, pid, progress);

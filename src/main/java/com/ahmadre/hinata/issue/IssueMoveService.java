@@ -7,6 +7,9 @@ import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.notification.FieldChange;
+import com.ahmadre.hinata.notification.IssueChangeDiff;
+import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.project.WorkflowMapping;
@@ -82,6 +85,10 @@ public class IssueMoveService {
 	private final SprintRepository sprints;
 	private final AuditService audit;
 	private final MongoTemplate mongo;
+	// A move is an issue mutation like any other, so it owes its watchers a notice
+	// — and it owes the ones it just moved out of reach an unsubscribe.
+	private final NotificationService notifications;
+	private final IssueWatcherCleanup watcherCleanup;
 
 	// --- API shapes ----------------------------------------------------------
 
@@ -203,6 +210,10 @@ public class IssueMoveService {
 	private Issue moveOne(Issue issue, Project source, Project target, Map<String, String> stateMap,
 			Set<String> moving, boolean keepSprint, User user) {
 		String previousReadableId = issue.getReadableId();
+		// Captured before the mutation: a move changes more than the project, and a
+		// watcher is owed all of it in one notice rather than only the headline.
+		String previousState = issue.getState();
+		String previousSprintId = issue.getSprintId();
 
 		// Status: the confirmed mapping, else the same suggestion the preflight
 		// showed. Validated against the target workflow either way, so a client
@@ -240,6 +251,12 @@ public class IssueMoveService {
 		Issue saved = save(issue);
 		issueService.mergeProjectLabels(target, saved.getTags());
 		reKeyDevInfo(previousReadableId, saved.getReadableId(), target.getId());
+		// A subscription is to an issue, but the access that allowed it was to the
+		// project the issue has just left. Whoever cannot see where it landed loses
+		// the subscription here — before the notice below fans out, so it never
+		// reaches them — and their queued mail goes with it.
+		watcherCleanup.pruneAfterMove(saved, target.getId());
+		notifyMoved(saved, source, target, previousState, previousSprintId, user);
 
 		activities.save(IssueActivity.builder()
 				.issueId(saved.getId())
@@ -253,6 +270,36 @@ public class IssueMoveService {
 				.meta("target", saved.getReadableId())
 				.log();
 		return saved;
+	}
+
+	/**
+	 * Tells the issue's remaining watchers that it moved, and what moved with it.
+	 *
+	 * <p>A move is the largest single change an issue can undergo — it changes the
+	 * project, the readable id everyone has been linking to, usually the status and
+	 * often the sprint — and until this existed it was one of two issue mutations
+	 * that raised no notice at all.
+	 *
+	 * <p>Best-effort: the move is committed, and a mail layer that is unavailable
+	 * must not turn a successful move into a 500 for the user who performed it.
+	 */
+	private void notifyMoved(Issue saved, Project source, Project target, String previousState,
+			String previousSprintId, User user) {
+		List<FieldChange> changes = new ArrayList<>();
+		changes.add(IssueChangeDiff.projectChange(source.getId(), target.getId()));
+		if (!Objects.equals(previousState, saved.getState())) {
+			changes.add(new FieldChange(IssueChangeDiff.STATE, previousState, saved.getState()));
+		}
+		if (!Objects.equals(previousSprintId, saved.getSprintId())) {
+			changes.add(new FieldChange(IssueChangeDiff.SPRINT, previousSprintId,
+					saved.getSprintId()));
+		}
+		try {
+			notifications.notifyUpdated(saved, changes, user);
+		}
+		catch (RuntimeException ex) {
+			log.warn("move notification failed for issue {} (move kept)", saved.getId(), ex);
+		}
 	}
 
 	// --- planning ------------------------------------------------------------

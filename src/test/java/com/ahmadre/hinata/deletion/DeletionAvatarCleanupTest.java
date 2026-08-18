@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.ahmadre.hinata.issue.IssueWatcherCleanup;
 
 /**
  * A deleted team or project takes its avatar with it. Nothing else references
@@ -50,7 +51,8 @@ class DeletionAvatarCleanupTest {
 				mock(AgileBoardRepository.class), mock(SprintRepository.class), issues,
 				mock(ProjectRepository.class), mock(ProjectService.class), mock(TeamRepository.class),
 				mock(TeamActivityRepository.class), projectAvatars, teamAvatars,
-				mock(StorageService.class), mock(MongoTemplate.class), mock(MessageSource.class));
+				mock(StorageService.class), mock(MongoTemplate.class), mock(MessageSource.class),
+				mock(IssueWatcherCleanup.class));
 	}
 
 	@Test

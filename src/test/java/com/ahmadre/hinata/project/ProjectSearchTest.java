@@ -29,6 +29,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.ahmadre.hinata.user.UserRepository;
+import com.ahmadre.hinata.issue.IssueWatcherCleanup;
 
 /**
  * The project pickers page through {@code searchVisible} instead of listing
@@ -50,7 +52,8 @@ class ProjectSearchTest {
 		when(mongo.find(any(Query.class), eq(Project.class))).thenReturn(List.of());
 		ProjectRepository projects = mock(ProjectRepository.class);
 		service = new ProjectService(projects, mongo, teams,
-				mock(NotificationService.class), new ProjectReach(projects, teams));
+				mock(NotificationService.class), mock(IssueWatcherCleanup.class),
+				new ProjectReach(projects, teams, mock(UserRepository.class)));
 	}
 
 	private User member() {

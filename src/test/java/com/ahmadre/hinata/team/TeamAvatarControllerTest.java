@@ -28,6 +28,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.ahmadre.hinata.issue.IssueWatcherCleanup;
 
 /**
  * Who may reach a team's picture. Unlike a profile photo, a team crest is
@@ -52,7 +53,8 @@ class TeamAvatarControllerTest {
 		// A real TeamService over mocked repositories: it *is* the visibility and
 		// manage rule, so stubbing it out would stub out the behaviour under test.
 		teamService = new TeamService(teams, mock(TeamActivityRepository.class),
-				mock(ProjectService.class), mock(NotificationService.class), avatars);
+				mock(ProjectService.class), mock(NotificationService.class), avatars,
+				mock(IssueWatcherCleanup.class));
 		controller = new TeamAvatarController(teamService, avatars,
 				new CurrentUser(mock(UserRepository.class), mock(SessionService.class)));
 	}

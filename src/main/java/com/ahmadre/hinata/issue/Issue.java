@@ -34,6 +34,24 @@ import java.util.List;
 // issue open. Without this a parent-id fetch COLLSCANs the whole collection;
 // the compound also satisfies the children sort, turning it into an IXSCAN.
 @CompoundIndex(name = "parent_number", def = "{'parentId': 1, 'numberInProject': 1}")
+// "Issues I watch", newest-touched first (IssueWatchService.watchedBy).
+//
+// What it covers, honestly: two equality bounds — multikey on watcherIds, then
+// archived — followed by the sort key and its _id tiebreaker. That is the ESR
+// order, so the scan is bounded to one user's subscriptions and Mongo takes the
+// sort straight from the index instead of loading the whole result set into a
+// blocking SORT. Both equalities have to stay equalities: the moment archived is
+// asked as $ne, its two intervals sit in front of the sort keys and the
+// index-provided sort is gone.
+//
+// What it does NOT cover: projectId. The query also scopes to the projects the
+// caller can still see, and that is an $in over a set whose size is the user's,
+// not ours — putting it before the sort keys would let the planner fall back to
+// a blocking sort as soon as the set grew past what it will explode for sort.
+// So it stays a residual filter applied to the documents this index already
+// narrowed to one person's watch list, which is a small set by construction.
+@CompoundIndex(name = "watchers_updated",
+		def = "{'watcherIds': 1, 'archived': 1, 'updatedAt': -1, '_id': -1}")
 public class Issue {
 
 	public enum Type {
@@ -152,6 +170,20 @@ public class Issue {
 	@TextIndexed(weight = 5)
 	private List<String> tags = new ArrayList<>();
 
+	/**
+	 * Everyone subscribed to this issue's changes. Written only by the dedicated
+	 * watch endpoints and only ever with {@code $addToSet}/{@code $pull}, never
+	 * through the generic update path: a user with write access to an issue must
+	 * not be able to subscribe — or unsubscribe — somebody else.
+	 *
+	 * <p>Being on this list grants nothing. Every read and every delivery still
+	 * asks {@code ProjectReach} whether the watcher may see the project, because a
+	 * subscription outlives the access that allowed it.
+	 *
+	 * <p>No {@code @Indexed} of its own: the {@code watchers_updated} compound
+	 * above already starts here, and a standalone multikey index on the same field
+	 * would be maintained on every issue write to serve no query at all.
+	 */
 	@Builder.Default
 	private List<String> watcherIds = new ArrayList<>();
 
@@ -202,11 +234,19 @@ public class Issue {
 	 * <p>Stored as a wrapper because pre-migration documents lack the field —
 	 * a primitive would make Spring Data's constructor mapping reject them
 	 * (null → boolean). The manual accessors keep the boolean API.
+	 *
+	 * <p>Defaulted to {@code false} on the builder so every issue this build writes
+	 * carries the field explicitly. That is what lets the queries ask
+	 * {@code archived == false} instead of {@code archived != true} — an equality
+	 * an index can bound, where the negation is a two-interval bound that costs the
+	 * index-provided sort. {@code IssueSchemaMigration} backfills the documents
+	 * written before this.
 	 */
+	@Builder.Default
 	@Getter(AccessLevel.NONE)
 	@Setter(AccessLevel.NONE)
 	@Indexed
-	private Boolean archived;
+	private Boolean archived = false;
 
 	private Instant archivedAt;
 

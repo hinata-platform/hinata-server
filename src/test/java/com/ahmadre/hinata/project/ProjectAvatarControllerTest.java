@@ -31,6 +31,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.ahmadre.hinata.issue.IssueWatcherCleanup;
 
 /**
  * Who may reach a project's picture. Unlike a profile photo, a project logo is
@@ -59,7 +60,8 @@ class ProjectAvatarControllerTest {
 		// reach and lead rules, so stubbing them out would stub out the behaviour
 		// under test.
 		projectService = new ProjectService(projects, mock(MongoTemplate.class), teams,
-				mock(NotificationService.class), new ProjectReach(projects, teams));
+				mock(NotificationService.class), mock(IssueWatcherCleanup.class),
+				new ProjectReach(projects, teams, mock(UserRepository.class)));
 		controller = new ProjectAvatarController(projectService, avatars,
 				new CurrentUser(mock(UserRepository.class), mock(SessionService.class)));
 	}

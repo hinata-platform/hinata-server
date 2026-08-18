@@ -62,8 +62,9 @@ public class UserService {
 	/**
 	 * Permanently removes a user and scrubs the references that would otherwise
 	 * dangle: their in-app notifications are dropped, issues assigned to them are
-	 * unassigned, and they are removed from every watcher list. Historical author
-	 * references (reporter, comment authors) are intentionally retained.
+	 * unassigned, they are removed from every watcher list and the change mails
+	 * still queued for them are discarded. Historical author references (reporter,
+	 * comment authors) are intentionally retained.
 	 */
 	public void delete(User user) {
 		String id = user.getId();
@@ -83,6 +84,10 @@ public class UserService {
 				new Update().unset("assigneeId"), "issues");
 		mongo.updateMulti(new Query(Criteria.where("watcherIds").is(id)),
 				new Update().pull("watcherIds", id), "issues");
+		// The subscriptions are gone; the mails queued for them would otherwise
+		// outlive the account by up to half an hour — and the rows themselves hold
+		// the deleted user's id alongside field values that can name other users.
+		mongo.remove(new Query(Criteria.where("userId").is(id)), "issue_mail_digests");
 		users.delete(user);
 		log.info("Deleted user {} ({}) and scrubbed dangling references", id, user.getUsername());
 	}

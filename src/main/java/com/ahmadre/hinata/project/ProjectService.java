@@ -56,6 +56,8 @@ public class ProjectService {
 	private final TeamRepository teams;
 	// Safe to inject: NotificationService does not depend back on this service.
 	private final NotificationService notifications;
+	// Best-effort pruning of subscriptions whose access this service just revoked.
+	private final com.ahmadre.hinata.issue.IssueWatcherCleanup watcherCleanup;
 	// Owns the "may this user see that project" rule, so callers outside this domain
 	// (notifications, above all) can ask it without injecting this service back.
 	private final ProjectReach projectReach;
@@ -314,7 +316,21 @@ public class ProjectService {
 		// it so "done" stays truthful (struck-through sub-tasks, throughput, etc.).
 		reconcileResolvedAt(saved);
 		notifyNewMembers(saved, previousMembers, user);
+		pruneWatchersOfRemovedMembers(saved, previousMembers);
 		return saved;
+	}
+
+	/**
+	 * Drops the watcher subscriptions of anyone this update removed from the
+	 * project. The cleanup itself decides who really lost access — a direct member
+	 * dropped from this list may still hold a team grant — and owns the best-effort
+	 * guard, so a failure there can never reach the settings save.
+	 */
+	private void pruneWatchersOfRemovedMembers(Project saved, Set<String> previousMembers) {
+		Set<String> removed = new HashSet<>(previousMembers);
+		removed.removeAll(saved.getMemberIds());
+		if (removed.isEmpty()) return;
+		watcherCleanup.removeFromProject(saved.getId(), removed);
 	}
 
 	/**
