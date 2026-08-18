@@ -71,6 +71,15 @@ public class Project {
 	@Builder.Default
 	private String color = "#AEC6F4";
 
+	/**
+	 * Relative, cache-busted URL of the uploaded project avatar (null = draw the
+	 * key on the {@link #color} accent, as before). Written only by
+	 * {@link ProjectAvatarService}: it is an address the app renders, never a
+	 * value a client may hand in, so it is deliberately absent from
+	 * {@link ProjectUpdateRequest}.
+	 */
+	private String avatarUrl;
+
 	@Builder.Default
 	private boolean archived = false;
 

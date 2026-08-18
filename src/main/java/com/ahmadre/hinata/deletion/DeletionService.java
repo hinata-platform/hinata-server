@@ -11,6 +11,7 @@ import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.project.ProjectAvatarService;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.storage.ImagePreviewService;
@@ -18,6 +19,7 @@ import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.team.ProjectAccess;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.team.TeamActivityRepository;
+import com.ahmadre.hinata.team.TeamAvatarService;
 import com.ahmadre.hinata.team.TeamMembership;
 import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.timetracking.WorkItem;
@@ -85,6 +87,8 @@ public class DeletionService {
 	private final ProjectService projectService;
 	private final TeamRepository teams;
 	private final TeamActivityRepository teamActivity;
+	private final ProjectAvatarService projectAvatars;
+	private final TeamAvatarService teamAvatars;
 	private final StorageService storage;
 	private final MongoTemplate mongo;
 	private final MessageSource messages;
@@ -307,6 +311,9 @@ public class DeletionService {
 
 		progress.step("deletingProject");
 		projects.deleteById(pid);
+		// The uploaded avatar is reachable only through the row that just went
+		// away; best-effort so an unreachable store can't fail the cascade.
+		projectAvatars.deleteStoredObject(pid);
 
 		return summary(Map.of(
 				"issues", projectIssues.size(),
@@ -324,6 +331,8 @@ public class DeletionService {
 		teamActivity.deleteByTeamId(team.getId());
 		progress.step("deletingTeam");
 		teams.delete(team);
+		// Same reasoning as the project cascade: no row, no way back to the object.
+		teamAvatars.deleteStoredObject(team.getId());
 		return summary(Map.of(
 				"members", team.getMembers().size(),
 				"projects", team.getProjectIds().size()));

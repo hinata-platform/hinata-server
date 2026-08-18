@@ -157,6 +157,11 @@ class ApiE2EIntegrationTest {
 	@DisplayName("protected endpoints reject requests without a token (401)")
 	void protectedEndpointRejectsAnonymous() {
 		assertThat(get("/api/v1/auth/me", null).statusCode()).isEqualTo(401);
+		// Team/project avatars are byte proxies like the user avatar, but they are
+		// deliberately NOT permit-listed: a public one would tell anyone which
+		// internal teams and projects exist, and what their logos look like.
+		assertThat(get("/api/v1/teams/anything/avatar", null).statusCode()).isEqualTo(401);
+		assertThat(get("/api/v1/projects/anything/avatar", null).statusCode()).isEqualTo(401);
 	}
 
 	@Test

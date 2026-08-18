@@ -33,6 +33,7 @@ public class TeamService {
 	private final TeamActivityRepository activity;
 	private final ProjectService projects;
 	private final NotificationService notifications;
+	private final TeamAvatarService avatars;
 
 	// --- Reads ---------------------------------------------------------------
 
@@ -123,6 +124,9 @@ public class TeamService {
 	public void delete(Team team) {
 		teams.delete(team);
 		activity.deleteByTeamId(team.getId());
+		// The uploaded avatar is reachable only through the team row that just
+		// went away, so it has to go with it or it lingers as an orphan forever.
+		avatars.deleteStoredObject(team.getId());
 	}
 
 	// --- Membership ----------------------------------------------------------

@@ -16,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class TeamServiceTest {
@@ -23,6 +24,7 @@ class TeamServiceTest {
 	private TeamRepository teams;
 	private ProjectService projects;
 	private NotificationService notifications;
+	private TeamAvatarService avatars;
 	private TeamService service;
 
 	@BeforeEach
@@ -30,8 +32,10 @@ class TeamServiceTest {
 		teams = mock(TeamRepository.class);
 		projects = mock(ProjectService.class);
 		notifications = mock(NotificationService.class);
+		avatars = mock(TeamAvatarService.class);
 		when(teams.save(any(Team.class))).thenAnswer(invocation -> invocation.getArgument(0));
-		service = new TeamService(teams, mock(TeamActivityRepository.class), projects, notifications);
+		service = new TeamService(teams, mock(TeamActivityRepository.class), projects, notifications,
+				avatars);
 	}
 
 	private User user(String id, Role... roles) {
@@ -122,6 +126,20 @@ class TeamServiceTest {
 
 		assertThat(team.getProjectIds()).doesNotContain("p1");
 		assertThat(team.membership("u2").getAccess().getProjectIds()).doesNotContain("p1");
+	}
+
+	/**
+	 * The plain DELETE path is a second way a team disappears (the SSE cascade is
+	 * the other). Both have to take the uploaded picture with them, or it lingers
+	 * in the bucket with nothing left that could ever reference it.
+	 */
+	@Test
+	void deletingATeamTakesItsAvatarObjectWithIt() {
+		Team team = teamWithAdmin("u1");
+
+		service.delete(team);
+
+		verify(avatars).deleteStoredObject("t1");
 	}
 
 	private Team teamWithAdmin(String adminId) {

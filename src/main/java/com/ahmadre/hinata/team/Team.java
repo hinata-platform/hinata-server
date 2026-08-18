@@ -45,6 +45,14 @@ public class Team {
 	@Builder.Default
 	private String icon = "hexagon";
 
+	/**
+	 * Relative, cache-busted URL of the uploaded team avatar (null = draw the
+	 * {@link #icon} on the {@link #colorHue} accent, as before). Written only by
+	 * {@link TeamAvatarService}: it is an address the app renders, never a value
+	 * a client may hand in, so it is deliberately absent from the update DTO.
+	 */
+	private String avatarUrl;
+
 	/** User id of the creator – becomes the first Team-Admin. */
 	private String createdBy;
 
