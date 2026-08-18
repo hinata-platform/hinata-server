@@ -7,6 +7,8 @@ import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.notification.FieldChange;
+import com.ahmadre.hinata.notification.IssueChangeDiff;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.project.Project;
@@ -213,7 +215,6 @@ public class IssueService {
 		Issue before = snapshot(issue);
 		Set<String> previousAssignees = new HashSet<>(
 				issue.getAssigneeIds() != null ? issue.getAssigneeIds() : List.of());
-		String previousState = issue.getState();
 		String previousSprint = issue.getSprintId();
 		mutator.accept(issue);
 		validateHierarchy(issue);
@@ -242,17 +243,33 @@ public class IssueService {
 		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);
 		// Ping anyone newly @-mentioned in the description (existing mentions on an
-		// unrelated edit are not re-notified).
-		notifications.notifyNewMentions(saved, editor, before.getDescriptionDoc(),
-				saved.getDescriptionDoc());
+		// unrelated edit are not re-notified), and collect everyone this save has
+		// already interrupted with a more specific notice, so the change summary
+		// below skips them. Being told "you were assigned" and "the assignee
+		// changed" for the same click is noise, not thoroughness.
+		Set<String> notified = new HashSet<>(notifications.notifyNewMentions(saved, editor,
+				before.getDescriptionDoc(), saved.getDescriptionDoc()));
 		Set<String> newlyAssigned = new HashSet<>(
 				saved.getAssigneeIds() != null ? saved.getAssigneeIds() : List.of());
 		newlyAssigned.removeAll(previousAssignees);
 		if (!newlyAssigned.isEmpty()) {
 			notifications.notifyAssigned(saved, editor, newlyAssigned);
+			notified.addAll(newlyAssigned);
 		}
-		else if (!saved.getState().equals(previousState)) {
-			notifications.notifyStateChanged(saved, editor, saved.getState());
+		// One notice per save, summarising everything that moved — replacing the
+		// if/else chain where an assignment silently suppressed a state change and
+		// a due date, a priority or a sprint moved in total silence.
+		//
+		// Best-effort, like every other fan-out here: the issue is already saved,
+		// and the chain behind this call reaches the mail layer and the digest
+		// queue. A failure there must not come back to the editor as a 500 for a
+		// write that succeeded — nor rob the recipients after it in the fan-out.
+		try {
+			notifications.notifyUpdated(saved, IssueChangeDiff.between(before, saved), editor,
+					notified);
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("change notification failed for issue {} (update kept)", saved.getId(), ex);
 		}
 		return saved;
 	}
@@ -396,6 +413,17 @@ public class IssueService {
 		issue.setArchived(archived);
 		issue.setArchivedAt(at);
 		Issue saved = issues.save(issue);
+		// Archiving does not go through update(), so it has to raise its own notice
+		// — and it is the change a watcher most needs to hear about: the issue they
+		// subscribed to has just disappeared from every list they look at.
+		// Best-effort for the same reason update() is: the archival is already
+		// committed and a mail failure must not report it as having failed.
+		try {
+			notifications.notifyUpdated(saved, IssueChangeDiff.archiveChange(archived), user);
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("archive notification failed for issue {} (archival kept)", saved.getId(), ex);
+		}
 		audit.event(archived ? AuditAction.ISSUE_ARCHIVED : AuditAction.ISSUE_UNARCHIVED)
 				.actor(user).meta("issue", saved.getReadableId()).log();
 		return saved;
@@ -673,6 +701,12 @@ public class IssueService {
 	/** A shallow copy of the fields we track for the change history. */
 	private Issue snapshot(Issue issue) {
 		return Issue.builder()
+				// An update never re-homes an issue — IssueMoveService does, and reports
+				// it itself. The watcher diff still compares it as a backstop, and a
+				// field the diff reads but the snapshot drops reads as "null → current"
+				// on *every* save: leaving this out announced a phantom project change
+				// to every watcher of every edited issue.
+				.projectId(issue.getProjectId())
 				.title(issue.getTitle())
 				.description(issue.getDescription())
 				// The notification layer diffs the *document* to find newly added
@@ -693,6 +727,12 @@ public class IssueService {
 				.estimateMinutes(issue.getEstimateMinutes())
 				.storyPoints(issue.getStoryPoints())
 				.tags(new ArrayList<>(issue.getTags() != null ? issue.getTags() : List.of()))
+				// Not shown in the change history, but the watcher diff reads them:
+				// a re-scheduled dependency and an archival are both changes someone
+				// subscribed to the issue asked to hear about.
+				.dependsOnIds(new ArrayList<>(
+						issue.getDependsOnIds() != null ? issue.getDependsOnIds() : List.of()))
+				.archived(issue.isArchived())
 				.build();
 	}
 

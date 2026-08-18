@@ -25,6 +25,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.ahmadre.hinata.user.UserRepository;
+import com.ahmadre.hinata.issue.IssueWatcherCleanup;
 
 class ProjectServiceTest {
 
@@ -43,7 +45,8 @@ class ProjectServiceTest {
 		// A real ProjectReach over the same mocks: it *is* the membership rule, so
 		// stubbing it out would stub out the access behaviour under test.
 		service = new ProjectService(projects, mongo, teams, notifications,
-				new ProjectReach(projects, teams));
+				mock(IssueWatcherCleanup.class),
+				new ProjectReach(projects, teams, mock(UserRepository.class)));
 	}
 
 	private User user(String id, Role... roles) {

@@ -100,6 +100,15 @@ class ApiContractE2EIntegrationTest {
 		return send(b.build());
 	}
 
+	private HttpResponse<String> delete(String path, String token) {
+		HttpRequest.Builder b = HttpRequest.newBuilder(url(path)).timeout(Duration.ofSeconds(15))
+				.DELETE();
+		if (token != null) {
+			b.header("Authorization", "Bearer " + token);
+		}
+		return send(b.build());
+	}
+
 	private String login() {
 		HttpResponse<String> res = postJson("/api/v1/auth/login",
 				"{\"identifier\":\"" + ADMIN_USER + "\",\"password\":\"" + ADMIN_PASS + "\"}", null);
@@ -270,6 +279,43 @@ class ApiContractE2EIntegrationTest {
 	}
 
 	// --- SSO exchange endpoint -----------------------------------------
+
+	// --- watching an issue ------------------------------------------------------
+
+	/**
+	 * The three calls the app makes to subscribe, unsubscribe and list. Pinned as
+	 * a contract because the client's whole watch toggle is built on them: 204 on
+	 * both writes, a page on the read, and both writes idempotent so a retried
+	 * request after a lost response cannot double-subscribe or 404.
+	 */
+	@Test
+	@DisplayName("watch / unwatch are 204 and idempotent; /me/watched is a page")
+	void watchUnwatchAndTheWatchedList() {
+		String token = login();
+		JsonNode issues = getOk("/api/v1/issues?size=1", token);
+		String key = issues.path("content").get(0).path("readableId").asText();
+
+		assertThat(postJson("/api/v1/issues/" + key + "/watch", "", token).statusCode())
+				.as("subscribe").isEqualTo(204);
+		assertThat(postJson("/api/v1/issues/" + key + "/watch", "", token).statusCode())
+				.as("subscribing again is a no-op, not a conflict").isEqualTo(204);
+
+		JsonNode watched = getOk("/api/v1/me/watched?page=0&size=20", token);
+		assertThat(watched.has("content")).as("a Spring page, like every other list").isTrue();
+		assertThat(watched.path("totalElements").asInt()).isEqualTo(1);
+		JsonNode row = watched.path("content").get(0);
+		assertThat(row.path("readableId").asText()).isEqualTo(key);
+		// The client renders the toggle and the watcher count straight off the issue.
+		assertThat(row.path("watcherIds").isArray()).isTrue();
+		assertThat(row.path("watcherIds")).hasSize(1);
+
+		assertThat(delete("/api/v1/issues/" + key + "/watch", token).statusCode())
+				.as("unsubscribe").isEqualTo(204);
+		assertThat(delete("/api/v1/issues/" + key + "/watch", token).statusCode())
+				.as("unsubscribing again is a no-op").isEqualTo(204);
+
+		assertThat(getOk("/api/v1/me/watched", token).path("totalElements").asInt()).isZero();
+	}
 
 	@Test
 	@DisplayName("sso exchange is public and rejects an invalid code (400)")

@@ -165,6 +165,15 @@ hinata:
       emailReply: ${HINATA_FEATURE_EMAIL_REPLY:true}
   mail:
     from: ${HINATA_MAIL_FROM:hinata@localhost}
+  notification:
+    watch:
+      # E-mail for a WATCHED issue is bundled per issue and recipient; the bell and
+      # the push still fire at the moment of the change. Send once nothing more has
+      # happened for quiet-window, or at the latest max-delay after the first
+      # unsent change, so continuous editing cannot starve the debounce.
+      # ISO-8601 durations or Spring's shorthand (5m / 30m).
+      quiet-window: ${HINATA_WATCH_QUIET_WINDOW:5m}
+      max-delay: ${HINATA_WATCH_MAX_DELAY:30m}
   storage:
     # s3 (MinIO, AWS S3, GCS interop, R2, Spaces, …) or azure (Azure Blob Storage)
     provider: ${HINATA_STORAGE_PROVIDER:s3}

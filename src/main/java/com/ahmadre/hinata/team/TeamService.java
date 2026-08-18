@@ -34,6 +34,9 @@ public class TeamService {
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final TeamAvatarService avatars;
+	// Team grants are revoked in reconcileProjectMembers below; subscriptions that
+	// only that grant allowed have to go with them.
+	private final com.ahmadre.hinata.issue.IssueWatcherCleanup watcherCleanup;
 
 	// --- Reads ---------------------------------------------------------------
 
@@ -285,11 +288,22 @@ public class TeamService {
 		List<String> members = project.getMemberIds();
 		boolean changed = members.addAll(
 				grantedNow.stream().filter(id -> !members.contains(id)).toList());
+		Set<String> revoked = new HashSet<>();
 		for (String userId : removalCandidates) {
 			if (grantedNow.contains(userId) || isProjectLead(project, userId)) continue;
 			changed |= members.remove(userId);
+			// Collected whether or not they were materialized into memberIds: a user
+			// can hold a bare grant and a subscription without ever having been
+			// written into the project's member list.
+			revoked.add(userId);
 		}
 		if (changed) projects.save(project);
+		// Whoever just lost the project also loses the subscriptions that access
+		// allowed. Best-effort — the cleanup owns that guard, and the delivery-time
+		// access check is what actually stops the notifications.
+		if (!revoked.isEmpty()) {
+			watcherCleanup.removeFromProject(project.getId(), revoked);
+		}
 	}
 
 	/** Every user who reaches [projectId] through any team that owns it. */

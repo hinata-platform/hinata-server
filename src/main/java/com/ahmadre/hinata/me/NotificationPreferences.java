@@ -20,9 +20,20 @@ import java.util.Map;
 @AllArgsConstructor
 public class NotificationPreferences {
 
+	/**
+	 * Watching an issue you are neither assigned to nor reported. Its own event
+	 * because it is its own decision: someone who wants every change to the two
+	 * issues they subscribed to does not necessarily want every status change on
+	 * the forty issues assigned to them, and vice versa. A watcher-triggered
+	 * {@code ISSUE_UPDATED} is gated by this; the same notification reaching an
+	 * assignee or the reporter is gated by {@code status}.
+	 */
+	public static final String WATCHING = "watching";
+
 	/** Stable event ids — mirror the reference {@code account_data.js → NOTIF_EVENTS}. */
 	public static final String[] EVENTS = {
-			"mentions", "assigned", "comments", "status", "ingest", "sprint", "invites", "digest", "security"
+			"mentions", "assigned", "comments", "status", WATCHING, "ingest", "sprint", "invites",
+			"digest", "security"
 	};
 
 	/** Events that can never be turned off (transactional / security mail). */
@@ -47,6 +58,9 @@ public class NotificationPreferences {
 		events.put("assigned", new Channel(true, true));
 		events.put("comments", new Channel(true, false));
 		events.put("status", new Channel(false, true));
+		// Subscribing to an issue is an explicit, deliberate act, so both channels
+		// start on — unlike "status", which every assignment opts you into.
+		events.put(WATCHING, new Channel(true, true));
 		events.put("ingest", new Channel(false, true)); // new issue ingested via e-mail — push on, e-mail off
 		events.put("sprint", new Channel(true, true));
 		events.put("invites", new Channel(true, false));

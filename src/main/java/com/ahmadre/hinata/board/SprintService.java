@@ -5,6 +5,8 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueActivityRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.notification.FieldChange;
+import com.ahmadre.hinata.notification.IssueChangeDiff;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
@@ -196,6 +198,7 @@ public class SprintService {
 		}
 
 		List<IssueActivity> log = new ArrayList<>();
+		Map<Issue, String> reHomed = new LinkedHashMap<>();
 		for (Issue issue : issues.findBySprintId(sprint.getId())) {
 			Project project = projects.get(issue.getProjectId());
 			boolean resolved = project.getResolvedStates().contains(issue.getState());
@@ -204,7 +207,8 @@ public class SprintService {
 			}
 			String from = issue.getSprintId();
 			issue.setSprintId(target);
-			issues.save(issue);
+			Issue saved = issues.save(issue);
+			reHomed.put(saved, from);
 			log.add(IssueActivity.builder()
 					.issueId(issue.getId())
 					.actorId(user != null ? user.getId() : null)
@@ -214,6 +218,7 @@ public class SprintService {
 					.build());
 		}
 		if (!log.isEmpty()) activities.saveAll(log);
+		notifyReHomed(reHomed, target, user);
 
 		sprint.setArchived(true);
 		sprints.save(sprint);
@@ -222,6 +227,31 @@ public class SprintService {
 			boards.save(board);
 		}
 		notifySprintLifecycle(board, sprint.getName(), user, false);
+	}
+
+	/**
+	 * Tells the watchers of every issue this completion re-homed that its sprint
+	 * changed.
+	 *
+	 * <p>Completing a sprint moves other people's work out from under them, which
+	 * is exactly the kind of change someone subscribes to an issue to hear about —
+	 * and until this existed it was the one issue mutation that went out in total
+	 * silence, even though the activity log recorded it faithfully all along.
+	 *
+	 * <p>Best-effort, and deliberately after the writes: the sprint is completed
+	 * either way. A mail server that is down must not roll back a sprint.
+	 */
+	private void notifyReHomed(Map<Issue, String> reHomed, String target, User user) {
+		reHomed.forEach((issue, from) -> {
+			try {
+				notifications.notifyUpdated(issue,
+						List.of(new FieldChange(IssueChangeDiff.SPRINT, from, target)), user);
+			}
+			catch (RuntimeException ex) {
+				log.warn("sprint-change notification failed for issue {} (completion kept)",
+						issue.getId(), ex);
+			}
+		});
 	}
 
 	// ── insights report ───────────────────────────────────────────────────

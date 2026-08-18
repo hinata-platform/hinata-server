@@ -30,6 +30,7 @@ import java.util.Map;
 public class IssueController {
 
 	private final IssueService issueService;
+	private final IssueWatchService issueWatchService;
 	private final IssueMoveService issueMoveService;
 	private final CommentEvents commentEvents;
 	private final CurrentUser currentUser;
@@ -273,6 +274,27 @@ public class IssueController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String id) {
 		issueService.delete(id, currentUser.require());
+	}
+
+	/**
+	 * Subscribes the caller to every change to this issue.
+	 *
+	 * <p>Not part of {@code PATCH /issues/{id}}: watcher lists are personal, and
+	 * routing them through the generic update body would let anyone with write
+	 * access subscribe — or unsubscribe — a colleague. Idempotent, so a client
+	 * that retries a lost response cannot create a second subscription.
+	 */
+	@PostMapping("/{id}/watch")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void watch(@PathVariable String id) {
+		issueWatchService.watch(id, currentUser.require());
+	}
+
+	/** Unsubscribes the caller, discarding any change mail still queued for them. */
+	@DeleteMapping("/{id}/watch")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void unwatch(@PathVariable String id) {
+		issueWatchService.unwatch(id, currentUser.require());
 	}
 
 	/** Soft delete — any project member may archive an issue. */

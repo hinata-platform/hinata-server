@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!--/*
+  The bundled change mail for a watched issue: everything that happened since the
+  last one, in a single message. One panel per field, because a watcher scans
+  this mail for the one line that concerns them rather than reading it — and a
+  run-on paragraph of "Priorität: NORMAL → MAJOR, Fällig: 23.08.2026, Status: …"
+  is exactly what a scan cannot do.
+
+  `lines` is a list of IssueChangeRenderer.Line (label + value), already in the
+  recipient's language; this template only dresses them.
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{email/_layout :: page(
+          #{email.eyebrow.ISSUE_UPDATED},
+          ${headline},
+          ${preheader},
+          #{email.footer.automated},
+          ~{::content})}">
+<body>
+<th:block th:fragment="content">
+  <th:block th:replace="~{email/_layout :: copy(#{email.issueChanges.intro})}"/>
+
+  <th:block th:replace="~{email/_layout :: sectionLabel(#{email.issueChanges.section})}"/>
+  <th:block th:each="line : ${lines}">
+    <th:block th:replace="~{email/_layout :: panel(${line.label}, ${line.value})}"/>
+  </th:block>
+
+  <th:block th:if="${ctaLink != null}"
+            th:replace="~{email/_layout :: cta(${ctaLink}, #{email.cta.open})}"/>
+  <th:block th:if="${ctaLink != null}" th:replace="~{email/_layout :: fallback(${ctaLink})}"/>
+
+  <th:block th:replace="~{email/_layout :: fineprint(#{email.issueChanges.unsubscribe})}"/>
+</th:block>
+</body>
+</html>

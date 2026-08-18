@@ -18,6 +18,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.ahmadre.hinata.issue.IssueWatcherCleanup;
 
 class TeamServiceTest {
 
@@ -35,7 +36,7 @@ class TeamServiceTest {
 		avatars = mock(TeamAvatarService.class);
 		when(teams.save(any(Team.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		service = new TeamService(teams, mock(TeamActivityRepository.class), projects, notifications,
-				avatars);
+				avatars, mock(IssueWatcherCleanup.class));
 	}
 
 	private User user(String id, Role... roles) {

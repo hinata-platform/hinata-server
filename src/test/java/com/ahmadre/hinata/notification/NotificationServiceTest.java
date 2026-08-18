@@ -3,6 +3,7 @@ package com.ahmadre.hinata.notification;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.project.ProjectReach;
+import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.user.User;
@@ -25,6 +26,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.ahmadre.hinata.board.SprintRepository;
+import com.ahmadre.hinata.issue.IssueRepository;
 
 /**
  * Covers the plain-text teaser and the reply-notification fan-out. The teaser
@@ -52,7 +55,10 @@ class NotificationServiceTest {
 		reach = mock(ProjectReach.class);
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
 		service = new NotificationService(notifications, users, mail, push,
-				mock(GatewayService.class), richText, reach);
+				mock(GatewayService.class), richText, reach,
+				new IssueChangeRenderer(users, mock(SprintRepository.class),
+						mock(IssueRepository.class), mock(ProjectRepository.class)),
+				mock(IssueDigestService.class));
 	}
 
 	/** A stored text comment, as the write path would have produced it. */
@@ -151,8 +157,8 @@ class NotificationServiceTest {
 
 	@Test
 	void stillNotifiesAWatcherWhoCannotOpenTheProjectButDropsTheDeadLink() {
-		User external = recipient();
-		when(reach.canSee("p1", external)).thenReturn(false);
+		recipient();
+		when(reach.whoCanSee(eq("p1"), any())).thenReturn(Set.of());
 		User actor = User.builder().id("u1").displayName("Sam").active(true).build();
 
 		// A mention delivers on both channels by default, so one event covers both.
@@ -173,7 +179,7 @@ class NotificationServiceTest {
 	@Test
 	void keepsTheLinkForARecipientWhoCanOpenTheProject() {
 		User member = recipient();
-		when(reach.canSee("p1", member)).thenReturn(true);
+		when(reach.whoCanSee(eq("p1"), any())).thenReturn(Set.of(member.getId()));
 		User actor = User.builder().id("u1").displayName("Sam").active(true).build();
 
 		service.notifyMentions(watchedIssue(), actor, Set.of("u-ext"), "look at this");
