@@ -387,7 +387,7 @@ public class DemoSeeder {
 		issue(p, "Sprint capacity overflow not flagged in header", Issue.Type.BUG,
 				Issue.Priority.MAJOR, "Open", admin, s24, 2, 75, 15,
 				List.of("performance"), -2, 0);
-		issue(p, "Wire ⌘K palette to project quick-switch", Issue.Type.STORY,
+		issue(p, "Wire the command palette to project quick-switch", Issue.Type.STORY,
 				Issue.Priority.MAJOR, "In Progress", admin, s24, 3, 120, 45,
 				List.of(), 1, 3, epicSearch.getId());
 
@@ -396,7 +396,7 @@ public class DemoSeeder {
 				"Done", amara, s24, 2, 60, 60, daysAgo(2));
 		resolved(p, "Timeline view: snap drag to day grid", Issue.Type.FEATURE,
 				"Done", lena, s24, 3, 150, 140, daysAgo(3));
-		resolved(p, "Keyboard shortcut ⌘K opens command palette", Issue.Type.FEATURE,
+		resolved(p, "Keyboard shortcut opens the command palette", Issue.Type.FEATURE,
 				"Done", admin, s24, 2, 80, 75, daysAgo(1));
 		resolved(p, "Fix flaky team-access integration test", Issue.Type.TASK,
 				"Done", tomas, s24, 1, 45, 50, daysAgo(4));
@@ -406,7 +406,7 @@ public class DemoSeeder {
 		// --- Sprint 23 (closed): velocity history --------------------------
 		resolved(p, "Per-member project access gating", Issue.Type.FEATURE,
 				"Done", tomas, s23, 8, 480, 520, daysAgo(9));
-		resolved(p, "Global ⌘K search & command palette", Issue.Type.FEATURE,
+		resolved(p, "Global search & command palette", Issue.Type.FEATURE,
 				"Done", admin, s23, 5, 300, 290, daysAgo(10));
 		resolved(p, "Colored labels & workflow states editor", Issue.Type.FEATURE,
 				"Done", lena, s23, 5, 260, 250, daysAgo(11));
