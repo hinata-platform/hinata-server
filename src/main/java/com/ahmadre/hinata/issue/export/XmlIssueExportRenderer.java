@@ -3,6 +3,7 @@ package com.ahmadre.hinata.issue.export;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -10,8 +11,10 @@ import java.util.List;
  * in {@code issue-export-v1.xsd}.
  *
  * <p>Versioned in the root element from the first release, because the moment
- * somebody scripts against this it is a contract. Adding an element later is
- * safe; renaming or removing one is a {@code version="2"}.
+ * somebody scripts against this it is a contract. Adding an element leaves
+ * {@code version="1"} standing — a consumer that reads the elements it knows by
+ * name keeps working — while renaming or removing one breaks those consumers
+ * and is a {@code version="2"}.
  *
  * <p>Written by hand rather than through a marshaller: the document is a page of
  * elements, and a hand-written writer emits no DTD, no processing instruction
@@ -21,8 +24,13 @@ import java.util.List;
 @Component
 class XmlIssueExportRenderer implements IssueExportRenderer {
 
-	/** Bumped only when an element is renamed or removed, never when one is added. */
-	static final String SCHEMA_VERSION = "1";
+	/**
+	 * Bumped only when an element is renamed or removed, never when one is added.
+	 * Consumers that validate rather than read by name are the exception: the
+	 * schema file is updated in place for an addition, so one holding an older
+	 * copy of it rejects the newer document until it takes the new copy.
+	 */
+	private static final String SCHEMA_VERSION = "1";
 
 	@Override
 	public IssueExportFormat format() {
@@ -164,7 +172,7 @@ class XmlIssueExportRenderer implements IssueExportRenderer {
 		xml.append("\t".repeat(depth));
 	}
 
-	private static String instant(java.time.Instant value) {
+	private static String instant(Instant value) {
 		return value == null ? "" : ExportText.forXml(ExportText.DATE_TIME.format(value));
 	}
 }

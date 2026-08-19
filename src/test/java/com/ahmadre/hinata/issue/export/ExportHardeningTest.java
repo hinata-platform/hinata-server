@@ -42,14 +42,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * What an export refuses to do with content somebody else wrote.
+ * What an export refuses to do — and to spend — on content somebody else wrote.
  *
  * <p>Separate from {@code IssueExportRenderersTest}, which asks whether the four
  * formats come out readable. These ask the opposite question: what happens when
  * the description, the comments and the issue's own id fields are not a document
  * but an attempt — a table shaped to cost a thousand times what it took to
- * write, an id pointing into a project the caller was never added to, a user
- * whose only name on file is their mail address.
+ * write, a block of pasted log where an excerpt belongs, an id pointing into a
+ * project the caller was never added to, a user whose only name on file is their
+ * mail address.
+ *
+ * <p>The last one is the same question asked about time rather than memory: a
+ * document that names forty people must not cost forty round trips.
  */
 class ExportHardeningTest {
 
@@ -155,6 +159,50 @@ class ExportHardeningTest {
 					assertThat(table.headers()).containsExactly("Format", "Library");
 					assertThat(table.rows()).hasSize(2);
 				});
+	}
+
+	/**
+	 * A description is untrusted input like any other stored document, and the
+	 * blocks it becomes are held in memory while four formats read them.
+	 */
+	@Test
+	void aPathologicalDocumentIsBounded() {
+		List<ExportBlock> blocks = MarkdownBlocks.of("para\n\n".repeat(5_000));
+
+		assertThat(blocks.size()).isLessThanOrEqualTo(2_000);
+	}
+
+	/**
+	 * The other half of the table bound, and found the same way. The Word
+	 * renderer writes a paragraph per line, so a block of pasted log costs a
+	 * renderer far more than it cost whoever pasted it.
+	 */
+	@Test
+	void aPastedLogIsCutToAnExcerptAndSaysSo() {
+		List<ExportBlock> blocks = MarkdownBlocks.of(
+				"```\n" + "a line\n".repeat(20000) + "```");
+
+		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
+		assertThat(code.text().split("\n", -1).length).isLessThanOrEqualTo(501);
+		assertThat(code.text()).endsWith("… truncated");
+	}
+
+	@Test
+	void oneEnormousLineIsCutOnCharactersToo() {
+		List<ExportBlock> blocks = MarkdownBlocks.of("```\n" + "x".repeat(200000) + "\n```");
+
+		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
+		assertThat(code.text().length()).isLessThan(41000);
+		assertThat(code.text()).endsWith("… truncated");
+	}
+
+	@Test
+	void anOrdinaryCodeBlockIsUntouched() {
+		List<ExportBlock> blocks = MarkdownBlocks.of("```dart\nvoid main() {}\n```");
+
+		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
+		assertThat(code.text()).isEqualTo("void main() {}\n");
+		assertThat(code.text()).doesNotContain("truncated");
 	}
 
 	/**

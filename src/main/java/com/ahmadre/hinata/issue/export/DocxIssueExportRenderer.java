@@ -86,10 +86,10 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 		section(document, "Details");
 		XWPFTable table = document.createTable(1, 2);
 		table.setWidth("100%");
-		fill(table.getRow(0), "Field", "Value", true);
+		fill(table.getRow(0), List.of("Field", "Value"), true);
 		for (IssueExport.Field field : export.fields()) {
 			if (!field.value().isBlank()) {
-				fill(table.createRow(), field.label(), field.value(), false);
+				fill(table.createRow(), List.of(field.label(), field.value()), false);
 			}
 		}
 	}
@@ -126,11 +126,13 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 			return;
 		}
 		section(document, "Attachments");
-		XWPFTable table = document.createTable(1, 3);
+		XWPFTable table = document.createTable(1, 4);
 		table.setWidth("100%");
-		fill(table.getRow(0), "File", "Type", "Size", true);
+		fill(table.getRow(0), List.of("File", "Type", "Size", "Uploaded by"), true);
 		for (IssueExport.Attachment file : export.attachments()) {
-			fill(table.createRow(), file.fileName(), file.contentType(), file.size(), false);
+			fill(table.createRow(),
+					List.of(file.fileName(), file.contentType(), file.size(), file.uploader()),
+					false);
 		}
 	}
 
@@ -246,14 +248,6 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 			run.setColor(color);
 		}
 		run.setText(text);
-	}
-
-	private static void fill(XWPFTableRow row, String left, String right, boolean head) {
-		fill(row, List.of(left, right), head);
-	}
-
-	private static void fill(XWPFTableRow row, String a, String b, String c, boolean head) {
-		fill(row, List.of(a, b, c), head);
 	}
 
 	/** Writes [values] across [row], creating cells the template row lacks. */

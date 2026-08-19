@@ -9,8 +9,8 @@ import java.util.List;
  * <p>It exists so the four renderers stay dumb. A PDF, a Word document, a
  * spreadsheet cell and an XML element have nothing in common except that each
  * can be told "this is a level-2 heading" or "this is a bullet list", and none
- * of them should be parsing anything. The same split the list export already
- * makes, where {@code IssueExportRow} carries display text and the builders only
+ * of them should be parsing anything. The same split the app's list export
+ * already makes, where one row type carries display text and the builders only
  * place it.
  *
  * <p>Deliberately flat and deliberately small: no nesting beyond a list's items,

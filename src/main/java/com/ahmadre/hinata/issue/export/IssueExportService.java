@@ -3,6 +3,7 @@ package com.ahmadre.hinata.issue.export;
 import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
+import com.ahmadre.hinata.common.ByteSize;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueActivityRepository;
@@ -46,20 +47,20 @@ public class IssueExportService {
 	/**
 	 * Comments and activity entries a single export will carry.
 	 *
-	 * <p>A cap rather than a page: an export is a document, and a document that
-	 * silently stops is worse than one that says where it stopped — so the
-	 * renderers are told the count and print a line when it was reached. Neither
-	 * collection is bounded in the database, and a long-running ticket
-	 * legitimately accumulates hundreds of both.
+	 * <p>A cap rather than a page: an export is a document somebody files, not a
+	 * screen they scroll. Neither collection is bounded in the database, and a
+	 * long-running ticket legitimately accumulates hundreds of both — the oldest
+	 * comments and the newest history are what a reader of the ticket would
+	 * expect on paper, so that is the end each cap keeps.
 	 *
-	 * <p>Which is why the cap is spent in the query and not on the result. An
-	 * issue's activity grows by a document per changed field per edit, so it is
-	 * the one collection here anybody can inflate cheaply and on purpose; reading
-	 * all of it in order to keep the newest five hundred would let a few thousand
-	 * PATCHes decide how much memory each later export of that issue costs.
+	 * <p>The cap is spent in the query and not on the result. An issue's activity
+	 * grows by a document per changed field per edit, so it is the one collection
+	 * here anybody can inflate cheaply and on purpose; reading all of it in order
+	 * to keep the newest five hundred would let a few thousand PATCHes decide how
+	 * much memory each later export of that issue costs.
 	 */
-	static final int MAX_COMMENTS = 500;
-	static final int MAX_ACTIVITY = 500;
+	private static final int MAX_COMMENTS = 500;
+	private static final int MAX_ACTIVITY = 500;
 
 	/**
 	 * Issues the "Depends on" field will name.
@@ -96,11 +97,11 @@ public class IssueExportService {
 		// name is not knowable until the comments and the history have been read,
 		// and reading them first is what lets every id in all of them be resolved
 		// in one query rather than one at a time.
-		List<IssueComment> comments = options.comments() ? readComments(issue) : List.of();
-		List<IssueActivity> activity = options.activity() ? readActivity(issue) : List.of();
-		List<Issue.Attachment> attachments = options.attachments() && issue.getAttachments() != null
+		List<IssueComment> thread = options.comments() ? readComments(issue) : List.of();
+		List<IssueActivity> history = options.activity() ? readActivity(issue) : List.of();
+		List<Issue.Attachment> files = options.attachments() && issue.getAttachments() != null
 				? issue.getAttachments() : List.of();
-		Map<String, String> names = names(issue, comments, attachments, activity);
+		Map<String, String> names = names(issue, thread, files, history);
 		return new IssueExport(
 				nz(issue.getReadableId()),
 				nz(issue.getTitle()),
@@ -108,10 +109,10 @@ public class IssueExportService {
 				fields(issue, project, names, user),
 				MarkdownBlocks.of(LexicalToMarkdown.fromStored(
 						issue.getDescriptionDoc(), issue.getDescription())),
-				comments(comments, names),
+				comments(thread, names),
 				options.links() ? links(idOrReadableId, user) : List.of(),
-				attachments(attachments, names),
-				activity(activity, names),
+				attachments(files, names),
+				activity(history, names),
 				nz(settings.get().getOrganizationName()),
 				Instant.now());
 	}
@@ -178,7 +179,7 @@ public class IssueExportService {
 		List<IssueExport.Attachment> out = new ArrayList<>();
 		for (Issue.Attachment file : files) {
 			out.add(new IssueExport.Attachment(nz(file.getFileName()), nz(file.getContentType()),
-					humanSize(file.getSize()), person(file.getUploaderId(), names),
+					ByteSize.human(file.getSize()), person(file.getUploaderId(), names),
 					file.getUploadedAt()));
 		}
 		return out;
@@ -230,20 +231,20 @@ public class IssueExportService {
 	 * the uploader of an attachment an export was asked to leave out is a name
 	 * nobody reads.
 	 */
-	private Map<String, String> names(Issue issue, List<IssueComment> comments,
-			List<Issue.Attachment> attachments, List<IssueActivity> activity) {
+	private Map<String, String> names(Issue issue, List<IssueComment> thread,
+			List<Issue.Attachment> files, List<IssueActivity> history) {
 		Set<String> ids = new LinkedHashSet<>();
 		if (issue.getAssigneeIds() != null) {
 			ids.addAll(issue.getAssigneeIds());
 		}
 		ids.add(issue.getReporterId());
-		for (IssueComment comment : comments) {
+		for (IssueComment comment : thread) {
 			ids.add(comment.getAuthorId());
 		}
-		for (Issue.Attachment file : attachments) {
+		for (Issue.Attachment file : files) {
 			ids.add(file.getUploaderId());
 		}
-		for (IssueActivity entry : activity) {
+		for (IssueActivity entry : history) {
 			ids.add(entry.getActorId());
 		}
 		ids.removeIf(id -> id == null || id.isBlank());
@@ -397,31 +398,17 @@ public class IssueExportService {
 
 	// --- formatting ----------------------------------------------------------
 
-	static String humanSize(long bytes) {
-		if (bytes < 1024) {
-			return bytes + " B";
-		}
-		String[] units = { "KB", "MB", "GB" };
-		double value = bytes;
-		int unit = -1;
-		while (value >= 1024 && unit < units.length - 1) {
-			value /= 1024;
-			unit++;
-		}
-		return String.format(java.util.Locale.ROOT, "%.1f %s", value, units[unit]);
-	}
-
+	/** A duration in the "2h 30m" shape the issue's own fields already use. */
 	private static String minutes(Integer value) {
-		return value == null || value == 0 ? "" : minutes(value.intValue());
-	}
-
-	private static String minutes(int value) {
-		if (value == 0) {
+		if (value == null || value == 0) {
 			return "";
 		}
 		int hours = value / 60;
 		int rest = value % 60;
-		return hours == 0 ? rest + "m" : (rest == 0 ? hours + "h" : hours + "h " + rest + "m");
+		if (hours == 0) {
+			return rest + "m";
+		}
+		return rest == 0 ? hours + "h" : hours + "h " + rest + "m";
 	}
 
 	private static String instant(Instant value) {

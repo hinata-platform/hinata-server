@@ -84,11 +84,6 @@ final class MarkdownBlocks {
 	 */
 	private static final int MAX_TABLE_CELLS = 4_000;
 
-	private static final Parser PARSER = buildParser();
-
-	private MarkdownBlocks() {
-	}
-
 	/**
 	 * Lines a fenced or indented block may contribute, and characters across
 	 * them.
@@ -108,6 +103,11 @@ final class MarkdownBlocks {
 
 	/** Said out loud in the document, because a silent cut is a lie about a file. */
 	private static final String TRUNCATED = "\n… truncated";
+
+	private static final Parser PARSER = buildParser();
+
+	private MarkdownBlocks() {
+	}
 
 	private static Parser buildParser() {
 		MutableDataSet options = new MutableDataSet();
@@ -172,8 +172,8 @@ final class MarkdownBlocks {
 
 	/**
 	 * A code block's text, cut to what a renderer can lay out — see
-	 * {@link #MAX_CODE_LINES}. The cut is marked, so a reader can tell an excerpt
-	 * from a file that simply ended.
+	 * {@link #MAX_CODE_LINES} and {@link #MAX_CODE_CHARS}. The cut is marked, so
+	 * a reader can tell an excerpt from a file that simply ended.
 	 */
 	private static String code(String text) {
 		String clipped = text.length() <= MAX_CODE_CHARS ? text

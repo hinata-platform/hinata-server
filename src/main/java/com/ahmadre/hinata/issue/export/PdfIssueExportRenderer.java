@@ -7,7 +7,6 @@ import com.lowagie.text.Font;
 import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
-import com.lowagie.text.Rectangle;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
@@ -17,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -276,7 +276,7 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 
 	private static float[] equalWidths(int columns) {
 		float[] widths = new float[columns];
-		java.util.Arrays.fill(widths, 1f);
+		Arrays.fill(widths, 1f);
 		return widths;
 	}
 

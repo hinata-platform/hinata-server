@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.issue.export;
 
+import java.util.Locale;
+
 /**
  * The formats a single issue exports to. The name is the URL suffix and the file
  * extension, so {@code /issues/HIN-42/export.docx} and {@code HIN-42-….docx}
@@ -24,6 +26,6 @@ public enum IssueExportFormat {
 
 	/** The file extension, which is the enum name lower-cased. */
 	public String extension() {
-		return name().toLowerCase(java.util.Locale.ROOT);
+		return name().toLowerCase(Locale.ROOT);
 	}
 }

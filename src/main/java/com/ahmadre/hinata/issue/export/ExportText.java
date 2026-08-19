@@ -4,10 +4,11 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
 /**
- * The two places an export turns content into something a program will read
- * back, and the one place it turns a title into a file name. All three are the
- * export's attack surface, so they live together where they can be reviewed
- * together.
+ * Where an export writes a value into something that will interpret it: a
+ * spreadsheet cell, a download's file name, an XML document. All three are the
+ * export's attack surface rather than its formatting, so they live together
+ * where they can be reviewed together — and the one stamp every format dates
+ * itself with sits here too, so four renderers cannot each pick a format.
  */
 final class ExportText {
 
@@ -43,7 +44,7 @@ final class ExportText {
 	 */
 	static String forSpreadsheet(String value) {
 		if (value == null || value.isEmpty()) {
-			return value == null ? "" : value;
+			return "";
 		}
 		String text = value;
 		while (!text.isEmpty() && (text.charAt(0) == '\t' || text.charAt(0) == '\r'
@@ -66,8 +67,9 @@ final class ExportText {
 	 * three problems at once: the CR/LF that would let a title inject a second
 	 * response header, the quotes that would end the {@code filename="…"} early,
 	 * and the slashes and dots that would make the saved file land somewhere the
-	 * downloader did not choose. The same shape the list export already uses for
-	 * its shared PDF.
+	 * downloader did not choose. The same shape the app's list export already
+	 * uses for the PDF it shares, and the same rule the app repeats to name the
+	 * file it saves — a byte download cannot read the header this ends up in.
 	 *
 	 * <p>Letters here means letters in any script, so a Cyrillic or German title
 	 * keeps its own characters; Spring's {@code ContentDisposition} encodes them

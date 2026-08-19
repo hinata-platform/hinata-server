@@ -11,8 +11,8 @@ import java.util.List;
  * <p>The four renderers share this and add nothing to it. That is what keeps a
  * PDF and a Word export of the same issue saying the same thing: the question
  * "what does an export contain" is answered here, once, and the formats only
- * decide how it looks. The list export made the same split — {@code
- * IssueExportRow} carries display text and its builders stay dumb.
+ * decide how it looks. The app's list export made the same split for the same
+ * reason — one row type carrying display text, builders that only place it.
  */
 public record IssueExport(
 		String readableId,
@@ -50,7 +50,7 @@ public record IssueExport(
 	public record Options(boolean comments, boolean links, boolean attachments,
 			boolean activity) {
 
-		/** What the endpoints answer with when nothing is asked for explicitly. */
+		/** Every section but the history — what a caller who asks for nothing gets. */
 		public static Options standard() {
 			return new Options(true, true, true, false);
 		}

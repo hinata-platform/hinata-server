@@ -3,8 +3,11 @@
   The schema of GET /api/v1/issues/{id}/export.xml.
 
   It is published because the format is a contract the moment anybody scripts
-  against it. The rule for changing it: adding an element or an attribute is
-  compatible and keeps version="1"; renaming or removing one is version="2" and
+  against it. The rule for changing it: adding an element or an attribute keeps
+  version="1" and is edited into this file, because a consumer that reads the
+  elements it knows by name is unaffected — one that validates against a copy of
+  this file taken earlier is not, and has to take the new copy. Renaming or
+  removing an element breaks both kinds of consumer, so that is version="2" and
   a new file beside this one. Every section is optional in the sense that it can
   be empty — the export's query parameters can switch comments, links,
   attachments and history off — but the elements themselves are always present,

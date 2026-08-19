@@ -18,6 +18,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * acceptance criterion is that a formatted description <em>survives the trip out
  * of Lexical</em>, and a test that begins with a markdown string would pass
  * whether or not the document half works.
+ *
+ * <p>What a description is not allowed to cost, on the other hand, is asked in
+ * {@code ExportHardeningTest} — every ceiling in one place, rather than the
+ * table half there and the code-block half here.
  */
 class MarkdownBlocksTest {
 
@@ -116,50 +120,6 @@ class MarkdownBlocksTest {
 		assertThat(MarkdownBlocks.of(null)).isEmpty();
 		assertThat(MarkdownBlocks.of("   ")).isEmpty();
 		assertThat(throughStorage("")).isEmpty();
-	}
-
-	/**
-	 * A description is untrusted input like any other stored document, and the
-	 * blocks it becomes are held in memory while four formats read them.
-	 */
-	@Test
-	void aPathologicalDocumentIsBounded() {
-		List<ExportBlock> blocks = MarkdownBlocks.of("para\n\n".repeat(5_000));
-
-		assertThat(blocks.size()).isLessThanOrEqualTo(2_000);
-	}
-
-	/**
-	 * The other half of the table bound, and found the same way. The Word
-	 * renderer writes a paragraph per line, so a block of pasted log costs a
-	 * renderer far more than it cost whoever pasted it.
-	 */
-	@Test
-	void aPastedLogIsCutToAnExcerptAndSaysSo() {
-		List<ExportBlock> blocks = MarkdownBlocks.of(
-				"```\n" + "a line\n".repeat(20000) + "```");
-
-		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
-		assertThat(code.text().split("\n", -1).length).isLessThanOrEqualTo(501);
-		assertThat(code.text()).endsWith("… truncated");
-	}
-
-	@Test
-	void oneEnormousLineIsCutOnCharactersToo() {
-		List<ExportBlock> blocks = MarkdownBlocks.of("```\n" + "x".repeat(200000) + "\n```");
-
-		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
-		assertThat(code.text().length()).isLessThan(41000);
-		assertThat(code.text()).endsWith("… truncated");
-	}
-
-	@Test
-	void anOrdinaryCodeBlockIsUntouched() {
-		List<ExportBlock> blocks = MarkdownBlocks.of("```dart\nvoid main() {}\n```");
-
-		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
-		assertThat(code.text()).isEqualTo("void main() {}\n");
-		assertThat(code.text()).doesNotContain("truncated");
 	}
 
 	private static String text(ExportBlock block) {
