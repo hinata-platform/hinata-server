@@ -792,4 +792,24 @@ class IssueCloneIntegrationTest {
 					assertThat(entry.getOutcome()).isEqualTo(AuditLog.Outcome.SUCCESS);
 				});
 	}
+
+	/**
+	 * The count is the one thing a flag cannot say. "attachments=true" is the same
+	 * line whether somebody cloned a ticket carrying one screenshot or used the
+	 * clone endpoint to write fifty files into the bucket, and telling those two
+	 * apart afterwards is the only reason the number is written down.
+	 */
+	@Test
+	void theAuditEntrySaysHowManyFilesTheCloneCopied() {
+		attach(2);
+
+		clones.clone(original.getId(), options(true, false, false), cloner);
+
+		assertThat(auditLog.findAll())
+				.filteredOn(entry -> entry.getAction() == AuditAction.ISSUE_CLONED)
+				.singleElement()
+				.satisfies(entry -> assertThat(entry.getMetadata())
+						.containsEntry("attachments", "true")
+						.containsEntry("attachmentsCopied", "2"));
+	}
 }

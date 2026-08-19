@@ -59,10 +59,10 @@ public class IssueCloneService {
 	 * files cost twenty thousand round trips to the store on a servlet thread, and
 	 * the file budget alone still lets fifty files of a gigabyte through.
 	 */
-	public static final int MAX_COPIED_FILES = 50;
+	static final int MAX_COPIED_FILES = 50;
 
 	/** The byte half of the same budget — see {@link #MAX_COPIED_FILES}. */
-	public static final long MAX_COPIED_BYTES = 100L * 1024 * 1024;
+	static final long MAX_COPIED_BYTES = 100L * 1024 * 1024;
 
 	/**
 	 * Fields the clone can end up carrying — either verbatim from the original
@@ -319,10 +319,10 @@ public class IssueCloneService {
 		Instant now = Instant.now();
 		for (Issue.Attachment source : original.getAttachments()) {
 			String id = UUID.randomUUID().toString();
-			// A bare UUID, the same namespace StorageService.upload puts an
-			// attachment in — the copy is an attachment like any other, and a key
-			// of its own is what keeps deleting one issue from emptying the other.
-			String objectKey = UUID.randomUUID().toString();
+			// Minted by the store, in the namespace an upload lands in — the copy is
+			// an attachment like any other, and a key of its own is what keeps
+			// deleting one issue from emptying the other.
+			String objectKey = StorageService.newObjectKey();
 			if (!storage.copyObject(source.getObjectKey(), objectKey)) {
 				log.warn("Cloning {}: attachment {} could not be copied, leaving it out",
 						original.getReadableId(), source.getId());
@@ -343,7 +343,7 @@ public class IssueCloneService {
 					.contentType(source.getContentType())
 					.size(source.getSize())
 					.objectKey(objectKey)
-					.uploaderId(user != null ? user.getId() : null)
+					.uploaderId(user.getId())
 					.uploadedAt(now)
 					.blurHash(source.getBlurHash())
 					.build());

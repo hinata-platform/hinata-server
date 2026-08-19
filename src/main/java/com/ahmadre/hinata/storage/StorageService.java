@@ -76,7 +76,7 @@ public class StorageService {
 		// magic bytes for binary types so a file cannot masquerade as e.g. an
 		// image (defends against polyglot / content-sniffing attacks, A03/A05).
 		verifyMagicBytes(file, contentType);
-		String objectKey = keyPrefix + UUID.randomUUID();
+		String objectKey = newObjectKey(keyPrefix);
 		try (var stream = file.getInputStream()) {
 			backend.put(objectKey, stream, file.getSize(), contentType);
 			return objectKey;
@@ -85,6 +85,26 @@ public class StorageService {
 			log.error("Upload failed: {}", ex.getMessage());
 			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
 		}
+	}
+
+	/**
+	 * A fresh object key under an optional [keyPrefix] "folder", minted exactly
+	 * the way {@link #upload(MultipartFile, String)} mints one: a random UUID,
+	 * never a name a client chose.
+	 *
+	 * <p>Here rather than at the call site because the bucket layout needs one
+	 * owner. A caller that writes an object without uploading it — a copy of one,
+	 * say — would otherwise carry its own idea of what a key looks like, and a
+	 * prefix introduced later would move the uploads and leave that caller
+	 * writing into the namespace they used to share.
+	 */
+	public static String newObjectKey(String keyPrefix) {
+		return keyPrefix + UUID.randomUUID();
+	}
+
+	/** A fresh key in the bucket's root namespace, the one attachments live in. */
+	public static String newObjectKey() {
+		return newObjectKey("");
 	}
 
 	/** A binary object read back from storage. */
@@ -166,7 +186,7 @@ public class StorageService {
 	 */
 	public boolean copyObject(String fromKey, String toKey) {
 		try {
-			// Inside the guard, unlike every other method here: a store that is not
+			// Inside the try, unlike every other method here: a store that is not
 			// configured is one more reason a file cannot be copied, and this one
 			// answers that with false like it answers all the others.
 			requireConfigured();

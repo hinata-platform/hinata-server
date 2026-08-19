@@ -41,8 +41,10 @@ class AzureBlobStorageBackendTest {
 		String url = backend().signedSourceUrl("8f14e45f-ceea-467a-9e02-cd3f45d3f0e1");
 
 		assertThat(url).contains("sig="); // signed at all
-		assertThat(url).contains("sp=r"); // and only for reading
 		assertThat(url).contains("se="); // and only for a while
+		// Whole parameter, not a prefix: "sp=r" as a substring is equally true of
+		// "sp=rwd", which is the grant this test exists to rule out.
+		assertThat(url).containsPattern("[?&]sp=r(&|$)"); // and only for reading
 	}
 
 	/**
