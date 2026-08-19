@@ -1,9 +1,9 @@
 package com.ahmadre.hinata.mcp;
 
+import com.ahmadre.hinata.common.ByteSize;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.storage.AttachmentContent;
 
-import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -61,7 +61,7 @@ final class AttachmentSummary {
 				oneLine(issue.getReadableId(), "issue"),
 				oneLine(attachment.getFileName(), "file"),
 				oneLine(attachment.getContentType(), "unknown type"),
-				humanSize(attachment.getSize()));
+				ByteSize.human(attachment.getSize()));
 	}
 
 	/** The file name, bounded and stripped, for prose and for the audit trail. */
@@ -129,20 +129,5 @@ final class AttachmentSummary {
 			case MISSING -> "No content returned: the stored file is missing. This attachment's metadata "
 					+ "still exists but its bytes do not.";
 		};
-	}
-
-	/** Human-readable byte size — an agent reads "3.2 MB" better than 3355443. */
-	private static String humanSize(long bytes) {
-		if (bytes < 1024) {
-			return bytes + " B";
-		}
-		String[] units = { "KB", "MB", "GB" };
-		double value = bytes;
-		int unit = -1;
-		while (value >= 1024 && unit < units.length - 1) {
-			value /= 1024;
-			unit++;
-		}
-		return String.format(Locale.ROOT, "%.1f %s", value, units[unit]);
 	}
 }

@@ -254,6 +254,14 @@ public class HinataProperties {
 		 */
 		@Min(10)
 		private int mcpPerMinute = 120;
+		/**
+		 * Single-issue exports per minute, per caller. Laying out a PDF or building
+		 * an OPC package costs real CPU on a request thread, so this sits far below
+		 * the general budget and is keyed by the user rather than by the address —
+		 * an office behind one NAT is not one budget.
+		 */
+		@Min(1)
+		private int exportsPerMinute = 12;
 		/** Failed logins per account before a temporary database-backed block. */
 		@Min(3)
 		private int maxLoginFailures = 5;
