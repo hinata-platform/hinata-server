@@ -4,6 +4,8 @@ import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.storage.StorageService.ObjectInfo;
 import com.ahmadre.hinata.storage.StorageService.StoredObject;
 import io.minio.BucketExistsArgs;
+import io.minio.CopyObjectArgs;
+import io.minio.CopySource;
 import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
 import io.minio.GetPresignedObjectUrlArgs;
@@ -65,6 +67,23 @@ class S3StorageBackend implements StorageBackend {
 				.object(objectKey)
 				.contentType(contentType)
 				.stream(stream, length, -1)
+				.build());
+	}
+
+	@Override
+	public void copy(String fromKey, String toKey) throws Exception {
+		// Server-side: S3 copies within a bucket without the object leaving the
+		// store. The content type and the other metadata come along with it, which
+		// is why nothing is passed here to restore them.
+		//
+		// No ensureBucket() either, unlike put: the source lives in this same
+		// bucket, so a bucket that would have to be created is a copy that could
+		// never have found its source anyway — and the check is a request of its
+		// own, which a clone would pay per object and per thumbnail it duplicates.
+		client.copyObject(CopyObjectArgs.builder()
+				.bucket(bucket)
+				.object(toKey)
+				.source(CopySource.builder().bucket(bucket).object(fromKey).build())
 				.build());
 	}
 

@@ -33,6 +33,13 @@ import java.util.Optional;
  */
 class AzureBlobStorageBackend implements StorageBackend {
 
+	/**
+	 * How long a copy's source signature stays valid. The blob service reads the
+	 * source while {@code copy} is blocked on it, and the URL is never handed to
+	 * anyone, so this only has to outlast one server-side copy.
+	 */
+	private static final int COPY_SOURCE_SAS_MINUTES = 10;
+
 	private final BlobContainerClient container;
 
 	AzureBlobStorageBackend(HinataProperties.Storage storage) {
@@ -49,6 +56,45 @@ class AzureBlobStorageBackend implements StorageBackend {
 				new BlobParallelUploadOptions(BinaryData.fromStream(stream, length))
 						.setHeaders(new BlobHttpHeaders().setContentType(contentType)),
 				null, null);
+	}
+
+	@Override
+	public void copy(String fromKey, String toKey) throws Exception {
+		// Azure's copy is asynchronous by protocol; copyFromUrl blocks until it has
+		// finished, which is what every caller here wants — a clone that returns
+		// before its files exist would show empty tiles.
+		//
+		// No createIfNotExists() either, unlike put: source and destination share
+		// this container, so a container that would have to be created holds no
+		// source to copy — and it is a request to the service like any other, which
+		// a clone would make per object and per thumbnail it duplicates.
+		container.getBlobClient(toKey).copyFromUrl(signedSourceUrl(fromKey));
+	}
+
+	/**
+	 * The URL {@code Copy Blob From URL} is given for the source, signed with a
+	 * short-lived read SAS.
+	 *
+	 * <p>The signature is not optional. The account key on this client authorizes
+	 * the <em>destination</em> write; the source is fetched by the blob service
+	 * over HTTP as an ordinary reader, and this container is private (that is the
+	 * whole reason downloads are handed out as SAS URLs), so an unsigned source URL
+	 * comes back 404 and the copy fails. Shared-key credentials cannot be presented
+	 * for the source any other way — the {@code x-ms-copy-source-authorization}
+	 * header carries bearer tokens only — so the URL carries its own.
+	 *
+	 * <p>Minutes, not hours: the service reads the source while the call is
+	 * blocked, and the URL is never handed to anyone. It also never leaves this
+	 * account — the blob client builds it from the configured endpoint and
+	 * container, and [fromKey] is a key this application generated, so there is
+	 * nothing here for a caller to point somewhere else.
+	 */
+	String signedSourceUrl(String fromKey) {
+		BlobClient source = container.getBlobClient(fromKey);
+		String sas = source.generateSas(new BlobServiceSasSignatureValues(
+				OffsetDateTime.now().plusMinutes(COPY_SOURCE_SAS_MINUTES),
+				new BlobSasPermission().setReadPermission(true)));
+		return source.getBlobUrl() + "?" + sas;
 	}
 
 	@Override

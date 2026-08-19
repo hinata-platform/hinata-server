@@ -101,7 +101,7 @@ class IssueCloneHardeningTest {
 	}
 
 	private IssueCloneService.Options options(boolean includeLinks) {
-		return new IssueCloneService.Options("CLONE - " + original.getTitle(), List.of(),
+		return new IssueCloneService.Options("CLONE - " + original.getTitle(), List.of(), false,
 				includeLinks, false);
 	}
 

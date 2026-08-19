@@ -29,6 +29,16 @@ public interface StorageBackend {
 	/** Reads an object, or empty when it doesn't exist. */
 	Optional<StoredObject> get(String objectKey) throws Exception;
 
+	/**
+	 * Copies an object inside the store, without the bytes passing through this
+	 * application. Every provider has a server-side copy for exactly this, and
+	 * the alternative — read it here, write it back — drags the whole file
+	 * through the JVM's heap and both network hops for no reason.
+	 *
+	 * <p>Overwrites [toKey] if something is there, and fails if [fromKey] is not.
+	 */
+	void copy(String fromKey, String toKey) throws Exception;
+
 	/** Deletes an object; deleting a missing object is not an error. */
 	void delete(String objectKey) throws Exception;
 
