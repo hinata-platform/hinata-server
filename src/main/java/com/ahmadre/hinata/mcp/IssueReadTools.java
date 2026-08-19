@@ -16,7 +16,6 @@ import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
 import java.util.List;
 
 /**
@@ -25,6 +24,10 @@ import java.util.List;
  * delegates to {@link IssueService} so the service-layer project ACLs apply —
  * the model can never see an issue its caller could not see in the app. Results
  * are the lean {@link McpViews} projections, never raw entities.
+ *
+ * <p>Attachments have their own tools in {@link AttachmentTools} — listing a
+ * file and reading what is inside it are one concern, with bounds and a rate
+ * budget this class has no business carrying.
  */
 @Service
 @RequiredArgsConstructor
@@ -112,28 +115,6 @@ public class IssueReadTools {
 		User user = currentUser.require();
 		Page<IssueComment> result = issueService.commentsOf(idOrReadableId, pageOr(page), sizeOr(size), user);
 		return PageResult.of(result, CommentView::of);
-	}
-
-	@McpTool(name = "list_attachments", title = "List attachments",
-			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
-			description = "List the file attachments of an issue (metadata only — name, type, "
-					+ "size, uploader; files are downloaded through the app).")
-	public List<AttachmentView> listAttachments(
-			@McpToolParam(description = "Issue id or readable id (e.g. ASTA-42)") String idOrReadableId) {
-		scopeGuard.require(Scopes.ISSUES_READ);
-		User user = currentUser.require();
-		Issue issue = issueService.getForUser(idOrReadableId, user);
-		return issue.getAttachments().stream().map(AttachmentView::of).toList();
-	}
-
-	/** Attachment metadata without the internal storage object key. */
-	public record AttachmentView(String id, String fileName, String contentType, long size,
-			String uploaderId, Instant uploadedAt) {
-
-		static AttachmentView of(Issue.Attachment a) {
-			return new AttachmentView(a.getId(), a.getFileName(), a.getContentType(), a.getSize(),
-					a.getUploaderId(), a.getUploadedAt());
-		}
 	}
 
 	@McpTool(name = "get_dev_info", title = "Get an issue's development info",

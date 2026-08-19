@@ -312,7 +312,8 @@ class McpSecurityIntegrationTest {
 				.contains("list_boards").contains("list_sprints").contains("get_sprint_report")
 				.contains("create_sprint").contains("complete_sprint")
 				.contains("list_teams").contains("search_users").contains("get_me")
-				.contains("list_comments").contains("list_attachments").contains("get_dev_info")
+				.contains("list_comments").contains("list_attachments").contains("get_attachment")
+				.contains("get_dev_info")
 				.contains("list_kb_articles").contains("update_kb_article")
 				.contains("list_work_items").contains("my_timesheet")
 				.contains("list_my_notifications").contains("get_project_metrics");

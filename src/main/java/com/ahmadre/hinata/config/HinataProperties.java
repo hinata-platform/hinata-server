@@ -341,6 +341,37 @@ public class HinataProperties {
 		/** Refresh-token lifetime (days). */
 		@Min(1)
 		private long refreshTokenTtlDays = 30;
+
+		/**
+		 * Largest attachment, in megabytes, the {@code get_attachment} tool will
+		 * read at all. An MCP response lands in a model's context window, and
+		 * base64 inflates a file by a third — so this is deliberately far below
+		 * the upload limit. Anything larger answers with metadata and a pointer to
+		 * the app, never with truncated bytes.
+		 */
+		@Min(1)
+		private int attachmentMaxMb = 5;
+
+		/**
+		 * Default width, in pixels, images are downscaled to before being
+		 * returned. 1600 keeps the text in a screenshot readable at a fraction of
+		 * the original's bytes. A caller may ask for less, and for more up to the
+		 * server's own ceiling.
+		 */
+		@Min(320)
+		private int attachmentImageWidth = 1600;
+
+		/** Longest text or PDF extract returned, in characters, before truncation. */
+		@Min(1000)
+		private int attachmentTextChars = 20000;
+
+		/**
+		 * {@code get_attachment} calls per minute, per caller. Downscaling and PDF
+		 * text extraction are CPU-bound, so this bucket sits well below the /mcp
+		 * per-IP budget and is keyed by the user, not the address.
+		 */
+		@Min(1)
+		private int attachmentReadsPerMinute = 20;
 	}
 
 	@Getter
