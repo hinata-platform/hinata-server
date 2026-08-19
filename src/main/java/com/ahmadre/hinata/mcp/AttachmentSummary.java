@@ -44,6 +44,14 @@ final class AttachmentSummary {
 	private static final Pattern UNSAFE_IN_PROSE =
 			Pattern.compile("[\\p{Cntrl}\\p{Cf}\\p{Zl}\\p{Zp}\"]+");
 
+	/**
+	 * Runs of whitespace, collapsed so a name padded out with spaces cannot push
+	 * the rest of the line off a reader's screen. Compiled once like the pattern
+	 * above: {@code String.replaceAll} compiles its argument afresh on every call,
+	 * and this one runs four times for every attachment described.
+	 */
+	private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s{2,}");
+
 	private AttachmentSummary() {
 	}
 
@@ -71,7 +79,7 @@ final class AttachmentSummary {
 	 */
 	static String oneLine(String value, String fallback) {
 		String text = value == null ? "" : UNSAFE_IN_PROSE.matcher(value).replaceAll(" ").trim();
-		text = text.replaceAll("\\s{2,}", " ");
+		text = WHITESPACE_RUN.matcher(text).replaceAll(" ");
 		if (text.isEmpty()) {
 			return fallback;
 		}

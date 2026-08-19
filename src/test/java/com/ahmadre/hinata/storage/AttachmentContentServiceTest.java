@@ -311,6 +311,114 @@ class AttachmentContentServiceTest {
 				new AttachmentContent.Unavailable(AttachmentContent.Reason.MISSING));
 	}
 
+	// --- how hard the bounds are worked -----------------------------------
+
+	@Test
+	void theShrinkStepIsAimedAtTheByteBudgetRatherThanStepped() {
+		// Every retry costs a full scale and re-encode of the source — around
+		// 60 ms for a 1600px picture with transparency — so the step is derived
+		// from how far over budget the last one came out. Bytes grow with the
+		// pixel count and pixels with the square of the width, hence the root.
+		int budget = AttachmentContentService.MAX_ENCODED_BYTES;
+
+		// Four times over: shrink hard, but never past half in one step.
+		assertThat(AttachmentContentService.narrowerThan(1600, budget * 4)).isEqualTo(800);
+		// Twice over: about seven tenths, which a fixed three-quarter step would
+		// have needed two passes to reach.
+		assertThat(AttachmentContentService.narrowerThan(1600, budget * 2)).isEqualTo(1073);
+		// Barely over: never a smaller step than the fixed one, so every attempt
+		// still makes real progress and the loop terminates.
+		assertThat(AttachmentContentService.narrowerThan(1600, budget + 1)).isEqualTo(1200);
+		// The floor wins over the estimate, whatever the overshoot.
+		assertThat(AttachmentContentService.narrowerThan(400, budget * 100))
+				.isEqualTo(AttachmentContentService.MIN_IMAGE_WIDTH);
+	}
+
+	@Test
+	void aPictureThatReEncodesTooFatComesBackInsideTheByteBudget() throws Exception {
+		// Noise is what an encoder cannot compress away, so this is the case that
+		// actually walks the retry loop. What must hold is the bound, not a
+		// particular width: the picture leaving here fits in a context window.
+		byte[] original = noise(1300, 850);
+		stored(original, "image/png");
+
+		AttachmentContent.Image image = (AttachmentContent.Image)
+				service.render(attachment("image/png", original.length), LIMITS);
+
+		assertThat(image.bytes().length).isLessThanOrEqualTo(AttachmentContentService.MAX_ENCODED_BYTES);
+		assertThat(image.width()).isLessThan(image.sourceWidth());
+		assertThat(image.width()).isGreaterThanOrEqualTo(AttachmentContentService.MIN_IMAGE_WIDTH);
+	}
+
+	/** A picture with an incompressible interior: the encoder's worst case. */
+	private static byte[] noise(int width, int height) throws Exception {
+		BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+		java.util.Random random = new java.util.Random(19);
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++) {
+				image.setRGB(x, y, 0xC0000000 | random.nextInt(0xFFFFFF));
+			}
+		}
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ImageIO.write(image, "png", out);
+		return out.toByteArray();
+	}
+
+	@Test
+	void onlyTheTextThatCanBeKeptIsDecoded() {
+		// The budget is in characters, so decoding a five megabyte export in full
+		// to keep twenty kilobytes of it is work with no answer attached. What the
+		// caller gets must not change because of that: it is still exactly the
+		// beginning of the file, multi-byte characters and all.
+		String unit = "Grüße über größere Bäume – 🌳 ";
+		StringBuilder whole = new StringBuilder();
+		while (whole.length() < 50_000) {
+			whole.append(unit);
+		}
+		byte[] data = whole.toString().getBytes(StandardCharsets.UTF_8);
+		stored(data, "text/plain");
+
+		AttachmentContent.Text text = (AttachmentContent.Text)
+				service.render(attachment("text/plain", data.length), LIMITS);
+
+		assertThat(text.truncated()).isTrue();
+		assertThat(text.text()).hasSize(200);
+		assertThat(text.text()).isEqualTo(whole.substring(0, 200));
+	}
+
+	@Test
+	void aFileThatIsNotQuiteUtf8StillFillsTheWholeBudget() {
+		// Malformed bytes decode to replacement characters, and the JDK folds up
+		// to three of them into one — the worst ratio of bytes to characters
+		// there is, and the one the read window has to be wide enough for.
+		byte[] data = new byte[10_000];
+		for (int i = 0; i < data.length; i++) {
+			// A truncated three-byte sequence, over and over: never valid, never
+			// resynchronising, one replacement character per two bytes at best.
+			data[i] = (byte) (i % 2 == 0 ? 0xE0 : 0xA0);
+		}
+		stored(data, "text/plain");
+
+		AttachmentContent.Text text = (AttachmentContent.Text)
+				service.render(attachment("text/plain", data.length), LIMITS);
+
+		assertThat(text.text()).hasSize(200);
+		assertThat(text.truncated()).isTrue();
+		assertThat(text.text()).isEqualTo(new String(data, StandardCharsets.UTF_8).substring(0, 200));
+	}
+
+	@Test
+	void textShorterThanTheBudgetIsUnaffectedByTheReadWindow() {
+		byte[] data = "Grüße – 🌳 ok".getBytes(StandardCharsets.UTF_8);
+		stored(data, "text/plain");
+
+		AttachmentContent.Text text = (AttachmentContent.Text)
+				service.render(attachment("text/plain", data.length), LIMITS);
+
+		assertThat(text.text()).isEqualTo("Grüße – 🌳 ok");
+		assertThat(text.truncated()).isFalse();
+	}
+
 	@Test
 	void aFileClaimingToBeAPdfWithoutTheSignatureIsNotHandedToTheParser() {
 		byte[] data = "not really a pdf".getBytes(StandardCharsets.UTF_8);

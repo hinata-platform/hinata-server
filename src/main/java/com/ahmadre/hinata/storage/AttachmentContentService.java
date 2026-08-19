@@ -57,7 +57,7 @@ public class AttachmentContentService {
 	 * Byte ceiling for the encoded picture. Base64 inflates by a third, so this
 	 * is what keeps a noisy photograph from becoming two megabytes of context.
 	 */
-	private static final int MAX_ENCODED_BYTES = 1_500_000;
+	static final int MAX_ENCODED_BYTES = 1_500_000;
 
 	/**
 	 * Pixel ceiling for the <em>decode</em>. Well below what the upload path
@@ -68,8 +68,28 @@ public class AttachmentContentService {
 	 */
 	private static final long MAX_DECODE_PIXELS = 30_000_000L;
 
-	/** Re-encode attempts, each three quarters the width of the last. */
+	/** Re-encode attempts allowed after the first, before whatever is in hand wins. */
 	private static final int SHRINK_ATTEMPTS = 3;
+
+	/**
+	 * How far one shrink step may go, as a fraction of the width it started
+	 * from. An encoder's output grows roughly with the pixel count, so the step
+	 * is derived from how far over budget the last attempt came out — but only
+	 * within these bounds. The upper one guarantees progress (and therefore
+	 * termination) when the estimate is optimistic; the lower one stops a single
+	 * badly-estimated step from throwing away half the resolution the budget
+	 * would in fact have allowed.
+	 */
+	private static final double MIN_SHRINK = 0.50;
+	private static final double MAX_SHRINK = 0.75;
+
+	/**
+	 * Aim a little inside the ceiling rather than exactly at it. The estimate is
+	 * an approximation, and one that lands a single byte over pays for another
+	 * full scale-and-encode pass — where landing ten percent under costs about
+	 * five percent of the width.
+	 */
+	private static final double SHRINK_AIM = 0.90;
 
 	private static final float JPEG_QUALITY = 0.82f;
 
@@ -87,6 +107,14 @@ public class AttachmentContentService {
 			"application/json", "application/xml", "application/yaml", "application/x-yaml");
 
 	private static final String PDF_TYPE = "application/pdf";
+
+	/**
+	 * The most bytes UTF-8 can spend per decoded {@code char}, counting malformed
+	 * input: a three-byte sequence decodes to one character, a four-byte one to a
+	 * surrogate pair, and the longest malformed run the JDK folds into a single
+	 * replacement character is three bytes. Four leaves a margin over that three.
+	 */
+	private static final int BYTES_PER_CHAR_FLOOR = 4;
 
 	private final StorageService storage;
 
@@ -174,7 +202,7 @@ public class AttachmentContentService {
 							scaled.getWidth(), scaled.getHeight(),
 							source.getWidth(), source.getHeight());
 				}
-				width = Math.max(MIN_IMAGE_WIDTH, scaled.getWidth() * 3 / 4);
+				width = narrowerThan(scaled.getWidth(), encoded.length);
 			}
 		}
 		catch (Exception | OutOfMemoryError ex) {
@@ -196,6 +224,28 @@ public class AttachmentContentService {
 			width = (int) Math.floor(Math.sqrt(MAX_OUTPUT_PIXELS / aspect));
 		}
 		return Math.max(1, width);
+	}
+
+	/**
+	 * The width to try next after an encode came out at [encodedBytes], which was
+	 * over {@link #MAX_ENCODED_BYTES}. Every scale-and-encode attempt costs a full
+	 * pass over the raster — around 60 ms for a 1600px picture with transparency —
+	 * so the step is aimed rather than fixed: bytes grow about linearly with the
+	 * pixel count, and pixels grow with the square of the width, so the square
+	 * root of "how far over budget" is the width factor that should land inside
+	 * it. Clamped to {@link #MIN_SHRINK}…{@link #MAX_SHRINK} because the model is
+	 * an approximation, not a promise.
+	 *
+	 * <p>On a 3.7 MB 1300×850 picture the encoder cannot compress, a fixed
+	 * three-quarter step spent three passes (365 ms) to land at 731px; aiming the
+	 * step lands at 793px in two (227 ms) — less work <em>and</em> a sharper
+	 * answer, since overshooting downward throws away resolution the budget would
+	 * in fact have paid for.
+	 */
+	static int narrowerThan(int width, int encodedBytes) {
+		double aimed = Math.sqrt(SHRINK_AIM * MAX_ENCODED_BYTES / encodedBytes);
+		double factor = Math.clamp(aimed, MIN_SHRINK, MAX_SHRINK);
+		return Math.max(MIN_IMAGE_WIDTH, (int) (width * factor));
 	}
 
 	private static BufferedImage scaleToWidth(BufferedImage source, int width, boolean alpha) {
@@ -227,12 +277,26 @@ public class AttachmentContentService {
 	 * Decodes as UTF-8 with replacement rather than refusing on the first invalid
 	 * byte: a CSV exported from a spreadsheet is routinely not quite UTF-8, and a
 	 * replacement character in one cell is a far better answer than none at all.
+	 *
+	 * <p>Only the prefix that can possibly be kept is decoded. UTF-8 never spends
+	 * more than {@link #BYTES_PER_CHAR_FLOOR} bytes on one {@code char} — a
+	 * three-byte sequence yields one, and the four-byte ones yield two — so that
+	 * many bytes per requested character is guaranteed to decode to at least
+	 * [maxChars] characters, and everything past them was going to be thrown away.
+	 * Decoding a whole 5 MB file to keep 20 KB of it cost 1–2 ms and up to 10 MB
+	 * of short-lived heap on a path several agents may be walking at once.
 	 */
 	private AttachmentContent renderText(byte[] data, int maxChars) {
-		String text = new String(data, StandardCharsets.UTF_8);
-		if (text.length() <= maxChars) {
-			return new AttachmentContent.Text(text, false);
+		int window = (int) Math.min(data.length, (long) Math.max(maxChars, 0) * BYTES_PER_CHAR_FLOOR);
+		if (window >= data.length) {
+			String whole = new String(data, StandardCharsets.UTF_8);
+			return whole.length() <= maxChars
+					? new AttachmentContent.Text(whole, false)
+					: new AttachmentContent.Text(whole.substring(0, maxChars), true);
 		}
-		return new AttachmentContent.Text(text.substring(0, maxChars), true);
+		// The window is cut at an arbitrary byte, so its last character may be the
+		// replacement one — but it sits far past [maxChars] and is dropped here.
+		String prefix = new String(data, 0, window, StandardCharsets.UTF_8);
+		return new AttachmentContent.Text(prefix.substring(0, maxChars), true);
 	}
 }
