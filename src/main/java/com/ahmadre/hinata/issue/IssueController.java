@@ -62,12 +62,13 @@ public class IssueController {
 	 * What the clone dialog sends. [title] is required and validated here so a
 	 * blank summary never reaches the service, mirroring
 	 * {@link CreateIssueRequest#title()} — the copy is an ordinary issue and gets
-	 * the same bound. The two flags default to off when absent, which is what the
+	 * the same bound. The three flags default to off when absent, which is what the
 	 * dialog shows.
 	 */
 	public record CloneIssueRequest(
 			@NotBlank @Size(max = 300) String title,
 			List<String> assigneeIds,
+			Boolean includeAttachments,
 			Boolean includeLinks,
 			Boolean includeSprint) {
 	}
@@ -247,6 +248,7 @@ public class IssueController {
 		IssueCloneService.Options options = new IssueCloneService.Options(
 				request.title(),
 				request.assigneeIds(),
+				Boolean.TRUE.equals(request.includeAttachments()),
 				Boolean.TRUE.equals(request.includeLinks()),
 				Boolean.TRUE.equals(request.includeSprint()));
 		return issueCloneService.clone(id, options, currentUser.require());

@@ -52,6 +52,16 @@ class AzureBlobStorageBackend implements StorageBackend {
 	}
 
 	@Override
+	public void copy(String fromKey, String toKey) throws Exception {
+		container.createIfNotExists();
+		// Azure's copy is asynchronous by protocol; copyFromUrl blocks until it has
+		// finished, which is what every caller here wants — a clone that returns
+		// before its files exist would show empty tiles.
+		container.getBlobClient(toKey)
+				.copyFromUrl(container.getBlobClient(fromKey).getBlobUrl());
+	}
+
+	@Override
 	public Optional<StoredObject> get(String objectKey) throws Exception {
 		try {
 			BlobClient blob = container.getBlobClient(objectKey);

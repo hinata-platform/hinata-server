@@ -8,6 +8,8 @@ import com.ahmadre.hinata.notification.Notification;
 import com.ahmadre.hinata.notification.NotificationRepository;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
+import com.ahmadre.hinata.storage.ImagePreviewService;
+import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -18,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -36,6 +39,11 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Cloning an issue against a real MongoDB.
@@ -92,6 +100,13 @@ class IssueCloneIntegrationTest {
 	private AuditLogRepository auditLog;
 	@Autowired
 	private NotificationRepository notifications;
+	/**
+	 * The object store is the one collaborator with no container behind it. Only
+	 * the attachment tests reach it, and what they assert is which keys the clone
+	 * asks it to copy — not whether MinIO can copy them.
+	 */
+	@MockitoBean
+	private StorageService storage;
 
 	private User owner;
 	private User cloner;
@@ -134,6 +149,7 @@ class IssueCloneIntegrationTest {
 				.assigneeIds(new ArrayList<>(List.of(owner.getId())))
 				.build(), owner);
 		notifications.deleteAll(); // the original's own creation notices are not the subject
+		when(storage.copyObject(anyString(), anyString())).thenReturn(true);
 	}
 
 	// --- fixtures ------------------------------------------------------------
@@ -160,8 +176,12 @@ class IssueCloneIntegrationTest {
 	}
 
 	private IssueCloneService.Options options(boolean links, boolean sprint) {
+		return options(false, links, sprint);
+	}
+
+	private IssueCloneService.Options options(boolean attachments, boolean links, boolean sprint) {
 		return new IssueCloneService.Options("CLONE - " + original.getTitle(),
-				List.of(cloner.getId()), links, sprint);
+				List.of(cloner.getId()), attachments, links, sprint);
 	}
 
 	private Issue another(String title) {
@@ -200,7 +220,7 @@ class IssueCloneIntegrationTest {
 					try {
 						start.await();
 						keys.set(index, clones.clone(original.getId(),
-								new IssueCloneService.Options("CLONE " + index, List.of(), false, false),
+								new IssueCloneService.Options("CLONE " + index, List.of(), false, false, false),
 								cloner).getReadableId());
 					}
 					catch (Exception ignored) {
@@ -262,7 +282,7 @@ class IssueCloneIntegrationTest {
 		assertThat(copy.getAssigneeIds()).containsExactly(cloner.getId());
 
 		Issue unassigned = clones.clone(original.getId(),
-				new IssueCloneService.Options("CLONE - unassigned", List.of(), false, false), cloner);
+				new IssueCloneService.Options("CLONE - unassigned", List.of(), false, false, false), cloner);
 
 		assertThat(unassigned.getAssigneeIds()).isEmpty();
 		assertThat(unassigned.getAssigneeId()).isNull();
@@ -325,6 +345,120 @@ class IssueCloneIntegrationTest {
 		assertThat(copy.getInboundSubject()).isNull();
 		assertThat(copy.getReporterEmail()).isNull();
 		assertThat(copy.getIngestConnectionId()).isNull();
+	}
+
+	// --- the attachments switch ----------------------------------------------
+
+	/** Hangs [count] files on the original, as an upload would leave them. */
+	private List<Issue.Attachment> attach(int count) {
+		List<Issue.Attachment> files = new ArrayList<>();
+		for (int i = 1; i <= count; i++) {
+			files.add(Issue.Attachment.builder()
+					.id("att-" + i)
+					.fileName("shot-" + i + ".png")
+					.contentType("image/png")
+					.size(2048)
+					.objectKey("object-" + i)
+					.uploaderId(owner.getId())
+					.uploadedAt(Instant.now())
+					.blurHash("LEHV6nWB2yk8pyo0adR*")
+					.build());
+		}
+		original.setAttachments(files);
+		issueRepository.save(original);
+		return files;
+	}
+
+	@Test
+	void withoutTheAttachmentsSwitchTheFilesStayWithTheOriginal() {
+		attach(2);
+
+		Issue copy = clones.clone(original.getId(), options(false, false, false), cloner);
+
+		assertThat(copy.getAttachments()).isEmpty();
+		// Not even asked for: refusing to copy must not cost a round trip to the
+		// object store per file.
+		verify(storage, never()).copyObject(anyString(), anyString());
+	}
+
+	@Test
+	void withTheAttachmentsSwitchEveryFileIsDuplicatedIntoItsOwnObject() {
+		List<Issue.Attachment> sources = attach(2);
+
+		Issue copy = clones.clone(original.getId(), options(true, false, false), cloner);
+
+		assertThat(copy.getAttachments()).hasSize(2);
+		assertThat(copy.getAttachments()).extracting(Issue.Attachment::getFileName)
+				.containsExactly("shot-1.png", "shot-2.png");
+		// What a viewer sees is carried; who put it there is whoever cloned, for
+		// the same reason the copy's reporter is.
+		assertThat(copy.getAttachments()).allSatisfy(file -> {
+			assertThat(file.getContentType()).isEqualTo("image/png");
+			assertThat(file.getSize()).isEqualTo(2048);
+			assertThat(file.getBlurHash()).isEqualTo("LEHV6nWB2yk8pyo0adR*");
+			assertThat(file.getUploaderId()).isEqualTo(cloner.getId());
+		});
+		for (Issue.Attachment source : sources) {
+			verify(storage).copyObject(eq(source.getObjectKey()), anyString());
+			verify(storage).copyObject(
+					eq(ImagePreviewService.attachmentThumbnailKey(source.getId())), anyString());
+		}
+	}
+
+	/**
+	 * The load-bearing property: the copy's files are its own objects. Sharing a
+	 * key would make deleting either issue empty the other's attachment grid —
+	 * the deletion path removes an attachment's object without asking who else
+	 * points at it, because until now nobody could.
+	 */
+	@Test
+	void theCopysFilesAreItsOwnObjectsAndItsOwnIds() {
+		List<Issue.Attachment> sources = attach(2);
+
+		Issue copy = clones.clone(original.getId(), options(true, false, false), cloner);
+
+		List<String> sourceKeys = sources.stream().map(Issue.Attachment::getObjectKey).toList();
+		List<String> sourceIds = sources.stream().map(Issue.Attachment::getId).toList();
+		assertThat(copy.getAttachments()).extracting(Issue.Attachment::getObjectKey)
+				.doesNotContainAnyElementsOf(sourceKeys)
+				.doesNotHaveDuplicates();
+		assertThat(copy.getAttachments()).extracting(Issue.Attachment::getId)
+				.doesNotContainAnyElementsOf(sourceIds)
+				.doesNotHaveDuplicates();
+		// And the original still has everything it had.
+		assertThat(issueRepository.findById(original.getId()).orElseThrow().getAttachments())
+				.extracting(Issue.Attachment::getObjectKey)
+				.containsExactlyElementsOf(sourceKeys);
+	}
+
+	/**
+	 * A file that will not copy costs the clone that file, not its existence. An
+	 * issue that fails to be created because one of its pictures could not be
+	 * duplicated is a worse answer than an issue with one picture missing.
+	 */
+	@Test
+	void aFileThatCannotBeCopiedIsLeftOutRatherThanFailingTheClone() {
+		attach(2);
+		when(storage.copyObject(eq("object-1"), anyString())).thenReturn(false);
+
+		Issue copy = clones.clone(original.getId(), options(true, false, false), cloner);
+
+		assertThat(copy.getAttachments()).singleElement()
+				.returns("shot-2.png", Issue.Attachment::getFileName);
+	}
+
+	/** A lost thumbnail is a lost preview, which the viewer regenerates on demand. */
+	@Test
+	void aThumbnailThatCannotBeCopiedDoesNotCostTheAttachment() {
+		attach(1);
+		when(storage.copyObject(
+				eq(ImagePreviewService.attachmentThumbnailKey("att-1")), anyString()))
+				.thenReturn(false);
+
+		Issue copy = clones.clone(original.getId(), options(true, false, false), cloner);
+
+		assertThat(copy.getAttachments()).singleElement()
+				.returns("shot-1.png", Issue.Attachment::getFileName);
 	}
 
 	// --- the sprint checkbox -------------------------------------------------
@@ -438,7 +572,7 @@ class IssueCloneIntegrationTest {
 		Issue first = clones.clone(original.getId(), options(false, false), cloner);
 
 		Issue second = clones.clone(original.getId(),
-				new IssueCloneService.Options("CLONE - second", List.of(), true, false), cloner);
+				new IssueCloneService.Options("CLONE - second", List.of(), false, true, false), cloner);
 
 		assertThat(links.linksOf(second.getId(), cloner))
 				.singleElement()
@@ -495,7 +629,7 @@ class IssueCloneIntegrationTest {
 	void theNewAssigneeIsStillNotified() {
 		clones.clone(original.getId(),
 				new IssueCloneService.Options("CLONE - for the owner", List.of(owner.getId()),
-						false, false),
+						false, false, false),
 				cloner);
 
 		assertThat(notifications.findAll())
@@ -527,7 +661,7 @@ class IssueCloneIntegrationTest {
 	@Test
 	void aBlankSummaryIsRefusedBeforeAnythingIsWritten() {
 		assertThatThrownBy(() -> clones.clone(original.getId(),
-				new IssueCloneService.Options("   ", List.of(), false, false), cloner))
+				new IssueCloneService.Options("   ", List.of(), false, false, false), cloner))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.issue.cloneTitleRequired");
 

@@ -154,6 +154,31 @@ public class StorageService {
 		}
 	}
 
+	/**
+	 * Copies an object to a new key inside the store, returning false when the
+	 * source is not there or the store refuses. Never throws: the only caller is
+	 * duplicating files onto a cloned issue, and a file that will not copy must
+	 * cost that issue its attachment, not its existence.
+	 *
+	 * <p>The copy happens inside the object store — the bytes never travel through
+	 * this application, which is what keeps cloning an issue with fifty megabytes
+	 * of attachments from pulling fifty megabytes through the JVM twice.
+	 */
+	public boolean copyObject(String fromKey, String toKey) {
+		try {
+			// Inside the guard, unlike every other method here: a store that is not
+			// configured is one more reason a file cannot be copied, and this one
+			// answers that with false like it answers all the others.
+			requireConfigured();
+			backend.copy(fromKey, toKey);
+			return true;
+		}
+		catch (Exception ex) {
+			log.warn("Copying object {} to {} failed: {}", fromKey, toKey, ex.getMessage());
+			return false;
+		}
+	}
+
 	public void delete(String objectKey) {
 		requireConfigured();
 		try {
