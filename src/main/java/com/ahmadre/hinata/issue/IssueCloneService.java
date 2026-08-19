@@ -158,7 +158,10 @@ public class IssueCloneService {
 	 * existed, so this costs a row, not a model.
 	 */
 	private void recordOrigin(Issue copy, Issue original, User user) {
-		links.addLinks(copy.getId(), IssueLinkType.CLONES, true, List.of(original.getId()), user);
+		// createLinks, not addLinks: the difference is only that this one does not
+		// re-read and re-render the copy's whole link list on the way out, which is
+		// a view nothing here looks at. See IssueLinkService#createLinks.
+		links.createLinks(copy.getId(), IssueLinkType.CLONES, true, List.of(original.getId()), user);
 	}
 
 	/**
@@ -179,6 +182,15 @@ public class IssueCloneService {
 	 * next copy "is cloned by HIN-43" — a claim that HIN-43 is a copy of an issue
 	 * that did not exist when HIN-43 was made. The copy's own origin is recorded
 	 * separately by {@link #recordOrigin}, and that is the only lineage it has.
+	 *
+	 * <p>{@code linksOf} is more than this needs — all that survives the loop below
+	 * is a type, an orientation and an id, while it loads every linked issue whole,
+	 * description and all. Reading them anyway is the deliberate half of the trade:
+	 * it is the one place that knows which way a link points from a given side and
+	 * whether this caller may see the far end, and a leaner projection here would be
+	 * a second copy of that rule sitting in the path that decides what a clone is
+	 * allowed to link to. One read of it per clone is a price worth paying; the
+	 * repeats are not, which is why the writes below use {@code createLinks}.
 	 */
 	private void copyLinks(Issue copy, Issue original, User user) {
 		Map<Fan, List<String>> byFan = new LinkedHashMap<>();
@@ -191,7 +203,7 @@ public class IssueCloneService {
 		}
 		for (Map.Entry<Fan, List<String>> fan : byFan.entrySet()) {
 			try {
-				links.addLinks(copy.getId(), fan.getKey().type(), fan.getKey().outward(),
+				links.createLinks(copy.getId(), fan.getKey().type(), fan.getKey().outward(),
 						fan.getValue(), user);
 			}
 			catch (RuntimeException failed) {
@@ -207,23 +219,22 @@ public class IssueCloneService {
 
 	/**
 	 * One batch of links to add: a type and an orientation, which is everything
-	 * {@link IssueLinkService#addLinks} needs to be told once for a whole list of
-	 * targets.
+	 * {@link IssueLinkService#createLinks} needs to be told once for a whole list
+	 * of targets.
 	 *
-	 * <p>The grouping is not tidiness. {@code addLinks} answers with the issue's
-	 * <em>entire</em> link list — re-reading every link and loading the issue
-	 * behind each one — so calling it once per link makes copying n links cost on
-	 * the order of n² reads, every one of them thrown away here. An issue with a
-	 * couple of hundred links is an ordinary hub ticket that any member can clone
-	 * for the price of one small request, and that is not an amount of work any
-	 * request should be able to buy. There are seven link types and two
-	 * orientations, so this bounds the wasted re-reads to at most fourteen
-	 * regardless of how many links the original carries.
+	 * <p>The grouping is not tidiness. Every call re-resolves the copy and its
+	 * project to authorize the caller against them, and pings the copy's live
+	 * viewers once it is done — fixed costs that a call per link would multiply by
+	 * the number of links. An issue with a couple of hundred links is an ordinary
+	 * hub ticket that any member can clone for the price of one small request, so
+	 * what that request buys has to stay proportional to something other than the
+	 * links. There are seven link types and two orientations, which bounds the
+	 * repeats to fourteen however many links the original carries.
 	 *
 	 * <p>The cost is granularity when something goes wrong: a target that becomes
 	 * unreachable between the read above and the write below now aborts the rest
-	 * of its batch rather than only itself. {@code addLinks} saves as it goes, so
-	 * what it managed before the failure stays — and the failure needs a
+	 * of its batch rather than only itself. {@code createLinks} saves as it goes,
+	 * so what it managed before the failure stays — and the failure needs a
 	 * membership change or a database fault landing inside a window microseconds
 	 * wide, against a copy that survives either way.
 	 */

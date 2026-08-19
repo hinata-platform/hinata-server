@@ -106,14 +106,16 @@ class IssueCloneHardeningTest {
 	}
 
 	/**
-	 * Copying n links must not cost n round-trips into the link service.
+	 * Copying n links must not cost n round-trips into the link service, and none
+	 * of the trips it does make may ask for a rendered link list.
 	 *
-	 * <p>{@code addLinks} answers with the issue's whole link list — it re-reads
-	 * every link and loads the issue behind each one — so one call per link makes
-	 * a clone cost on the order of n² reads, all of it discarded. An issue with a
-	 * couple of hundred links is an ordinary hub ticket and any member may clone
-	 * it as often as the shared API budget allows, so the work one small request
-	 * can buy has to stay proportional to the links, not to their square.
+	 * <p>Two bounds, because a clone can blow past either one. {@code addLinks}
+	 * answers with the issue's whole link list — it re-reads every link and loads
+	 * the issue behind each one, description and all — so asking it per link makes
+	 * a clone cost on the order of n² reads, and asking it per <em>batch</em> still
+	 * re-renders a list that every batch before it has grown. Neither is looked at
+	 * here. {@code createLinks} writes the same rows and skips the view; the count
+	 * below keeps the batching, and the {@code never()} keeps the view gone.
 	 *
 	 * <p>Pinned as an exact count rather than a ceiling: three is one call for the
 	 * copy's own origin plus one per type/orientation the original carries, and
@@ -132,6 +134,8 @@ class IssueCloneHardeningTest {
 		Issue copy = clones.clone(original.getId(), options(true), member);
 
 		Mockito.verify(links, Mockito.times(3))
+				.createLinks(any(), any(), anyBoolean(), any(), any());
+		Mockito.verify(links, Mockito.never())
 				.addLinks(any(), any(), anyBoolean(), any(), any());
 		// And every link still made it across, which is what the batching must not
 		// have bought its cheapness with.
@@ -153,7 +157,7 @@ class IssueCloneHardeningTest {
 	@Test
 	void theCloneIsAuditedEvenWhenTheOriginLinkCannotBeWritten() {
 		Mockito.doThrow(new IllegalStateException("link store unavailable"))
-				.when(links).addLinks(any(), any(), anyBoolean(), any(), any());
+				.when(links).createLinks(any(), any(), anyBoolean(), any(), any());
 
 		assertThatThrownBy(() -> clones.clone(original.getId(), options(false), member))
 				.isInstanceOf(IllegalStateException.class);

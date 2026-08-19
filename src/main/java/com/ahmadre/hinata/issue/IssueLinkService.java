@@ -60,45 +60,78 @@ public class IssueLinkService {
 	 */
 	public List<LinkView> addLinks(String idOrReadableId, IssueLinkType type, boolean outward,
 			List<String> targetIds, User user) {
+		Issue issue = createLinks(idOrReadableId, type, outward, targetIds, user);
+		return linksOf(issue.getId(), user);
+	}
+
+	/**
+	 * The write half of {@link #addLinks} — same authorization, same rules, same
+	 * live events — answering with the issue it linked <em>from</em> rather than
+	 * with that issue's re-read link list.
+	 *
+	 * <p>Split out because the list is not free to produce. {@link #linksOf} loads
+	 * the issue behind every link and the project behind every one of those, so
+	 * rendering an issue that already carries n links costs about 2n reads and
+	 * materialises n whole issue documents — and an issue's description alone may
+	 * be a megabyte of Lexical JSON. A caller adding links in batches pays that
+	 * after every batch, against a list the batch before it has already grown, so
+	 * the view it never looks at costs more than the links it came to write.
+	 * The HTTP endpoint does look at it and keeps calling {@link #addLinks}; the
+	 * clone copies links and throws the view away, and calls this.
+	 */
+	public Issue createLinks(String idOrReadableId, IssueLinkType type, boolean outward,
+			List<String> targetIds, User user) {
 		if (type == null) throw ApiException.badRequest("error.issueLink.typeRequired");
 		Issue issue = issues.getForUser(idOrReadableId, user);
 		List<String> targets = targetIds == null ? List.of() : targetIds;
-		for (String ref : targets) {
-			if (ref == null || ref.isBlank()) continue;
-			Issue other = issues.getForUser(ref.trim(), user); // 403/404 if not accessible
-			if (Objects.equals(other.getId(), issue.getId())) {
-				throw ApiException.badRequest("error.issueLink.self");
+		boolean wrote = false;
+		try {
+			for (String ref : targets) {
+				if (ref == null || ref.isBlank()) continue;
+				Issue other = issues.getForUser(ref.trim(), user); // 403/404 if not accessible
+				if (Objects.equals(other.getId(), issue.getId())) {
+					throw ApiException.badRequest("error.issueLink.self");
+				}
+				// Symmetric ("relates to") has no real direction; keep a canonical
+				// orientation so the unique index actually dedupes a flipped pair.
+				String sourceId;
+				String targetId;
+				if (type.isSymmetric()) {
+					sourceId = issue.getId().compareTo(other.getId()) <= 0 ? issue.getId() : other.getId();
+					targetId = sourceId.equals(issue.getId()) ? other.getId() : issue.getId();
+				}
+				else {
+					sourceId = outward ? issue.getId() : other.getId();
+					targetId = outward ? other.getId() : issue.getId();
+				}
+				if (links.findByTypeAndSourceIdAndTargetId(type, sourceId, targetId).isPresent()) {
+					continue; // already linked — idempotent
+				}
+				try {
+					links.save(IssueLink.builder()
+							.type(type)
+							.sourceId(sourceId)
+							.targetId(targetId)
+							.createdBy(user != null ? user.getId() : null)
+							.build());
+				}
+				catch (org.springframework.dao.DuplicateKeyException race) {
+					continue; // a concurrent identical link won — fine, it exists
+				}
+				wrote = true;
+				events.publishChanged(other.getId());
 			}
-			// Symmetric ("relates to") has no real direction; keep a canonical
-			// orientation so the unique index actually dedupes a flipped pair.
-			String sourceId;
-			String targetId;
-			if (type.isSymmetric()) {
-				sourceId = issue.getId().compareTo(other.getId()) <= 0 ? issue.getId() : other.getId();
-				targetId = sourceId.equals(issue.getId()) ? other.getId() : issue.getId();
-			}
-			else {
-				sourceId = outward ? issue.getId() : other.getId();
-				targetId = outward ? other.getId() : issue.getId();
-			}
-			if (links.findByTypeAndSourceIdAndTargetId(type, sourceId, targetId).isPresent()) {
-				continue; // already linked — idempotent
-			}
-			try {
-				links.save(IssueLink.builder()
-						.type(type)
-						.sourceId(sourceId)
-						.targetId(targetId)
-						.createdBy(user != null ? user.getId() : null)
-						.build());
-			}
-			catch (org.springframework.dao.DuplicateKeyException race) {
-				continue; // a concurrent identical link won — fine, it exists
-			}
-			events.publishChanged(issue.getId());
-			events.publishChanged(other.getId());
 		}
-		return linksOf(issue.getId(), user);
+		finally {
+			// One ping for this side of the batch instead of one per link. A ping
+			// carries no payload — every subscriber answers it by re-reading its own
+			// link list — so n of them buy n-1 re-reads of a list that was still
+			// half-written, and the only one that described the finished batch was
+			// the last. In a finally because a target that fails halfway through must
+			// not cost this issue's viewers the links that did save.
+			if (wrote) events.publishChanged(issue.getId());
+		}
+		return issue;
 	}
 
 	/** Removes one link; the caller must be able to see one of its endpoints. */
