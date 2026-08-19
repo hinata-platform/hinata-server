@@ -16,6 +16,7 @@ import com.ahmadre.hinata.user.UserRepository;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -42,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -351,13 +353,18 @@ class IssueCloneIntegrationTest {
 
 	/** Hangs [count] files on the original, as an upload would leave them. */
 	private List<Issue.Attachment> attach(int count) {
+		return attach(count, 2048);
+	}
+
+	/** The same, with a size per file — for the budget a clone has to stay inside. */
+	private List<Issue.Attachment> attach(int count, long sizeEach) {
 		List<Issue.Attachment> files = new ArrayList<>();
 		for (int i = 1; i <= count; i++) {
 			files.add(Issue.Attachment.builder()
 					.id("att-" + i)
 					.fileName("shot-" + i + ".png")
 					.contentType("image/png")
-					.size(2048)
+					.size(sizeEach)
 					.objectKey("object-" + i)
 					.uploaderId(owner.getId())
 					.uploadedAt(Instant.now())
@@ -459,6 +466,80 @@ class IssueCloneIntegrationTest {
 
 		assertThat(copy.getAttachments()).singleElement()
 				.returns("shot-1.png", Issue.Attachment::getFileName);
+	}
+
+	// --- what one clone is allowed to duplicate ------------------------------
+
+	/**
+	 * Uploading costs the caller the file; copying does not. A clone request is a
+	 * couple of hundred bytes that tells the store to write whatever hangs off the
+	 * original, an issue may carry as many attachments as anybody cares to upload,
+	 * and the same request repeats up to the API rate limit every minute — so
+	 * without a ceiling the bucket one member can grow per request is bounded by
+	 * nothing. Refused before the first copy, not after the fiftieth.
+	 */
+	@Test
+	void anIssueWithMoreFilesThanOneCloneMayCopyIsRefusedBeforeAnythingIsCopied() {
+		attach(IssueCloneService.MAX_COPIED_FILES + 1);
+
+		assertThatThrownBy(() -> clones.clone(original.getId(), options(true, false, false), cloner))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.issue.cloneTooManyAttachments");
+
+		verify(storage, never()).copyObject(anyString(), anyString());
+		assertThat(issueRepository.count()).as("and no copy was written").isEqualTo(1);
+	}
+
+	/**
+	 * The same bound in bytes, because fifty files are fifty gigabytes if nothing
+	 * says otherwise.
+	 */
+	@Test
+	void filesTotallingMoreThanOneCloneMayCopyAreRefusedBeforeAnythingIsCopied() {
+		attach(2, IssueCloneService.MAX_COPIED_BYTES / 2 + 1);
+
+		assertThatThrownBy(() -> clones.clone(original.getId(), options(true, false, false), cloner))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.issue.cloneAttachmentsTooLarge");
+
+		verify(storage, never()).copyObject(anyString(), anyString());
+		assertThat(issueRepository.count()).as("and no copy was written").isEqualTo(1);
+	}
+
+	/** Cloning without the switch is never refused, however much the original carries. */
+	@Test
+	void theBudgetOnlyAppliesToACloneThatAsksForTheFiles() {
+		attach(IssueCloneService.MAX_COPIED_FILES + 1, IssueCloneService.MAX_COPIED_BYTES);
+
+		Issue copy = clones.clone(original.getId(), options(false, false, false), cloner);
+
+		assertThat(copy.getAttachments()).isEmpty();
+	}
+
+	/**
+	 * The files are duplicated before the issue that will point at them exists, so
+	 * a creation that refuses would otherwise leave objects in the bucket that
+	 * nothing ever names again — and nothing reaps: the orphan sweep only knows the
+	 * {@code media/} prefix, while an attachment's key is a bare UUID outside it.
+	 * A clone whose parent no longer resolves is a request anybody can repeat as
+	 * fast as the rate limiter allows, so the copies have to go back with it.
+	 */
+	@Test
+	void objectsCopiedForACloneThatIsNeverWrittenAreRemovedAgain() {
+		attach(2);
+		original.setParentId("a-parent-that-is-gone");
+		issueRepository.save(original);
+
+		assertThatThrownBy(() -> clones.clone(original.getId(), options(true, false, false), cloner))
+				.isInstanceOf(ApiException.class);
+
+		assertThat(issueRepository.count()).as("the copy was never written").isEqualTo(1);
+		ArgumentCaptor<String> copied = ArgumentCaptor.forClass(String.class);
+		verify(storage, times(4)).copyObject(anyString(), copied.capture());
+		ArgumentCaptor<String> deleted = ArgumentCaptor.forClass(String.class);
+		verify(storage, times(4)).delete(deleted.capture());
+		assertThat(deleted.getAllValues())
+				.containsExactlyInAnyOrderElementsOf(copied.getAllValues());
 	}
 
 	// --- the sprint checkbox -------------------------------------------------

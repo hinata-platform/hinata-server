@@ -42,6 +42,29 @@ public class IssueCloneService {
 	private static final int MAX_TITLE_CHARS = 300;
 
 	/**
+	 * Ceilings on what one clone will duplicate — how many files, and how many
+	 * bytes across them.
+	 *
+	 * <p>They are not about disk. Uploading costs the caller the file: every byte
+	 * that reaches the bucket had to be sent, so the store can only grow as fast
+	 * as somebody can upload into it. Copying breaks that coupling. A clone
+	 * request is a couple of hundred bytes of JSON that tells the store to write
+	 * however much hangs off the original — and an issue may carry as many
+	 * attachments as anyone cares to upload, while the same request repeats up to
+	 * {@code hinata.rate-limit.api-per-minute} times a minute from one address.
+	 * Without a ceiling here the bucket a member can grow per request is bounded
+	 * by nothing at all, which is the one thing the upload path never allowed.
+	 *
+	 * <p>Both are needed. The byte budget alone still lets ten thousand one-byte
+	 * files cost twenty thousand round trips to the store on a servlet thread, and
+	 * the file budget alone still lets fifty files of a gigabyte through.
+	 */
+	public static final int MAX_COPIED_FILES = 50;
+
+	/** The byte half of the same budget — see {@link #MAX_COPIED_FILES}. */
+	public static final long MAX_COPIED_BYTES = 100L * 1024 * 1024;
+
+	/**
 	 * Fields the clone can end up carrying — either verbatim from the original
 	 * (the description, its type and priority, the planning values) or as chosen
 	 * in the clone dialog (the title, the assignees, and the attachments, sprint
@@ -103,9 +126,18 @@ public class IssueCloneService {
 	 */
 	public Issue clone(String idOrReadableId, Options options, User user) {
 		Issue original = issues.getForUser(idOrReadableId, user);
+		String title = requireTitle(options.title());
+		// Both hoisted out of the builder below, and in this order. The files are
+		// duplicated before the issue is saved so the copy is never briefly visible
+		// with an empty attachment grid that then fills in — which means everything
+		// able to refuse this clone has to be asked before a single byte is copied,
+		// and it means the copies have a name here in case the save refuses anyway.
+		List<Issue.Attachment> attachments = options.includeAttachments()
+				? copyAttachments(original, user)
+				: new ArrayList<>();
 		Issue copy = Issue.builder()
 				.projectId(original.getProjectId())
-				.title(requireTitle(options.title()))
+				.title(title)
 				.description(original.getDescription())
 				.descriptionDoc(original.getDescriptionDoc())
 				.type(original.getType())
@@ -123,23 +155,38 @@ public class IssueCloneService {
 				.sprintId(options.includeSprint() ? original.getSprintId() : null)
 				.dependsOnIds(options.includeLinks() ? copyOf(original.getDependsOnIds())
 						: new ArrayList<>())
-				// Copied before the issue is saved, so the copy is never briefly
-				// visible with an empty attachment grid that then fills in.
-				.attachments(options.includeAttachments()
-						? copyAttachments(original, user)
-						: new ArrayList<>())
+				.attachments(attachments)
 				.build();
-		Issue saved = issues.create(copy, user, IssueService.Mentions.SUPPRESS);
+		Issue saved;
+		try {
+			saved = issues.create(copy, user, IssueService.Mentions.SUPPRESS);
+		}
+		catch (RuntimeException failed) {
+			// The bytes exist before the row that points at them, so a create that
+			// refuses — a parent that no longer resolves, a project that went away,
+			// a number that could not be reserved — leaves objects in the bucket
+			// that nothing will ever name again. Nothing reaps them either: the
+			// orphan sweep only knows the media/ prefix, and an attachment's key is
+			// a bare UUID outside it. A clone the create path rejects is a request
+			// anybody can repeat as fast as the rate limiter allows, so the objects
+			// go back with the failure rather than accumulating behind it.
+			discardCopiedObjects(attachments);
+			throw failed;
+		}
 		// Written the moment the copy exists, before any of the link work below.
 		// From here on the issue is in the project whatever happens next, and an
 		// audit log that only records the clones whose links happened to save is
 		// an audit log that misses exactly the ones worth looking at. The three
 		// flags describe what was asked for, which is what an auditor is reading
-		// this to learn.
+		// this to learn. The file count is the one thing a flag cannot say: the
+		// difference between somebody cloning a ticket and somebody using the clone
+		// endpoint to write fifty files into the bucket per request is a number, and
+		// it is bounded by MAX_COPIED_FILES rather than by anything a caller sends.
 		audit.event(AuditAction.ISSUE_CLONED).actor(user)
 				.meta("source", original.getReadableId())
 				.meta("clone", saved.getReadableId())
 				.meta("attachments", String.valueOf(options.includeAttachments()))
+				.meta("attachmentsCopied", String.valueOf(attachments.size()))
 				.meta("links", String.valueOf(options.includeLinks()))
 				.meta("sprint", String.valueOf(options.includeSprint()))
 				.log();
@@ -250,6 +297,9 @@ public class IssueCloneService {
 	 * writing it back would drag every megabyte through the heap and across the
 	 * network twice, for a copy the object store will make on its own.
 	 *
+	 * <p>How much this is allowed to duplicate is checked first and refuses the
+	 * whole clone — see {@link #assertWithinCopyBudget}.
+	 *
 	 * <p>A file that will not copy is dropped from the list and logged, never
 	 * raised: the clone is what the user asked for, and an issue that fails to
 	 * exist because one of its pictures could not be duplicated is a worse answer
@@ -265,6 +315,7 @@ public class IssueCloneService {
 		if (original.getAttachments() == null) {
 			return copies;
 		}
+		assertWithinCopyBudget(original.getAttachments());
 		Instant now = Instant.now();
 		for (Issue.Attachment source : original.getAttachments()) {
 			String id = UUID.randomUUID().toString();
@@ -291,6 +342,50 @@ public class IssueCloneService {
 					.build());
 		}
 		return copies;
+	}
+
+	/**
+	 * Refuses a clone that would duplicate more than {@link #MAX_COPIED_FILES}
+	 * files or {@link #MAX_COPIED_BYTES} bytes, before anything is copied.
+	 *
+	 * <p>Loud rather than quietly truncating, unlike the per-file store failure in
+	 * {@link #copyAttachments}. That one is the store's answer about a single file
+	 * and there is nothing the caller can do with it; this is a rule of the product,
+	 * and the caller has an obvious way around it — clone the issue without its
+	 * attachments, which is what the switch is off for by default. A clone that
+	 * silently arrived carrying the first fifty of two hundred files would be a
+	 * half-answer nobody notices until the missing file is the one that was needed.
+	 *
+	 * <p>The sizes are the store's own, recorded when each file was written, never
+	 * a number a client sent.
+	 */
+	private static void assertWithinCopyBudget(List<Issue.Attachment> sources) {
+		if (sources.size() > MAX_COPIED_FILES) {
+			throw ApiException.badRequest("error.issue.cloneTooManyAttachments", MAX_COPIED_FILES);
+		}
+		long bytes = 0;
+		for (Issue.Attachment source : sources) {
+			bytes += source.getSize();
+		}
+		if (bytes > MAX_COPIED_BYTES) {
+			throw ApiException.badRequest("error.issue.cloneAttachmentsTooLarge",
+					MAX_COPIED_BYTES / (1024 * 1024));
+		}
+	}
+
+	/**
+	 * Removes the objects copied for a clone that then failed to be written, so a
+	 * refused request leaves the bucket as it found it.
+	 *
+	 * <p>Best-effort by construction — {@link StorageService#delete} logs and
+	 * swallows — because the caller is already on the way out with the original
+	 * failure, and replacing it with a storage error would report the wrong thing.
+	 */
+	private void discardCopiedObjects(List<Issue.Attachment> attachments) {
+		for (Issue.Attachment attachment : attachments) {
+			storage.delete(attachment.getObjectKey());
+			storage.delete(ImagePreviewService.attachmentThumbnailKey(attachment.getId()));
+		}
 	}
 
 	private static String requireTitle(String title) {
