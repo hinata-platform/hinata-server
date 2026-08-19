@@ -304,8 +304,8 @@ public class IssueCloneService {
 	 * raised: the clone is what the user asked for, and an issue that fails to
 	 * exist because one of its pictures could not be duplicated is a worse answer
 	 * than an issue with one picture missing. The derived thumbnail is copied on
-	 * the same terms — losing it costs a preview, which the viewer regenerates on
-	 * demand anyway.
+	 * the same terms, and only where one can exist at all — losing it costs a
+	 * preview, which the viewer regenerates on demand anyway.
 	 *
 	 * <p>The uploader recorded on the copy is whoever cloned, for the same reason
 	 * the copy's reporter is: they are the person who put this file on this issue.
@@ -328,8 +328,15 @@ public class IssueCloneService {
 						original.getReadableId(), source.getId());
 				continue;
 			}
-			storage.copyObject(ImagePreviewService.attachmentThumbnailKey(source.getId()),
-					ImagePreviewService.attachmentThumbnailKey(id));
+			// Only for the types that can have one. A thumbnail is written for
+			// pictures and PDFs and for nothing else, so asking the store to copy
+			// one for a ZIP or a Word file buys a round trip and a warning line per
+			// file to be told what the content type already said — half the store
+			// traffic of a clone whose attachments are documents.
+			if (ImagePreviewService.isPreviewable(source.getContentType())) {
+				storage.copyObject(ImagePreviewService.attachmentThumbnailKey(source.getId()),
+						ImagePreviewService.attachmentThumbnailKey(id));
+			}
 			copies.add(Issue.Attachment.builder()
 					.id(id)
 					.fileName(source.getFileName())

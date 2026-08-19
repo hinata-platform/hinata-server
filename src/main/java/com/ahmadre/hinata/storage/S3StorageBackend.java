@@ -72,10 +72,14 @@ class S3StorageBackend implements StorageBackend {
 
 	@Override
 	public void copy(String fromKey, String toKey) throws Exception {
-		ensureBucket();
 		// Server-side: S3 copies within a bucket without the object leaving the
 		// store. The content type and the other metadata come along with it, which
 		// is why nothing is passed here to restore them.
+		//
+		// No ensureBucket() either, unlike put: the source lives in this same
+		// bucket, so a bucket that would have to be created is a copy that could
+		// never have found its source anyway — and the check is a request of its
+		// own, which a clone would pay per object and per thumbnail it duplicates.
 		client.copyObject(CopyObjectArgs.builder()
 				.bucket(bucket)
 				.object(toKey)

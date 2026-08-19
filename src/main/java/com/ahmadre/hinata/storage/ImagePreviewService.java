@@ -37,6 +37,25 @@ public class ImagePreviewService {
 	public static final String PREFIX = "thumbs/";
 
 	/**
+	 * Whether a preview is worth attempting for this content type: pictures, and
+	 * PDFs (whose first page is rendered). A Word file or an archive has no page
+	 * to draw, and reading a 20 MB ZIP back out of storage to discover that is
+	 * exactly the work this check avoids.
+	 *
+	 * <p>It is also the answer to whether a thumbnail can exist at all — every
+	 * path that writes one asks this first — which is what lets a caller skip the
+	 * key below for an attachment that can never have anything under it, instead
+	 * of asking the store and being told the same thing by a 404.
+	 */
+	public static boolean isPreviewable(String contentType) {
+		if (contentType == null) {
+			return false;
+		}
+		String type = contentType.toLowerCase();
+		return type.startsWith("image/") || type.startsWith("application/pdf");
+	}
+
+	/**
 	 * Where an issue attachment's thumbnail lives. Derived from the attachment id
 	 * so nothing extra has to be stored to find (or delete) it again.
 	 */

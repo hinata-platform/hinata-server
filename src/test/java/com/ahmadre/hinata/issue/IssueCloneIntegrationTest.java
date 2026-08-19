@@ -468,6 +468,34 @@ class IssueCloneIntegrationTest {
 				.returns("shot-1.png", Issue.Attachment::getFileName);
 	}
 
+	/**
+	 * A thumbnail is only ever written for a picture or a PDF, so an archive or a
+	 * Word file has nothing under its thumbnail key — and asking the store to copy
+	 * it anyway is a round trip per file answered with a 404, plus a warning line
+	 * that reads like a storage fault. The content type already knows.
+	 */
+	@Test
+	void anAttachmentThatCanHaveNoThumbnailIsNotAskedForOne() {
+		original.setAttachments(new ArrayList<>(List.of(Issue.Attachment.builder()
+				.id("att-zip")
+				.fileName("logs.zip")
+				.contentType("application/zip")
+				.size(4096)
+				.objectKey("object-zip")
+				.uploaderId(owner.getId())
+				.uploadedAt(Instant.now())
+				.build())));
+		issueRepository.save(original);
+
+		Issue copy = clones.clone(original.getId(), options(true, false, false), cloner);
+
+		assertThat(copy.getAttachments()).singleElement()
+				.returns("logs.zip", Issue.Attachment::getFileName);
+		verify(storage).copyObject(eq("object-zip"), anyString());
+		verify(storage, never()).copyObject(
+				eq(ImagePreviewService.attachmentThumbnailKey("att-zip")), anyString());
+	}
+
 	// --- what one clone is allowed to duplicate ------------------------------
 
 	/**
