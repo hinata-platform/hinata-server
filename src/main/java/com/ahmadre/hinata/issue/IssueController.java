@@ -32,6 +32,7 @@ public class IssueController {
 	private final IssueService issueService;
 	private final IssueWatchService issueWatchService;
 	private final IssueMoveService issueMoveService;
+	private final IssueCloneService issueCloneService;
 	private final CommentEvents commentEvents;
 	private final CurrentUser currentUser;
 	private final RichTextService richText;
@@ -55,6 +56,20 @@ public class IssueController {
 			LocalDate dueDate,
 			Integer estimateMinutes,
 			Integer storyPoints) {
+	}
+
+	/**
+	 * What the clone dialog sends. [title] is required and validated here so a
+	 * blank summary never reaches the service, mirroring
+	 * {@link CreateIssueRequest#title()} — the copy is an ordinary issue and gets
+	 * the same bound. The two flags default to off when absent, which is what the
+	 * dialog shows.
+	 */
+	public record CloneIssueRequest(
+			@NotBlank @Size(max = 300) String title,
+			List<String> assigneeIds,
+			Boolean includeLinks,
+			Boolean includeSprint) {
 	}
 
 	public record UpdateIssueRequest(
@@ -219,6 +234,22 @@ public class IssueController {
 				.storyPoints(request.storyPoints())
 				.build();
 		return issueService.create(issue, currentUser.require());
+	}
+
+	/**
+	 * Creates a copy of an issue in the same project. Everything the copy carries
+	 * — and everything it deliberately does not — is decided by
+	 * {@link IssueCloneService}; this only unpacks the request.
+	 */
+	@PostMapping("/{id}/clone")
+	@ResponseStatus(HttpStatus.CREATED)
+	public Issue clone(@PathVariable String id, @RequestBody @Valid CloneIssueRequest request) {
+		IssueCloneService.Options options = new IssueCloneService.Options(
+				request.title(),
+				request.assigneeIds(),
+				Boolean.TRUE.equals(request.includeLinks()),
+				Boolean.TRUE.equals(request.includeSprint()));
+		return issueCloneService.clone(id, options, currentUser.require());
 	}
 
 	@PatchMapping("/{id}")

@@ -125,7 +125,32 @@ public class IssueService {
 		projects.assertMember(projects.get(issue.getProjectId()), user);
 	}
 
+	/**
+	 * Who hears about the {@code @}-mentions in a freshly created issue's body.
+	 * A copy needs its own answer: the text is not new, so nobody named in it was
+	 * named <em>now</em>, and telling five people they were mentioned because
+	 * somebody duplicated a well-documented ticket is five notifications about
+	 * nothing that changed for them.
+	 */
+	public enum Mentions {
+		/** Ordinary creation — everyone named in the body is told they were named. */
+		NOTIFY,
+		/** The body is a copy of an existing issue's; stay quiet. */
+		SUPPRESS
+	}
+
 	public Issue create(Issue issue, User author) {
+		return create(issue, author, Mentions.NOTIFY);
+	}
+
+	/**
+	 * The one creation path. Everything that makes an issue an issue happens here
+	 * — the project-scoped number, the workflow state, the hierarchy check, the
+	 * rank, the CREATED activity — so a second caller with its own persistence is
+	 * how numbering and history drift apart. [mentions] is the only lever a
+	 * caller gets over it.
+	 */
+	public Issue create(Issue issue, User author, Mentions mentions) {
 		Project project = projects.get(issue.getProjectId());
 		// The builder sets the list field directly; normalise so the primary
 		// assigneeId is in sync and the list is de-duped/blank-stripped.
@@ -156,8 +181,12 @@ public class IssueService {
 				.build());
 		// Notify every assignee (except the creator) that the issue is theirs.
 		notifications.notifyAssigned(saved, author, saved.getAssigneeIds());
-		// Ping anyone @-mentioned in the freshly written description.
-		notifications.notifyNewMentions(saved, author, null, saved.getDescriptionDoc());
+		// Ping anyone @-mentioned in the freshly written description — unless the
+		// description was copied from somewhere, in which case nothing about their
+		// mention is new.
+		if (mentions == Mentions.NOTIFY) {
+			notifications.notifyNewMentions(saved, author, null, saved.getDescriptionDoc());
+		}
 		return saved;
 	}
 
