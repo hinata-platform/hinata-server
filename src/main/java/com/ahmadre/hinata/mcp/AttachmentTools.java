@@ -72,7 +72,8 @@ public class AttachmentTools {
 			@McpToolParam(description = "Issue id or readable id (e.g. ASTA-42)") String idOrReadableId,
 			@McpToolParam(description = "Attachment id from list_attachments") String attachmentId,
 			@McpToolParam(required = false,
-					description = "Max width in px for images (default 1600, clamped by the server)")
+					description = "Max width in px for images — clamped to 320-2048, and never "
+							+ "above the original's width (server default 1600)")
 					Integer maxWidth) {
 		AttachmentReader.Rendered rendered = reader.read(idOrReadableId, attachmentId, maxWidth);
 		return toResult(rendered);

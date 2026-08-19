@@ -56,7 +56,7 @@ final class AttachmentSummary {
 	}
 
 	/** One line naming the file: issue, name, type, size. */
-	static String headline(Issue issue, Issue.Attachment attachment) {
+	private static String headline(Issue issue, Issue.Attachment attachment) {
 		return "%s · \"%s\" · %s · %s".formatted(
 				oneLine(issue.getReadableId(), "issue"),
 				oneLine(attachment.getFileName(), "file"),
@@ -116,7 +116,7 @@ final class AttachmentSummary {
 	}
 
 	/** Why there is no content, phrased so a caller knows what to do next. */
-	static String reason(AttachmentContent.Reason reason) {
+	private static String reason(AttachmentContent.Reason reason) {
 		return switch (reason) {
 			case TOO_LARGE -> "No content returned: the file is larger than this server will inline into "
 					+ "a conversation. Nothing was truncated — download it in the app instead.";
@@ -132,7 +132,7 @@ final class AttachmentSummary {
 	}
 
 	/** Human-readable byte size — an agent reads "3.2 MB" better than 3355443. */
-	static String humanSize(long bytes) {
+	private static String humanSize(long bytes) {
 		if (bytes < 1024) {
 			return bytes + " B";
 		}

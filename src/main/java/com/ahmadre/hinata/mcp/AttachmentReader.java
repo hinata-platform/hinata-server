@@ -30,8 +30,10 @@ import java.util.Locale;
  * project ACL decides. Only <em>after</em> that is the attachment looked up, and
  * only inside the list of the issue that was authorized — which is what makes
  * one issue's attachment id useless against another issue (IDOR). Every attempt
- * is audited — what it returned, and equally what it was refused, since a caller
- * fishing for ids across issues it may not read produces nothing but refusals.
+ * that names a caller is audited — what it returned, and equally what it was
+ * refused, since a caller fishing for ids across issues it may not read produces
+ * nothing but refusals. A missing scope is turned away one step earlier, before
+ * there is an identity to record it against.
  */
 @Component
 @RequiredArgsConstructor
@@ -64,7 +66,7 @@ public class AttachmentReader {
 			Issue.Attachment attachment = find(issue.getAttachments(), attachmentId);
 			AttachmentContent content = contents.render(attachment, limits(maxWidth));
 			logRead(user, issue.getReadableId(), attachment.getId(),
-					AttachmentSummary.safeFileName(attachment), describe(content),
+					AttachmentSummary.safeFileName(attachment), renderedAs(content),
 					AuditLog.Outcome.SUCCESS);
 			return new Rendered(issue, attachment, content);
 		}
@@ -127,8 +129,13 @@ public class AttachmentReader {
 				mcp.getAttachmentTextChars());
 	}
 
-	/** A short, non-sensitive summary of the outcome for the audit trail. */
-	private static String describe(AttachmentContent content) {
+	/**
+	 * What a successful read handed back, in a form short and non-sensitive enough
+	 * for the audit trail — the counterpart of {@link #reasonFor} on the path that
+	 * did not get this far. Not to be confused with {@link AttachmentSummary}'s
+	 * prose, which is written for the model rather than for an investigation.
+	 */
+	private static String renderedAs(AttachmentContent content) {
 		return switch (content) {
 			case AttachmentContent.Image image -> "image " + image.width() + "x" + image.height();
 			case AttachmentContent.Text text -> text.truncated() ? "text (truncated)" : "text";

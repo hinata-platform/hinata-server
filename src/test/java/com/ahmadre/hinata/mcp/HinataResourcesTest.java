@@ -5,6 +5,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.pat.Scopes;
+import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.storage.AttachmentContent;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,13 +34,14 @@ import static org.mockito.Mockito.when;
  * equivalent tool spends — otherwise a token issued for one thing could read
  * another simply by asking for a URI instead of calling a tool.
  */
-class AttachmentResourceTest {
+class HinataResourcesTest {
 
 	private static final User CALLER = User.builder().id("u1").build();
 
 	private ScopeGuard scopeGuard;
 	private AttachmentReader reader;
 	private IssueService issueService;
+	private ProjectRepository projects;
 	private KnowledgeReadTools knowledge;
 	private HinataResources resources;
 
@@ -47,11 +50,12 @@ class AttachmentResourceTest {
 		scopeGuard = mock(ScopeGuard.class);
 		reader = mock(AttachmentReader.class);
 		issueService = mock(IssueService.class);
+		projects = mock(ProjectRepository.class);
 		knowledge = mock(KnowledgeReadTools.class);
 		CurrentUser currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(CALLER);
 		resources = new HinataResources(scopeGuard, currentUser, issueService, reader,
-				mock(ProjectService.class), mock(ProjectRepository.class), knowledge);
+				mock(ProjectService.class), projects, knowledge);
 	}
 
 	private static Issue.Attachment attachment() {
@@ -96,6 +100,22 @@ class AttachmentResourceTest {
 	}
 
 	@Test
+	void anExtractedTextResourceKeepsTheNoticeAndTheTextInOnePiece() {
+		// A resource read hands back contents, not a conversation. Caveat and text
+		// travel as one piece here, so a client rendering only the payload cannot
+		// drop the framing on the way.
+		renders(new AttachmentContent.Text("first page…", true));
+
+		ReadResourceResult result = resources.attachment("HIN-1", "a1");
+
+		assertThat(result.contents()).singleElement()
+				.isInstanceOfSatisfying(TextResourceContents.class, contents -> {
+					assertThat(contents.text()).contains("TRUNCATED").contains("first page…");
+					assertThat(contents.text()).contains("untrusted");
+				});
+	}
+
+	@Test
 	void theIssueResourceSpendsTheSameScopeAsTheIssueTool() {
 		when(issueService.getForUser(anyString(), any()))
 				.thenReturn(Issue.builder().id("i1").readableId("HIN-1").build());
@@ -103,6 +123,16 @@ class AttachmentResourceTest {
 		resources.issue("HIN-1");
 
 		verify(scopeGuard).require(Scopes.ISSUES_READ);
+	}
+
+	@Test
+	void theProjectResourceSpendsTheSameScopeAsTheProjectTool() {
+		when(projects.findById("ASTA")).thenReturn(Optional.of(
+				Project.builder().id("p1").key("ASTA").name("AStA").build()));
+
+		resources.project("ASTA");
+
+		verify(scopeGuard).require(Scopes.PROJECTS_READ);
 	}
 
 	@Test

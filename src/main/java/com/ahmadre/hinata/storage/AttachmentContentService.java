@@ -114,7 +114,7 @@ public class AttachmentContentService {
 	 * surrogate pair, and the longest malformed run the JDK folds into a single
 	 * replacement character is three bytes. Four leaves a margin over that three.
 	 */
-	private static final int BYTES_PER_CHAR_FLOOR = 4;
+	private static final int MAX_BYTES_PER_CHAR = 4;
 
 	private final StorageService storage;
 
@@ -257,7 +257,7 @@ public class AttachmentContentService {
 	private AttachmentContent renderPdf(byte[] data, int maxChars) {
 		// Trust the magic bytes, not the recorded content type: PDFBox is the one
 		// parser here that a mislabelled upload could aim at.
-		if (!isPdf(data)) {
+		if (!FileSignature.isPdf(data)) {
 			return new AttachmentContent.Unavailable(AttachmentContent.Reason.UNREADABLE);
 		}
 		PdfTextExtractor.Extract extract = PdfTextExtractor.extract(data, maxChars);
@@ -267,19 +267,13 @@ public class AttachmentContentService {
 		return new AttachmentContent.Text(extract.text(), extract.truncated());
 	}
 
-	/** {@code %PDF-} — the only signature a PDF is allowed to start with. */
-	private static boolean isPdf(byte[] data) {
-		return data.length > 4
-				&& data[0] == '%' && data[1] == 'P' && data[2] == 'D' && data[3] == 'F';
-	}
-
 	/**
 	 * Decodes as UTF-8 with replacement rather than refusing on the first invalid
 	 * byte: a CSV exported from a spreadsheet is routinely not quite UTF-8, and a
 	 * replacement character in one cell is a far better answer than none at all.
 	 *
 	 * <p>Only the prefix that can possibly be kept is decoded. UTF-8 never spends
-	 * more than {@link #BYTES_PER_CHAR_FLOOR} bytes on one {@code char} — a
+	 * more than {@link #MAX_BYTES_PER_CHAR} bytes on one {@code char} — a
 	 * three-byte sequence yields one, and the four-byte ones yield two — so that
 	 * many bytes per requested character is guaranteed to decode to at least
 	 * [maxChars] characters, and everything past them was going to be thrown away.
@@ -287,7 +281,7 @@ public class AttachmentContentService {
 	 * of short-lived heap on a path several agents may be walking at once.
 	 */
 	private AttachmentContent renderText(byte[] data, int maxChars) {
-		int window = (int) Math.min(data.length, (long) Math.max(maxChars, 0) * BYTES_PER_CHAR_FLOOR);
+		int window = (int) Math.min(data.length, (long) Math.max(maxChars, 0) * MAX_BYTES_PER_CHAR);
 		if (window >= data.length) {
 			String whole = new String(data, StandardCharsets.UTF_8);
 			return whole.length() <= maxChars
