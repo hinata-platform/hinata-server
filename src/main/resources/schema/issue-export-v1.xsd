@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The schema of GET /api/v1/issues/{id}/export.xml.
+
+  It is published because the format is a contract the moment anybody scripts
+  against it. The rule for changing it: adding an element or an attribute is
+  compatible and keeps version="1"; renaming or removing one is version="2" and
+  a new file beside this one. Every section is optional in the sense that it can
+  be empty — the export's query parameters can switch comments, links,
+  attachments and history off — but the elements themselves are always present,
+  so a consumer never has to distinguish "absent" from "empty".
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+
+  <!-- The description of an issue or of a comment: a flat sequence of blocks. -->
+  <xs:group name="blocks">
+    <xs:choice>
+      <xs:element name="heading">
+        <xs:complexType>
+          <xs:simpleContent>
+            <xs:extension base="xs:string">
+              <xs:attribute name="level" type="xs:positiveInteger" use="required"/>
+            </xs:extension>
+          </xs:simpleContent>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="p" type="xs:string"/>
+      <xs:element name="list">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="item" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+          </xs:sequence>
+          <xs:attribute name="ordered" type="xs:boolean" use="required"/>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="code">
+        <xs:complexType>
+          <xs:simpleContent>
+            <xs:extension base="xs:string">
+              <xs:attribute name="language" type="xs:string" use="required"/>
+            </xs:extension>
+          </xs:simpleContent>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="quote" type="xs:string"/>
+      <xs:element name="table">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="row" minOccurs="0" maxOccurs="unbounded">
+              <xs:complexType>
+                <xs:sequence>
+                  <xs:element name="cell" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+                </xs:sequence>
+                <xs:attribute name="header" type="xs:boolean"/>
+              </xs:complexType>
+            </xs:element>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="rule">
+        <xs:complexType/>
+      </xs:element>
+    </xs:choice>
+  </xs:group>
+
+  <xs:element name="issue">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="title" type="xs:string"/>
+        <xs:element name="project" type="xs:string"/>
+        <xs:element name="organization" type="xs:string"/>
+        <xs:element name="generatedAt" type="xs:string"/>
+
+        <xs:element name="fields">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="field" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:simpleContent>
+                    <xs:extension base="xs:string">
+                      <xs:attribute name="name" type="xs:string" use="required"/>
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="description">
+          <xs:complexType>
+            <xs:group ref="blocks" minOccurs="0" maxOccurs="unbounded"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="comments">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="comment" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:group ref="blocks" minOccurs="0" maxOccurs="unbounded"/>
+                  <xs:attribute name="author" type="xs:string" use="required"/>
+                  <xs:attribute name="at" type="xs:string" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="count" type="xs:nonNegativeInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="links">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="link" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:simpleContent>
+                    <xs:extension base="xs:string">
+                      <xs:attribute name="verb" type="xs:string" use="required"/>
+                      <xs:attribute name="key" type="xs:string" use="required"/>
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="count" type="xs:nonNegativeInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="attachments">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="attachment" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="name" type="xs:string" use="required"/>
+                  <xs:attribute name="contentType" type="xs:string" use="required"/>
+                  <xs:attribute name="size" type="xs:string" use="required"/>
+                  <xs:attribute name="uploader" type="xs:string" use="required"/>
+                  <xs:attribute name="uploadedAt" type="xs:string" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="count" type="xs:nonNegativeInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="activity">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="entry" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:simpleContent>
+                    <xs:extension base="xs:string">
+                      <xs:attribute name="at" type="xs:string" use="required"/>
+                      <xs:attribute name="actor" type="xs:string" use="required"/>
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="count" type="xs:nonNegativeInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+
+      <xs:attribute name="version" type="xs:string" use="required"/>
+      <xs:attribute name="key" type="xs:string" use="required"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

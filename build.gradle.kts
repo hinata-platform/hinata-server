@@ -26,6 +26,14 @@ val openpdfVersion = "2.0.3"
 // PDF *rasterizing* (first-page thumbnails). openpdf above writes PDFs and
 // cannot render them; PDFBox is the mature reader/renderer for that side.
 val pdfboxVersion = "3.0.3"
+// Office documents (.docx / .xlsx) for the single-issue export. A heavy
+// dependency by any measure — POI plus its transitives is several megabytes —
+// and one with a real CVE history (XML-parsing and zip-bomb classes of issue in
+// the OOXML side). Taken deliberately: the alternative for .docx is Jira's, an
+// HTML body served as application/msword, which Word opens and LibreOffice and
+// Google Docs do not, and which produces garbage the moment anyone edits it.
+// Belongs in dependency monitoring; keep it current rather than pinned old.
+val poiVersion = "5.4.1"
 val springdocScalarVersion = "3.0.3"
 // Spring AI provides the MCP (Model Context Protocol) server: it embeds the
 // official io.modelcontextprotocol Java SDK and auto-configures the WebMVC
@@ -102,6 +110,8 @@ dependencies {
     implementation("com.github.librepdf:openpdf:$openpdfVersion")
     // PDF rendering: first-page thumbnails for PDF attachments
     implementation("org.apache.pdfbox:pdfbox:$pdfboxVersion")
+    // Word + Excel generation: the single-issue export (XWPF / XSSF)
+    implementation("org.apache.poi:poi-ooxml:$poiVersion")
 
     // Security & SSO
     implementation("org.springframework.boot:spring-boot-starter-security")
