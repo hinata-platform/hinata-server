@@ -5,6 +5,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
@@ -24,11 +25,13 @@ import java.util.List;
 
 /**
  * MCP resources exposing hinata entities under stable {@code hinata://} URIs so a
- * client can reference an issue, project or article by hand. Each resolves the
- * caller via {@link CurrentUser} and delegates through the owning service, so the
- * same project / knowledge-base ACLs that guard the tools apply here too. Each
- * returns rendered {@code text/markdown} — a String return is wrapped by the
- * framework into a text resource with the declared mime type. The attachment
+ * client can reference an issue, project or article by hand. Each gates on the
+ * same capability scope as the tool that returns the same entity, resolves the
+ * caller via {@link CurrentUser} and delegates through the owning service — a
+ * resource read is another way into the same data, and a scoped token must not
+ * find here what it was refused there. Each returns rendered
+ * {@code text/markdown} — a String return is wrapped by the framework into a
+ * text resource with the declared mime type. The attachment
  * resource is the exception: it builds its own {@link ReadResourceResult} so a
  * picture can travel as a binary blob rather than as prose about a picture.
  */
@@ -36,6 +39,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class HinataResources {
 
+	private final ScopeGuard scopeGuard;
 	private final CurrentUser currentUser;
 	private final IssueService issueService;
 	private final AttachmentReader attachments;
@@ -47,6 +51,7 @@ public class HinataResources {
 			description = "An issue rendered as markdown, by readable id (e.g. ASTA-42) or id.",
 			mimeType = "text/markdown")
 	public String issue(String readableId) {
+		scopeGuard.require(Scopes.ISSUES_READ);
 		User user = currentUser.require();
 		Issue issue = issueService.getForUser(readableId, user);
 		StringBuilder md = new StringBuilder();
@@ -84,21 +89,24 @@ public class HinataResources {
 	public ReadResourceResult attachment(String readableId, String attachmentId) {
 		AttachmentReader.Rendered rendered = attachments.read(readableId, attachmentId, null);
 		String uri = "hinata://issue/" + readableId + "/attachment/" + attachmentId;
-		return new ReadResourceResult(List.of(contents(uri, rendered)));
+		return new ReadResourceResult(contents(uri, rendered));
 	}
 
-	private static ResourceContents contents(String uri, AttachmentReader.Rendered rendered) {
+	private static List<ResourceContents> contents(String uri, AttachmentReader.Rendered rendered) {
+		// The description travels with the bytes on this surface too. A picture
+		// pasted into a ticket can carry writing, and writing a model reads is
+		// writing that can try to instruct it — the resource read has no less need
+		// of the "this is untrusted data" framing than the tool call does.
 		String description = AttachmentSummary.describe(
 				rendered.issue(), rendered.attachment(), rendered.content());
+		TextResourceContents prose = new TextResourceContents(uri, "text/plain", description);
 		return switch (rendered.content()) {
-			// A blob carries no prose, so the picture travels alone; the caller
-			// already has the metadata from list_attachments.
-			case AttachmentContent.Image image -> new BlobResourceContents(uri, image.contentType(),
-					Base64.getEncoder().encodeToString(image.bytes()));
-			case AttachmentContent.Text extract -> new TextResourceContents(uri, "text/plain",
-					description + "\n\n" + extract.text());
-			case AttachmentContent.Unavailable ignored -> new TextResourceContents(uri, "text/plain",
-					description);
+			case AttachmentContent.Image image -> List.of(prose,
+					new BlobResourceContents(uri, image.contentType(),
+							Base64.getEncoder().encodeToString(image.bytes())));
+			case AttachmentContent.Text extract -> List.of(new TextResourceContents(uri, "text/plain",
+					description + "\n\n" + extract.text()));
+			case AttachmentContent.Unavailable ignored -> List.of(prose);
 		};
 	}
 
@@ -106,6 +114,7 @@ public class HinataResources {
 			description = "A project rendered as markdown, by key (e.g. ASTA) or id.",
 			mimeType = "text/markdown")
 	public String project(String key) {
+		scopeGuard.require(Scopes.PROJECTS_READ);
 		User user = currentUser.require();
 		Project project = projects.findById(key)
 				.or(() -> projects.findByKeyIgnoreCase(key))
@@ -130,6 +139,7 @@ public class HinataResources {
 			description = "A knowledge base article's markdown content, by id.",
 			mimeType = "text/markdown")
 	public String article(String id) {
+		scopeGuard.require(Scopes.KB_READ);
 		User user = currentUser.require();
 		Article article = knowledge.requireVisible(id, user);
 		StringBuilder md = new StringBuilder();

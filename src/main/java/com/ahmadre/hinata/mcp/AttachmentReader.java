@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
@@ -15,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * The single path from "an id an agent typed" to "bytes it may see". Both MCP
@@ -27,8 +29,9 @@ import java.util.List;
  * own rate budget, then the issue resolved through {@link IssueService} so the
  * project ACL decides. Only <em>after</em> that is the attachment looked up, and
  * only inside the list of the issue that was authorized — which is what makes
- * one issue's attachment id useless against another issue (IDOR). Every read is
- * audited, whatever it returned.
+ * one issue's attachment id useless against another issue (IDOR). Every attempt
+ * is audited — what it returned, and equally what it was refused, since a caller
+ * fishing for ids across issues it may not read produces nothing but refusals.
  */
 @Component
 @RequiredArgsConstructor
@@ -53,19 +56,51 @@ public class AttachmentReader {
 	public Rendered read(String idOrReadableId, String attachmentId, Integer maxWidth) {
 		scopeGuard.require(Scopes.ISSUES_READ);
 		User user = currentUser.require();
-		// Metered before any database or storage work: probing ids is exactly the
-		// traffic worth metering, and it must cost the prober, not the server.
-		limiter.require(user.getId());
-		Issue issue = issueService.getForUser(idOrReadableId, user);
-		Issue.Attachment attachment = find(issue.getAttachments(), attachmentId);
-		AttachmentContent content = contents.render(attachment, limits(maxWidth));
-		audit.event(AuditAction.MCP_ATTACHMENT_READ).actor(user)
-				.meta("issue", issue.getReadableId())
-				.meta("attachment", attachment.getId())
-				.meta("file", attachment.getFileName())
-				.meta("result", describe(content))
+		try {
+			// Metered before the issue is looked up: probing ids is exactly the
+			// traffic worth metering, and it must cost the prober, not the server.
+			limiter.require(user.getId());
+			Issue issue = issueService.getForUser(idOrReadableId, user);
+			Issue.Attachment attachment = find(issue.getAttachments(), attachmentId);
+			AttachmentContent content = contents.render(attachment, limits(maxWidth));
+			logRead(user, issue.getReadableId(), attachment.getId(),
+					AttachmentSummary.safeFileName(attachment), describe(content),
+					AuditLog.Outcome.SUCCESS);
+			return new Rendered(issue, attachment, content);
+		}
+		catch (RuntimeException refused) {
+			// The refusals are the records worth having. An agent walking attachment
+			// ids across issues its token may not read produces nothing but denials,
+			// and auditing only what succeeded would show that caller as a quiet,
+			// well-behaved one. The ids are echoed back as the caller wrote them —
+			// bounded and stripped, because at this point nothing has validated them.
+			logRead(user, AttachmentSummary.oneLine(idOrReadableId, "?"),
+					AttachmentSummary.oneLine(attachmentId, "?"), null,
+					reasonFor(refused), AuditLog.Outcome.FAILURE);
+			throw refused;
+		}
+	}
+
+	private void logRead(User user, String issue, String attachment, String file, String result,
+			AuditLog.Outcome outcome) {
+		audit.event(AuditAction.MCP_ATTACHMENT_READ).actor(user).outcome(outcome)
+				.meta("issue", issue)
+				.meta("attachment", attachment)
+				.meta("file", file)
+				.meta("result", result)
 				.log();
-		return new Rendered(issue, attachment, content);
+	}
+
+	/**
+	 * Why a read was refused, in a form safe to persist: an {@link ApiException}
+	 * carries an i18n <em>key</em>, and anything else is named by its type only.
+	 * Never the message — a helpful NullPointerException names internal classes
+	 * and fields, and an audit record is read by more people than a log line.
+	 */
+	private static String reasonFor(RuntimeException refused) {
+		return refused instanceof ApiException api
+				? "refused: " + api.getMessageKey()
+				: "failed: " + refused.getClass().getSimpleName();
 	}
 
 	/**
@@ -97,7 +132,7 @@ public class AttachmentReader {
 		return switch (content) {
 			case AttachmentContent.Image image -> "image " + image.width() + "x" + image.height();
 			case AttachmentContent.Text text -> text.truncated() ? "text (truncated)" : "text";
-			case AttachmentContent.Unavailable unavailable -> unavailable.reason().name().toLowerCase();
+			case AttachmentContent.Unavailable unavailable -> unavailable.reason().name().toLowerCase(Locale.ROOT);
 		};
 	}
 }

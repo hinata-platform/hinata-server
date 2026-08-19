@@ -226,6 +226,39 @@ class AttachmentContentServiceTest {
 		assertThat(text.truncated()).isTrue();
 	}
 
+	@Test
+	void aPageIsAbandonedOnceItHasCostMoreGlyphsThanItMay() throws Exception {
+		// The character budget is only ever checked between pages, and PDFBox lays
+		// out a whole page before it emits a single character — so a file whose
+		// compressed content stream expands into hundreds of millions of glyphs
+		// would take the heap with it while still on page one. The glyph ceiling
+		// is the only bound that can see that page coming; here it is set low
+		// enough that an ordinary document trips it.
+		byte[] data = pdf(5, "the quick brown fox jumps over the lazy dog on page");
+
+		PdfTextExtractor.Extract whole = PdfTextExtractor.extract(data, 100_000);
+		PdfTextExtractor.Extract bounded = PdfTextExtractor.extract(data, 100_000, 80);
+
+		assertThat(whole.truncated()).isFalse();
+		assertThat(bounded.truncated()).isTrue();
+		assertThat(bounded.text().length()).isLessThan(whole.text().length());
+	}
+
+	@Test
+	void aDocumentThatFitsIsNotAffectedByTheGlyphCeiling() throws Exception {
+		// The ceiling is derived from the character budget with room to spare, so
+		// a real document must never be cut short by it.
+		byte[] data = pdf(3, "a perfectly ordinary paragraph of text on page");
+		stored(data, "application/pdf");
+
+		AttachmentContent.Text text = (AttachmentContent.Text) service.render(
+				attachment("application/pdf", data.length),
+				new AttachmentContentService.Limits(5L * 1024 * 1024, 1600, 20_000));
+
+		assertThat(text.truncated()).isFalse();
+		assertThat(text.text()).contains("ordinary paragraph");
+	}
+
 	// --- refusals ----------------------------------------------------------
 
 	@Test

@@ -151,14 +151,18 @@ public class AttachmentContentService {
 	 * produced rather than a file somebody uploaded.
 	 */
 	private AttachmentContent renderImage(byte[] data, int requestedWidth) {
-		BufferedImage source = ImageOps.read(data, MAX_DECODE_PIXELS);
-		if (source == null) {
-			// No reader (webp), a decompression bomb, or simply broken bytes.
-			return new AttachmentContent.Unavailable(AttachmentContent.Reason.UNREADABLE);
-		}
-		boolean alpha = ImageOps.hasAlpha(source);
-		int width = targetWidth(source, requestedWidth);
+		// The decode is inside the guard, not before it: it is the single largest
+		// allocation on this path (a bounded 30 MP raster is still ~120 MB as
+		// ARGB), so it is also the step most likely to fail with an Error rather
+		// than the exception ImageOps already turns into a null.
 		try {
+			BufferedImage source = ImageOps.read(data, MAX_DECODE_PIXELS);
+			if (source == null) {
+				// No reader (webp), a decompression bomb, or simply broken bytes.
+				return new AttachmentContent.Unavailable(AttachmentContent.Reason.UNREADABLE);
+			}
+			boolean alpha = ImageOps.hasAlpha(source);
+			int width = targetWidth(source, requestedWidth);
 			for (int attempt = 0; ; attempt++) {
 				BufferedImage scaled = scaleToWidth(source, width, alpha);
 				byte[] encoded = alpha
