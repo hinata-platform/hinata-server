@@ -9,7 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Cloning an issue: a new ticket that starts where an existing one did, for a
@@ -130,16 +132,22 @@ public class IssueCloneService {
 						: new ArrayList<>())
 				.build();
 		Issue saved = issues.create(copy, user, IssueService.Mentions.SUPPRESS);
-		recordOrigin(saved, original, user);
-		if (options.includeLinks()) {
-			copyLinks(saved, original, user);
-		}
+		// Written the moment the copy exists, before any of the link work below.
+		// From here on the issue is in the project whatever happens next, and an
+		// audit log that only records the clones whose links happened to save is
+		// an audit log that misses exactly the ones worth looking at. The two
+		// flags describe what was asked for, which is what an auditor is reading
+		// this to learn.
 		audit.event(AuditAction.ISSUE_CLONED).actor(user)
 				.meta("source", original.getReadableId())
 				.meta("clone", saved.getReadableId())
 				.meta("links", String.valueOf(options.includeLinks()))
 				.meta("sprint", String.valueOf(options.includeSprint()))
 				.log();
+		recordOrigin(saved, original, user);
+		if (options.includeLinks()) {
+			copyLinks(saved, original, user);
+		}
 		return saved;
 	}
 
@@ -173,23 +181,53 @@ public class IssueCloneService {
 	 * separately by {@link #recordOrigin}, and that is the only lineage it has.
 	 */
 	private void copyLinks(Issue copy, Issue original, User user) {
+		Map<Fan, List<String>> byFan = new LinkedHashMap<>();
 		for (IssueLinkService.LinkView link : links.linksOf(original.getId(), user)) {
 			if (link.type() == IssueLinkType.CLONES) {
 				continue;
 			}
+			byFan.computeIfAbsent(new Fan(link.type(), link.outward()), key -> new ArrayList<>())
+					.add(link.issue().getId());
+		}
+		for (Map.Entry<Fan, List<String>> fan : byFan.entrySet()) {
 			try {
-				links.addLinks(copy.getId(), link.type(), link.outward(),
-						List.of(link.issue().getId()), user);
+				links.addLinks(copy.getId(), fan.getKey().type(), fan.getKey().outward(),
+						fan.getValue(), user);
 			}
 			catch (RuntimeException failed) {
 				// The clone exists. A link that will not copy is worth a line in the
 				// log and nothing more — rolling the issue back over it would throw
 				// away the thing the user actually asked for.
-				log.warn("Copying {} link from {} to clone {} failed: {}",
-						link.type(), original.getReadableId(), copy.getReadableId(),
+				log.warn("Copying {} links from {} to clone {} failed: {}",
+						fan.getKey().type(), original.getReadableId(), copy.getReadableId(),
 						failed.toString());
 			}
 		}
+	}
+
+	/**
+	 * One batch of links to add: a type and an orientation, which is everything
+	 * {@link IssueLinkService#addLinks} needs to be told once for a whole list of
+	 * targets.
+	 *
+	 * <p>The grouping is not tidiness. {@code addLinks} answers with the issue's
+	 * <em>entire</em> link list — re-reading every link and loading the issue
+	 * behind each one — so calling it once per link makes copying n links cost on
+	 * the order of n² reads, every one of them thrown away here. An issue with a
+	 * couple of hundred links is an ordinary hub ticket that any member can clone
+	 * for the price of one small request, and that is not an amount of work any
+	 * request should be able to buy. There are seven link types and two
+	 * orientations, so this bounds the wasted re-reads to at most fourteen
+	 * regardless of how many links the original carries.
+	 *
+	 * <p>The cost is granularity when something goes wrong: a target that becomes
+	 * unreachable between the read above and the write below now aborts the rest
+	 * of its batch rather than only itself. {@code addLinks} saves as it goes, so
+	 * what it managed before the failure stays — and the failure needs a
+	 * membership change or a database fault landing inside a window microseconds
+	 * wide, against a copy that survives either way.
+	 */
+	private record Fan(IssueLinkType type, boolean outward) {
 	}
 
 	private static String requireTitle(String title) {
