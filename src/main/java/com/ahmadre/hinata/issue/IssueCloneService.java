@@ -25,26 +25,17 @@ import java.util.Map;
  * scheme and an activity history drift apart.
  *
  * <p>What the copy carries and what it deliberately does not is spelled out in
- * {@link #CARRIED} and {@link #RESET} — two lists that together must name every
- * field of {@link Issue}, so a field added later cannot silently start (or stop)
- * being copied.
+ * {@link #CARRIED} and {@link #LEFT_BEHIND} — two lists that together must name
+ * every field of {@link Issue}, so a field added later cannot silently start (or
+ * stop) being copied.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class IssueCloneService {
 
-	/**
-	 * The prefix a cloned title is offered with. Deliberately not localized: it
-	 * is written into stored data that a whole organisation reads and searches,
-	 * and a per-user prefix would mean the same action produces different titles
-	 * depending on who ran it — so half the clones fall out of any search for
-	 * them. The dialog prefills it and the user is free to delete it.
-	 */
-	public static final String TITLE_PREFIX = "CLONE - ";
-
 	/** Mirrors {@code CreateIssueRequest.title}; the clone is an issue like any other. */
-	public static final int MAX_TITLE_CHARS = 300;
+	private static final int MAX_TITLE_CHARS = 300;
 
 	/**
 	 * Fields the clone can end up carrying — either verbatim from the original
@@ -87,7 +78,7 @@ public class IssueCloneService {
 	 * <p>Comments and the activity log are not fields and are equally not copied —
 	 * they are other collections keyed by issue id, and nothing here reads them.
 	 */
-	static final List<String> RESET = List.of(
+	static final List<String> LEFT_BEHIND = List.of(
 			"id", "numberInProject", "readableId", "formerReadableIds", "state", "reporterId",
 			"reporterEmail", "inboundMessageId", "inboundSubject", "ingestConnectionId",
 			"watcherIds", "spentMinutes", "attachments", "rank", "resolvedAt", "archived",
@@ -158,10 +149,11 @@ public class IssueCloneService {
 	 * existed, so this costs a row, not a model.
 	 */
 	private void recordOrigin(Issue copy, Issue original, User user) {
-		// createLinks, not addLinks: the difference is only that this one does not
-		// re-read and re-render the copy's whole link list on the way out, which is
-		// a view nothing here looks at. See IssueLinkService#createLinks.
-		links.createLinks(copy.getId(), IssueLinkType.CLONES, true, List.of(original.getId()), user);
+		// Not addLinks: the difference is only that this one does not re-read and
+		// re-render the copy's whole link list on the way out, which is a view
+		// nothing here looks at. See IssueLinkService#addLinksWithoutView.
+		links.addLinksWithoutView(copy.getId(), IssueLinkType.CLONES, true,
+				List.of(original.getId()), user);
 	}
 
 	/**
@@ -190,37 +182,38 @@ public class IssueCloneService {
 	 * whether this caller may see the far end, and a leaner projection here would be
 	 * a second copy of that rule sitting in the path that decides what a clone is
 	 * allowed to link to. One read of it per clone is a price worth paying; the
-	 * repeats are not, which is why the writes below use {@code createLinks}.
+	 * repeats are not, which is why the writes below use
+	 * {@code addLinksWithoutView}.
 	 */
 	private void copyLinks(Issue copy, Issue original, User user) {
-		Map<Fan, List<String>> byFan = new LinkedHashMap<>();
+		Map<LinkKind, List<String>> byKind = new LinkedHashMap<>();
 		for (IssueLinkService.LinkView link : links.linksOf(original.getId(), user)) {
 			if (link.type() == IssueLinkType.CLONES) {
 				continue;
 			}
-			byFan.computeIfAbsent(new Fan(link.type(), link.outward()), key -> new ArrayList<>())
-					.add(link.issue().getId());
+			LinkKind kind = new LinkKind(link.type(), link.outward());
+			byKind.computeIfAbsent(kind, key -> new ArrayList<>()).add(link.issue().getId());
 		}
-		for (Map.Entry<Fan, List<String>> fan : byFan.entrySet()) {
+		for (Map.Entry<LinkKind, List<String>> batch : byKind.entrySet()) {
 			try {
-				links.createLinks(copy.getId(), fan.getKey().type(), fan.getKey().outward(),
-						fan.getValue(), user);
+				links.addLinksWithoutView(copy.getId(), batch.getKey().type(),
+						batch.getKey().outward(), batch.getValue(), user);
 			}
 			catch (RuntimeException failed) {
 				// The clone exists. A link that will not copy is worth a line in the
 				// log and nothing more — rolling the issue back over it would throw
 				// away the thing the user actually asked for.
 				log.warn("Copying {} links from {} to clone {} failed: {}",
-						fan.getKey().type(), original.getReadableId(), copy.getReadableId(),
+						batch.getKey().type(), original.getReadableId(), copy.getReadableId(),
 						failed.toString());
 			}
 		}
 	}
 
 	/**
-	 * One batch of links to add: a type and an orientation, which is everything
-	 * {@link IssueLinkService#createLinks} needs to be told once for a whole list
-	 * of targets.
+	 * The kind of link one batched call writes: a type and an orientation, which
+	 * is everything {@link IssueLinkService#addLinksWithoutView} needs to be told
+	 * once for a whole list of targets.
 	 *
 	 * <p>The grouping is not tidiness. Every call re-resolves the copy and its
 	 * project to authorize the caller against them, and pings the copy's live
@@ -233,12 +226,12 @@ public class IssueCloneService {
 	 *
 	 * <p>The cost is granularity when something goes wrong: a target that becomes
 	 * unreachable between the read above and the write below now aborts the rest
-	 * of its batch rather than only itself. {@code createLinks} saves as it goes,
-	 * so what it managed before the failure stays — and the failure needs a
-	 * membership change or a database fault landing inside a window microseconds
-	 * wide, against a copy that survives either way.
+	 * of its batch rather than only itself. The write saves as it goes, so what it
+	 * managed before the failure stays — and the failure needs a membership change
+	 * or a database fault landing inside a window microseconds wide, against a
+	 * copy that survives either way.
 	 */
-	private record Fan(IssueLinkType type, boolean outward) {
+	private record LinkKind(IssueLinkType type, boolean outward) {
 	}
 
 	private static String requireTitle(String title) {

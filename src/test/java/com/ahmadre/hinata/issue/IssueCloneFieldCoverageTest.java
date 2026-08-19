@@ -21,9 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class IssueCloneFieldCoverageTest {
 
 	@Test
-	void everyIssueFieldIsEitherCarriedOrDeliberatelyReset() {
+	void everyIssueFieldIsEitherCarriedOrDeliberatelyLeftBehind() {
 		List<String> named = new ArrayList<>(IssueCloneService.CARRIED);
-		named.addAll(IssueCloneService.RESET);
+		named.addAll(IssueCloneService.LEFT_BEHIND);
 
 		List<String> unaccounted = Arrays.stream(Issue.class.getDeclaredFields())
 				.filter(field -> !field.isSynthetic())
@@ -34,7 +34,7 @@ class IssueCloneFieldCoverageTest {
 
 		assertThat(unaccounted)
 				.as("a new Issue field must be added to IssueCloneService.CARRIED or to "
-						+ "IssueCloneService.RESET — a clone takes it along, or it is documented "
+						+ "IssueCloneService.LEFT_BEHIND — a clone takes it along, or it is documented "
 						+ "why it must not")
 				.isEmpty();
 	}
@@ -43,7 +43,7 @@ class IssueCloneFieldCoverageTest {
 	@Test
 	void noFieldIsOnBothLists() {
 		assertThat(IssueCloneService.CARRIED)
-				.doesNotContainAnyElementsOf(IssueCloneService.RESET);
+				.doesNotContainAnyElementsOf(IssueCloneService.LEFT_BEHIND);
 	}
 
 	/** Both lists must name real fields, or the coverage check above passes on a typo. */
@@ -53,9 +53,9 @@ class IssueCloneFieldCoverageTest {
 				.map(Field::getName)
 				.toList();
 		List<String> named = new ArrayList<>(IssueCloneService.CARRIED);
-		named.addAll(IssueCloneService.RESET);
+		named.addAll(IssueCloneService.LEFT_BEHIND);
 
 		assertThat(named).allMatch(declared::contains,
-				"every name on CARRIED/RESET is a declared field of Issue");
+				"every name on CARRIED/LEFT_BEHIND is a declared field of Issue");
 	}
 }

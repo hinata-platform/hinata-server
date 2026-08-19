@@ -54,13 +54,15 @@ public class IssueLinkService {
 
 	/**
 	 * Links {@code issueId} to each of {@code targetIds} with the given type and
-	 * direction ({@code outward} = this issue is the source/verb subject). Targets
-	 * the caller can't access, self-links and exact duplicates are skipped so a
-	 * batch never half-fails. Returns the refreshed, oriented link list.
+	 * direction ({@code outward} = this issue is the source/verb subject). An exact
+	 * duplicate is skipped, so re-adding a link that exists is a no-op; a self-link
+	 * or a target the caller can't access is refused. The batch saves as it goes,
+	 * so what was written before such a target stays written. Returns the
+	 * refreshed, oriented link list.
 	 */
 	public List<LinkView> addLinks(String idOrReadableId, IssueLinkType type, boolean outward,
 			List<String> targetIds, User user) {
-		Issue issue = createLinks(idOrReadableId, type, outward, targetIds, user);
+		Issue issue = addLinksWithoutView(idOrReadableId, type, outward, targetIds, user);
 		return linksOf(issue.getId(), user);
 	}
 
@@ -79,7 +81,7 @@ public class IssueLinkService {
 	 * The HTTP endpoint does look at it and keeps calling {@link #addLinks}; the
 	 * clone copies links and throws the view away, and calls this.
 	 */
-	public Issue createLinks(String idOrReadableId, IssueLinkType type, boolean outward,
+	public Issue addLinksWithoutView(String idOrReadableId, IssueLinkType type, boolean outward,
 			List<String> targetIds, User user) {
 		if (type == null) throw ApiException.badRequest("error.issueLink.typeRequired");
 		Issue issue = issues.getForUser(idOrReadableId, user);
