@@ -24,8 +24,10 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Gathers everything an export shows, once, in the shape {@link IssueExport}
@@ -90,7 +92,15 @@ public class IssueExportService {
 	public IssueExport gather(String idOrReadableId, IssueExport.Options options, User user) {
 		Issue issue = issues.getForUser(idOrReadableId, user);
 		Project project = projects.findById(issue.getProjectId()).orElse(null);
-		Map<String, String> names = new HashMap<>();
+		// The rows first, the names they refer to second: who this document has to
+		// name is not knowable until the comments and the history have been read,
+		// and reading them first is what lets every id in all of them be resolved
+		// in one query rather than one at a time.
+		List<IssueComment> comments = options.comments() ? readComments(issue) : List.of();
+		List<IssueActivity> activity = options.activity() ? readActivity(issue) : List.of();
+		List<Issue.Attachment> attachments = options.attachments() && issue.getAttachments() != null
+				? issue.getAttachments() : List.of();
+		Map<String, String> names = names(issue, comments, attachments, activity);
 		return new IssueExport(
 				nz(issue.getReadableId()),
 				nz(issue.getTitle()),
@@ -98,10 +108,10 @@ public class IssueExportService {
 				fields(issue, project, names, user),
 				MarkdownBlocks.of(LexicalToMarkdown.fromStored(
 						issue.getDescriptionDoc(), issue.getDescription())),
-				options.comments() ? comments(issue, names) : List.of(),
+				comments(comments, names),
 				options.links() ? links(idOrReadableId, user) : List.of(),
-				options.attachments() ? attachments(issue, names) : List.of(),
-				options.activity() ? activity(issue, names) : List.of(),
+				attachments(attachments, names),
+				activity(activity, names),
 				nz(settings.get().getOrganizationName()),
 				Instant.now());
 	}
@@ -132,9 +142,12 @@ public class IssueExportService {
 		return fields;
 	}
 
-	private List<IssueExport.Comment> comments(Issue issue, Map<String, String> names) {
-		List<IssueComment> all = comments.findByIssueIdOrderByCreatedAtAsc(
+	private List<IssueComment> readComments(Issue issue) {
+		return comments.findByIssueIdOrderByCreatedAtAsc(
 				issue.getId(), PageRequest.of(0, MAX_COMMENTS));
+	}
+
+	private List<IssueExport.Comment> comments(List<IssueComment> all, Map<String, String> names) {
 		List<IssueExport.Comment> out = new ArrayList<>();
 		for (IssueComment comment : all) {
 			out.add(new IssueExport.Comment(
@@ -160,12 +173,10 @@ public class IssueExportService {
 		return out;
 	}
 
-	private List<IssueExport.Attachment> attachments(Issue issue, Map<String, String> names) {
+	private List<IssueExport.Attachment> attachments(List<Issue.Attachment> files,
+			Map<String, String> names) {
 		List<IssueExport.Attachment> out = new ArrayList<>();
-		if (issue.getAttachments() == null) {
-			return out;
-		}
-		for (Issue.Attachment file : issue.getAttachments()) {
+		for (Issue.Attachment file : files) {
 			out.add(new IssueExport.Attachment(nz(file.getFileName()), nz(file.getContentType()),
 					humanSize(file.getSize()), person(file.getUploaderId(), names),
 					file.getUploadedAt()));
@@ -173,9 +184,12 @@ public class IssueExportService {
 		return out;
 	}
 
-	private List<IssueExport.Activity> activity(Issue issue, Map<String, String> names) {
-		List<IssueActivity> all = activities.findByIssueIdOrderByCreatedAtDesc(
+	private List<IssueActivity> readActivity(Issue issue) {
+		return activities.findByIssueIdOrderByCreatedAtDesc(
 				issue.getId(), PageRequest.of(0, MAX_ACTIVITY)).getContent();
+	}
+
+	private List<IssueExport.Activity> activity(List<IssueActivity> all, Map<String, String> names) {
 		List<IssueExport.Activity> out = new ArrayList<>();
 		for (IssueActivity entry : all) {
 			out.add(new IssueExport.Activity(instant(entry.getCreatedAt()),
@@ -197,6 +211,57 @@ public class IssueExportService {
 	// --- naming --------------------------------------------------------------
 
 	/**
+	 * Every display name this export is going to print, read in one query.
+	 *
+	 * <p>Remembering a name once it has been looked up is not enough on its own.
+	 * Resolved lazily, a document costs one round trip per distinct person in it,
+	 * one after another on the request thread — and the caps allow five hundred
+	 * comments and five hundred history entries, which is a document that can
+	 * legitimately name several dozen. Sequential round trips are the whole cost
+	 * there: forty of them is forty times the network's latency for forty small
+	 * reads a single {@code $in} answers in one.
+	 *
+	 * <p>Ids that name nobody are remembered too, as themselves. That is what a
+	 * miss already rendered as — a deleted author has always printed as the id —
+	 * and priming it is what stops each one costing the query the batch was meant
+	 * to replace.
+	 *
+	 * <p>Only the sections that will actually be printed contribute ids: naming
+	 * the uploader of an attachment an export was asked to leave out is a name
+	 * nobody reads.
+	 */
+	private Map<String, String> names(Issue issue, List<IssueComment> comments,
+			List<Issue.Attachment> attachments, List<IssueActivity> activity) {
+		Set<String> ids = new LinkedHashSet<>();
+		if (issue.getAssigneeIds() != null) {
+			ids.addAll(issue.getAssigneeIds());
+		}
+		ids.add(issue.getReporterId());
+		for (IssueComment comment : comments) {
+			ids.add(comment.getAuthorId());
+		}
+		for (Issue.Attachment file : attachments) {
+			ids.add(file.getUploaderId());
+		}
+		for (IssueActivity entry : activity) {
+			ids.add(entry.getActorId());
+		}
+		ids.removeIf(id -> id == null || id.isBlank());
+		Map<String, String> names = new HashMap<>();
+		if (ids.isEmpty()) {
+			return names;
+		}
+		for (User person : users.findAllById(ids)) {
+			names.put(person.getId(),
+					firstNonBlank(person.getDisplayName(), person.getUsername(), person.getId()));
+		}
+		for (String id : ids) {
+			names.putIfAbsent(id, id);
+		}
+		return names;
+	}
+
+	/**
 	 * Display name for a user id, resolved once per export and remembered.
 	 *
 	 * <p>Name then username, and never the e-mail address. {@code DirectoryUser}
@@ -211,6 +276,11 @@ public class IssueExportService {
 		if (userId == null || userId.isBlank()) {
 			return "";
 		}
+		// The batch above has already put every id this document prints into the
+		// map, so in practice this only reads it. The single-id read stays as the
+		// answer for an id the batch was never told about: a section added later
+		// that forgets to contribute its ids should cost a query, not print a raw
+		// id at somebody.
 		return names.computeIfAbsent(userId, id -> users.findById(id)
 				.map(user -> firstNonBlank(user.getDisplayName(), user.getUsername(), id))
 				.orElse(id));
@@ -292,8 +362,22 @@ public class IssueExportService {
 		if (ids == null || ids.isEmpty()) {
 			return "";
 		}
+		// Deduplicated before the ceiling is spent, because the list is stored the
+		// way it arrives and nothing keeps the same id out of it twice. Every repeat
+		// used to cost its own two reads — the issue and the project behind its ACL
+		// — and then name the same key again in the field. The ceiling on reads is
+		// unchanged at MAX_DEPENDS_ON; they are simply all distinct now.
+		Set<String> distinct = new LinkedHashSet<>();
+		for (String id : ids) {
+			if (id != null && !id.isBlank()) {
+				distinct.add(id);
+			}
+			if (distinct.size() == MAX_DEPENDS_ON) {
+				break;
+			}
+		}
 		List<String> keys = new ArrayList<>();
-		for (String id : ids.subList(0, Math.min(ids.size(), MAX_DEPENDS_ON))) {
+		for (String id : distinct) {
 			Issue other = related(id, user);
 			if (other != null) {
 				keys.add(nz(other.getReadableId()));

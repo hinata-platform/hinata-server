@@ -5,7 +5,9 @@ import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueActivityRepository;
+import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueLinkService;
 import com.ahmadre.hinata.issue.IssueService;
@@ -19,18 +21,24 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyIterable;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -176,6 +184,8 @@ class ExportHardeningTest {
 	private UserRepository users;
 	private SprintRepository sprints;
 	private AgileBoardRepository boards;
+	private IssueCommentRepository comments;
+	private IssueActivityRepository activities;
 	private IssueExportService exports;
 	private User caller;
 
@@ -184,8 +194,8 @@ class ExportHardeningTest {
 		issues = mock(IssueService.class);
 		users = mock(UserRepository.class);
 		IssueLinkService links = mock(IssueLinkService.class);
-		IssueCommentRepository comments = mock(IssueCommentRepository.class);
-		IssueActivityRepository activities = mock(IssueActivityRepository.class);
+		comments = mock(IssueCommentRepository.class);
+		activities = mock(IssueActivityRepository.class);
 		ProjectRepository projects = mock(ProjectRepository.class);
 		sprints = mock(SprintRepository.class);
 		boards = mock(AgileBoardRepository.class);
@@ -277,7 +287,8 @@ class ExportHardeningTest {
 		User quiet = User.builder().id("quiet").username("tomas")
 				.email("tomas@asta.example").build();
 		when(issues.getForUser(anyString(), any())).thenReturn(own);
-		when(users.findById("quiet")).thenReturn(Optional.of(quiet));
+		// Names arrive in one batched read now, so that is the call to answer.
+		when(users.findAllById(anyIterable())).thenReturn(List.of(quiet));
 
 		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller);
 
@@ -321,5 +332,45 @@ class ExportHardeningTest {
 		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller);
 
 		assertThat(valueOf(export, "Sprint")).isEqualTo("Sprint 7");
+	}
+
+	// --- what gather() costs ------------------------------------------------
+
+	/**
+	 * A document that names forty people reads the directory once.
+	 *
+	 * <p>The number pinned here is the round trips, not the milliseconds. Names
+	 * used to be resolved one id at a time, so a busy ticket cost one sequential
+	 * read per distinct person in it — forty of them is forty times the latency
+	 * between this process and the database, spent on a request thread while
+	 * somebody waits for a file. Written down because nothing else would notice
+	 * it going back: an export resolved lazily produces exactly the same document.
+	 */
+	@Test
+	void everyNameInADocumentIsReadInOneQuery() {
+		Issue own = issue();
+		own.setReporterId("u0");
+		own.setAssigneeIds(List.of("u1", "u2"));
+		List<IssueComment> thread = new ArrayList<>();
+		List<IssueActivity> history = new ArrayList<>();
+		for (int i = 0; i < 200; i++) {
+			thread.add(IssueComment.builder().id("c" + i).issueId("own")
+					.authorId("u" + (i % 20)).text("noted").build());
+			history.add(IssueActivity.builder().id("a" + i).issueId("own")
+					.actorId("u" + (20 + i % 20)).field(IssueActivity.Field.CREATED).build());
+		}
+		when(issues.getForUser(anyString(), any())).thenReturn(own);
+		when(comments.findByIssueIdOrderByCreatedAtAsc(anyString(), any(Pageable.class)))
+				.thenReturn(thread);
+		when(activities.findByIssueIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+				.thenReturn(new PageImpl<>(history));
+
+		IssueExport export = exports.gather("HIN-50",
+				new IssueExport.Options(true, true, true, true), caller);
+
+		assertThat(export.comments()).hasSize(200);
+		assertThat(export.activity()).hasSize(200);
+		verify(users, times(1)).findAllById(anyIterable());
+		verify(users, never()).findById(anyString());
 	}
 }

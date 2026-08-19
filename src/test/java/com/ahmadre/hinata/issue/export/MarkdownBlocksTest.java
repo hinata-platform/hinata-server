@@ -129,6 +129,39 @@ class MarkdownBlocksTest {
 		assertThat(blocks.size()).isLessThanOrEqualTo(2_000);
 	}
 
+	/**
+	 * The other half of the table bound, and found the same way. The Word
+	 * renderer writes a paragraph per line, so a block of pasted log costs a
+	 * renderer far more than it cost whoever pasted it.
+	 */
+	@Test
+	void aPastedLogIsCutToAnExcerptAndSaysSo() {
+		List<ExportBlock> blocks = MarkdownBlocks.of(
+				"```\n" + "a line\n".repeat(20000) + "```");
+
+		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
+		assertThat(code.text().split("\n", -1).length).isLessThanOrEqualTo(501);
+		assertThat(code.text()).endsWith("… truncated");
+	}
+
+	@Test
+	void oneEnormousLineIsCutOnCharactersToo() {
+		List<ExportBlock> blocks = MarkdownBlocks.of("```\n" + "x".repeat(200000) + "\n```");
+
+		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
+		assertThat(code.text().length()).isLessThan(41000);
+		assertThat(code.text()).endsWith("… truncated");
+	}
+
+	@Test
+	void anOrdinaryCodeBlockIsUntouched() {
+		List<ExportBlock> blocks = MarkdownBlocks.of("```dart\nvoid main() {}\n```");
+
+		ExportBlock.Code code = (ExportBlock.Code) blocks.get(0);
+		assertThat(code.text()).isEqualTo("void main() {}\n");
+		assertThat(code.text()).doesNotContain("truncated");
+	}
+
 	private static String text(ExportBlock block) {
 		return switch (block) {
 			case ExportBlock.Heading heading -> ExportBlock.Span.plain(heading.spans());

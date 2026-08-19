@@ -89,6 +89,26 @@ final class MarkdownBlocks {
 	private MarkdownBlocks() {
 	}
 
+	/**
+	 * Lines a fenced or indented block may contribute, and characters across
+	 * them.
+	 *
+	 * <p>The same shape as the table bound and found the same way. The Word
+	 * renderer writes a paragraph per line — measured at about 2.7 kB of heap
+	 * each — so a two-hundred-kilobyte block of pasted log, well inside what a
+	 * description may hold, became roughly three hundred megabytes and a second
+	 * of CPU on a request thread. A code block in a ticket is an excerpt; a file
+	 * is an attachment.
+	 *
+	 * <p>The character ceiling is the other half: one line is one paragraph
+	 * however long it is, so the line count alone does not bound the bytes.
+	 */
+	private static final int MAX_CODE_LINES = 500;
+	private static final int MAX_CODE_CHARS = 40_000;
+
+	/** Said out loud in the document, because a silent cut is a lie about a file. */
+	private static final String TRUNCATED = "\n… truncated";
+
 	private static Parser buildParser() {
 		MutableDataSet options = new MutableDataSet();
 		options.set(Parser.EXTENSIONS, List.of(
@@ -131,9 +151,9 @@ final class MarkdownBlocks {
 				}
 			}
 			case FencedCodeBlock fenced -> blocks.add(new ExportBlock.Code(
-					fenced.getInfo().toString().trim(), fenced.getContentChars().toString()));
+					fenced.getInfo().toString().trim(), code(fenced.getContentChars().toString())));
 			case IndentedCodeBlock indented ->
-					blocks.add(new ExportBlock.Code("", indented.getContentChars().toString()));
+					blocks.add(new ExportBlock.Code("", code(indented.getContentChars().toString())));
 			case BulletList list -> blocks.add(new ExportBlock.BulletList(false, items(list)));
 			case OrderedList list -> blocks.add(new ExportBlock.BulletList(true, items(list)));
 			case BlockQuote quote -> blocks.add(new ExportBlock.Quote(spans(quote)));
@@ -148,6 +168,23 @@ final class MarkdownBlocks {
 				}
 			}
 		}
+	}
+
+	/**
+	 * A code block's text, cut to what a renderer can lay out — see
+	 * {@link #MAX_CODE_LINES}. The cut is marked, so a reader can tell an excerpt
+	 * from a file that simply ended.
+	 */
+	private static String code(String text) {
+		String clipped = text.length() <= MAX_CODE_CHARS ? text
+				: text.substring(0, MAX_CODE_CHARS) + TRUNCATED;
+		int line = 0;
+		for (int i = 0; i < clipped.length(); i++) {
+			if (clipped.charAt(i) == '\n' && ++line == MAX_CODE_LINES) {
+				return clipped.substring(0, i) + TRUNCATED;
+			}
+		}
+		return clipped;
 	}
 
 	/** One entry per list item, flattened: a nested list contributes its lines. */

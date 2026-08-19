@@ -7,7 +7,6 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -44,16 +43,39 @@ import java.util.Map;
 @Tag(name = "Issues")
 @RestController
 @RequestMapping("/api/v1/issues/{idOrReadableId}")
-@RequiredArgsConstructor
 public class IssueExportController {
 
 	private final IssueExportService exports;
 	private final CurrentUser currentUser;
 	private final ExportRateLimiter limiter;
 	private final AuditService audit;
-	private final List<IssueExportRenderer> renderers;
+	private final Map<IssueExportFormat, IssueExportRenderer> byFormat;
 
-	private Map<IssueExportFormat, IssueExportRenderer> byFormat;
+	/**
+	 * The renderers arrive as a list and are indexed here, once.
+	 *
+	 * <p>Indexed at construction rather than on first use because the list is
+	 * already complete at construction — the laziness bought nothing and cost
+	 * correctness: four endpoints share this bean and servlet threads reach it
+	 * concurrently, so a map published through a plain field can be seen by
+	 * another thread as a non-null reference to a map that is not finished being
+	 * built. A final field written in the constructor is the one publication the
+	 * memory model guarantees.
+	 */
+	public IssueExportController(IssueExportService exports, CurrentUser currentUser,
+			ExportRateLimiter limiter, AuditService audit,
+			List<IssueExportRenderer> renderers) {
+		this.exports = exports;
+		this.currentUser = currentUser;
+		this.limiter = limiter;
+		this.audit = audit;
+		Map<IssueExportFormat, IssueExportRenderer> index =
+				new EnumMap<>(IssueExportFormat.class);
+		for (IssueExportRenderer renderer : renderers) {
+			index.put(renderer.format(), renderer);
+		}
+		this.byFormat = Map.copyOf(index);
+	}
 
 	@Operation(summary = "Download this issue as a PDF")
 	@GetMapping("/export.pdf")
@@ -131,16 +153,12 @@ public class IssueExportController {
 				.body(body);
 	}
 
-	/** The renderer for [format], indexed on first use from the injected beans. */
+	/**
+	 * The renderer for [format]. Never null in a wired application — the guard is
+	 * for the one way it could be: a format added to the enum without the bean
+	 * that renders it, which is a 400 rather than a NullPointerException.
+	 */
 	private IssueExportRenderer renderer(IssueExportFormat format) {
-		if (byFormat == null) {
-			Map<IssueExportFormat, IssueExportRenderer> index =
-					new EnumMap<>(IssueExportFormat.class);
-			for (IssueExportRenderer renderer : renderers) {
-				index.put(renderer.format(), renderer);
-			}
-			byFormat = index;
-		}
 		IssueExportRenderer renderer = byFormat.get(format);
 		if (renderer == null) {
 			throw ApiException.badRequest("error.issue.exportFailed");
