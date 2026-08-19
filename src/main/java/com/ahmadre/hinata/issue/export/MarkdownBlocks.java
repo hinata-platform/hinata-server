@@ -52,6 +52,38 @@ final class MarkdownBlocks {
 	 */
 	private static final int MAX_BLOCKS = 2_000;
 
+	/**
+	 * Columns and rows a single table contributes.
+	 *
+	 * <p>The sharpest bound in the export, and not a formatting preference. A
+	 * table costs a renderer {@code columns × rows} cells but costs its author
+	 * only {@code columns + rows} characters: a header row declaring a few
+	 * hundred columns followed by a few thousand one-cell rows is a couple of
+	 * kilobytes of description, and both the PDF and the Word renderer pad every
+	 * short row out to the full width — so those kilobytes become millions of
+	 * cell objects. Sixteen kilobytes of exactly that shape exhausted the heap.
+	 *
+	 * <p>Bounded here rather than in the renderers because here is the one place
+	 * all four of them share, and a bound only three of them have is the one the
+	 * fourth gets wrong. A table wider than this does not fit on a page in any
+	 * case, and a longer one is a spreadsheet somebody should have attached.
+	 */
+	private static final int MAX_TABLE_COLUMNS = 32;
+	private static final int MAX_TABLE_ROWS = 500;
+
+	/**
+	 * Cells every table in one description or comment may lay out between them.
+	 *
+	 * <p>The per-table ceiling is not the bound on its own, because nothing
+	 * limits how many tables a document holds: a maximal table costs about two
+	 * kilobytes to write, so a description could carry four hundred of them and
+	 * pay the padding on all four hundred. This is the number a renderer actually
+	 * has to hold; a table that does not fit what is left of it keeps as many rows
+	 * as the budget affords, because a shortened table still says what it is
+	 * about and a missing one says nothing.
+	 */
+	private static final int MAX_TABLE_CELLS = 4_000;
+
 	private static final Parser PARSER = buildParser();
 
 	private MarkdownBlocks() {
@@ -72,20 +104,23 @@ final class MarkdownBlocks {
 		if (markdown == null || markdown.isBlank()) {
 			return blocks;
 		}
-		appendChildren(PARSER.parse(markdown), blocks);
+		// One cell budget for the whole document rather than one per table: the
+		// per-table ceiling bounds a table, and the document is what a renderer
+		// has to hold.
+		appendChildren(PARSER.parse(markdown), blocks, new int[] { MAX_TABLE_CELLS });
 		return blocks;
 	}
 
-	private static void appendChildren(Node parent, List<ExportBlock> blocks) {
+	private static void appendChildren(Node parent, List<ExportBlock> blocks, int[] cells) {
 		for (Node node = parent.getFirstChild(); node != null; node = node.getNext()) {
 			if (blocks.size() >= MAX_BLOCKS) {
 				return;
 			}
-			append(node, blocks);
+			append(node, blocks, cells);
 		}
 	}
 
-	private static void append(Node node, List<ExportBlock> blocks) {
+	private static void append(Node node, List<ExportBlock> blocks, int[] cells) {
 		switch (node) {
 			case Heading heading ->
 					blocks.add(new ExportBlock.Heading(heading.getLevel(), spans(heading)));
@@ -102,7 +137,7 @@ final class MarkdownBlocks {
 			case BulletList list -> blocks.add(new ExportBlock.BulletList(false, items(list)));
 			case OrderedList list -> blocks.add(new ExportBlock.BulletList(true, items(list)));
 			case BlockQuote quote -> blocks.add(new ExportBlock.Quote(spans(quote)));
-			case TableBlock table -> appendTable(table, blocks);
+			case TableBlock table -> appendTable(table, blocks, cells);
 			case ThematicBreak ignored -> blocks.add(new ExportBlock.Rule());
 			// Anything else — an HTML block, a link reference definition — carries
 			// no shape worth reproducing, but its text still belongs in the export.
@@ -129,25 +164,53 @@ final class MarkdownBlocks {
 		return items;
 	}
 
-	private static void appendTable(TableBlock table, List<ExportBlock> blocks) {
+	private static void appendTable(TableBlock table, List<ExportBlock> blocks, int[] cells) {
 		List<String> headers = new ArrayList<>();
 		List<List<String>> rows = new ArrayList<>();
 		collectRows(table, headers, rows);
-		if (!headers.isEmpty() || !rows.isEmpty()) {
-			blocks.add(new ExportBlock.Table(headers, rows));
+		// What the renderers actually lay out is the rectangle, not the cells that
+		// were written: a one-cell row in a thirty-column table still costs thirty,
+		// because every short row is padded out to the full width. So the budget is
+		// spent on the rectangle, and rows past what is left are dropped rather
+		// than the table — a shortened table still says what it is about.
+		int width = headers.size();
+		for (List<String> row : rows) {
+			width = Math.max(width, row.size());
 		}
+		if (width == 0) {
+			return;
+		}
+		int affordable = cells[0] / width - 1; // the header row costs a row too
+		if (affordable < 0) {
+			return;
+		}
+		if (rows.size() > affordable) {
+			rows = new ArrayList<>(rows.subList(0, affordable));
+		}
+		cells[0] -= width * (rows.size() + 1);
+		blocks.add(new ExportBlock.Table(headers, rows));
 	}
 
-	/** Depth-first over the table's sections; the first row read is the header. */
+	/**
+	 * Depth-first over the table's sections; the first row read is the header.
+	 *
+	 * <p>Both dimensions stop at their ceiling rather than at the end of the
+	 * input: the row cap is checked on every child at every level, because a
+	 * table's rows arrive under a head and a body section and a cap that only
+	 * ended one of them would not be a cap.
+	 */
 	private static void collectRows(Node node, List<String> headers, List<List<String>> rows) {
 		for (Node child = node.getFirstChild(); child != null; child = child.getNext()) {
+			if (rows.size() >= MAX_TABLE_ROWS) {
+				return;
+			}
 			if (child instanceof TableSeparator) {
 				continue;
 			}
 			if (child instanceof TableRow row) {
 				List<String> cells = new ArrayList<>();
 				for (Node cell = row.getFirstChild(); cell != null; cell = cell.getNext()) {
-					if (cell instanceof TableCell) {
+					if (cell instanceof TableCell && cells.size() < MAX_TABLE_COLUMNS) {
 						cells.add(ExportBlock.Span.plain(spans(cell)).trim());
 					}
 				}

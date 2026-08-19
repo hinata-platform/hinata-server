@@ -21,6 +21,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 
@@ -165,6 +166,49 @@ class IssueExportIntegrationTest {
 		assertThat(disposition).contains("filename*=UTF-8''");
 	}
 
+	/**
+	 * The leak the ACL on the issue itself does not cover. {@code dependsOnIds} is
+	 * stored exactly as it is sent — the update endpoint checks neither its length
+	 * nor whether the caller may see anything in it — so a member of one project
+	 * can point their own issue at an id from a project that is closed to them.
+	 * Resolving that id to a readable key would make the export an oracle for the
+	 * keys, and so for the existence and the size, of projects they cannot open.
+	 *
+	 * <p>Written end to end rather than against the service because the premise is
+	 * the half that has to stay true: that the PATCH really does accept the
+	 * foreign id. A unit test that stubbed the write would be asserting its own
+	 * assumption.
+	 */
+	@Test
+	@DisplayName("an export never resolves an id from a project the caller cannot see")
+	void dependsOnDoesNotLeakAForeignKey() {
+		String closedIssue = createIssue("Payroll", createProject("PAYR", "Payroll"));
+		String closedKey = parse(get("/api/v1/issues/" + closedIssue, admin))
+				.path("readableId").asText();
+		assertThat(closedKey).startsWith("PAYR-");
+		// The outsider's own issue, in a project every demo user belongs to, made to
+		// point at the closed one.
+		String own = createIssue("Probe");
+		HttpResponse<String> patched = patchJson("/api/v1/issues/" + own,
+				JSON.createObjectNode().set("dependsOnIds",
+						JSON.createArrayNode().add(closedIssue)).toString(), admin);
+		assertThat(patched.statusCode()).as("the foreign id is stored, unchecked").isEqualTo(200);
+
+		HttpResponse<byte[]> outsiderResponse = download(own, "xml", login(OUTSIDER));
+		// Asserted, not assumed: a refusal here would make every claim below true
+		// for the wrong reason.
+		assertThat(outsiderResponse.statusCode()).as("the outsider may read the probe")
+				.isEqualTo(200);
+		String outsiderXml = new String(outsiderResponse.body(), StandardCharsets.UTF_8);
+		String adminXml = new String(download(own, "xml", admin).body(), StandardCharsets.UTF_8);
+
+		assertThat(outsiderXml).as("a non-member of PAYR learns nothing about it")
+				.contains("<issue version=")
+				.doesNotContain(closedKey).doesNotContain("PAYR");
+		assertThat(adminXml).as("and the field still works for someone who may see it")
+				.contains(closedKey);
+	}
+
 	@Test
 	@DisplayName("every export leaves a record naming the format")
 	void everyExportIsAudited() {
@@ -262,6 +306,16 @@ class IssueExportIntegrationTest {
 				.header("Authorization", "Bearer " + token)
 				.GET().build();
 		return send(request).body();
+	}
+
+	private HttpResponse<String> patchJson(String path, String json, String token) {
+		HttpRequest request = HttpRequest.newBuilder(url(path))
+				.timeout(Duration.ofSeconds(15))
+				.header("Content-Type", "application/json")
+				.header("Authorization", "Bearer " + token)
+				.method("PATCH", HttpRequest.BodyPublishers.ofString(json))
+				.build();
+		return send(request);
 	}
 
 	private HttpResponse<String> postJson(String path, String json, String token) {

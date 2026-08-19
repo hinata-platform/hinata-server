@@ -13,6 +13,15 @@ public interface IssueCommentRepository extends MongoRepository<IssueComment, St
 	List<IssueComment> findByIssueIdOrderByCreatedAtAsc(String issueId);
 
 	/**
+	 * The oldest {@code n} comments of a thread, replies included — the whole
+	 * thread in reading order, for a consumer that wants a bounded slice of it
+	 * rather than a page. The single-issue export is that consumer: it carries a
+	 * fixed maximum, and spending that maximum in the query is what keeps a
+	 * thread nobody bounded from being read in full to be thrown away.
+	 */
+	List<IssueComment> findByIssueIdOrderByCreatedAtAsc(String issueId, Pageable pageable);
+
+	/**
 	 * One page of a thread's TOP-LEVEL comments (replies excluded via
 	 * {@code replyToId == null}). The sort direction (newest- vs oldest-first) is
 	 * supplied by the {@link Pageable}, so a single method serves both orderings.
