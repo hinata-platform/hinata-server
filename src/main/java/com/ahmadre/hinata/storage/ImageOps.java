@@ -46,6 +46,16 @@ public final class ImageOps {
 	 * unreadable payload must degrade to "no preview", never to a failed upload.
 	 */
 	public static BufferedImage read(byte[] bytes) {
+		return read(bytes, MAX_DECODE_PIXELS);
+	}
+
+	/**
+	 * As {@link #read(byte[])} but with a caller-chosen pixel ceiling, for paths
+	 * that can afford far less than the global bound — a small file may still
+	 * declare enormous dimensions, and a caller serving many reads concurrently
+	 * pays for every one of them.
+	 */
+	public static BufferedImage read(byte[] bytes, long maxPixels) {
 		if (bytes == null || bytes.length == 0) {
 			return null;
 		}
@@ -61,7 +71,7 @@ public final class ImageOps {
 			try {
 				reader.setInput(stream, true, true);
 				long pixels = (long) reader.getWidth(0) * reader.getHeight(0);
-				if (pixels <= 0 || pixels > MAX_DECODE_PIXELS) {
+				if (pixels <= 0 || pixels > Math.min(maxPixels, MAX_DECODE_PIXELS)) {
 					return null;
 				}
 				return reader.read(0);

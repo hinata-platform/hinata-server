@@ -9,10 +9,18 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.richtext.LexicalToMarkdown;
+import com.ahmadre.hinata.storage.AttachmentContent;
 import com.ahmadre.hinata.user.User;
+import io.modelcontextprotocol.spec.McpSchema.BlobResourceContents;
+import io.modelcontextprotocol.spec.McpSchema.ReadResourceResult;
+import io.modelcontextprotocol.spec.McpSchema.ResourceContents;
+import io.modelcontextprotocol.spec.McpSchema.TextResourceContents;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.mcp.annotation.McpResource;
 import org.springframework.stereotype.Component;
+
+import java.util.Base64;
+import java.util.List;
 
 /**
  * MCP resources exposing hinata entities under stable {@code hinata://} URIs so a
@@ -20,7 +28,9 @@ import org.springframework.stereotype.Component;
  * caller via {@link CurrentUser} and delegates through the owning service, so the
  * same project / knowledge-base ACLs that guard the tools apply here too. Each
  * returns rendered {@code text/markdown} — a String return is wrapped by the
- * framework into a text resource with the declared mime type.
+ * framework into a text resource with the declared mime type. The attachment
+ * resource is the exception: it builds its own {@link ReadResourceResult} so a
+ * picture can travel as a binary blob rather than as prose about a picture.
  */
 @Component
 @RequiredArgsConstructor
@@ -28,6 +38,7 @@ public class HinataResources {
 
 	private final CurrentUser currentUser;
 	private final IssueService issueService;
+	private final AttachmentReader attachments;
 	private final ProjectService projectService;
 	private final ProjectRepository projects;
 	private final KnowledgeReadTools knowledge;
@@ -55,6 +66,40 @@ public class HinataResources {
 			md.append(body).append("\n");
 		}
 		return md.toString();
+	}
+
+	/**
+	 * One attachment of one issue, addressable so it can be pinned into a
+	 * conversation by hand instead of fetched through a tool call. Same bounds and
+	 * same ACL as {@code get_attachment} — {@link AttachmentReader} is the only
+	 * path to an attachment's bytes, and the declared mime type below is only the
+	 * advertised default: each read answers with the type it actually produced.
+	 */
+	@McpResource(name = "issue-attachment",
+			uri = "hinata://issue/{readableId}/attachment/{attachmentId}",
+			description = "The content of one issue attachment — images as a binary blob "
+					+ "(downscaled), PDFs and text files as extracted text (length-capped). "
+					+ "Ids come from the list_attachments tool.",
+			mimeType = "application/octet-stream")
+	public ReadResourceResult attachment(String readableId, String attachmentId) {
+		AttachmentReader.Rendered rendered = attachments.read(readableId, attachmentId, null);
+		String uri = "hinata://issue/" + readableId + "/attachment/" + attachmentId;
+		return new ReadResourceResult(List.of(contents(uri, rendered)));
+	}
+
+	private static ResourceContents contents(String uri, AttachmentReader.Rendered rendered) {
+		String description = AttachmentSummary.describe(
+				rendered.issue(), rendered.attachment(), rendered.content());
+		return switch (rendered.content()) {
+			// A blob carries no prose, so the picture travels alone; the caller
+			// already has the metadata from list_attachments.
+			case AttachmentContent.Image image -> new BlobResourceContents(uri, image.contentType(),
+					Base64.getEncoder().encodeToString(image.bytes()));
+			case AttachmentContent.Text extract -> new TextResourceContents(uri, "text/plain",
+					description + "\n\n" + extract.text());
+			case AttachmentContent.Unavailable ignored -> new TextResourceContents(uri, "text/plain",
+					description);
+		};
 	}
 
 	@McpResource(name = "project", uri = "hinata://project/{key}",
