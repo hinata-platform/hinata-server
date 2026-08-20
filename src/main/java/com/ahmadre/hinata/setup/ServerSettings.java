@@ -95,6 +95,10 @@ public class ServerSettings {
 		private String androidStoreUrl;
 		/** Mac App Store listing the macOS app links to when an update is required. */
 		private String macosStoreUrl;
+		/** Microsoft Store listing the Windows app links to when an update is required. */
+		private String windowsStoreUrl;
+		/** Where the Linux app sends a user who has to update — Flathub, a download page, … */
+		private String linuxStoreUrl;
 		/** Optional client feature flags (name → enabled). */
 		private Map<String, Boolean> featureFlags = new LinkedHashMap<>();
 

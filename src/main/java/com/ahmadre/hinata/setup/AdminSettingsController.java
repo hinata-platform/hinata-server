@@ -62,6 +62,12 @@ public class AdminSettingsController {
 		if (isBlank(app.getMacosStoreUrl())) {
 			app.setMacosStoreUrl(defaults.getMacosStoreUrl());
 		}
+		if (isBlank(app.getWindowsStoreUrl())) {
+			app.setWindowsStoreUrl(defaults.getWindowsStoreUrl());
+		}
+		if (isBlank(app.getLinuxStoreUrl())) {
+			app.setLinuxStoreUrl(defaults.getLinuxStoreUrl());
+		}
 		// Merge env defaults with any admin overrides (override wins per-key) so a
 		// newly shipped default flag (e.g. a fresh feature) surfaces in the editor
 		// even after admins have already toggled other, unrelated flags — matching

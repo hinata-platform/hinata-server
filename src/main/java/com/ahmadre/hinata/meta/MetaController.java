@@ -49,6 +49,7 @@ public class MetaController {
 	public record Meta(String serverVersion, String minAppVersion, String organizationName,
 			String logoUrl, boolean setupCompleted, String privacyPolicyUrl,
 			String iosStoreUrl, String androidStoreUrl, String macosStoreUrl,
+			String windowsStoreUrl, String linuxStoreUrl,
 			Map<String, Boolean> featureFlags, boolean localAuthEnabled,
 			boolean registrationEnabled, boolean adminApprovalRequired, UploadLimits uploadLimits,
 			int passwordMinLength) {
@@ -88,6 +89,8 @@ public class MetaController {
 				firstNonBlank(app.getIosStoreUrl(), appDefaults.getIosStoreUrl()),
 				firstNonBlank(app.getAndroidStoreUrl(), appDefaults.getAndroidStoreUrl()),
 				firstNonBlank(app.getMacosStoreUrl(), appDefaults.getMacosStoreUrl()),
+				firstNonBlank(app.getWindowsStoreUrl(), appDefaults.getWindowsStoreUrl()),
+				firstNonBlank(app.getLinuxStoreUrl(), appDefaults.getLinuxStoreUrl()),
 				featureFlags,
 				authPolicy.localAuthEnabled(),
 				authPolicy.registrationEnabled(),

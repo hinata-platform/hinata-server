@@ -289,6 +289,14 @@ public class HinataProperties {
 		private String androidStoreUrl = "";
 		/** Mac App Store listing the macOS app links to when an update is required. */
 		private String macosStoreUrl = "";
+		/** Microsoft Store listing the Windows app links to when an update is required. */
+		private String windowsStoreUrl = "";
+		/**
+		 * Where the Linux app sends a user who has to update. There is no single Linux
+		 * store, so this is whatever fits the way you ship: a Flathub page, your own
+		 * download page, a distribution's package listing.
+		 */
+		private String linuxStoreUrl = "";
 		/** Deep link scheme the app registers for SSO callbacks. */
 		private String callbackScheme = "hinata";
 		private Map<String, Boolean> featureFlags = Map.of();
