@@ -67,13 +67,13 @@ public class TimeTrackingService {
 		}
 		List<WorkItem> items;
 		if (userId != null) {
-			items = workItems.findByUserIdAndDateBetween(userId, from, to);
+			items = workItems.findByUserIdInDateRange(userId, from, to);
 		}
 		else if (projectId != null) {
-			items = workItems.findByProjectIdAndDateBetween(projectId, from, to);
+			items = workItems.findByProjectIdInDateRange(projectId, from, to);
 		}
 		else {
-			items = workItems.findByDateBetween(from, to);
+			items = workItems.findInDateRange(from, to);
 		}
 		Map<String, List<WorkItem>> grouped = items.stream()
 				.collect(Collectors.groupingBy(item -> item.getUserId() + "|" + item.getProjectId()));

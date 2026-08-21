@@ -295,26 +295,50 @@ class ApiContractE2EIntegrationTest {
 		JsonNode issues = getOk("/api/v1/issues?size=1", token);
 		String key = issues.path("content").get(0).path("readableId").asText();
 
+		// Counts here are relative, never absolute. The demo seed subscribes this
+		// account to a handful of issues so the app's Watched page has something
+		// to show, and a test that asserts "exactly one" is really asserting that
+		// nobody ever seeds a watcher — which is a fixture detail, not the
+		// contract. What the client depends on is that one subscribe adds exactly
+		// one row and one unsubscribe takes it away again.
+		delete("/api/v1/issues/" + key + "/watch", token);   // known starting point
+		int baseline = getOk("/api/v1/me/watched?page=0&size=1", token)
+				.path("totalElements").asInt();
+
 		assertThat(postJson("/api/v1/issues/" + key + "/watch", "", token).statusCode())
 				.as("subscribe").isEqualTo(204);
 		assertThat(postJson("/api/v1/issues/" + key + "/watch", "", token).statusCode())
 				.as("subscribing again is a no-op, not a conflict").isEqualTo(204);
 
-		JsonNode watched = getOk("/api/v1/me/watched?page=0&size=20", token);
+		JsonNode watched = getOk("/api/v1/me/watched?page=0&size=50", token);
 		assertThat(watched.has("content")).as("a Spring page, like every other list").isTrue();
-		assertThat(watched.path("totalElements").asInt()).isEqualTo(1);
-		JsonNode row = watched.path("content").get(0);
-		assertThat(row.path("readableId").asText()).isEqualTo(key);
+		assertThat(watched.path("totalElements").asInt())
+				.as("subscribing twice still adds one row").isEqualTo(baseline + 1);
+
+		JsonNode row = null;
+		for (JsonNode candidate : watched.path("content")) {
+			if (key.equals(candidate.path("readableId").asText())) {
+				row = candidate;
+				break;
+			}
+		}
+		assertThat(row).as("the issue just watched is on the page").isNotNull();
 		// The client renders the toggle and the watcher count straight off the issue.
 		assertThat(row.path("watcherIds").isArray()).isTrue();
-		assertThat(row.path("watcherIds")).hasSize(1);
+		assertThat(row.path("watcherIds")).as("at least the subscriber").isNotEmpty();
 
 		assertThat(delete("/api/v1/issues/" + key + "/watch", token).statusCode())
 				.as("unsubscribe").isEqualTo(204);
 		assertThat(delete("/api/v1/issues/" + key + "/watch", token).statusCode())
 				.as("unsubscribing again is a no-op").isEqualTo(204);
 
-		assertThat(getOk("/api/v1/me/watched", token).path("totalElements").asInt()).isZero();
+		JsonNode after = getOk("/api/v1/me/watched?page=0&size=50", token);
+		assertThat(after.path("totalElements").asInt())
+				.as("back where we started").isEqualTo(baseline);
+		for (JsonNode candidate : after.path("content")) {
+			assertThat(candidate.path("readableId").asText())
+					.as("the unsubscribed issue is gone").isNotEqualTo(key);
+		}
 	}
 
 	@Test
