@@ -52,6 +52,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Component;
 
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -184,8 +185,9 @@ public class DemoSeeder {
 		// milestone rather than just bars.
 		scheduleTimeline(hin);
 
-		// --- this week's tracked work for the admin ------------------------
-		seedTracker(admin, hin);
+		// --- who follows what, and this week's tracked work ------------------
+		seedWatchers(hin, mob, inf, admin, tomas, lena, amara, mei, jonas);
+		seedTracker(hin, mob, inf, admin, tomas, lena);
 
 		// --- knowledge base (real articles, cross-linked to issues/people) --
 		seedKnowledge(core, dsgn, hin, inf, admin, tomas, lena, amara, mei, jonas);
@@ -376,19 +378,27 @@ public class DemoSeeder {
 				List.of("design"), null, 0, epicBoard.getId());
 
 		// --- sub-tasks: the granular breakdown of two in-flight stories ----
-		subtask(p, "Audit column spacing tokens", lena, "In Review", boardRedesign);
-		subtask(p, "Rebuild the column header component", lena, "In Progress", boardRedesign);
-		subtask(p, "Migration guide for custom board layouts", amara, "Open", boardRedesign);
-		subtask(p, "Write the health-check probe", jonas, "In Progress", deployScript);
-		subtask(p, "Document the rollback procedure", jonas, "Open", deployScript);
+		// Estimates rather than zeros: a sub-task is where the hours actually go,
+		// one of them is booked against in seedTracker, and the issue panel prints
+		// "spent of estimate" — against a zero estimate that reads as "1h 30m of 0m".
+		subtask(p, "Audit column spacing tokens", lena, "In Review", boardRedesign, 60);
+		subtask(p, "Rebuild the column header component", lena, "In Progress", boardRedesign, 180);
+		subtask(p, "Migration guide for custom board layouts", amara, "Open", boardRedesign, 90);
+		subtask(p, "Write the health-check probe", jonas, "In Progress", deployScript, 120);
+		subtask(p, "Document the rollback procedure", jonas, "Open", deployScript, 60);
 		// A few more on the admin's plate so the dashboard "Today's focus" fills.
+		// The estimates on these three carry the week seedTracker books against
+		// them (90, 120 and 195 minutes) without going over. Overrun is a state
+		// worth showing, and the resolved work shows it — five issues closed
+		// above their estimate — but a board where a dozen open cards read
+		// "over" is a seeding accident, not a demo.
 		issue(p, "Restore drag-handle focus ring after a drop", Issue.Type.BUG,
-				Issue.Priority.CRITICAL, "Open", admin, s24, 2, 60, 0, List.of(), -1, 0);
+				Issue.Priority.CRITICAL, "Open", admin, s24, 2, 120, 0, List.of(), -1, 0);
 		issue(p, "Sprint capacity overflow not flagged in header", Issue.Type.BUG,
-				Issue.Priority.MAJOR, "Open", admin, s24, 2, 75, 15,
+				Issue.Priority.MAJOR, "Open", admin, s24, 2, 150, 15,
 				List.of("performance"), -2, 0);
 		issue(p, "Wire the command palette to project quick-switch", Issue.Type.STORY,
-				Issue.Priority.MAJOR, "In Progress", admin, s24, 3, 120, 45,
+				Issue.Priority.MAJOR, "In Progress", admin, s24, 3, 240, 45,
 				List.of(), 1, 3, epicSearch.getId());
 
 		// --- resolved this sprint / last 7d (feeds completion + ranking) ---
@@ -428,31 +438,37 @@ public class DemoSeeder {
 				"Done", lena, s22, 3, 160, 150, daysAgo(28));
 
 		// --- backlog (no sprint): future work ------------------------------
-		backlog(p, "Recurring issues & templates", Issue.Type.FEATURE, lena, 5, List.of("design"));
-		backlog(p, "Webhooks for issue lifecycle events", Issue.Type.FEATURE, tomas, 5, List.of());
+		// backlog() derives the estimate from the points (points x 60), so the
+		// points are what has to cover the hours seedTracker books here: 7h on
+		// the first, 6h30 on the second.
+		backlog(p, "Recurring issues & templates", Issue.Type.FEATURE, lena, 8, List.of("design"));
+		backlog(p, "Webhooks for issue lifecycle events", Issue.Type.FEATURE, tomas, 8, List.of());
 		backlog(p, "Bulk edit from the issues table", Issue.Type.FEATURE, amara, 3, List.of());
 		backlog(p, "Audit log export for compliance", Issue.Type.TASK, jonas, 3, List.of("security"));
 		backlog(p, "Markdown paste handling in comments", Issue.Type.BUG, mei, 2,
 				List.of("good-first-issue"));
-		backlog(p, "Saved board filters per user", Issue.Type.FEATURE, admin, 3, List.of());
+		backlog(p, "Saved board filters per user", Issue.Type.FEATURE, admin, 4, List.of());
 	}
 
 	/** Lighter, generic fill for the secondary projects. */
 	private void seedSideIssues(Project p, User lead, User a, User b, User qa) {
+		// This block is seeded once per side project and seedTracker books a week
+		// against both copies, so the estimates have to cover the larger of the
+		// two: 3h15 on the picker, 6h30 on the offline cache.
 		issue(p, "Wire up project picker on the connect screen", Issue.Type.FEATURE,
-				Issue.Priority.NORMAL, "In Progress", lead, null, 3, 150, 60, List.of(), null, 2);
+				Issue.Priority.NORMAL, "In Progress", lead, null, 5, 300, 60, List.of(), null, 2);
 		issue(p, "Offline cache for the dashboard", Issue.Type.FEATURE,
-				Issue.Priority.NORMAL, "Open", a, null, 5, 240, 0, List.of(), null, 0);
+				Issue.Priority.NORMAL, "Open", a, null, 8, 480, 0, List.of(), null, 0);
 		issue(p, "Crash on rotate during sprint planning", Issue.Type.BUG,
-				Issue.Priority.MAJOR, "Open", qa, null, 2, 90, 0, List.of(), -1, 0);
+				Issue.Priority.MAJOR, "Open", qa, null, 3, 150, 0, List.of(), -1, 0);
 		resolved(p, "Bottom-nav liquid-glass refinement", Issue.Type.FEATURE,
 				"Done", a, null, 3, 150, 150, daysAgo(3));
 		resolved(p, "Set up release lane in fastlane", Issue.Type.TASK,
 				"Done", b, null, 2, 120, 110, daysAgo(6));
 		resolved(p, "Pin base images by digest", Issue.Type.TASK,
 				"Done", lead, null, 1, 60, 55, daysAgo(8));
-		backlog(p, "Localize push notification copy", Issue.Type.TASK, qa, 2, List.of());
-		backlog(p, "Add staging environment to CI", Issue.Type.TASK, b, 3, List.of());
+		backlog(p, "Localize push notification copy", Issue.Type.TASK, qa, 4, List.of());
+		backlog(p, "Add staging environment to CI", Issue.Type.TASK, b, 5, List.of());
 	}
 
 	// ---- issue helpers -----------------------------------------------------
@@ -470,10 +486,11 @@ public class DemoSeeder {
 				null, 0, 0, 0, List.of(), null, rank, null);
 	}
 
-	/** Sub-task under a standard [parent] issue (same project, no estimate). */
-	private void subtask(Project p, String title, User assignee, String state, Issue parent) {
+	/** Sub-task under a standard [parent] issue (same project, no story points). */
+	private void subtask(Project p, String title, User assignee, String state, Issue parent,
+			int estimate) {
 		issue(p, title, Issue.Type.SUBTASK, Issue.Priority.NORMAL, state, assignee, null,
-				0, 0, 0, List.of(), null, 0, parent.getId());
+				0, estimate, 0, List.of(), null, 0, parent.getId());
 	}
 
 	private Issue issue(Project p, String title, Issue.Type type, Issue.Priority priority,
@@ -796,11 +813,19 @@ public class DemoSeeder {
 
 	/** Stagger start/due dates across ~3 weeks for the first dozen HIN issues, then
 	 * shape the linked ones into a timeline that shows off every Gantt state —
-	 * see {@link #showcaseTimeline}. */
+	 * see {@link #showcaseTimeline}.
+	 *
+	 * <p>The anchor is the Saturday before the current week, not {@code today - 6}.
+	 * The tracked week in {@link #seedTracker} is anchored to this week's Monday,
+	 * and a {@code today}-relative anchor slides against it by a day per day: the
+	 * same seed run on a Monday and on a Friday puts the same logged hours inside
+	 * a bar and four days behind it. Anchored to the week, the two agree on every
+	 * day of it. On a Friday run this is the same date {@code today - 6} produced,
+	 * so the Gantt page looks unchanged. */
 	private void scheduleTimeline(Project p) {
 		List<Issue> list = mongo.find(Query.query(Criteria.where("projectId").is(p.getId()))
 				.with(Sort.by("numberInProject")).limit(12), Issue.class);
-		LocalDate base = LocalDate.now(ZoneOffset.UTC).minusDays(6);
+		LocalDate base = LocalDate.now(ZoneOffset.UTC).with(DayOfWeek.MONDAY).minusDays(2);
 		int offset = 0;
 		for (Issue i : list) {
 			LocalDate start = base.plusDays(offset);
@@ -840,7 +865,9 @@ public class DemoSeeder {
 						.set("startDate", base.plusDays(14))
 						.set("dueDate", base.plusDays(18)),
 				Issue.class);
-		// A deadline rather than a stretch of work: no start date at all.
+		// A deadline rather than a stretch of work: no start date at all. Nothing
+		// books time against it in seedTracker — an issue three weeks out with a
+		// week of logged hours is the first thing this page makes obvious.
 		Issue milestone = chain.get(Math.min(8, chain.size() - 1));
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(milestone.getId())),
 				new Update().unset("startDate").set("dueDate", base.plusDays(21)), Issue.class);
@@ -892,28 +919,261 @@ public class DemoSeeder {
 				.build());
 	}
 
+	// ---- watching ----------------------------------------------------------
+
+	/**
+	 * Subscriptions. A fresh workspace watches nothing, so {@code /watched} — its
+	 * own page in the nav's personal group — opens empty for everyone who tries
+	 * the demo, and the watcher popover on every issue answers "nobody".
+	 *
+	 * <p>The admin's set is deliberately mixed: three projects, four states, four
+	 * types. The page is for work you follow but do not own, and a column of
+	 * identical rows says none of that. The spread is the pick, not the sort:
+	 * the page orders by {@code updatedAt} descending, and nothing here can aim
+	 * that. Subscribing is an {@code $addToSet} through {@code mongo.updateFirst},
+	 * which never touches {@code @LastModifiedDate} — as do the timeline dates and
+	 * the resolution backdating — so an issue's {@code updatedAt} is whenever the
+	 * repository last saved it, which anything writing through the ordinary API
+	 * afterwards moves again. Choose the rows for what they show; the order they
+	 * arrive in is not ours.
+	 *
+	 * <p>The last block subscribes other people to issues the admin does <em>not</em>
+	 * follow: a workspace where every watcher is the same account makes the
+	 * "who is watching this" panel look broken.
+	 *
+	 * <p>Everyone named here is a member of the project they watch. Watching goes
+	 * through the ordinary access gate in {@code IssueWatchService}, so a
+	 * subscriber who cannot see the project is a state the API itself cannot
+	 * produce — and the list read is filtered by project visibility anyway, which
+	 * would simply drop the row again.
+	 */
+	private void seedWatchers(Project hin, Project mob, Project inf, User admin, User tomas,
+			User lena, User amara, User mei, User jonas) {
+		// The two pieces of the active sprint most likely to slip …
+		watch(hin, "Redesign the agile board with calmer column rhythm", admin, tomas, mei);
+		watch(hin, "Card drag introduces 120ms jank on large sprints", admin, jonas);
+		// … one task he depends on but does not own, one waiting on review …
+		watch(hin, "Blue-green deploy script for the self-host bundle", admin, tomas);
+		watch(hin, "Sprint header shows wrong remaining capacity", admin, amara);
+		// … one already closed, so the list is not only open work …
+		watch(hin, "Per-member project access gating", admin);
+		// … one from the backlog, to hear about it the moment it moves …
+		watch(hin, "Recurring issues & templates", admin, amara);
+		// … and both side projects, so the page is more than one project deep.
+		watch(mob, "Wire up project picker on the connect screen", admin, lena);
+		watch(inf, "Offline cache for the dashboard", admin, jonas);
+
+		// Issues the admin does not watch — including two of his own, which is how
+		// the watcher panel usually looks: other people following your work.
+		watch(hin, "Wire the command palette to project quick-switch", lena, mei);
+		watch(hin, "Add story-point capacity bar to sprint planning", amara, mei);
+		watch(mob, "Crash on rotate during sprint planning", lena, mei);
+
+		log.info("[demo] seeded watchers on {} issues", mongo.count(
+				Query.query(Criteria.where("watcherIds.0").exists(true)), Issue.class));
+	}
+
+	/**
+	 * Subscribes everyone in {@code watchers} to one issue. {@code $addToSet}
+	 * rather than a set of the whole list, so the same issue may be named twice
+	 * without the second call dropping the first call's watchers.
+	 */
+	private void watch(Project p, String title, User... watchers) {
+		Issue issue = findIssue(p, title);
+		if (issue == null) {
+			return;
+		}
+		List<String> ids = new ArrayList<>();
+		for (User u : watchers) {
+			ids.add(u.getId());
+		}
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(issue.getId())),
+				new Update().addToSet("watcherIds").each(ids.toArray()), Issue.class);
+	}
+
 	// ---- time tracking -----------------------------------------------------
 
-	/** A believable "focus this week" for the admin: ~26h30m across the week. */
-	private void seedTracker(User user, Project p) {
-		String issueId = issues.findByProjectId(p.getId(),
-				org.springframework.data.domain.PageRequest.of(0, 1)).getContent().get(0).getId();
-		LocalDate monday = LocalDate.now(ZoneOffset.UTC).with(java.time.DayOfWeek.MONDAY);
-		int[] minutes = {255, 300, 210, 345, 270, 0, 0}; // Mon–Sun
-		String[] activities = {"Development", "Development", "Code Review", "Development",
-				"Testing", "Development", "Development"};
-		for (int d = 0; d < 7; d++) {
-			if (minutes[d] == 0) continue;
+	/**
+	 * This week's tracked work. The timesheet groups work items by person
+	 * <em>and</em> project, so the rows it draws are exactly the person/project
+	 * pairs that logged something. Three people across three projects give it
+	 * six rows; the one issue logged by one user this used to seed gave it one,
+	 * which is why the page looked broken.
+	 *
+	 * <p>Roughly 4–5h each per weekday and nothing at the weekend. A tracked day
+	 * is not a working day — standups, mail and the half hour that went nowhere
+	 * never reach a work item — so eight logged hours a day would read as
+	 * invented rather than as a full week.
+	 *
+	 * <p>Which issue takes which hours is not free either. Work only lands on
+	 * issues this week can explain: the ones that came due or were resolved
+	 * inside it, the two whose scheduled window reaches into it, and the undated
+	 * backlog, sub-task and side-project work. Hours booked against an issue that
+	 * starts three weeks out are the first thing a reader notices on the Gantt
+	 * page next door. Only two dated issues qualify — {@link #showcaseTimeline}
+	 * staggers the rest of the first dozen forward from the same anchor — so
+	 * everything else booked here is deliberately an issue with no start date.
+	 *
+	 * <p>Nothing here goes over its estimate. The issue panel and the board card
+	 * both print "spent of estimate" and the Gantt bar fills from the same two
+	 * numbers, so a week of hours dropped on top of a seeded estimate is a dozen
+	 * cards reading as overrun. Five resolved issues already closed above their
+	 * estimate, which is where that state belongs — on work that is finished, not
+	 * on every open card at once.
+	 */
+	private void seedTracker(Project hin, Project mob, Project inf, User admin, User tomas,
+			User lena) {
+		LocalDate monday = LocalDate.now(ZoneOffset.UTC).with(DayOfWeek.MONDAY);
+		// The activity of every item below is one of the six the log-time sheet
+		// offers (work_log_sheet.dart: Development, Testing, Documentation, Design,
+		// Meeting, Support). The field takes any string, so a seventh value would
+		// be accepted, stored and printed back — an activity the demo shows and
+		// nobody can pick, one screen away from the picker itself.
+
+		// --- admin: his own in-flight work, plus reviews in both projects ---
+		// The story he is assigned is due inside this week: most of its hours are
+		// behind him at the start of it, with one block left near the end.
+		track(admin, hin, "Wire the command palette to project quick-switch",
+				"Development", monday, 90, 60, 0, 45, 0);
+		// Both bugs are already past their due date — their hours sit early in
+		// the week, around the deadlines they slipped.
+		track(admin, hin, "Sprint capacity overflow not flagged in header",
+				"Testing", monday, 60, 60, 0, 0, 0);
+		track(admin, hin, "Restore drag-handle focus ring after a drop",
+				"Development", monday, 0, 0, 90, 0, 0);
+		// A review on Lena's story, not the story: she books the work below, and
+		// the two of them together stay inside its 4h estimate, so its Gantt bar
+		// keeps a partial fill instead of pinning at the 99% cap.
+		track(admin, hin, "Redesign the agile board with calmer column rhythm",
+				"Development", monday, 60, 0, 0, 0, 0);
+		// Already resolved, and its two blocks add up to exactly the spent time
+		// it was seeded with, so closing it left no number to explain.
+		track(admin, hin, "Keyboard shortcut opens the command palette",
+				"Development", monday, 0, 45, 30, 0, 0);
+		// The one thing he chips away at daily — thin cells across a whole row are
+		// what a timesheet actually looks like.
+		track(admin, hin, "Saved board filters per user",
+				"Development", monday, 30, 45, 45, 30, 30);
+		// His second row: the mobile project he reviews for rather than builds in.
+		track(admin, mob, "Crash on rotate during sprint planning",
+				"Testing", monday, 0, 45, 60, 0, 0);
+		track(admin, mob, "Wire up project picker on the connect screen",
+				"Development", monday, 0, 0, 45, 75, 75);
+		track(admin, mob, "Localize push notification copy",
+				"Documentation", monday, 0, 0, 0, 90, 120);
+
+		// --- lena: the redesign first, then the feature that follows it ------
+		track(lena, hin, "Redesign the agile board with calmer column rhythm",
+				"Development", monday, 90, 75, 0, 0, 0);
+		// Also resolved: only part of its spent time is logged here and the rest
+		// predates the week — the case syncSpent() must not overwrite.
+		track(lena, hin, "Timeline view: snap drag to day grid",
+				"Development", monday, 90, 0, 0, 0, 0);
+		// Her sub-task of the redesign, not the story itself: the story's own hours
+		// are the row above, and a sub-task is where a breakdown says the work is.
+		// Deliberately not "Add story-point capacity bar to sprint planning" — that
+		// one is the Gantt milestone, a deadline three weeks out with no start date
+		// at all, and booking this week against it is precisely the thing this
+		// method's docstring says a reader notices.
+		track(lena, hin, "Rebuild the column header component",
+				"Development", monday, 0, 90, 60, 0, 0);
+		// The big undated backlog item absorbs the second half of her week — the
+		// sprint's own issues are hours of work each, not days.
+		track(lena, hin, "Recurring issues & templates",
+				"Development", monday, 0, 90, 120, 120, 90);
+		track(lena, mob, "Bottom-nav liquid-glass refinement",
+				"Development", monday, 150, 0, 0, 0, 0);
+		track(lena, mob, "Offline cache for the dashboard",
+				"Development", monday, 0, 0, 90, 120, 150);
+
+		// --- tomas: backend work, one review, and the infra project ----------
+		track(tomas, hin, "Webhooks for issue lifecycle events",
+				"Development", monday, 150, 150, 90, 0, 0);
+		// Reviewing Amara's bug: 1h30 against an issue that already carries more
+		// spent time than that, which is why syncSpent() leaves its number alone.
+		// Wednesday and Thursday, because that bug is the second link of the Gantt
+		// chain and its bar opens on the Wednesday.
+		track(tomas, hin, "Card drag introduces 120ms jank on large sprints",
+				"Testing", monday, 0, 0, 45, 45, 0);
+		track(tomas, inf, "Offline cache for the dashboard",
+				"Development", monday, 0, 90, 120, 120, 60);
+		track(tomas, inf, "Wire up project picker on the connect screen",
+				"Development", monday, 60, 0, 0, 60, 60);
+		track(tomas, inf, "Add staging environment to CI",
+				"Development", monday, 0, 0, 0, 60, 120);
+
+		syncSpent();
+		log.info("[demo] seeded {} work items", workItems.count());
+	}
+
+	/**
+	 * One person's week on one issue: a work item per weekday that carries
+	 * minutes. The weekend is not passed at all rather than passed as zeros —
+	 * five numbers is the shape of the timesheet's working week.
+	 *
+	 * <p>Days after today are skipped. A seed run is not a Friday run: seeded on
+	 * a Tuesday, writing all five would book Wednesday to Friday as work already
+	 * done, and {@link #syncSpent()} would then report that future work as time
+	 * spent on the issue. What a mid-week workspace shows instead is the week so
+	 * far, which is what a timesheet looks like on a Tuesday anyway.
+	 */
+	private void track(User user, Project p, String title, String activity, LocalDate monday,
+			int... minutesMonToFri) {
+		Issue issue = findIssue(p, title);
+		if (issue == null) {
+			return;
+		}
+		LocalDate today = LocalDate.now(ZoneOffset.UTC);
+		for (int day = 0; day < minutesMonToFri.length; day++) {
+			if (minutesMonToFri[day] == 0 || monday.plusDays(day).isAfter(today)) {
+				continue;
+			}
 			workItems.save(WorkItem.builder()
-					.issueId(issueId)
+					.issueId(issue.getId())
 					.projectId(p.getId())
 					.userId(user.getId())
-					.date(monday.plusDays(d))
-					.durationMinutes(minutes[d])
-					.activityType(activities[d])
+					.date(monday.plusDays(day))
+					.durationMinutes(minutesMonToFri[day])
+					.activityType(activity)
 					.description("Demo tracked work")
 					.build());
 		}
+	}
+
+	/**
+	 * Brings each issue's spent time up to what its work items add up to — what
+	 * {@code TimeTrackingService} does on every logged item, which the seeder
+	 * bypasses by writing to the repository directly. The issue panel prints
+	 * "spent of estimate" immediately above the list of those work items, so a
+	 * header claiming less than the rows under it is the first thing a screenshot
+	 * shows.
+	 *
+	 * <p>Never lowers a value: the seeded spent time stands for work done before
+	 * this week, for which there are no work items to find.
+	 */
+	private void syncSpent() {
+		Map<String, Integer> trackedPerIssue = new LinkedHashMap<>();
+		for (WorkItem item : workItems.findAll()) {
+			trackedPerIssue.merge(item.getIssueId(), item.getDurationMinutes(), Integer::sum);
+		}
+		trackedPerIssue.forEach((issueId, tracked) -> mongo.updateFirst(
+				Query.query(Criteria.where("_id").is(issueId).and("spentMinutes").lt(tracked)),
+				new Update().set("spentMinutes", tracked), Issue.class));
+	}
+
+	/**
+	 * The seeded issue with this title in this project — how both the watchers
+	 * and the work items above name their issues. Titles rather than readable
+	 * ids: the ids fall out of the seeding order, so inserting one issue above
+	 * would silently move every subscription and every logged hour one row down.
+	 */
+	private Issue findIssue(Project p, String title) {
+		Issue issue = mongo.findOne(Query.query(Criteria.where("projectId").is(p.getId())
+				.and("title").is(title)), Issue.class);
+		if (issue == null) {
+			log.warn("[demo] no issue titled \"{}\" in {} — renamed?", title, p.getKey());
+		}
+		return issue;
 	}
 
 	// ---- knowledge base ----------------------------------------------------
