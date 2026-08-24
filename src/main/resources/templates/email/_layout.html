@@ -100,8 +100,19 @@
             <td class="hn-card"
                 style="background:#FFFFFF;border:1px solid #E7E5DE;border-radius:14px;overflow:hidden">
 
-              <!--/* Aurora Hive masthead. bgcolor carries the navy, so a blocked
-                   image still reads as the brand band with the alt text on it. */-->
+              <!--/* The band that opens every mail — one geometry for all of them,
+                   so an inbox does not read as two products. bgcolor carries the
+                   navy, so a blocked image still reads as the brand band with the
+                   alt text (the organization's name) on it.
+
+                   The picture itself is composed server-side per mail by
+                   MailBandComposer: the illustration that belongs to this
+                   template, under whichever lockup the instance carries — the
+                   organization's logo and name, or Hinata's. Flat pixels rather
+                   than an <img> on a bgcolor here, because Gmail's dark theme
+                   inverts cell backgrounds but leaves images alone: a transparent
+                   logo would keep its dark ink on a flipped-dark ground and
+                   disappear. */-->
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td bgcolor="#211F3D" align="left"
@@ -109,7 +120,8 @@
                       style="background:#211F3D;line-height:0;font-size:0;height:118px">
                     <img th:src="${mastheadSrc}" src="masthead.jpg" width="600"
                          th:attr="height=${mastheadHeight}" height="118"
-                         th:alt="#{email.masthead.alt}" alt="Hinata"
+                         th:alt="${organizationName != null and !#strings.isEmpty(organizationName)}
+                                 ? ${organizationName} : #{email.masthead.alt}" alt="Hinata"
                          style="display:block;width:100%;max-width:600px;height:auto;border:0;
                                 font-family:Helvetica,Arial,sans-serif;font-size:18px;font-weight:700;
                                 letter-spacing:0.4px;color:#F4F3EF"/>
@@ -146,14 +158,20 @@
           <!--/* ---- footer, outside the card ------------------------------- */-->
           <tr>
             <td align="left" style="padding:20px 8px 0 8px">
+              <!--/* The organization owns the top line: this mail is theirs, and on a
+                   self-hosted instance the recipient's relationship is with them, not
+                   with us. Hinata stays named underneath — the recipient still needs
+                   to know what the tool is — but as the software, not the sender. */-->
               <div class="hn-faint"
                    style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
                           font-size:12px;line-height:1.7;color:#9A99B0">
                 <strong class="hn-soft" style="color:#6B6A85;font-weight:600"
-                        th:text="#{email.brand}">Hinata</strong>
-                <span> · </span><span th:text="#{email.brand.tagline}">Self-hosted project tracking</span>
+                        th:text="${organizationName != null and !#strings.isEmpty(organizationName)}
+                                 ? ${organizationName} : #{email.brand}">Hinata</strong>
                 <br/>
-                <span th:text="${footerNote}">This is an automated message from Hinata.</span>
+                <span th:text="#{email.footer.poweredBy}">Powered by Hinata</span>
+                <br/>
+                <span th:text="${footerNote}">This is an automated message.</span>
               </div>
             </td>
           </tr>

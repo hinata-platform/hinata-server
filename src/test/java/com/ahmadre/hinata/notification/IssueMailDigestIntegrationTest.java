@@ -50,6 +50,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * The bundled change mail, end to end against a real MongoDB and a clock the
@@ -119,6 +120,17 @@ class IssueMailDigestIntegrationTest {
 	/** No SMTP anywhere near a test; the mock is also how sends are counted. */
 	@MockitoBean
 	private MailService mail;
+
+	/**
+	 * The subject tag is the organization's, resolved from settings at send time.
+	 * A bare mock would answer null and every subject would read "nullHIN-42: …",
+	 * so it is stubbed to what an instance with no organization configured
+	 * produces.
+	 */
+	@org.junit.jupiter.api.BeforeEach
+	void stubSubjectPrefix() {
+		when(mail.subjectPrefix()).thenReturn("[Hinata] ");
+	}
 
 	/** Its @Scheduled sweep would race the ones the tests drive by hand. */
 	@MockitoBean

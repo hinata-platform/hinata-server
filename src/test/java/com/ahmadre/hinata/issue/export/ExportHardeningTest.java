@@ -12,6 +12,7 @@ import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueLinkService;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.project.ProjectRepository;
+import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
@@ -63,7 +64,7 @@ class ExportHardeningTest {
 
 	private static IssueExport export(String title, List<ExportBlock> description) {
 		return new IssueExport("HIN-50", title, "p", List.of(), description,
-				List.of(), List.of(), List.of(), List.of(), "org", AT);
+				List.of(), List.of(), List.of(), List.of(), "org", null, AT);
 	}
 
 	/**
@@ -248,6 +249,7 @@ class ExportHardeningTest {
 		sprints = mock(SprintRepository.class);
 		boards = mock(AgileBoardRepository.class);
 		SettingsService settings = mock(SettingsService.class);
+		BrandLogoService brandLogo = mock(BrandLogoService.class);
 
 		when(links.linksOf(anyString(), any())).thenReturn(List.of());
 		when(comments.findByIssueIdOrderByCreatedAtAsc(anyString(), any(Pageable.class)))
@@ -256,10 +258,11 @@ class ExportHardeningTest {
 				.thenReturn(Page.empty());
 		when(projects.findById(anyString())).thenReturn(Optional.empty());
 		when(settings.get()).thenReturn(new ServerSettings());
+		when(brandLogo.raster()).thenReturn(Optional.empty());
 
 		caller = User.builder().id("caller").build();
 		exports = new IssueExportService(issues, links, comments, activities, projects,
-				sprints, boards, users, settings);
+				sprints, boards, users, settings, brandLogo);
 	}
 
 	private static Issue issue() {

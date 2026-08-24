@@ -41,6 +41,12 @@ public class OrganizationLogoService {
 	/** Longest edge of the stored logo; plenty for headers, PDFs and retina. */
 	static final int MAX_EDGE = 1024;
 
+	/**
+	 * Most pixels a logo may declare before decoding. 50 MP is far past any real
+	 * mark (a 7000x7000 source) and still bounds the decode at roughly 200 MB.
+	 */
+	static final long MAX_PIXELS = 50L * 1000 * 1000;
+
 	/** Max accepted upload before normalization. */
 	private static final long MAX_UPLOAD_BYTES = 8L * 1024 * 1024;
 
@@ -52,7 +58,7 @@ public class OrganizationLogoService {
 			Set.of("image/png", "image/jpeg", "image/jpg", "image/gif", "image/bmp");
 
 	/** The relative proxy path an uploaded logo's {@code logoUrl} points at. */
-	static final String INTERNAL_URL_PREFIX = "/api/v1/meta/logo";
+	public static final String INTERNAL_URL_PREFIX = "/api/v1/meta/logo";
 
 	private final StorageService storage;
 	private final SettingsService settings;
@@ -100,12 +106,14 @@ public class OrganizationLogoService {
 	 * is left untouched (it is not an "upload"; the URL field owns it).
 	 */
 	public void remove() {
-		storage.delete(LOGO_OBJECT_KEY);
 		ServerSettings current = settings.get();
 		if (isInternal(current.getGeneral().getLogoUrl())) {
 			current.getGeneral().setLogoUrl(null);
 			settings.save(current);
 		}
+		// After the save, so a failed write leaves the object and the URL agreeing
+		// with each other rather than pointing the proxy at bytes that are gone.
+		deleteStoredObject();
 	}
 
 	/**
@@ -114,6 +122,13 @@ public class OrganizationLogoService {
 	 * can't shadow the new URL in the proxy and doesn't linger as an orphan.
 	 */
 	public void deleteStoredObject() {
+		// An instance without object storage has no uploaded logo to delete, and
+		// StorageService.delete() would throw 503 there. Callers reach this on the
+		// ordinary "admin saved settings" path, so throwing would take the whole
+		// settings PUT down over a file that cannot exist.
+		if (!storage.isConfigured()) {
+			return;
+		}
 		storage.delete(LOGO_OBJECT_KEY);
 	}
 
@@ -134,7 +149,28 @@ public class OrganizationLogoService {
 
 	private byte[] normalize(MultipartFile file) {
 		try {
-			BufferedImage source = ImageIO.read(new ByteArrayInputStream(file.getBytes()));
+			return normalize(file.getBytes());
+		}
+		catch (ApiException ex) {
+			throw ex;
+		}
+		catch (Exception ex) {
+			log.warn("Logo normalization failed: {}", ex.getMessage());
+			throw ApiException.badRequest("error.logo.unreadable");
+		}
+	}
+
+	/**
+	 * Decodes [raw] (validating it really is a raster image, which also strips any
+	 * metadata the source carried), downscales it to {@link #MAX_EDGE} and
+	 * re-encodes it as PNG. Shared with {@link BrandLogoService} so an external URL
+	 * and an upload end up as the same kind of bytes.
+	 */
+	public byte[] normalize(byte[] raw) {
+		try {
+			// Through decode(), so the pixel-dimension gate applies to an upload as
+			// well as to bytes fetched from an external URL.
+			BufferedImage source = decode(raw).orElse(null);
 			if (source == null) {
 				throw ApiException.badRequest("error.logo.unreadable");
 			}
@@ -146,6 +182,55 @@ public class OrganizationLogoService {
 		catch (Exception ex) {
 			log.warn("Logo normalization failed: {}", ex.getMessage());
 			throw ApiException.badRequest("error.logo.unreadable");
+		}
+	}
+
+	/** Decodes [raw] into an image, or empty when it is not a usable raster. */
+	public static Optional<BufferedImage> decode(byte[] raw) {
+		if (raw == null || raw.length == 0) {
+			return Optional.empty();
+		}
+		try (var in = new javax.imageio.stream.MemoryCacheImageInputStream(
+				new ByteArrayInputStream(raw))) {
+			return readGuarded(in);
+		}
+		catch (Exception ex) {
+			return Optional.empty();
+		}
+	}
+
+	/**
+	 * Reads the header first and refuses anything whose declared dimensions would
+	 * not fit in {@link #MAX_PIXELS} before a single pixel is allocated.
+	 *
+	 * <p>Compressed size is no defence here: a few hundred kilobytes of PNG can
+	 * declare 20000x20000, and {@code ImageIO.read} would answer by asking for
+	 * 1.6 GB of heap. That matters because these bytes are not always ours — an
+	 * external {@code logoUrl} is fetched and decoded on a path that anonymous
+	 * callers can trigger.
+	 */
+	private static Optional<BufferedImage> readGuarded(javax.imageio.stream.ImageInputStream in)
+			throws java.io.IOException {
+		var readers = ImageIO.getImageReaders(in);
+		if (!readers.hasNext()) {
+			return Optional.empty();
+		}
+		javax.imageio.ImageReader reader = readers.next();
+		try {
+			reader.setInput(in, true, true);
+			long pixels = (long) reader.getWidth(0) * reader.getHeight(0);
+			if (pixels > MAX_PIXELS) {
+				log.warn("Refusing a {}x{} logo: {} pixels exceeds the {} cap",
+						reader.getWidth(0), reader.getHeight(0), pixels, MAX_PIXELS);
+				return Optional.empty();
+			}
+			return Optional.ofNullable(reader.read(0));
+		}
+		catch (Exception ex) {
+			return Optional.empty();
+		}
+		finally {
+			reader.dispose();
 		}
 	}
 
@@ -175,10 +260,17 @@ public class OrganizationLogoService {
 		return out;
 	}
 
-	private byte[] encodePng(BufferedImage image) throws Exception {
+	/**
+	 * PNG bytes for [image]. The stream is a MemoryCache one, not ImageIO's
+	 * default — that default spools every encode through a temp file on disk.
+	 * It must be closed for the buffered data to reach the byte array.
+	 */
+	static byte[] encodePng(BufferedImage image) throws Exception {
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-		if (!ImageIO.write(image, "png", bytes)) {
-			throw ApiException.badRequest("error.logo.unreadable");
+		try (var out = new javax.imageio.stream.MemoryCacheImageOutputStream(bytes)) {
+			if (!ImageIO.write(image, "png", out)) {
+				throw ApiException.badRequest("error.logo.unreadable");
+			}
 		}
 		return bytes.toByteArray();
 	}

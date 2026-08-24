@@ -30,13 +30,22 @@ public class SmtpMailSenderProvider {
 	private volatile JavaMailSender sender;
 	private volatile ServerSettings.Smtp active;
 
+	/**
+	 * Cached alongside the sender rather than read per send: {@link #fromName()}
+	 * is called on every outbound message, and settings.get() is a database read.
+	 */
+	private volatile String organizationName;
+
 	@PostConstruct
 	void init() {
-		rebuild(settings.get().getSmtp());
+		ServerSettings current = settings.get();
+		organizationName = current.getOrganizationName();
+		rebuild(current.getSmtp());
 	}
 
 	@EventListener
 	void onSettingsChanged(SettingsService.SettingsChangedEvent event) {
+		organizationName = event.settings().getOrganizationName();
 		rebuild(event.settings().getSmtp());
 	}
 
@@ -83,9 +92,17 @@ public class SmtpMailSenderProvider {
 		return active != null && !isBlank(active.getFromAddress()) ? active.getFromAddress() : null;
 	}
 
-	/** The configured From display name, or {@code null}. */
+	/**
+	 * The From display name: what the admin configured, else the organization —
+	 * the inbox row is the first thing a recipient reads, and on a self-hosted
+	 * instance the sender is the organization, not the product.
+	 */
 	public String fromName() {
-		return active != null && !isBlank(active.getFromName()) ? active.getFromName() : null;
+		if (active != null && !isBlank(active.getFromName())) {
+			return active.getFromName();
+		}
+		String organization = organizationName;
+		return isBlank(organization) ? null : organization.trim();
 	}
 
 	private static boolean isBlank(String s) {

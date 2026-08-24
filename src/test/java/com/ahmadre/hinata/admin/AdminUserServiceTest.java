@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.admin;
 
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.notification.MailService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.GatewayService;
@@ -58,8 +59,10 @@ class AdminUserServiceTest {
 		// RETURNS_SELF makes the mocked Entry return itself for every chained call.
 		AuditService audit = mock(AuditService.class);
 		when(audit.event(any())).thenReturn(mock(AuditService.Entry.class, RETURNS_SELF));
+		MailService mail = mock(MailService.class);
+		when(mail.organizationName()).thenReturn("Hinata");
 		service = new AdminUserService(users, userService, sessions, notifications, gateway, adminMail,
-				accountMail, currentUser, new BCryptPasswordEncoder(4), audit);
+				mail, accountMail, currentUser, new BCryptPasswordEncoder(4), audit);
 	}
 
 	private User user(String id, Role role, boolean active, User.Origin origin) {

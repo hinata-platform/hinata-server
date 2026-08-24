@@ -1,10 +1,9 @@
 package com.ahmadre.hinata.meta;
 
 import com.ahmadre.hinata.config.HinataProperties;
-import com.ahmadre.hinata.setup.OrganizationLogoService;
+import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
-import com.ahmadre.hinata.storage.StorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -17,13 +16,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.Map;
-import java.util.Optional;
 
 @Tag(name = "Public", description = "Unauthenticated server metadata")
 @RestController
@@ -31,17 +26,12 @@ import java.util.Optional;
 @Slf4j
 public class MetaController {
 
-	private static final HttpClient HTTP = HttpClient.newBuilder()
-			.connectTimeout(Duration.ofSeconds(5))
-			.followRedirects(HttpClient.Redirect.NORMAL)
-			.build();
-
 	private final HinataProperties properties;
 	private final SettingsService settings;
 	private final com.ahmadre.hinata.auth.AuthPolicy authPolicy;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final com.ahmadre.hinata.mcp.McpSettings mcpSettings;
-	private final OrganizationLogoService logoService;
+	private final BrandLogoService brandLogo;
 
 	@Value("${hinata.version:1.0.0}")
 	private String serverVersion;
@@ -100,57 +90,53 @@ public class MetaController {
 				securityPolicy.passwordMinLength());
 	}
 
-	@Operation(summary = "Organization logo", description = "Serves the organization logo same-origin so clients (incl. the web app and the PDF export) load it without CORS restrictions. An uploaded logo is streamed from object storage; a configured external URL is proxied.")
+	@Operation(summary = "Organization logo", description = "Serves the organization logo same-origin so clients (incl. the web app and the PDF export) load it without CORS restrictions. An uploaded logo is streamed from object storage; a configured external URL is fetched server-side through the SSRF-hardened image fetcher and cached.")
 	@SecurityRequirements
 	@GetMapping("/api/v1/meta/logo")
-	public ResponseEntity<byte[]> logo() {
-		String url = settings.get().getGeneral().getLogoUrl();
-		if (url == null || url.isBlank()) {
+	public ResponseEntity<byte[]> logo(
+			@org.springframework.web.bind.annotation.RequestHeader(
+					value = "If-None-Match", required = false) String ifNoneMatch) {
+		BrandLogoService.BrandAsset asset = brandLogo.display().orElse(null);
+		if (asset == null) {
 			return ResponseEntity.notFound().build();
 		}
-		// An uploaded logo lives in object storage and logoUrl holds our internal
-		// proxy path (not an absolute URL) — stream those bytes straight back.
-		if (OrganizationLogoService.isInternal(url)) {
-			Optional<StorageService.StoredObject> stored = logoService.load();
-			if (stored.isEmpty()) {
-				return ResponseEntity.notFound().build();
-			}
-			StorageService.StoredObject obj = stored.get();
-			MediaType contentType = obj.contentType() != null
-					? parseMediaType(obj.contentType())
-					: MediaType.APPLICATION_OCTET_STREAM;
-			return ResponseEntity.ok()
-					.contentType(contentType)
-					.cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
-					.body(obj.data());
+		String etag = etagOf(asset.bytes());
+		if (etag.equals(ifNoneMatch)) {
+			return ResponseEntity.status(304).eTag(etag).build();
 		}
+		return ResponseEntity.ok()
+				.contentType(parseMediaType(asset.contentType()))
+				.eTag(etag)
+				// Revalidate rather than expire. The ?v= token lives in the *stored*
+				// logoUrl, not in the URL a client requests — clients call the bare
+				// /api/v1/meta/logo — so a freshness window here would let a shared
+				// cache keep serving a logo the operator has already replaced or
+				// taken down, with no way to purge it. The strong ETag above makes
+				// revalidation a 304, so the bytes are still only sent once.
+				.cacheControl(asset.uploaded()
+						? CacheControl.noCache().cachePublic()
+						: CacheControl.noCache().cachePrivate())
+				// This endpoint returns third-party bytes under our own origin. It is
+				// never a document: naming it as an attachment-style disposition and
+				// stripping every capability keeps a hostile host from using our
+				// domain to host a page (nosniff and the chain-wide CSP already stop
+				// script; `form-action` does not inherit from default-src, so an HTML
+				// body would otherwise still render a same-origin credential form).
+				.header("Content-Disposition", "inline; filename=\"logo\"")
+				.header("Content-Security-Policy",
+						"default-src 'none'; style-src 'unsafe-inline'; sandbox")
+				.header("X-Content-Type-Options", "nosniff")
+				.body(asset.bytes());
+	}
+
+	/** Strong validator over the bytes, so a client re-check costs a 304. */
+	private static String etagOf(byte[] bytes) {
 		try {
-			HttpRequest request = HttpRequest.newBuilder(URI.create(url.trim()))
-					.timeout(Duration.ofSeconds(10))
-					.header("User-Agent", "Hinata-Server")
-					.GET()
-					.build();
-			HttpResponse<byte[]> response =
-					HTTP.send(request, HttpResponse.BodyHandlers.ofByteArray());
-			byte[] body = response.body();
-			if (response.statusCode() >= 300 || body == null || body.length == 0) {
-				return ResponseEntity.notFound().build();
-			}
-			MediaType contentType = response.headers().firstValue("content-type")
-					.map(MetaController::parseMediaType)
-					.orElse(MediaType.APPLICATION_OCTET_STREAM);
-			return ResponseEntity.ok()
-					.contentType(contentType)
-					.cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePublic())
-					.headers(h -> { /* same-origin proxy: no ACAO, don't widen CORS (A05) */ })
-					.body(body);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			log.warn("Interrupted while proxying organization logo from {}", url);
-			return ResponseEntity.notFound().build();
-		} catch (Exception e) {
-			log.warn("Failed to proxy organization logo from {}: {}", url, e.toString());
-			return ResponseEntity.notFound().build();
+			byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+			return "\"" + HexFormat.of().formatHex(digest, 0, 16) + "\"";
+		}
+		catch (java.security.NoSuchAlgorithmException ex) {
+			return "\"" + Integer.toHexString(java.util.Arrays.hashCode(bytes)) + "\"";
 		}
 	}
 

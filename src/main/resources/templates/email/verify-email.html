@@ -4,13 +4,13 @@
       th:replace="~{email/_layout :: page(
           #{email.verify.eyebrow},
           #{email.verify.headline},
-          #{email.verify.body},
-          #{email.footer.automated},
+          #{email.verify.body(${organizationName})},
+          #{email.footer.automated(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">
   <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
-  <th:block th:replace="~{email/_layout :: copy(#{email.verify.body})}"/>
+  <th:block th:replace="~{email/_layout :: copy(#{email.verify.body(${organizationName})})}"/>
 
   <th:block th:replace="~{email/_layout :: cta(${verifyUrl}, #{email.verify.cta})}"/>
   <th:block th:replace="~{email/_layout :: fallback(${verifyUrl})}"/>

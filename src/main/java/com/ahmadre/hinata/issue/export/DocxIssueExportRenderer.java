@@ -2,6 +2,8 @@ package com.ahmadre.hinata.issue.export;
 
 import com.ahmadre.hinata.common.ApiException;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.common.usermodel.PictureType;
+import org.apache.poi.util.Units;
 import org.apache.poi.xwpf.usermodel.ParagraphAlignment;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
@@ -11,7 +13,14 @@ import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
+import javax.imageio.stream.MemoryCacheImageInputStream;
+import java.awt.Dimension;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -36,6 +45,16 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 	private static final String NAVY = "2D2B55";
 	private static final String MUTED = "6B6A85";
 	private static final String CODE_BG = "F4F3EF";
+
+	/**
+	 * The box the organization's mark is contained in, in points — the same one
+	 * the PDF uses, so the two documents an export produces show the same mark at
+	 * the same size. Contained rather than fitted: a logo is a 6:1 wordmark as
+	 * readily as a square signet, and Word draws exactly the box it is given, so
+	 * the aspect ratio has to be preserved here or the mark arrives stretched.
+	 */
+	private static final double LOGO_MAX_H = 32;
+	private static final double LOGO_MAX_W = 220;
 
 	@Override
 	public IssueExportFormat format() {
@@ -68,12 +87,76 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 	// --- sections ------------------------------------------------------------
 
 	private void title(XWPFDocument document, IssueExport export) {
+		logo(document, export);
 		XWPFParagraph key = document.createParagraph();
 		run(key, export.readableId(), 11, false, NAVY);
 		XWPFParagraph title = document.createParagraph();
 		run(title, export.title(), 20, true, NAVY);
 		XWPFParagraph project = document.createParagraph();
 		run(project, export.project(), 10, false, MUTED);
+	}
+
+	/**
+	 * The organization's mark above the issue key, when there is one.
+	 *
+	 * <p>Wrapped whole, because {@code addPicture} throws on its own account —
+	 * {@link org.apache.poi.openxml4j.exceptions.InvalidFormatException} for bytes
+	 * POI will not embed, {@link java.io.IOException} while it copies them into
+	 * the package — and {@link #render} turns anything thrown into a 500. A badly
+	 * configured logo must cost the letterhead, never the export.
+	 */
+	private void logo(XWPFDocument document, IssueExport export) {
+		byte[] png = export.logo();
+		if (png == null || png.length == 0) {
+			return;
+		}
+		try {
+			Dimension pixels = pixels(png);
+			if (pixels == null) {
+				return;
+			}
+			// Word wants the drawn extent in EMU and applies no rules of its own,
+			// so the containment happens here: one scale factor from whichever edge
+			// runs out first, applied to both.
+			double scale = Math.min(LOGO_MAX_W / pixels.getWidth(), LOGO_MAX_H / pixels.getHeight());
+			int width = Units.toEMU(Math.max(1.0, pixels.getWidth() * scale));
+			int height = Units.toEMU(Math.max(1.0, pixels.getHeight() * scale));
+			XWPFRun run = document.createParagraph().createRun();
+			try (ByteArrayInputStream in = new ByteArrayInputStream(png)) {
+				run.addPicture(in, PictureType.PNG, "logo.png", width, height);
+			}
+		}
+		catch (Exception ex) {
+			log.warn("The organization logo was left out of the DOCX export of {}: {}",
+					export.readableId(), ex.toString());
+		}
+	}
+
+	/**
+	 * The logo's real pixel size, or null when nothing here can read it.
+	 *
+	 * <p>Read from the image's header rather than by decoding it: the picture is
+	 * embedded as the bytes that arrived, so the only question asked of it is how
+	 * wide and how tall it is, and rasterizing a megapixel image to answer that
+	 * would be work thrown away. The stream is a MemoryCache one for the reason it
+	 * is everywhere else in this codebase — ImageIO's default spools through a
+	 * temp file on disk.
+	 */
+	private static Dimension pixels(byte[] png) throws Exception {
+		try (ImageInputStream stream = new MemoryCacheImageInputStream(new ByteArrayInputStream(png))) {
+			Iterator<ImageReader> readers = ImageIO.getImageReaders(stream);
+			if (!readers.hasNext()) {
+				return null;
+			}
+			ImageReader reader = readers.next();
+			try {
+				reader.setInput(stream);
+				return new Dimension(reader.getWidth(0), reader.getHeight(0));
+			}
+			finally {
+				reader.dispose();
+			}
+		}
 	}
 
 	private void section(XWPFDocument document, String label) {

@@ -13,16 +13,14 @@ import org.springframework.stereotype.Service;
 import org.thymeleaf.context.Context;
 import org.thymeleaf.spring6.SpringTemplateEngine;
 
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.util.StreamUtils;
+import com.ahmadre.hinata.setup.MailBandComposer;
 
-import java.io.IOException;
+import org.springframework.core.io.ByteArrayResource;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** Sends transactional HTML mails via the configured SMTP server (Mailpit in dev). */
 @Slf4j
@@ -31,35 +29,26 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MailService {
 
 	/**
-	 * Content-ID of the masthead that opens every templated mail. The artwork is
+	 * Content-ID of the band that opens every templated mail. The artwork is
 	 * inlined into the message rather than linked: Hinata is self-hosted, so an
 	 * instance is regularly unreachable from wherever the recipient reads their
-	 * mail, and a linked masthead would render as a broken image on exactly those
-	 * installs.
+	 * mail, and a linked band would render as a broken image on exactly those
+	 * installs. Hotlinking would additionally leak every recipient's IP and open
+	 * time to whoever hosts the picture.
 	 */
 	static final String MASTHEAD_CID = "hinata-masthead";
 
-	/** A masthead variant: the classpath artwork and the height it displays at. */
-	private record Masthead(String resource, int height) {}
+	/** Longest organization name that still leaves room for a subject on a phone. */
+	private static final int MAX_SUBJECT_TAG = 22;
 
-	/**
-	 * Which band heads which mail. Nearly everything gets the plain aurora — that
-	 * repetition is what a masthead is for. Only the two mails that mark a
-	 * beginning carry an illustration; a picture on a password reset is noise, and
-	 * the band is inlined into every message it heads. Selected by the model's
-	 * {@code masthead} key (see AuthMailService / AdminMailService).
-	 */
-	private static final Map<String, Masthead> MASTHEADS = Map.of(
-			"default", new Masthead("email/masthead.jpg", 118),
-			"welcome", new Masthead("email/masthead-welcome.jpg", 200),
-			"invite", new Masthead("email/masthead-invite.jpg", 200));
+	/** One image travelling with the message body as a related part. */
+	private record InlinePart(String cid, byte[] data, String contentType) {}
 
 	private final ObjectProvider<JavaMailSender> mailSender;
 	private final ObjectProvider<SpringTemplateEngine> templateEngine;
 	private final SmtpMailSenderProvider smtp;
-
-	/** Artwork read from the classpath on first use and kept; 28-50 KB each. */
-	private final Map<String, byte[]> artCache = new ConcurrentHashMap<>();
+	private final com.ahmadre.hinata.setup.SettingsService settings;
+	private final com.ahmadre.hinata.setup.BrandLogoService brandLogo;
 
 	@Value("${hinata.mail.from:hinata@localhost}")
 	private String from;
@@ -155,14 +144,29 @@ public class MailService {
 			log.warn("No template engine available; cannot send mail to {}", to);
 			return false;
 		}
-		Masthead art = mastheadFor(model);
-		return dispatch(to, subject, render(engine, template, model), art);
+		// Each mail gets the illustration that belongs to it, carrying whichever
+		// lockup this instance has. Resolved before the render so the body and the
+		// attached part can never disagree about which band this mail shows.
+		String backdrop = backdropFor(template);
+		byte[] band = brandLogo.mailBand(backdrop)
+				.or(() -> MailBandComposer.composeHinata(backdrop))
+				.orElse(null);
+		String html = render(engine, template, model);
+		return dispatch(to, subject, html,
+				List.of(new InlinePart(MASTHEAD_CID, band, MailBandComposer.CONTENT_TYPE)));
 	}
 
-	private static Masthead mastheadFor(Map<String, Object> model) {
-		Object variant = model.get("masthead");
-		return MASTHEADS.getOrDefault(variant instanceof String s ? s : "default",
-				MASTHEADS.get("default"));
+	/**
+	 * The artwork a template opens with, named after the template itself — an
+	 * invitation gets a door standing open, a password reset gets a key. A
+	 * template with no artwork of its own falls through to the neutral band inside
+	 * the composer, so adding a template never breaks a send.
+	 */
+	static String backdropFor(String template) {
+		if (template == null || template.isBlank()) {
+			return MailBandComposer.DEFAULT_BACKDROP;
+		}
+		return template.substring(template.lastIndexOf('/') + 1);
 	}
 
 	/**
@@ -172,20 +176,80 @@ public class MailService {
 	 * resolved with {@code #{...}} — a default-locale context would silently mail
 	 * everyone English (or, with fallback-to-system-locale on, the host's language).
 	 */
+	/**
+	 * Renders {@code template} against {@code model}.
+	 *
+	 * <p>Every variable is set with {@code putIfAbsent}: that is the seam the
+	 * e-mail preview task renders through, substituting on-disk filenames for the
+	 * {@code cid:} references a browser cannot resolve.
+	 */
 	public String render(SpringTemplateEngine engine, String template, Map<String, Object> model) {
 		Object locale = model.get("locale");
 		Locale resolved = (locale instanceof String tag && !tag.isBlank())
 				? Locale.forLanguageTag(tag)
 				: Locale.ENGLISH;
 		Map<String, Object> vars = new HashMap<>(model);
-		// The masthead rides along as an inlined part (see dispatch), so the
-		// template addresses it by Content-ID rather than by URL.
+		// The band rides along as an inlined part (see dispatch), so the template
+		// addresses it by Content-ID rather than by URL.
 		vars.putIfAbsent("mastheadSrc", "cid:" + MASTHEAD_CID);
-		vars.putIfAbsent("mastheadHeight", mastheadFor(model).height());
+		vars.putIfAbsent("mastheadHeight", MailBandComposer.DISPLAY_HEIGHT);
+		// Thymeleaf treats an absent variable and a null one the same in `${x != null}`,
+		// but the footer also reads it as text — put it in explicitly.
+		vars.putIfAbsent("organizationName", organizationName());
 		return engine.process(template, new Context(resolved, vars));
 	}
 
-	private boolean dispatch(String to, String subject, String html, Masthead art) {
+	/**
+	 * The bracketed tag every transactional subject opens with — "[AStA] ", not
+	 * "[Hinata] ". The inbox list is where identity actually lands, and on a
+	 * self-hosted instance the sender is the organization.
+	 *
+	 * <p>Truncated hard: a subject line is read at a glance on a phone, where a
+	 * long organization name would push the actual subject off the row entirely.
+	 */
+	public String subjectPrefix() {
+		String name = organizationName();
+		return "[" + (name.length() > MAX_SUBJECT_TAG
+				? name.substring(0, MAX_SUBJECT_TAG - 1).trim() + "…"
+				: name) + "] ";
+	}
+
+	/**
+	 * The instance's organization, or the product name on one that has none.
+	 *
+	 * <p>Held rather than read per call: this is on the path of every subject line
+	 * and every render, so a fan-out to fifty watchers would otherwise cost a
+	 * hundred settings lookups for a value that changes when an admin saves a
+	 * form. Filled lazily instead of at startup so a directly-constructed
+	 * instance (the template render tests) needs no lifecycle.
+	 */
+	public String organizationName() {
+		String cached = organization;
+		if (cached != null) {
+			return cached;
+		}
+		String resolved;
+		try {
+			String name = settings.get().getOrganizationName();
+			resolved = name == null || name.isBlank() ? "Hinata" : name.trim();
+		}
+		catch (Exception ex) {
+			// Branding must never be the reason a mail fails to go out — and a
+			// failure is not cached, so the next send tries again.
+			return "Hinata";
+		}
+		organization = resolved;
+		return resolved;
+	}
+
+	private volatile String organization;
+
+	@org.springframework.context.event.EventListener
+	void onSettingsChanged(com.ahmadre.hinata.setup.SettingsService.SettingsChangedEvent event) {
+		organization = null;
+	}
+
+	private boolean dispatch(String to, String subject, String html, List<InlinePart> parts) {
 		// Prefer the admin-area SMTP (configured at runtime), falling back to a
 		// Spring-autoconfigured sender if present.
 		JavaMailSender sender = smtp.sender();
@@ -208,11 +272,15 @@ public class MailService {
 			helper.setSubject(subject);
 			helper.setText(html, true);
 			// Must follow setText: MimeMessageHelper builds the related part around
-			// the body that is already there.
-			if (html.contains("cid:" + MASTHEAD_CID)) {
-				byte[] bytes = artwork(art.resource());
-				if (bytes != null) {
-					helper.addInline(MASTHEAD_CID, new ByteArrayResource(bytes), "image/jpeg");
+			// the body that is already there. Only parts the body actually references
+			// are attached — and only non-empty ones: an empty part renders as a
+			// broken-image icon, which is strictly worse than the alt text a missing
+			// one falls back to.
+			for (InlinePart part : parts) {
+				if (part.data() != null && part.data().length > 0
+						&& html.contains("cid:" + part.cid())) {
+					helper.addInline(part.cid(), new ByteArrayResource(part.data()),
+							part.contentType());
 				}
 			}
 			sender.send(message);
@@ -225,20 +293,4 @@ public class MailService {
 		}
 	}
 
-	/**
-	 * Artwork bytes, read from the classpath on first use. A missing or unreadable
-	 * asset degrades to a mail without the band (the template's bgcolor and alt
-	 * text still carry the brand) rather than to a failed send.
-	 */
-	private byte[] artwork(String resource) {
-		return artCache.computeIfAbsent(resource, path -> {
-			try (var in = new ClassPathResource(path).getInputStream()) {
-				return StreamUtils.copyToByteArray(in);
-			}
-			catch (IOException ex) {
-				log.warn("E-mail artwork {} unreadable: {}", path, ex.getMessage());
-				return new byte[0];
-			}
-		});
-	}
 }

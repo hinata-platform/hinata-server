@@ -1,6 +1,8 @@
 package com.ahmadre.hinata.setup;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -29,6 +31,14 @@ public class ServerSettings {
 
 	private String organizationName;
 
+	/**
+	 * {@code @Valid} is what makes the constraints inside {@link General} run at
+	 * all: Jakarta Validation does not descend into a nested object unless the
+	 * field says so, so without it {@code @LogoUrl} is declared and never
+	 * evaluated — and {@code /api/v1/meta} republishes whatever was stored to
+	 * every unauthenticated client.
+	 */
+	@Valid
 	private General general = new General();
 	private App app = new App();
 	private Smtp smtp = new Smtp();
@@ -74,7 +84,30 @@ public class ServerSettings {
 	/** General organization settings. */
 	@Data
 	public static class General {
+		/**
+		 * The organization logo: either an absolute {@code http(s)} URL or the
+		 * internal proxy path an upload sets (see {@link OrganizationLogoService}).
+		 * {@code /api/v1/meta} publishes this value to <em>unauthenticated</em>
+		 * clients, so it is constrained on write rather than trusted on read — a
+		 * stored {@code javascript:} or {@code data:text/html} value would become a
+		 * client-side injection the moment any surface dereferenced it directly.
+		 */
+		@Size(max = 2048, message = "error.logo.invalidUrl")
+		@LogoUrl
 		private String logoUrl;
+
+		/**
+		 * Whether the configured logo can also be drawn into e-mails and exported
+		 * documents, or only shown in the app. Read-only: filled on the way out by
+		 * {@link AdminSettingsController}, never stored.
+		 *
+		 * <p>False for a vector — no mail client renders SVG and this process has no
+		 * decoder for one — and for a URL that cannot be fetched at all. The admin
+		 * area says so, because otherwise the logo simply appears in some places and
+		 * not others and that reads as a bug.
+		 */
+		@Transient
+		private boolean logoUsableForDocuments;
 		private String timezone = "Europe/Berlin";
 		private String defaultLocale = "de";
 	}
@@ -127,7 +160,12 @@ public class ServerSettings {
 		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
 		private String password;
 		private String fromAddress = "hinata@localhost";
-		private String fromName = "Hinata";
+		/**
+		 * From display name. Null/blank means "use the organization name" — a
+		 * fresh instance should mail as the organization, not as the software it
+		 * happens to run on (see SmtpMailSenderProvider.fromName()).
+		 */
+		private String fromName;
 	}
 
 	/**

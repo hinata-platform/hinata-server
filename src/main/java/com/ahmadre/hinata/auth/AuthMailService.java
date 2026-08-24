@@ -20,19 +20,16 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AuthMailService {
 
-	private static final String SUBJECT_PREFIX = "[Hinata] ";
 
 	private final MailService mail;
 
 	/** Sign-up: confirm the email address to activate the account. */
 	public void sendVerification(User user, String verifyUrl) {
 		Map<String, Object> model = base(user);
-		// Arriving is a moment; the sign-up confirmation gets the illustrated band.
-		model.put("masthead", "welcome");
 		model.put("verifyUrl", verifyUrl);
 		model.put("expiresHours", 24);
 		String subject = de(user) ? "Bestätige deine E-Mail-Adresse" : "Confirm your email address";
-		mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + subject, "email/verify-email", model);
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + subject, "email/verify-email", model);
 	}
 
 	/** Tells an admin a verified self-registration is awaiting their approval. */
@@ -44,7 +41,7 @@ public class AuthMailService {
 		String subject = de(admin)
 				? "Neue Registrierung wartet auf Freigabe"
 				: "A new registration awaits approval";
-		mail.sendTemplate(admin.getEmail(), SUBJECT_PREFIX + subject, "email/approval-request", model);
+		mail.sendTemplate(admin.getEmail(), mail.subjectPrefix() + subject, "email/approval-request", model);
 	}
 
 	private Map<String, Object> base(User user) {

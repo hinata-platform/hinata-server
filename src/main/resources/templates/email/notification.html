@@ -11,7 +11,7 @@
           ${eyebrowKey != null} ? #{__${eyebrowKey}__} : #{email.notification.eyebrow},
           ${headline},
           ${body},
-          #{email.footer.automated},
+          #{email.footer.automated(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">

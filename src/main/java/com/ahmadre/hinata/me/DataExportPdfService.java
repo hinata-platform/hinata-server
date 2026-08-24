@@ -7,12 +7,15 @@ import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.setup.BrandLogoService;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.user.User;
 import com.lowagie.text.Chunk;
 import com.lowagie.text.Document;
 import com.lowagie.text.Element;
 import com.lowagie.text.Font;
+import com.lowagie.text.Image;
 import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
@@ -21,22 +24,32 @@ import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
+import java.text.Normalizer;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * Renders a complete, human-readable PDF of a user's personal data for the GDPR
  * self-service data export (Art. 15). Pulls every record we hold that relates to
  * the requesting user — profile, security, preferences, sessions, memberships,
- * authored content and account activity — into one branded document.
+ * authored content and account activity — into one document.
+ *
+ * <p>The document is headed by the organization running this instance, not by us:
+ * an Art. 15 request is answered by the data controller, and the closing note
+ * already sends the reader there with any question about the processing. A
+ * masthead naming the software would name a different party than the one the
+ * document holds answerable.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DataExportPdfService {
@@ -48,12 +61,30 @@ public class DataExportPdfService {
 	private static final Color HEAD_BG = new Color(0xF4, 0xF3, 0xEF);
 	private static final Color LINE = new Color(0xE7, 0xE5, 0xDE);
 
+	private static final Font BRAND = new Font(Font.HELVETICA, 12, Font.BOLD, AMBER);
 	private static final Font H_TITLE = new Font(Font.HELVETICA, 22, Font.BOLD, NAVY);
 	private static final Font H_SECTION = new Font(Font.HELVETICA, 13, Font.BOLD, NAVY);
 	private static final Font BODY = new Font(Font.HELVETICA, 10, Font.NORMAL, INK);
 	private static final Font BODY_MUTED = new Font(Font.HELVETICA, 9, Font.NORMAL, MUTED);
+	private static final Font CREDIT = new Font(Font.HELVETICA, 8, Font.NORMAL, MUTED);
 	private static final Font TH = new Font(Font.HELVETICA, 8, Font.BOLD, NAVY);
 	private static final Font TD = new Font(Font.HELVETICA, 9, Font.NORMAL, INK);
+
+	/**
+	 * The box the organization's mark is contained in, in points. Contained, never
+	 * fitted: a 6:1 wordmark and a square signet arrive through the same setting,
+	 * so bounding both edges is the only rule that leaves an unknown aspect ratio
+	 * recognizable. Matches the issue export, so the two documents this server
+	 * produces share one letterhead.
+	 */
+	private static final float LOGO_MAX_H = 34f;
+	private static final float LOGO_MAX_W = 220f;
+
+	/** What heads and names the file on an instance whose organization has none. */
+	private static final String PRODUCT = "Hinata";
+
+	/** Keeps a long legal name from growing into an unwieldy filename. */
+	private static final int MAX_SLUG = 48;
 
 	private static final DateTimeFormatter DT =
 			DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneId.of("UTC"));
@@ -63,13 +94,20 @@ public class DataExportPdfService {
 	private final IssueRepository issues;
 	private final IssueCommentRepository comments;
 	private final AuditLogRepository auditLogs;
+	private final SettingsService settings;
+	private final BrandLogoService brandLogo;
 
-	/** A suggested, filesystem-safe download name for {@code user}'s export. */
+	/**
+	 * A suggested, filesystem-safe download name for {@code user}'s export. The
+	 * organization leads it for the same reason it heads the page: this file is
+	 * the controller's answer to a request against it, and is filed as such —
+	 * often next to the answers of other controllers.
+	 */
 	public String fileName(User user) {
 		String who = user.getUsername() == null ? user.getId() : user.getUsername();
 		who = who.replaceAll("[^A-Za-z0-9._-]", "_");
 		String day = DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneId.of("UTC")).format(Instant.now());
-		return "hinata-data-export-" + who + "-" + day + ".pdf";
+		return slug(organizationName()) + "-data-export-" + who + "-" + day + ".pdf";
 	}
 
 	/** Builds the full PDF document and returns its bytes. */
@@ -102,9 +140,7 @@ public class DataExportPdfService {
 	// --- Sections -------------------------------------------------------------
 
 	private void header(Document doc, User user, boolean de) {
-		Paragraph brand = new Paragraph("Hinata", new Font(Font.HELVETICA, 12, Font.BOLD, AMBER));
-		brand.setSpacingAfter(2);
-		doc.add(brand);
+		masthead(doc);
 
 		Paragraph title = new Paragraph(de ? "Datenexport" : "Data export", H_TITLE);
 		doc.add(title);
@@ -322,13 +358,103 @@ public class DataExportPdfService {
 
 	private void footer(Document doc, boolean de) {
 		doc.add(rule());
+		String controller = organizationName();
 		Paragraph p = new Paragraph(de
-				? "Dieser Export umfasst die personenbezogenen Daten, die Hinata zu deinem Konto speichert. "
+				? "Dieser Export umfasst die personenbezogenen Daten, die " + controller
+						+ " zu deinem Konto speichert. "
 						+ "Fragen zur Verarbeitung richtest du an den Verantwortlichen."
-				: "This export contains the personal data Hinata stores about your account. "
+				: "This export contains the personal data " + controller
+						+ " stores about your account. "
 						+ "Direct any questions about processing to the data controller.", BODY_MUTED);
 		p.setSpacingBefore(8);
 		doc.add(p);
+
+		// The credit the masthead gave up. The reader still needs to know what
+		// produced the file — just not to mistake it for who answers for it.
+		Paragraph credit = new Paragraph(
+				de ? "Erstellt mit " + PRODUCT + "." : "Generated with " + PRODUCT + ".", CREDIT);
+		credit.setSpacingBefore(4);
+		doc.add(credit);
+	}
+
+	// --- organization branding ------------------------------------------------
+
+	/**
+	 * Who is issuing this document: the organization's logo, its name when there
+	 * is no usable logo, and only then the product — an instance that never
+	 * completed its setup still has to be able to answer an Art. 15 request.
+	 */
+	/**
+	 * The logo, if there is one, and the controller's name in every case.
+	 *
+	 * <p>The name is not optional here the way it is on a marketing surface: under
+	 * Art. 15 the reader has to be able to tell who issued the document, and a
+	 * picture-only signet — a crest, a hexagon, an initial — names nobody. The
+	 * closing paragraph already points them at "the data controller"; this is
+	 * where that controller is identified.
+	 */
+	private void masthead(Document doc) {
+		logo(doc);
+		Paragraph brand = new Paragraph(organizationName(), BRAND);
+		brand.setSpacingAfter(2);
+		doc.add(brand);
+	}
+
+	/**
+	 * Places the configured logo and reports whether it made it onto the page.
+	 * Failure is silence on purpose: {@link #build} turns anything thrown into a
+	 * failed download, and a logo an admin mistyped — or a host that changed the
+	 * bytes underneath us — must not be what stops someone exercising a right.
+	 */
+	private boolean logo(Document doc) {
+		try {
+			byte[] png = brandLogo.raster().orElse(null);
+			if (png == null || png.length == 0) {
+				return false;
+			}
+			Image image = Image.getInstance(png);
+			image.scaleToFit(LOGO_MAX_W, LOGO_MAX_H);
+			image.setAlignment(Element.ALIGN_LEFT);
+			image.setSpacingAfter(6);
+			doc.add(image);
+			return true;
+		} catch (Exception e) {
+			log.warn("The organization logo was left out of the data export: {}", e.toString());
+			return false;
+		}
+	}
+
+	/**
+	 * The organization this instance belongs to, or the product name when it has
+	 * none. Swallows a settings read failure for the same reason the logo swallows
+	 * its own: branding decorates this document, it does not gate it.
+	 */
+	private String organizationName() {
+		try {
+			String name = settings.get().getOrganizationName();
+			return name == null || name.isBlank() ? PRODUCT : name.trim();
+		} catch (Exception e) {
+			return PRODUCT;
+		}
+	}
+
+	/**
+	 * An organization name flattened into a filename. Admins type names in
+	 * whatever script they use, while the file travels through mail clients,
+	 * archives and file systems that still disagree about everything past ASCII —
+	 * so accents are folded ("Müller" becomes "muller") rather than trusted, and a
+	 * name that leaves nothing behind falls back to the product.
+	 */
+	private String slug(String name) {
+		String folded = Normalizer.normalize(name.replace("ß", "ss"), Normalizer.Form.NFD)
+				.replaceAll("\\p{M}+", "")
+				.toLowerCase(Locale.ROOT)
+				.replaceAll("[^a-z0-9]+", "-");
+		if (folded.length() > MAX_SLUG) {
+			folded = folded.substring(0, MAX_SLUG);
+		}
+		folded = folded.replaceAll("(^-+|-+$)", "");
+		return folded.isBlank() ? PRODUCT.toLowerCase(Locale.ROOT) : folded;
 	}
 
 	// --- Building blocks ------------------------------------------------------

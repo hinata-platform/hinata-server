@@ -17,8 +17,10 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -39,6 +41,9 @@ public class MeController {
 	private final com.ahmadre.hinata.issue.IssueWatchService watchedIssues;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
+	private final com.ahmadre.hinata.setup.SettingsService settings;
+	private final com.ahmadre.hinata.setup.BrandLogoService brandLogo;
+	private final org.springframework.context.MessageSource messages;
 
 	// --- DTOs -----------------------------------------------------------------
 
@@ -130,10 +135,11 @@ public class MeController {
 	@Operation(summary = "Confirm an email change from the mailed link")
 	@SecurityRequirements
 	@GetMapping(value = "/email-change/confirm", produces = MediaType.TEXT_HTML_VALUE)
-	public String confirmEmailChange(@RequestParam String token) {
+	public ResponseEntity<String> confirmEmailChange(@RequestParam String token,
+			@RequestHeader(name = "Accept-Language", required = false) String acceptLanguage) {
 		me.confirmEmailChange(token);
-		return resultPage("Email confirmed",
-				"Your sign-in email address has been updated. You can close this window and sign in again.");
+		return page(resultPage(localeOf(acceptLanguage), "web.emailChange.doneTitle",
+				"web.emailChange.doneBody"));
 	}
 
 	@Operation(summary = "Email myself a one-time password reset link")
@@ -147,17 +153,20 @@ public class MeController {
 	@Operation(summary = "Render the password-reset form from the mailed link")
 	@SecurityRequirements
 	@GetMapping(value = "/password-reset/confirm", produces = MediaType.TEXT_HTML_VALUE)
-	public String passwordResetForm(@RequestParam String token) {
-		return passwordFormPage(token);
+	public ResponseEntity<String> passwordResetForm(@RequestParam String token,
+			@RequestHeader(name = "Accept-Language", required = false) String acceptLanguage) {
+		return page(passwordFormPage(token, localeOf(acceptLanguage)));
 	}
 
 	@Operation(summary = "Set a new password from the reset form")
 	@SecurityRequirements
 	@PostMapping(value = "/password-reset/confirm", produces = MediaType.TEXT_HTML_VALUE)
-	public String submitPasswordReset(@RequestParam String token, @RequestParam String password) {
+	public ResponseEntity<String> submitPasswordReset(@RequestParam String token,
+			@RequestParam String password,
+			@RequestHeader(name = "Accept-Language", required = false) String acceptLanguage) {
 		me.confirmPasswordReset(token, password);
-		return resultPage("Password updated",
-				"Your password has been reset and other devices were signed out. You can close this window.");
+		return page(resultPage(localeOf(acceptLanguage), "web.passwordReset.doneTitle",
+				"web.passwordReset.doneBody"));
 	}
 
 	// --- Sessions -------------------------------------------------------------
@@ -304,17 +313,15 @@ public class MeController {
 	@SecurityRequirements
 	@GetMapping("/export.pdf")
 	public ResponseEntity<byte[]> exportPdf(@RequestParam(required = false) String token,
-			@org.springframework.web.bind.annotation.RequestHeader(name = "Accept-Language", required = false) String acceptLanguage) {
-		boolean de = acceptLanguage != null && acceptLanguage.toLowerCase().startsWith("de");
+			@RequestHeader(name = "Accept-Language", required = false) String acceptLanguage) {
 		User user = resolveExportToken(token);
 		if (user == null) {
-			String body = resultPage(
-					de ? "Link ungültig oder abgelaufen" : "Link invalid or expired",
-					de ? "Bitte fordere deinen Datenexport in den Kontoeinstellungen erneut an."
-							: "Please request your data export again from your account settings.");
+			String body = resultPage(localeOf(acceptLanguage), "web.dataExport.linkInvalidTitle",
+					"web.dataExport.linkInvalidBody");
 			return ResponseEntity.status(HttpStatus.GONE)
-					.contentType(MediaType.TEXT_HTML)
-					.body(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+					.contentType(new MediaType(MediaType.TEXT_HTML, StandardCharsets.UTF_8))
+					.header("Content-Security-Policy", PAGE_CSP)
+					.body(body.getBytes(StandardCharsets.UTF_8));
 		}
 		byte[] pdf = dataExportPdf.build(user);
 		return ResponseEntity.ok()
@@ -354,46 +361,155 @@ public class MeController {
 
 	// --- minimal public pages -------------------------------------------------
 
-	private String resultPage(String title, String body) {
+	/** The wordmark these pages carried before organizations could brand them. */
+	private static final String PRODUCT_NAME = "hinata";
+
+	/**
+	 * The policy these two pages need, and the reason they are wrapped in a
+	 * {@link ResponseEntity} at all. The chain-wide header is
+	 * {@code default-src 'none'} — exactly right for a JSON API, but it also
+	 * blocks the inline styling these pages are made of and the organization
+	 * logo they now carry. Spring Security's header writers leave a header the
+	 * handler already set alone (the mechanism {@code /api/v1/meta/logo} relies
+	 * on), so this narrower policy replaces it for these responses only: still
+	 * no script, no framing, no base-URI games, and a form that can post
+	 * nowhere but back to us.
+	 */
+	private static final String PAGE_CSP = "default-src 'none'; img-src 'self'; "
+			+ "style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; "
+			+ "frame-ancestors 'none'";
+
+	/** Serves a rendered page as UTF-8 HTML under {@link #PAGE_CSP}. */
+	private static ResponseEntity<String> page(String html) {
+		return ResponseEntity.ok()
+				.contentType(new MediaType(MediaType.TEXT_HTML, StandardCharsets.UTF_8))
+				.header("Content-Security-Policy", PAGE_CSP)
+				.body(html);
+	}
+
+	/**
+	 * The language of a page nobody opened from the app: these are landed on
+	 * from a link in an e-mail, so the browser's {@code Accept-Language} is the
+	 * only signal there is — the same rule {@code export.pdf} follows. Only
+	 * en/de are translated, so everything else lands on English.
+	 */
+	private static Locale localeOf(String acceptLanguage) {
+		return acceptLanguage != null && acceptLanguage.toLowerCase().startsWith("de")
+				? Locale.GERMAN
+				: Locale.ENGLISH;
+	}
+
+	/** Resolves page copy from {@code messages*.properties}, key as fallback. */
+	private String t(Locale locale, String key, Object... args) {
+		return messages.getMessage(key, args, key, locale);
+	}
+
+	/** What goes where the product wordmark used to be. */
+	private record Brand(String name, boolean logo) {
+	}
+
+	/**
+	 * Resolved once per render. Both reads are served from caches, so a warm
+	 * instance pays no I/O for it — and the whole thing is guarded because
+	 * branding must never be the reason a password cannot be reset: an
+	 * unreachable settings store falls back to the product wordmark and the
+	 * page still does its job.
+	 */
+	private Brand brand() {
+		try {
+			String name = settings.get().getOrganizationName();
+			return new Brand(name == null || name.isBlank() ? PRODUCT_NAME : name.trim(),
+					brandLogo.display().isPresent());
+		} catch (Exception e) {
+			return new Brand(PRODUCT_NAME, false);
+		}
+	}
+
+	/**
+	 * The browser counterpart of the mail masthead: on an instance that has a
+	 * logo, a page reached from a transactional e-mail belongs to the
+	 * organization rather than to the product.
+	 *
+	 * <p>The logo is referenced through our own {@code /api/v1/meta/logo} proxy,
+	 * which is same-origin by construction — no CORS question, no bytes to
+	 * inline — and only offered when {@link com.ahmadre.hinata.setup.BrandLogoService}
+	 * actually holds usable bytes, so a logo we cannot fetch degrades to the
+	 * organization's name instead of a broken-image icon. The image is capped
+	 * but deliberately not boxed, and carries no {@code onerror}: inline script
+	 * is not on this page's CSP, and an alt text in a text-sized row is a far
+	 * better failure than an empty 200×32 hole.
+	 */
+	private String masthead(Brand brand) {
+		String mark = brand.logo()
+				? "<img src=\"/api/v1/meta/logo\" alt=\"" + escape(brand.name())
+						+ "\" style=\"max-height:32px;max-width:200px\"/>"
+				: escape(brand.name());
+		return "<div style=\"font-weight:800;color:#2D2B55;margin-bottom:20px\">" + mark
+				+ "</div>";
+	}
+
+	/**
+	 * The page a mailed link lands on when there is nothing left to do: an
+	 * e-mail change confirmed, a password reset, or an export link that has
+	 * expired. Only the two message keys differ between those cases.
+	 */
+	private String resultPage(Locale locale, String titleKey, String bodyKey) {
+		Brand brand = brand();
+		String title = t(locale, titleKey);
 		return """
-				<!doctype html><html><head><meta charset="utf-8"/>
+				<!doctype html><html lang="%s"><head><meta charset="utf-8"/>
 				<meta name="viewport" content="width=device-width,initial-scale=1"/>
-				<title>%s · hinata</title></head>
+				<title>%s · %s</title></head>
 				<body style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F4F3EF">
 				<div style="max-width:460px;margin:64px auto;background:#fff;border:1px solid #E7E5DE;border-radius:24px;overflow:hidden">
 				<div style="height:4px;background:#D9A032"></div>
 				<div style="padding:32px">
-				<div style="font-weight:800;color:#2D2B55;margin-bottom:20px">hinata</div>
+				%s
 				<h1 style="color:#23223F;font-size:20px;margin:0 0 12px">%s</h1>
 				<p style="color:#6B6A85;font-size:15px;line-height:1.6;margin:0">%s</p>
 				</div></div></body></html>
-				""".formatted(escape(title), escape(title), escape(body));
+				""".formatted(locale.getLanguage(), escape(title), escape(brand.name()),
+				masthead(brand), escape(title), escape(t(locale, bodyKey)));
 	}
 
-	private String passwordFormPage(String token) {
+	private String passwordFormPage(String token, Locale locale) {
 		int min = securityPolicy.passwordMinLength();
+		Brand brand = brand();
 		return """
-				<!doctype html><html><head><meta charset="utf-8"/>
+				<!doctype html><html lang="%s"><head><meta charset="utf-8"/>
 				<meta name="viewport" content="width=device-width,initial-scale=1"/>
-				<title>Reset password · hinata</title></head>
+				<title>%s · %s</title></head>
 				<body style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F4F3EF">
 				<div style="max-width:460px;margin:64px auto;background:#fff;border:1px solid #E7E5DE;border-radius:24px;overflow:hidden">
 				<div style="height:4px;background:#D9A032"></div>
 				<div style="padding:32px">
-				<div style="font-weight:800;color:#2D2B55;margin-bottom:20px">hinata</div>
-				<h1 style="color:#23223F;font-size:20px;margin:0 0 16px">Choose a new password</h1>
+				%s
+				<h1 style="color:#23223F;font-size:20px;margin:0 0 16px">%s</h1>
 				<form method="post" action="/api/v1/me/password-reset/confirm">
 				<input type="hidden" name="token" value="%s"/>
-				<input type="password" name="password" minlength="%d" required placeholder="New password (min. %d chars)"
+				<input type="password" name="password" minlength="%d" required placeholder="%s"
 				  style="width:100%%;box-sizing:border-box;padding:13px;border:1px solid #E7E5DE;border-radius:10px;font-size:15px;margin-bottom:14px"/>
 				<button type="submit"
 				  style="width:100%%;padding:13px;background:#2D2B55;color:#fff;border:0;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">
-				  Update password</button>
+				  %s</button>
 				</form></div></div></body></html>
-				""".formatted(escape(token), min, min);
+				""".formatted(locale.getLanguage(),
+				escape(t(locale, "web.passwordReset.pageTitle")), escape(brand.name()),
+				masthead(brand), escape(t(locale, "web.passwordReset.heading")), escape(token), min,
+				escape(t(locale, "web.passwordReset.placeholder", min)),
+				escape(t(locale, "web.passwordReset.submit")));
 	}
 
+	/**
+	 * Everything interpolated into these pages goes through here — copy, the
+	 * organization name, the reset token.
+	 *
+	 * <p>Escaped for a UTF-8 document (which is what both pages declare and now
+	 * also send in their Content-Type): identical protection — the same five
+	 * characters that can break out of text or a quoted attribute — while German
+	 * copy stays readable text instead of turning into entity soup.
+	 */
 	private String escape(String value) {
-		return org.springframework.web.util.HtmlUtils.htmlEscape(value);
+		return org.springframework.web.util.HtmlUtils.htmlEscape(value, StandardCharsets.UTF_8.name());
 	}
 }
