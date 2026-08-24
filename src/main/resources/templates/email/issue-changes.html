@@ -14,7 +14,7 @@
           #{email.eyebrow.ISSUE_UPDATED},
           ${headline},
           ${preheader},
-          #{email.footer.automated},
+          #{email.footer.automated(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">

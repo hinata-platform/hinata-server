@@ -43,7 +43,6 @@ public class NotificationService {
 	// the push still fire from here, immediately.
 	private final IssueDigestService digests;
 
-	static final String SUBJECT_PREFIX = "[Hinata] ";
 
 	/** Notify each given assignee (except the actor) that the issue is theirs. */
 	public void notifyAssigned(Issue issue, User actor, java.util.Collection<String> assigneeIds) {
@@ -353,7 +352,7 @@ public class NotificationService {
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
 		// In-app notifications keep the relative route; the e-mail button needs an
 		// absolute deep link that the native app intercepts as a Universal/App Link.
-		mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link),
+		mail.sendNotification(user.getEmail(), mail.subjectPrefix() + title, title, body, appLink(link),
 				buttonLabel(de(user)), localeOf(user), eyebrowKey(type));
 		push.sendToUser(user.getId(), title, body, link);
 	}
@@ -372,7 +371,7 @@ public class NotificationService {
 		NotificationPreferences prefs = prefsOf(user);
 		boolean de = de(user);
 		if (prefs.deliversEmail(eventId)) {
-			mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + title, title, body, appLink(link),
+			mail.sendNotification(user.getEmail(), mail.subjectPrefix() + title, title, body, appLink(link),
 					buttonLabel(de), localeOf(user), eyebrowKey(type));
 		}
 		if (prefs.deliversPush(eventId)) {
@@ -452,7 +451,7 @@ public class NotificationService {
 		NotificationPreferences prefs = prefsOf(user);
 		if (prefs.deliversEmail(eventId(Notification.Type.DIGEST))) {
 			model.put("ctaLink", appLink(link));
-			mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + title, "email/weekly-summary", model);
+			mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/weekly-summary", model);
 		}
 		if (prefs.deliversPush(eventId(Notification.Type.DIGEST))) {
 			push.sendToUser(user.getId(), title, body, link);
@@ -483,21 +482,24 @@ public class NotificationService {
 
 	public void notifyAccountActivated(User user) {
 		String title = de(user) ? "Konto aktiviert" : "Account activated";
+		// The account belongs to the organization running this instance, not to us.
+		String org = mail.organizationName();
 		String body = de(user)
-				? "Dein Hinata-Konto wurde aktiviert. Du kannst dich jetzt wieder anmelden."
-				: "Your Hinata account has been activated. You can sign in again now.";
+				? "Dein Konto bei " + org + " wurde aktiviert. Du kannst dich jetzt wieder anmelden."
+				: "Your " + org + " account has been activated. You can sign in again now.";
 		persist(user, Notification.Type.ACCOUNT_ACTIVATED, title, body, "/login");
-		mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + title, "email/account-activated",
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/account-activated",
 				accountModel(user, signInLink()));
 	}
 
 	public void notifyAccountDeactivated(User user) {
 		String title = de(user) ? "Konto deaktiviert" : "Account deactivated";
+		String org = mail.organizationName();
 		String body = de(user)
-				? "Dein Hinata-Konto wurde deaktiviert. Du kannst dich derzeit nicht anmelden."
-				: "Your Hinata account has been deactivated. You currently cannot sign in.";
+				? "Dein Konto bei " + org + " wurde deaktiviert. Du kannst dich derzeit nicht anmelden."
+				: "Your " + org + " account has been deactivated. You currently cannot sign in.";
 		persist(user, Notification.Type.ACCOUNT_DEACTIVATED, title, body, null);
-		mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + title, "email/account-deactivated",
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/account-deactivated",
 				accountModel(user, null));
 	}
 
@@ -517,7 +519,7 @@ public class NotificationService {
 		Map<String, Object> model = accountModel(user, null);
 		model.put("isAdmin", isAdmin);
 		model.put("roles", roleLabels(user));
-		mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + title, "email/account-role-changed", model);
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/account-role-changed", model);
 	}
 
 	/**
@@ -528,7 +530,7 @@ public class NotificationService {
 	 */
 	public void notifyAccountDeleted(User user) {
 		String title = de(user) ? "Konto gelöscht" : "Account deleted";
-		mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + title, "email/account-deleted",
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/account-deleted",
 				accountModel(user, null));
 	}
 
@@ -721,7 +723,7 @@ public class NotificationService {
 				// an absolute deep link that the native app intercepts as a
 				// Universal/App Link, straight to the issue.
 				if (prefs.deliversEmail(eventId) && !routing.emailSink().takeOver(user)) {
-					mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + t, t, b, appLink(userLink),
+					mail.sendNotification(user.getEmail(), mail.subjectPrefix() + t, t, b, appLink(userLink),
 							buttonLabel(de), localeOf(user), eyebrowKey(type));
 				}
 				if (prefs.deliversPush(eventId)) {
@@ -809,9 +811,13 @@ public class NotificationService {
 		String of(boolean de);
 	}
 
-	/** Localized label for the e-mail call-to-action button. */
+	/**
+	 * Localized label for the e-mail call-to-action button. Names the thing being
+	 * opened rather than the product doing the opening — the recipient is going to
+	 * their own tracker.
+	 */
 	private String buttonLabel(boolean de) {
-		return de ? "In Hinata öffnen" : "Open in Hinata";
+		return de ? "Vorgang öffnen" : "Open issue";
 	}
 
 	/** Recipient's notification preferences, normalised (defaults for legacy users). */

@@ -5,6 +5,7 @@ import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -39,10 +40,12 @@ public class AdminSettingsController {
 	private final CurrentUser currentUser;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final OrganizationLogoService logoService;
+	private final BrandLogoService brandLogo;
 
 	@GetMapping
 	public ServerSettings get() {
 		ServerSettings current = settings.get();
+		fillLogoReach(current);
 		// Surface the effective app config (env defaults when not yet overridden)
 		// so the admin form pre-fills the values currently served via /meta.
 		ServerSettings.App app = current.getApp();
@@ -170,8 +173,20 @@ public class AdminSettingsController {
 		git.setTokenSecretConfigured(gitConfig.tokenSecretConfigured());
 	}
 
+	/**
+	 * Tells the admin form whether the configured logo reaches mails and exported
+	 * documents too, or only the app. Cached in {@link BrandLogoService}, so this
+	 * costs nothing on a warm instance.
+	 */
+	private void fillLogoReach(ServerSettings current) {
+		String url = current.getGeneral().getLogoUrl();
+		boolean configured = url != null && !url.isBlank();
+		current.getGeneral().setLogoUsableForDocuments(
+				configured && !brandLogo.configuredButUnusableForDocuments());
+	}
+
 	@PutMapping
-	public ServerSettings update(@RequestBody ServerSettings updated) {
+	public ServerSettings update(@Valid @RequestBody ServerSettings updated) {
 		ServerSettings current = settings.get();
 		// Setup completion and org identity are managed by the setup flow only.
 		updated.setSetupCompleted(current.isSetupCompleted());
@@ -179,20 +194,28 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
-		// A settings PUT that carries an external/blank logo URL means the admin is
-		// no longer using an uploaded logo — drop the stored object so it can't
-		// shadow the URL in the /meta/logo proxy and doesn't linger as an orphan.
-		if (updated.getGeneral() == null
-				|| !OrganizationLogoService.isInternal(updated.getGeneral().getLogoUrl())) {
-			logoService.deleteStoredObject();
-		}
+		// An upload the admin has just switched away from: the stored object would
+		// otherwise shadow the new URL in the /meta/logo proxy and linger as an
+		// orphan. Only relevant when there *was* an upload — testing the incoming
+		// value instead would fire on every ordinary save (an external URL and a
+		// blank one are both "not internal"), and on an instance without object
+		// storage that turned the whole settings PUT into a 503.
+		boolean droppingUpload = OrganizationLogoService.isInternal(current.getGeneral().getLogoUrl())
+				&& (updated.getGeneral() == null
+						|| !OrganizationLogoService.isInternal(updated.getGeneral().getLogoUrl()));
 		// Recorded before the save so that disabling audit logging itself is still
 		// captured (the check reads the pre-save, still-enabled settings).
 		audit.event(AuditAction.SETTINGS_CHANGED)
 				.actor(currentUser.require())
 				.meta("auditEnabled", String.valueOf(updated.getAudit().isEnabled()))
 				.log();
-		return settings.save(updated);
+		ServerSettings saved = settings.save(updated);
+		// After the save: a failed write must not leave the settings pointing at an
+		// object that is already gone.
+		if (droppingUpload) {
+			logoService.deleteStoredObject();
+		}
+		return saved;
 	}
 
 	/** WRITE_ONLY secrets are not echoed back; keep stored values when omitted. */

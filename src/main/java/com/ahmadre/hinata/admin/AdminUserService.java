@@ -49,6 +49,7 @@ public class AdminUserService {
 	private final NotificationService notifications;
 	private final GatewayService gateway;
 	private final AdminMailService adminMail;
+	private final com.ahmadre.hinata.notification.MailService mail;
 	private final AccountMailService accountMail;
 	private final CurrentUser currentUser;
 	private final PasswordEncoder passwordEncoder;
@@ -144,7 +145,7 @@ public class AdminUserService {
 	public InviteResult invite(List<String> emails, boolean admin, String message) {
 		Set<Role> roles = admin ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER);
 		String inviterId = currentUser.requireId();
-		String inviterName = users.findById(inviterId).map(User::getDisplayName).orElse("Hinata");
+		String inviterName = users.findById(inviterId).map(User::getDisplayName).orElse(mail.organizationName());
 		int sent = 0, failed = 0, skipped = 0;
 		for (String raw : emails) {
 			String email = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
@@ -185,7 +186,7 @@ public class AdminUserService {
 
 	public InviteResult resend(List<String> ids) {
 		String inviterId = currentUser.requireId();
-		String inviterName = users.findById(inviterId).map(User::getDisplayName).orElse("Hinata");
+		String inviterName = users.findById(inviterId).map(User::getDisplayName).orElse(mail.organizationName());
 		int sent = 0, failed = 0, skipped = 0;
 		for (String id : ids) {
 			User u = userService.get(id);

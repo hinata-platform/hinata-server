@@ -5,7 +5,7 @@
           #{email.export.eyebrow},
           #{email.export.headline},
           #{email.export.body},
-          #{email.footer.automated},
+          #{email.footer.automated(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">

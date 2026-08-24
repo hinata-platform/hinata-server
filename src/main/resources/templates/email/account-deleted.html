@@ -4,13 +4,13 @@
       th:replace="~{email/_layout :: page(
           #{email.account.eyebrow},
           #{email.account.deleted.headline},
-          #{email.account.deleted.body},
-          #{email.footer.automatedAdmin},
+          #{email.account.deleted.body(${organizationName})},
+          #{email.footer.automatedAdmin(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">
   <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
-  <th:block th:replace="~{email/_layout :: copy(#{email.account.deleted.body})}"/>
+  <th:block th:replace="~{email/_layout :: copy(#{email.account.deleted.body(${organizationName})})}"/>
 
   <th:block th:replace="~{email/_layout :: rule}"/>
   <th:block th:replace="~{email/_layout :: fineprint(#{email.account.mistake})}"/>

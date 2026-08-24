@@ -47,6 +47,12 @@ final class EmailFixtures {
 
 	private static final String BASE = "https://track.asta.hn";
 
+	/**
+	 * The organization the fixture instance belongs to. Long enough and umlauted
+	 * enough to catch a footer that assumed a short ASCII name.
+	 */
+	static final String ORGANIZATION = "AStA der Hochschule Niederrhein";
+
 	private static final String TOKEN =
 			"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZGEiLCJuYmYiOjE3NTUyMDAwMDB9.q7Vb3xR2mKpN8sT1uZ";
 
@@ -83,16 +89,32 @@ final class EmailFixtures {
 		return source;
 	}
 
+	/**
+	 * A {@link SettingsService} that reports the fixture organization, so the
+	 * rendered footer and subject tag are the ones a real instance produces.
+	 */
+	static com.ahmadre.hinata.setup.SettingsService settings() {
+		var settings = org.mockito.Mockito.mock(com.ahmadre.hinata.setup.SettingsService.class);
+		var stored = new com.ahmadre.hinata.setup.ServerSettings();
+		stored.setOrganizationName(ORGANIZATION);
+		org.mockito.Mockito.when(settings.get()).thenReturn(stored);
+		return settings;
+	}
+
+	/** A {@link BrandLogoService} with no organization logo — the default instance. */
+	static com.ahmadre.hinata.setup.BrandLogoService brandLogo() {
+		var brand = org.mockito.Mockito.mock(com.ahmadre.hinata.setup.BrandLogoService.class);
+		org.mockito.Mockito.when(brand.mailBand(org.mockito.ArgumentMatchers.anyString()))
+				.thenReturn(java.util.Optional.empty());
+		return brand;
+	}
+
 	/** Sample model for {@code template} in {@code locale} ("de" / "en"). */
 	static Map<String, Object> model(String template, String locale) {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("locale", locale);
 		m.put("displayName", "Ada Lovelace");
-		// Only the variant, exactly as AuthMailService / AdminMailService set it.
-		// MailService#render turns that into the cid: source and the band height;
-		// the preview swaps in a file path instead. Neither is decided here.
-		String variant = mastheadVariant(template);
-		if (variant != null) m.put("masthead", variant);
+		m.put("organizationName", ORGANIZATION);
 		boolean de = "de".equals(locale);
 
 		switch (template) {
@@ -172,15 +194,6 @@ final class EmailFixtures {
 			default -> throw new IllegalArgumentException("No sample model for " + template);
 		}
 		return m;
-	}
-
-	/** The illustrated band a template asks for, or null for the plain aurora. */
-	static String mastheadVariant(String template) {
-		return switch (template) {
-			case "email/verify-email" -> "welcome";
-			case "email/invite" -> "invite";
-			default -> null;
-		};
 	}
 
 	/** Mirrors the flat map that {@code WeeklyDigestJob#mailModel} builds. */

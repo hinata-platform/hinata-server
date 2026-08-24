@@ -1,7 +1,10 @@
 package com.ahmadre.hinata.issue.export;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -11,22 +14,30 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFPicture;
 import org.junit.jupiter.api.Test;
 import org.xml.sax.SAXException;
 
+import javax.imageio.ImageIO;
 import javax.xml.XMLConstants;
 import javax.xml.transform.stream.StreamSource;
 import javax.xml.validation.Schema;
 import javax.xml.validation.SchemaFactory;
 import javax.xml.validation.Validator;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * What actually comes out of the four renderers.
@@ -41,6 +52,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 class IssueExportRenderersTest {
 
 	private static final String HOSTILE_TITLE = "=HYPERLINK(\"http://evil\",\"x\")";
+	private static final String TITLE = "Einzelnes Issue exportieren";
 
 	private final PdfIssueExportRenderer pdf = new PdfIssueExportRenderer();
 	private final DocxIssueExportRenderer docx = new DocxIssueExportRenderer();
@@ -50,6 +62,10 @@ class IssueExportRenderersTest {
 	// --- fixtures ------------------------------------------------------------
 
 	private static IssueExport export(String title, List<ExportBlock> description) {
+		return export(title, description, null);
+	}
+
+	private static IssueExport export(String title, List<ExportBlock> description, byte[] logo) {
 		return new IssueExport(
 				"HIN-50", title, "hinata platform",
 				List.of(new IssueExport.Field("Status", "In Progress"),
@@ -62,11 +78,11 @@ class IssueExportRenderersTest {
 				List.of(new IssueExport.Attachment("shot.png", "image/png", "2.0 KB",
 						"Rebar Ahmad", Instant.parse("2026-08-18T09:00:00Z"))),
 				List.of(new IssueExport.Activity("2026-08-19 10:00 UTC", "Lena", "STATE: Open → In Progress")),
-				"AStA", Instant.parse("2026-08-20T08:00:00Z"));
+				"AStA", logo, Instant.parse("2026-08-20T08:00:00Z"));
 	}
 
 	private static IssueExport standard() {
-		return export("Einzelnes Issue exportieren", MarkdownBlocks.of("""
+		return export(TITLE, MarkdownBlocks.of("""
 				# Ziel
 
 				A paragraph with **bold**, *italic* and `code`.
@@ -165,6 +181,124 @@ class IssueExportRenderersTest {
 		}
 	}
 
+	// --- the organization logo ----------------------------------------------
+
+	/**
+	 * A [width]×[height] PNG, in the shape {@code BrandLogoService.raster()} hands
+	 * over: normalized, opaque enough to see, and of an aspect ratio nobody chose.
+	 */
+	private static byte[] logoPng(int width, int height) throws Exception {
+		BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D g = image.createGraphics();
+		g.setColor(new Color(0x2D, 0x2B, 0x55));
+		g.fillRect(0, 0, width, height);
+		g.dispose();
+		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+		ImageIO.write(image, "png", bytes);
+		return bytes.toByteArray();
+	}
+
+	/**
+	 * No logo is the ordinary case — most instances configure none, and a vector
+	 * one cannot be decoded here — so it is the case that has to stay whole.
+	 */
+	@Test
+	void withoutALogoBothDocumentsAreExactlyWhatTheyAlwaysWere() throws Exception {
+		try (PDDocument document = Loader.loadPDF(pdf.render(standard()))) {
+			assertThat(new PDFTextStripper().getText(document)).contains("HIN-50");
+			assertThat(images(document)).isEmpty();
+		}
+		try (XWPFDocument document = new XWPFDocument(
+				new ByteArrayInputStream(docx.render(standard())))) {
+			assertThat(document.getAllPictures()).isEmpty();
+		}
+	}
+
+	@Test
+	void aConfiguredLogoIsDrawnIntoThePdfAboveTheIssueKey() throws Exception {
+		// The same document twice, differing only in the logo — anything else in it
+		// would decide the size comparison instead.
+		byte[] plain = pdf.render(export(TITLE, List.of()));
+		byte[] branded = pdf.render(export(TITLE, List.of(), logoPng(600, 60)));
+
+		assertThat(branded.length).isGreaterThan(plain.length);
+		try (PDDocument document = Loader.loadPDF(branded)) {
+			assertThat(images(document)).as("the mark reached the page").hasSize(1);
+			assertThat(new PDFTextStripper().getText(document)).contains("HIN-50");
+		}
+	}
+
+	/**
+	 * Word draws exactly the box it is handed, so containment is this renderer's
+	 * own job: a 10:1 wordmark has to arrive 10:1 and inside the box, not filling
+	 * it. The numbers are the box — 220pt wide, 32pt tall — and the one the wide
+	 * mark runs out of first is its width.
+	 */
+	@Test
+	void aWideLogoIsContainedInTheWordDocumentRatherThanStretched() throws Exception {
+		byte[] plain = docx.render(export(TITLE, List.of()));
+		byte[] branded = docx.render(export(TITLE, List.of(), logoPng(600, 60)));
+
+		assertThat(branded.length).isGreaterThan(plain.length);
+		try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(branded))) {
+			assertThat(document.getAllPictures()).hasSize(1);
+			XWPFPicture picture = document.getParagraphs().stream()
+					.flatMap(paragraph -> paragraph.getRuns().stream())
+					.flatMap(run -> run.getEmbeddedPictures().stream())
+					.findFirst().orElseThrow();
+			assertThat(picture.getWidth()).isCloseTo(220, within(1.0));
+			assertThat(picture.getDepth()).isCloseTo(22, within(1.0));
+		}
+	}
+
+	/** A tall mark runs out of height first, and is bounded by that edge instead. */
+	@Test
+	void aTallLogoIsBoundedByTheHeightInstead() throws Exception {
+		byte[] branded = docx.render(export("t", List.of(), logoPng(120, 600)));
+
+		try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(branded))) {
+			XWPFPicture picture = document.getParagraphs().stream()
+					.flatMap(paragraph -> paragraph.getRuns().stream())
+					.flatMap(run -> run.getEmbeddedPictures().stream())
+					.findFirst().orElseThrow();
+			assertThat(picture.getDepth()).isCloseTo(32, within(1.0));
+			assertThat(picture.getWidth()).isCloseTo(6.4, within(1.0));
+		}
+	}
+
+	/**
+	 * The rule the whole feature hangs on: the logo decorates the export, so bytes
+	 * neither library will embed cost the letterhead and nothing else. Reached in
+	 * practice by a source that changed under a cached external URL.
+	 */
+	@Test
+	void bytesThatAreNotAnImageCostTheLetterheadAndNotTheExport() throws Exception {
+		IssueExport broken = export(TITLE, List.of(),
+				"not a picture".getBytes(StandardCharsets.UTF_8));
+
+		try (PDDocument document = Loader.loadPDF(pdf.render(broken))) {
+			assertThat(new PDFTextStripper().getText(document)).contains("HIN-50");
+			assertThat(images(document)).isEmpty();
+		}
+		try (XWPFDocument document = new XWPFDocument(
+				new ByteArrayInputStream(docx.render(broken)))) {
+			assertThat(document.getAllPictures()).isEmpty();
+			assertThat(document.getParagraphs()).isNotEmpty();
+		}
+	}
+
+	/** Every image the first page actually references. */
+	private static List<PDImageXObject> images(PDDocument document) throws Exception {
+		PDResources resources = document.getPage(0).getResources();
+		List<PDImageXObject> found = new ArrayList<>();
+		for (COSName name : resources.getXObjectNames()) {
+			if (resources.getXObject(name) instanceof PDImageXObject image) {
+				found.add(image);
+			}
+		}
+		return found;
+	}
+
 	// --- XLSX ----------------------------------------------------------------
 
 	/**
@@ -236,7 +370,7 @@ class IssueExportRenderersTest {
 						MarkdownBlocks.of("]]><!--"))),
 				List.of(new IssueExport.Link("\"", "&", "<")),
 				List.of(new IssueExport.Attachment("../x\".png", "text/plain", "1 B", "'", null)),
-				List.of(), "<org>", Instant.parse("2026-08-20T08:00:00Z"));
+				List.of(), "<org>", null, Instant.parse("2026-08-20T08:00:00Z"));
 
 		byte[] bytes = xml.render(export);
 

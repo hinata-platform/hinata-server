@@ -354,7 +354,7 @@ public class IssueDigestService {
 		String noun = de
 				? (count == 1 ? "Änderung" : "Änderungen")
 				: (count == 1 ? "change" : "changes");
-		return NotificationService.SUBJECT_PREFIX + issue.getReadableId() + ": " + count + " " + noun;
+		return mail.subjectPrefix() + issue.getReadableId() + ": " + count + " " + noun;
 	}
 
 	private Map<String, Object> model(Issue issue, List<FieldChange> changes, boolean de) {

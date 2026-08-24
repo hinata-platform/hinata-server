@@ -3,13 +3,13 @@
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{email/_layout :: page(
           #{email.invite.eyebrow},
-          #{email.invite.headline},
-          #{email.invite.body(${inviterName})},
-          #{email.footer.automated},
+          #{email.invite.headline(${organizationName})},
+          #{email.invite.body(${inviterName}, ${organizationName})},
+          #{email.footer.automated(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">
-  <th:block th:replace="~{email/_layout :: copy(#{email.invite.body(${inviterName})})}"/>
+  <th:block th:replace="~{email/_layout :: copy(#{email.invite.body(${inviterName}, ${organizationName})})}"/>
 
   <!--/* The inviter's personal note, when they wrote one — quoted rather than
        run into the body copy so it reads as their voice, not the system's. */-->

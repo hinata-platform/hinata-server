@@ -25,7 +25,8 @@ class EmailTemplateRenderTest {
 	 * collaborators — going through the real service means the Locale derivation
 	 * and the masthead injection are under test instead of re-implemented.
 	 */
-	private final MailService mail = new MailService(null, null, null);
+	private final MailService mail =
+			new MailService(null, null, null, EmailFixtures.settings(), EmailFixtures.brandLogo());
 
 	static List<String> templates() {
 		return EmailFixtures.TEMPLATES;

@@ -4,16 +4,16 @@
       th:replace="~{email/_layout :: page(
           #{email.account.eyebrow},
           #{email.account.activated.headline},
-          #{email.account.activated.body},
-          #{email.footer.automatedAdmin},
+          #{email.account.activated.body(${organizationName})},
+          #{email.footer.automatedAdmin(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">
   <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
-  <th:block th:replace="~{email/_layout :: copy(#{email.account.activated.body})}"/>
+  <th:block th:replace="~{email/_layout :: copy(#{email.account.activated.body(${organizationName})})}"/>
 
   <th:block th:if="${ctaLink != null}"
-            th:replace="~{email/_layout :: cta(${ctaLink}, #{email.account.activated.cta})}"/>
+            th:replace="~{email/_layout :: cta(${ctaLink}, #{email.account.activated.cta(${organizationName})})}"/>
   <th:block th:if="${ctaLink != null}" th:replace="~{email/_layout :: fallback(${ctaLink})}"/>
 </th:block>
 </body>

@@ -5,7 +5,7 @@
           #{email.approval.eyebrow},
           #{email.approval.headline},
           #{email.approval.body},
-          #{email.footer.automated},
+          #{email.footer.automated(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">
@@ -34,7 +34,7 @@
   <th:block th:replace="~{email/_layout :: fallback(${reviewUrl})}"/>
 
   <th:block th:replace="~{email/_layout :: rule}"/>
-  <th:block th:replace="~{email/_layout :: fineprint(#{email.approval.note})}"/>
+  <th:block th:replace="~{email/_layout :: fineprint(#{email.approval.note(${organizationName})})}"/>
 </th:block>
 </body>
 </html>

@@ -8,15 +8,23 @@ import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.setup.BrandLogoService;
+import com.ahmadre.hinata.setup.ServerSettings;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,9 +38,12 @@ class DataExportPdfServiceTest {
 	private IssueRepository issues;
 	private IssueCommentRepository comments;
 	private AuditLogRepository auditLogs;
+	private SettingsService settings;
+	private BrandLogoService brandLogo;
 	private DataExportPdfService service;
 
 	private User user;
+	private ServerSettings serverSettings;
 
 	@BeforeEach
 	void setUp() {
@@ -41,7 +52,13 @@ class DataExportPdfServiceTest {
 		issues = mock(IssueRepository.class);
 		comments = mock(IssueCommentRepository.class);
 		auditLogs = mock(AuditLogRepository.class);
-		service = new DataExportPdfService(me, sessions, issues, comments, auditLogs);
+		settings = mock(SettingsService.class);
+		brandLogo = mock(BrandLogoService.class);
+		service = new DataExportPdfService(me, sessions, issues, comments, auditLogs, settings, brandLogo);
+
+		serverSettings = new ServerSettings();
+		when(settings.get()).thenReturn(serverSettings);
+		when(brandLogo.raster()).thenReturn(Optional.empty());
 
 		user = User.builder().id("u1").username("ada").displayName("Ada Lovelace")
 				.email("ada@example.org").locale("en").roles(Set.of(Role.MEMBER))
@@ -93,5 +110,66 @@ class DataExportPdfServiceTest {
 	@Test
 	void buildsFilesystemSafeFileName() {
 		assertThat(service.fileName(user)).startsWith("hinata-data-export-ada-").endsWith(".pdf");
+	}
+
+	@Test
+	void namesTheFileAfterTheOrganization() {
+		serverSettings.setOrganizationName("AStA der Hochschule Niederrhein");
+
+		String name = service.fileName(user);
+
+		assertThat(name).startsWith("asta-der-hochschule-niederrhein-data-export-ada-").endsWith(".pdf");
+		assertThat(name).matches("[a-z0-9][A-Za-z0-9._-]*\\.pdf");
+	}
+
+	@Test
+	void foldsAccentsOutOfTheFileName() {
+		serverSettings.setOrganizationName("Müller & Söhne GmbH");
+
+		assertThat(service.fileName(user)).startsWith("muller-sohne-gmbh-data-export-ada-");
+	}
+
+	@Test
+	void embedsTheOrganizationLogoWhenThereIsOne() {
+		when(brandLogo.raster()).thenReturn(Optional.of(png(240, 80)));
+
+		byte[] withLogo = service.build(user);
+
+		assertThat(new String(withLogo, 0, 5, StandardCharsets.ISO_8859_1)).startsWith("%PDF-");
+		assertThat(new String(withLogo, StandardCharsets.ISO_8859_1)).contains("/Image");
+	}
+
+	@Test
+	void rendersWithoutALogoAndWithoutAnOrganization() {
+		// Nothing configured at all: still a document, headed by the product.
+		byte[] plain = service.build(user);
+
+		assertThat(new String(plain, 0, 5, StandardCharsets.ISO_8859_1)).startsWith("%PDF-");
+		assertThat(new String(plain, StandardCharsets.ISO_8859_1)).doesNotContain("/Image");
+	}
+
+	@Test
+	void survivesUnreadableLogoBytes() {
+		// A raster that no decoder accepts must cost the letterhead, not the export.
+		when(brandLogo.raster()).thenReturn(Optional.of(new byte[] { 1, 2, 3, 4 }));
+
+		byte[] pdf = service.build(user);
+
+		assertThat(new String(pdf, 0, 5, StandardCharsets.ISO_8859_1)).startsWith("%PDF-");
+	}
+
+	private static byte[] png(int width, int height) {
+		BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+		var g = image.createGraphics();
+		g.setColor(Color.ORANGE);
+		g.fillRect(0, 0, width, height);
+		g.dispose();
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try {
+			ImageIO.write(image, "png", out);
+		} catch (Exception e) {
+			throw new IllegalStateException(e);
+		}
+		return out.toByteArray();
 	}
 }

@@ -17,7 +17,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AccountMailService {
 
-	private static final String SUBJECT_PREFIX = "[Hinata] ";
 
 	private final MailService mail;
 
@@ -27,7 +26,7 @@ public class AccountMailService {
 		model.put("confirmUrl", confirmUrl);
 		model.put("expiresHours", 24);
 		String subject = de(user) ? "Bestätige deine neue E-Mail-Adresse" : "Confirm your new email address";
-		mail.sendTemplate(newEmail, SUBJECT_PREFIX + subject, "email/email-change-verify", model);
+		mail.sendTemplate(newEmail, mail.subjectPrefix() + subject, "email/email-change-verify", model);
 	}
 
 	public void sendPasswordReset(User user, String resetUrl) {
@@ -35,7 +34,7 @@ public class AccountMailService {
 		model.put("resetUrl", resetUrl);
 		model.put("expiresMinutes", 30);
 		String subject = de(user) ? "Passwort zurücksetzen" : "Reset your password";
-		mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + subject, "email/password-reset", model);
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + subject, "email/password-reset", model);
 	}
 
 	public void sendDataReportReady(User user, String downloadUrl) {
@@ -43,12 +42,12 @@ public class AccountMailService {
 		model.put("downloadUrl", downloadUrl);
 		model.put("expiresHours", 72);
 		String subject = de(user) ? "Dein Datenexport ist bereit" : "Your data export is ready";
-		mail.sendTemplate(user.getEmail(), SUBJECT_PREFIX + subject, "email/data-report-ready", model);
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + subject, "email/data-report-ready", model);
 	}
 
 	/** Security alert: 2FA enabled/disabled, password or email changed. */
 	public void sendSecurityAlert(User user, String headline, String body) {
-		mail.sendNotification(user.getEmail(), SUBJECT_PREFIX + headline, headline, body, null, null,
+		mail.sendNotification(user.getEmail(), mail.subjectPrefix() + headline, headline, body, null, null,
 				de(user) ? "de" : "en", "email.eyebrow.SECURITY_ALERT");
 	}
 

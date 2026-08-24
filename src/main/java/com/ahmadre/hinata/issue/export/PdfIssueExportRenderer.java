@@ -1,9 +1,11 @@
 package com.ahmadre.hinata.issue.export;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.lowagie.text.Chunk;
 import com.lowagie.text.Document;
 import com.lowagie.text.Element;
 import com.lowagie.text.Font;
+import com.lowagie.text.Image;
 import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
@@ -47,6 +49,18 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 	private static final Font TD = new Font(Font.HELVETICA, 9, Font.NORMAL, INK);
 	private static final Font MONO = new Font(Font.COURIER, 9, Font.NORMAL, INK);
 
+	/**
+	 * The box the organization's mark is contained in, in points.
+	 *
+	 * <p>Contained, never fitted: a logo is a 6:1 wordmark as readily as a square
+	 * signet, and scaling one to fixed dimensions distorts whichever of the two it
+	 * is not. Bounding both edges is the only rule that leaves an unknown aspect
+	 * ratio recognizable, and the height is what keeps the mark subordinate to the
+	 * issue key underneath it — this is stationery, not a cover page.
+	 */
+	private static final float LOGO_MAX_H = 32f;
+	private static final float LOGO_MAX_W = 220f;
+
 	@Override
 	public IssueExportFormat format() {
 		return IssueExportFormat.PDF;
@@ -84,12 +98,45 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 	// --- sections ------------------------------------------------------------
 
 	private void head(Document document, IssueExport export) {
+		logo(document, export);
 		document.add(paragraph(export.readableId(), H_KEY, 0, 2));
 		document.add(paragraph(export.title(), H_TITLE, 0, 4));
 		String where = export.project().isBlank() ? export.organization()
 				: export.project() + (export.organization().isBlank() ? ""
 						: " · " + export.organization());
 		document.add(paragraph(where, SMALL, 0, 14));
+	}
+
+	/**
+	 * The organization's mark above the issue key, when there is one.
+	 *
+	 * <p>Every failure is silence rather than an exception, and that is the point
+	 * of the whole method being wrapped: {@link #render} turns anything thrown
+	 * into a 500, so a logo an admin configured badly — or a host that changed the
+	 * bytes underneath us — would stop people exporting their issues at all. A
+	 * document without a letterhead is a document; a 500 is not.
+	 */
+	private void logo(Document document, IssueExport export) {
+		byte[] png = export.logo();
+		if (png == null || png.length == 0) {
+			return;
+		}
+		try {
+			Image image = Image.getInstance(png);
+			image.scaleToFit(LOGO_MAX_W, LOGO_MAX_H);
+			// Carried by a paragraph rather than added to the document directly:
+			// openpdf applies spacing to paragraphs and list items only, so a bare
+			// image would sit flush against the issue key with nothing but the
+			// leading between them.
+			Paragraph holder = new Paragraph();
+			holder.setSpacingAfter(10);
+			holder.add(new Chunk(image, 0, 0));
+			document.add(holder);
+		}
+		catch (Exception ex) {
+			log.warn("The organization logo was left out of the PDF export of {}: {}",
+					export.readableId(), ex.toString());
+		}
 	}
 
 	private void section(Document document, String label) {

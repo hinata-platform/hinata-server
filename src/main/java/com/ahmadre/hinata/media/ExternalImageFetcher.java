@@ -17,6 +17,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Fetches an external image URL <b>server-side</b> so the browser can render it
@@ -36,11 +40,16 @@ import java.util.Set;
  *       one;</li>
  *   <li>the response must be an allow-listed raster image type (SVG excluded —
  *       it can carry script);</li>
- *   <li>the body is read with a hard {@value #MAX_BYTES}-byte cap and the whole
- *       exchange is time-boxed.</li>
+ *   <li>the body is read with a hard {@value #MAX_BYTES}-byte cap <em>and</em> its
+ *       own deadline — the request timeout does not cover it, see
+ *       {@link #readCapped}.</li>
  * </ul>
- * A residual DNS-rebinding TOCTOU window remains (validate → connect can re-
- * resolve); it is accepted here as low-risk for an authenticated internal tool.
+ * A residual DNS-rebinding TOCTOU window remains (validate → connect can
+ * re-resolve). It is accepted: the win would require pinning the validated
+ * address into the connection, which the JDK client does not expose. Note that
+ * this is no longer only reachable from authenticated flows — the organization
+ * logo lands here from the public {@code /api/v1/meta/logo} — so anything added
+ * to this class has to stay safe for an anonymous caller.
  */
 @Slf4j
 @Component
@@ -51,17 +60,51 @@ public class ExternalImageFetcher {
 	private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(6);
 	private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
-	/** Raster images only; {@code image/svg+xml} is excluded (stored-XSS risk). */
-	private static final Set<String> ALLOWED_TYPES =
+	/** How long the body may take to arrive once the headers have. See readCapped. */
+	private static final Duration BODY_TIMEOUT = Duration.ofSeconds(15);
+
+	/** One daemon thread, shared: it only ever closes a stalled stream. */
+	private static final ScheduledExecutorService WATCHDOG =
+			Executors.newSingleThreadScheduledExecutor(runnable -> {
+				Thread thread = new Thread(runnable, "external-image-read-watchdog");
+				thread.setDaemon(true);
+				return thread;
+			});
+
+	/**
+	 * Raster images only; {@code image/svg+xml} is excluded. This is the set every
+	 * caller that will <em>decode</em> the bytes must use: an SVG is a document, not
+	 * a bitmap, and no decoder in this process should ever be pointed at one.
+	 */
+	public static final Set<String> RASTER_TYPES =
 			Set.of("image/png", "image/jpeg", "image/gif", "image/webp");
+
+	/**
+	 * {@link #RASTER_TYPES} plus the vector and icon types a browser renders
+	 * safely. Only for callers that hand the bytes straight to a client and serve
+	 * them under a locked-down CSP — see {@code MetaController#logo()}. Never for a
+	 * caller that decodes or rasterizes them server-side.
+	 */
+	public static final Set<String> DISPLAY_TYPES = Set.of("image/png", "image/jpeg",
+			"image/gif", "image/webp", "image/svg+xml", "image/avif", "image/x-icon",
+			"image/vnd.microsoft.icon");
 
 	private final HttpClient client = HttpClient.newBuilder()
 			.followRedirects(HttpClient.Redirect.NEVER)
 			.connectTimeout(CONNECT_TIMEOUT)
 			.build();
 
-	/** Fetches [rawUrl] and returns its validated image bytes + content type. */
+	/** Fetches [rawUrl] and returns its validated raster image bytes + content type. */
 	public StorageService.StoredObject fetch(String rawUrl) {
+		return fetch(rawUrl, RASTER_TYPES);
+	}
+
+	/**
+	 * Fetches [rawUrl], accepting only the given content types. Callers pass
+	 * {@link #RASTER_TYPES} unless they exclusively pass the bytes through to a
+	 * client, in which case {@link #DISPLAY_TYPES} widens it to SVG and friends.
+	 */
+	public StorageService.StoredObject fetch(String rawUrl, Set<String> allowedTypes) {
 		URI uri = parse(rawUrl);
 		for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
 			requireSafeHost(uri);
@@ -82,7 +125,7 @@ public class ExternalImageFetcher {
 			}
 			String contentType = response.headers().firstValue("content-type")
 					.map(ExternalImageFetcher::baseType).orElse("");
-			if (!ALLOWED_TYPES.contains(contentType)) {
+			if (!allowedTypes.contains(contentType)) {
 				close(response.body());
 				throw ApiException.badRequest("error.media.notAnImage");
 			}
@@ -172,7 +215,22 @@ public class ExternalImageFetcher {
 		return false;
 	}
 
-	private static byte[] readCapped(InputStream body) {
+	/**
+	 * Reads the body under a deadline as well as the size cap.
+	 *
+	 * <p>{@code HttpRequest.timeout} does <em>not</em> bound this.
+	 * {@code BodyHandlers.ofInputStream()} completes the response future as soon
+	 * as the headers arrive, and the request timer is cancelled with it — so a
+	 * host that answers 200 and then trickles (or simply stops) leaves
+	 * {@code read()} parked forever. A deadline checked inside the loop would not
+	 * help either, because the thread is blocked *in* the read and never gets back
+	 * to the condition. Closing the stream from a watchdog is what actually
+	 * unblocks it: the read throws and lands in the {@code IOException} branch
+	 * below, which every caller already treats as "no image".
+	 */
+	private byte[] readCapped(InputStream body) {
+		ScheduledFuture<?> deadline = WATCHDOG.schedule(
+				() -> close(body), BODY_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 		try (body) {
 			ByteArrayOutputStream out = new ByteArrayOutputStream();
 			byte[] chunk = new byte[8192];
@@ -192,6 +250,9 @@ public class ExternalImageFetcher {
 		}
 		catch (IOException ex) {
 			throw fetchFailed();
+		}
+		finally {
+			deadline.cancel(false);
 		}
 	}
 

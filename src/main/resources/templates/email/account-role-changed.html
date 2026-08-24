@@ -4,14 +4,14 @@
       th:replace="~{email/_layout :: page(
           #{email.account.eyebrow},
           #{email.account.roles.headline},
-          ${isAdmin} ? #{email.account.roles.granted} : #{email.account.roles.revoked},
-          #{email.footer.automatedAdmin},
+          ${isAdmin} ? #{email.account.roles.granted(${organizationName})} : #{email.account.roles.revoked(${organizationName})},
+          #{email.footer.automatedAdmin(${organizationName})},
           ~{::content})}">
 <body>
 <th:block th:fragment="content">
   <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
-  <th:block th:if="${isAdmin}" th:replace="~{email/_layout :: copy(#{email.account.roles.granted})}"/>
-  <th:block th:unless="${isAdmin}" th:replace="~{email/_layout :: copy(#{email.account.roles.revoked})}"/>
+  <th:block th:if="${isAdmin}" th:replace="~{email/_layout :: copy(#{email.account.roles.granted(${organizationName})})}"/>
+  <th:block th:unless="${isAdmin}" th:replace="~{email/_layout :: copy(#{email.account.roles.revoked(${organizationName})})}"/>
 
   <th:block th:replace="~{email/_layout :: panel(#{email.account.roles.current}, ${roles})}"/>
 </th:block>

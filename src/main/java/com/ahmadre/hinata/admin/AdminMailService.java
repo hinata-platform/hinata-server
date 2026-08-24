@@ -18,7 +18,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AdminMailService {
 
-	private static final String SUBJECT_PREFIX = "[Hinata] ";
 
 	private final MailService mail;
 
@@ -31,12 +30,15 @@ public class AdminMailService {
 		boolean de = "de".equalsIgnoreCase(invitee.getLocale());
 		Map<String, Object> model = new HashMap<>();
 		model.put("locale", de ? "de" : "en");
-		model.put("masthead", "invite");
 		model.put("inviteUrl", inviteUrl);
 		model.put("inviterName", inviterName);
 		model.put("message", message);
 		model.put("expiresDays", 7);
-		String subject = de ? "Du wurdest zu Hinata eingeladen" : "You've been invited to Hinata";
-		return mail.sendTemplateSync(invitee.getEmail(), SUBJECT_PREFIX + subject, "email/invite", model);
+		// The invitation is to the organization, not to the software it runs on —
+		// and the subject line is the first (often only) thing that is read.
+		String org = mail.organizationName();
+		String subject = de ? "Du wurdest zu " + org + " eingeladen"
+				: "You have been invited to " + org;
+		return mail.sendTemplateSync(invitee.getEmail(), mail.subjectPrefix() + subject, "email/invite", model);
 	}
 }

@@ -13,6 +13,12 @@ import java.util.List;
  * "what does an export contain" is answered here, once, and the formats only
  * decide how it looks. The app's list export made the same split for the same
  * reason — one row type carrying display text, builders that only place it.
+ *
+ * @param logo the organization's mark as normalized PNG bytes, or {@code null}.
+ *             {@code null} is the ordinary case, not an error: most instances
+ *             configure no logo at all, and one configured as a vector cannot be
+ *             decoded by this process. Every renderer therefore has to produce
+ *             its usual document without it.
  */
 public record IssueExport(
 		String readableId,
@@ -25,6 +31,7 @@ public record IssueExport(
 		List<Attachment> attachments,
 		List<Activity> activity,
 		String organization,
+		byte[] logo,
 		Instant generatedAt) {
 
 	/** A labelled value from the issue's head — "Status", "In Progress". */

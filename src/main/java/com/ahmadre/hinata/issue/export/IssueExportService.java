@@ -14,6 +14,7 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.richtext.LexicalToMarkdown;
+import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -82,6 +83,7 @@ public class IssueExportService {
 	private final AgileBoardRepository boards;
 	private final UserRepository users;
 	private final SettingsService settings;
+	private final BrandLogoService brandLogo;
 
 	/**
 	 * Everything [idOrReadableId] contributes to an export, for a caller who is
@@ -114,6 +116,10 @@ public class IssueExportService {
 				attachments(files, names),
 				activity(history, names),
 				nz(settings.get().getOrganizationName()),
+				// Cached behind the service, so a document costs no fetch — and empty
+				// whenever the logo is missing, unreachable or a vector, which is a
+				// document without a logo rather than an export that failed.
+				brandLogo.raster().orElse(null),
 				Instant.now());
 	}
 
