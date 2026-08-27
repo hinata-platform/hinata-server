@@ -223,6 +223,23 @@ tasks.register<Test>("emailPreview") {
     testLogging { showStandardStreams = true }
 }
 
+// Renders one issue as all four export formats, in German and in English, into
+// build/export-preview/ — so "does this document read like something a person
+// would want" can be answered by looking at it rather than by a string
+// assertion. The unit tests beside it pin the behaviour; this shows the result.
+//   ./gradlew exportPreview && open hinata-server/build/export-preview
+tasks.register<Test>("exportPreview") {
+    group = "documentation"
+    description = "Renders a sample issue export (de + en, all formats) to build/export-preview/."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter { includeTestsMatching("com.ahmadre.hinata.issue.export.ExportSampleTest") }
+    // The documents are the whole point of running this, so never skip it as
+    // up-to-date or serve it FROM-CACHE after a label or a layout changed.
+    outputs.upToDateWhen { false }
+    testLogging { showStandardStreams = true }
+}
+
 // Local debugging: when BOOTRUN_DEBUG_PORT is set, attach a JDWP agent to the
 // forked application JVM ONLY (not the Gradle daemon), on that port. Env-gated,
 // so CI/normal builds are unaffected. Used by the mono-repo "Full Stack — Local"

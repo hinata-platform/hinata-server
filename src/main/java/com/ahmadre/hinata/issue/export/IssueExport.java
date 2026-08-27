@@ -19,6 +19,11 @@ import java.util.List;
  *             configure no logo at all, and one configured as a vector cannot be
  *             decoded by this process. Every renderer therefore has to produce
  *             its usual document without it.
+ * @param words the language the document is written in and the clock its
+ *              timestamps are read on — see {@link ExportWords}. Every value in
+ *              the record above has already been through it; this is here for
+ *              the few words the renderers own themselves, the headings over
+ *              their sections and the headers over their tables.
  */
 public record IssueExport(
 		String readableId,
@@ -32,10 +37,20 @@ public record IssueExport(
 		List<Activity> activity,
 		String organization,
 		byte[] logo,
-		Instant generatedAt) {
+		Instant generatedAt,
+		ExportWords words) {
 
-	/** A labelled value from the issue's head — "Status", "In Progress". */
-	public record Field(String label, String value) {
+	/**
+	 * A labelled value from the issue's head — "Status", "In Progress".
+	 *
+	 * @param key   the field's stable name ({@code dueDate}), which never changes
+	 *              with the reader's language. The formats a person reads print
+	 *              [label]; the XML, which a program reads, prints both — a
+	 *              consumer that had to match on "Due date" would stop matching
+	 *              the moment the same export was taken in German.
+	 * @param label [key] in the reader's language
+	 */
+	public record Field(String key, String label, String value) {
 	}
 
 	public record Comment(String author, Instant at, List<ExportBlock> body) {
@@ -50,7 +65,9 @@ public record IssueExport(
 			String uploader, Instant uploadedAt) {
 	}
 
-	public record Activity(String at, String actor, String what) {
+	/** [at] stays an instant: each format stamps it its own way, and the XML
+	 *  stamps it in a shape a machine can read. */
+	public record Activity(Instant at, String actor, String what) {
 	}
 
 	/** What the caller asked to be included; every section defaults to shown. */

@@ -1,20 +1,17 @@
 package com.ahmadre.hinata.issue.export;
 
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-
 /**
  * Where an export writes a value into something that will interpret it: a
  * spreadsheet cell, a download's file name, an XML document. All three are the
  * export's attack surface rather than its formatting, so they live together
- * where they can be reviewed together — and the one stamp every format dates
- * itself with sits here too, so four renderers cannot each pick a format.
+ * where they can be reviewed together.
+ *
+ * <p>Dates used to live here too, as one UTC pattern shared by all four
+ * renderers. They moved to {@link ExportWords}: sharing one <em>format</em> was
+ * right, but the format could not be a constant once it had to answer in the
+ * reader's language and the reader's zone.
  */
 final class ExportText {
-
-	/** UTC everywhere, as the rest of the platform stores and renders it. */
-	static final DateTimeFormatter DATE_TIME =
-			DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneId.of("UTC"));
 
 	/**
 	 * Longest file-name stem an export produces, before the extension. Long

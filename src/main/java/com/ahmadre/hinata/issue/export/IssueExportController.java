@@ -4,9 +4,13 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.context.MessageSource;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -19,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
+import java.time.ZoneId;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +45,13 @@ import java.util.Map;
  * <p>Print is not an endpoint. The app fetches the PDF and hands it to the
  * platform's print dialog, so a printed issue and a saved one are the same
  * bytes and cannot drift apart.
+ *
+ * <p>Every endpoint also takes {@code tz}, an IANA zone id. It is the one piece
+ * of the reader's context the server cannot work out for itself: the language
+ * arrives in {@code Accept-Language}, but the process runs with its clock nailed
+ * to UTC so that stored instants are deterministic, and there is nothing in a
+ * request that says where the person holding the phone is. Without it every
+ * document was stamped in UTC, which is a time nobody's day is measured in.
  */
 @Tag(name = "Issues")
 @RestController
@@ -49,6 +62,8 @@ public class IssueExportController {
 	private final CurrentUser currentUser;
 	private final ExportRateLimiter limiter;
 	private final AuditService audit;
+	private final MessageSource messages;
+	private final SettingsService settings;
 	private final Map<IssueExportFormat, IssueExportRenderer> byFormat;
 
 	/**
@@ -63,12 +78,14 @@ public class IssueExportController {
 	 * memory model guarantees.
 	 */
 	public IssueExportController(IssueExportService exports, CurrentUser currentUser,
-			ExportRateLimiter limiter, AuditService audit,
-			List<IssueExportRenderer> renderers) {
+			ExportRateLimiter limiter, AuditService audit, MessageSource messages,
+			SettingsService settings, List<IssueExportRenderer> renderers) {
 		this.exports = exports;
 		this.currentUser = currentUser;
 		this.limiter = limiter;
 		this.audit = audit;
+		this.messages = messages;
+		this.settings = settings;
 		Map<IssueExportFormat, IssueExportRenderer> index =
 				new EnumMap<>(IssueExportFormat.class);
 		for (IssueExportRenderer renderer : renderers) {
@@ -83,9 +100,12 @@ public class IssueExportController {
 			@RequestParam(defaultValue = "true") boolean comments,
 			@RequestParam(defaultValue = "true") boolean links,
 			@RequestParam(defaultValue = "true") boolean attachments,
-			@RequestParam(defaultValue = "false") boolean activity) {
+			@RequestParam(defaultValue = "false") boolean activity,
+			@Parameter(description = "IANA time zone the timestamps are written in, "
+					+ "e.g. Europe/Berlin. Defaults to the organization's zone.")
+			@RequestParam(required = false) String tz) {
 		return export(IssueExportFormat.PDF, idOrReadableId,
-				new IssueExport.Options(comments, links, attachments, activity));
+				new IssueExport.Options(comments, links, attachments, activity), tz);
 	}
 
 	@Operation(summary = "Download this issue as a Word document")
@@ -94,9 +114,12 @@ public class IssueExportController {
 			@RequestParam(defaultValue = "true") boolean comments,
 			@RequestParam(defaultValue = "true") boolean links,
 			@RequestParam(defaultValue = "true") boolean attachments,
-			@RequestParam(defaultValue = "false") boolean activity) {
+			@RequestParam(defaultValue = "false") boolean activity,
+			@Parameter(description = "IANA time zone the timestamps are written in, "
+					+ "e.g. Europe/Berlin. Defaults to the organization's zone.")
+			@RequestParam(required = false) String tz) {
 		return export(IssueExportFormat.DOCX, idOrReadableId,
-				new IssueExport.Options(comments, links, attachments, activity));
+				new IssueExport.Options(comments, links, attachments, activity), tz);
 	}
 
 	@Operation(summary = "Download this issue as a spreadsheet")
@@ -105,9 +128,12 @@ public class IssueExportController {
 			@RequestParam(defaultValue = "true") boolean comments,
 			@RequestParam(defaultValue = "true") boolean links,
 			@RequestParam(defaultValue = "true") boolean attachments,
-			@RequestParam(defaultValue = "false") boolean activity) {
+			@RequestParam(defaultValue = "false") boolean activity,
+			@Parameter(description = "IANA time zone the timestamps are written in, "
+					+ "e.g. Europe/Berlin. Defaults to the organization's zone.")
+			@RequestParam(required = false) String tz) {
 		return export(IssueExportFormat.XLSX, idOrReadableId,
-				new IssueExport.Options(comments, links, attachments, activity));
+				new IssueExport.Options(comments, links, attachments, activity), tz);
 	}
 
 	@Operation(summary = "Download this issue as XML")
@@ -116,9 +142,12 @@ public class IssueExportController {
 			@RequestParam(defaultValue = "true") boolean comments,
 			@RequestParam(defaultValue = "true") boolean links,
 			@RequestParam(defaultValue = "true") boolean attachments,
-			@RequestParam(defaultValue = "false") boolean activity) {
+			@RequestParam(defaultValue = "false") boolean activity,
+			@Parameter(description = "IANA time zone the timestamps are written in, "
+					+ "e.g. Europe/Berlin. Defaults to the organization's zone.")
+			@RequestParam(required = false) String tz) {
 		return export(IssueExportFormat.XML, idOrReadableId,
-				new IssueExport.Options(comments, links, attachments, activity));
+				new IssueExport.Options(comments, links, attachments, activity), tz);
 	}
 
 	/**
@@ -126,12 +155,13 @@ public class IssueExportController {
 	 * lives), render, audit, answer.
 	 */
 	private ResponseEntity<byte[]> export(IssueExportFormat format, String idOrReadableId,
-			IssueExport.Options options) {
+			IssueExport.Options options, String tz) {
 		User user = currentUser.require();
 		// Metered before the issue is read: an export is worth metering whether or
 		// not the caller turns out to be allowed to have it.
 		limiter.require(user.getId());
-		IssueExport export = exports.gather(idOrReadableId, options, user);
+		ExportWords words = new ExportWords(messages, LocaleContextHolder.getLocale(), zone(tz));
+		IssueExport export = exports.gather(idOrReadableId, options, user, words);
 		byte[] body = renderer(format).render(export);
 		audit.event(AuditAction.ISSUE_EXPORTED).actor(user)
 				.meta("issue", export.readableId())
@@ -151,6 +181,41 @@ public class IssueExportController {
 				.cacheControl(CacheControl.noStore())
 				.header("X-Content-Type-Options", "nosniff")
 				.body(body);
+	}
+
+	/**
+	 * The zone the document's timestamps are written in: what the caller asked
+	 * for, else the organization's configured zone, else UTC.
+	 *
+	 * <p>A zone id that {@code ZoneId} does not know is ignored rather than
+	 * refused. It arrives from a device's own settings — a platform that reports
+	 * a Windows zone name, or one this JDK's tzdb has not heard of yet — and
+	 * answering a download with a 400 over it would turn a cosmetic difference
+	 * into a broken button. The fallback is a zone somebody chose in the admin
+	 * area, which is a better guess than UTC and a much better one than an error.
+	 *
+	 * <p>The value is bounded before it is parsed: it is written straight into a
+	 * document, and a zone id is at most a few dozen characters.
+	 */
+	private ZoneId zone(String requested) {
+		if (requested != null && !requested.isBlank() && requested.length() <= 64) {
+			try {
+				return ZoneId.of(requested.trim());
+			}
+			catch (DateTimeException ignored) {
+				// Fall through to the configured zone.
+			}
+		}
+		String configured = settings.get().getGeneral().getTimezone();
+		if (configured != null && !configured.isBlank()) {
+			try {
+				return ZoneId.of(configured.trim());
+			}
+			catch (DateTimeException ignored) {
+				// Fall through to UTC.
+			}
+		}
+		return ZoneId.of("UTC");
 	}
 
 	/**

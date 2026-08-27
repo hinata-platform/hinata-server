@@ -23,7 +23,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -74,6 +73,17 @@ public class IssueExportService {
 	 */
 	private static final int MAX_DEPENDS_ON = 50;
 
+	/**
+	 * Distinct people an export will look up on account of being mentioned.
+	 *
+	 * <p>The one id source in a document that its author chooses freely and
+	 * without limit: five hundred comments may each mention a different person,
+	 * so without a ceiling the cost of naming them is the cost of the description
+	 * somebody wrote. Past the cap a mention keeps its token rather than its name,
+	 * which is what it did before any of this existed.
+	 */
+	private static final int MAX_MENTIONS = 200;
+
 	private final IssueService issues;
 	private final IssueLinkService links;
 	private final IssueCommentRepository comments;
@@ -92,7 +102,8 @@ public class IssueExportService {
 	 * @throws com.ahmadre.hinata.common.ApiException 403/404 exactly as the detail
 	 *         view would
 	 */
-	public IssueExport gather(String idOrReadableId, IssueExport.Options options, User user) {
+	public IssueExport gather(String idOrReadableId, IssueExport.Options options, User user,
+			ExportWords words) {
 		Issue issue = issues.getForUser(idOrReadableId, user);
 		Project project = projects.findById(issue.getProjectId()).orElse(null);
 		// The rows first, the names they refer to second: who this document has to
@@ -103,50 +114,133 @@ public class IssueExportService {
 		List<IssueActivity> history = options.activity() ? readActivity(issue) : List.of();
 		List<Issue.Attachment> files = options.attachments() && issue.getAttachments() != null
 				? issue.getAttachments() : List.of();
-		Map<String, String> names = names(issue, thread, files, history);
+
+		// The rich text is parsed before the names are read, because the mentions
+		// inside it are ids this document has to name too — and reading them here
+		// puts them in the same batch as the assignees and the comment authors
+		// instead of costing a query each while a paragraph is being rendered.
+		List<ExportBlock> description = blocks(issue.getDescriptionDoc(), issue.getDescription());
+		List<List<ExportBlock>> bodies = new ArrayList<>(thread.size());
+		for (IssueComment comment : thread) {
+			bodies.add(blocks(comment.getTextDoc(), comment.getText()));
+		}
+		Map<String, String> names = names(issue, thread, files, history, description, bodies);
+
+		// Labels are harvested from the stored documents rather than looked up:
+		// see SmartLinks for why an export must not resolve a title it was not
+		// already showing.
+		Map<String, String> labels = new HashMap<>(SmartLinks.labels(issue.getDescriptionDoc()));
+		for (IssueComment comment : thread) {
+			SmartLinks.labels(comment.getTextDoc()).forEach(labels::putIfAbsent);
+		}
+		java.util.function.BiFunction<String, String, String> naming = naming(names, labels, words);
+
 		return new IssueExport(
 				nz(issue.getReadableId()),
 				nz(issue.getTitle()),
 				project == null ? "" : nz(project.getName()),
-				fields(issue, project, names, user),
-				MarkdownBlocks.of(LexicalToMarkdown.fromStored(
-						issue.getDescriptionDoc(), issue.getDescription())),
-				comments(thread, names),
-				options.links() ? links(idOrReadableId, user) : List.of(),
+				fields(issue, project, names, user, words),
+				SmartLinks.resolve(description, naming),
+				comments(thread, bodies, names, naming),
+				options.links() ? links(idOrReadableId, user, words) : List.of(),
 				attachments(files, names),
-				activity(history, names),
+				activity(history, names, words),
 				nz(settings.get().getOrganizationName()),
 				// Cached behind the service, so a document costs no fetch — and empty
 				// whenever the logo is missing, unreachable or a vector, which is a
 				// document without a logo rather than an export that failed.
 				brandLogo.raster().orElse(null),
-				Instant.now());
+				Instant.now(),
+				words);
+	}
+
+	/** One stored rich-text value as blocks — tokens still unresolved. */
+	private static List<ExportBlock> blocks(String storedDoc, String plain) {
+		return MarkdownBlocks.of(LexicalToMarkdown.fromStored(storedDoc, plain));
+	}
+
+	/**
+	 * What each {@code {{kind:id}}} in this document should read as.
+	 *
+	 * <p>Applied after the markdown has been parsed, never before: a display name
+	 * is content, and substituting one into markdown would let a person called
+	 * {@code A*B} turn the rest of a paragraph italic. {@link SmartLinks} has the
+	 * rest of the reasoning, including why only people are resolved live.
+	 */
+	private java.util.function.BiFunction<String, String, String> naming(
+			Map<String, String> names, Map<String, String> labels, ExportWords words) {
+		return (kind, id) -> switch (kind) {
+			// "@Ada Lovelace". The only kind resolved against the database, because
+			// a display name is the one label worth being current — and because
+			// these same names are printed in the document's own fields anyway.
+			case "user" -> {
+				String name = names.get(id);
+				yield name == null || name.isBlank() || name.equals(id) ? null : "@" + name;
+			}
+			// The token already carries the readable id, which is what a reader
+			// would go looking for; the stored label is the title as it read when
+			// the link was made.
+			case "issue" -> {
+				String title = labels.get(SmartLinks.key(kind, id));
+				yield title == null || title.isBlank() ? id : id + " (" + title + ")";
+			}
+			// An article id says nothing at all, so the stored label is the whole
+			// value here. Without one the reference is named for what it is rather
+			// than resolved into a title this caller may not be allowed to know.
+			case "doc" -> {
+				String title = labels.get(SmartLinks.key(kind, id));
+				yield title == null || title.isBlank() ? words.t("export.smartLink.doc") : title;
+			}
+			default -> null;
+		};
 	}
 
 	// --- sections ------------------------------------------------------------
 
+	/**
+	 * The issue's head, labelled in the reader's language.
+	 *
+	 * <p>The labels used to be English literals here, which meant a document in a
+	 * German user's hands still said "Assignees" and "Due date" over values that
+	 * were otherwise theirs. The values that are enums are translated too — a
+	 * priority reading {@code SHOWSTOPPER} is not a word in any language. What is
+	 * deliberately <em>not</em> translated is the workflow state: those names are
+	 * configured per project by the people who use them, so they are content.
+	 */
 	private List<IssueExport.Field> fields(Issue issue, Project project, Map<String, String> names,
-			User user) {
+			User user, ExportWords words) {
 		List<IssueExport.Field> fields = new ArrayList<>();
-		fields.add(new IssueExport.Field("Type", name(issue.getType())));
-		fields.add(new IssueExport.Field("Status", nz(issue.getState())));
-		fields.add(new IssueExport.Field("Priority", name(issue.getPriority())));
-		fields.add(new IssueExport.Field("Assignees", people(issue.getAssigneeIds(), names)));
-		fields.add(new IssueExport.Field("Reporter", person(issue.getReporterId(), names)));
-		fields.add(new IssueExport.Field("Sprint", sprintName(issue)));
-		fields.add(new IssueExport.Field("Start date", date(issue.getStartDate())));
-		fields.add(new IssueExport.Field("Due date", date(issue.getDueDate())));
-		fields.add(new IssueExport.Field("Story points",
+		fields.add(field(words, "type", type(issue.getType(), words)));
+		fields.add(field(words, "status", nz(issue.getState())));
+		fields.add(field(words, "priority", priority(issue.getPriority(), words)));
+		fields.add(field(words, "assignees", people(issue.getAssigneeIds(), names)));
+		fields.add(field(words, "reporter", person(issue.getReporterId(), names)));
+		fields.add(field(words, "sprint", sprintName(issue)));
+		fields.add(field(words, "startDate", words.date(issue.getStartDate())));
+		fields.add(field(words, "dueDate", words.date(issue.getDueDate())));
+		fields.add(field(words, "storyPoints",
 				issue.getStoryPoints() == null ? "" : String.valueOf(issue.getStoryPoints())));
-		fields.add(new IssueExport.Field("Estimate", minutes(issue.getEstimateMinutes())));
-		fields.add(new IssueExport.Field("Time spent", minutes(issue.getSpentMinutes())));
-		fields.add(new IssueExport.Field("Labels", join(issue.getTags())));
-		fields.add(new IssueExport.Field("Parent", parent(issue.getParentId(), user)));
-		fields.add(new IssueExport.Field("Depends on", dependsOn(issue.getDependsOnIds(), user)));
-		fields.add(new IssueExport.Field("Project key", project == null ? "" : nz(project.getKey())));
-		fields.add(new IssueExport.Field("Created", instant(issue.getCreatedAt())));
-		fields.add(new IssueExport.Field("Updated", instant(issue.getUpdatedAt())));
+		fields.add(field(words, "estimate", minutes(issue.getEstimateMinutes())));
+		fields.add(field(words, "timeSpent", minutes(issue.getSpentMinutes())));
+		fields.add(field(words, "labels", join(issue.getTags())));
+		fields.add(field(words, "parent", parent(issue.getParentId(), user)));
+		fields.add(field(words, "dependsOn", dependsOn(issue.getDependsOnIds(), user)));
+		fields.add(field(words, "projectKey", project == null ? "" : nz(project.getKey())));
+		fields.add(field(words, "created", words.instant(issue.getCreatedAt())));
+		fields.add(field(words, "updated", words.instant(issue.getUpdatedAt())));
 		return fields;
+	}
+
+	private static IssueExport.Field field(ExportWords words, String key, String value) {
+		return new IssueExport.Field(key, words.t("export.field." + key), value);
+	}
+
+	private static String type(Issue.Type value, ExportWords words) {
+		return value == null ? "" : words.or("export.type." + value.name(), value.name());
+	}
+
+	private static String priority(Issue.Priority value, ExportWords words) {
+		return value == null ? "" : words.or("export.priority." + value.name(), value.name());
 	}
 
 	private List<IssueComment> readComments(Issue issue) {
@@ -154,14 +248,17 @@ public class IssueExportService {
 				issue.getId(), PageRequest.of(0, MAX_COMMENTS));
 	}
 
-	private List<IssueExport.Comment> comments(List<IssueComment> all, Map<String, String> names) {
+	/** The thread, each body already parsed by [gather] and now named. */
+	private List<IssueExport.Comment> comments(List<IssueComment> all,
+			List<List<ExportBlock>> bodies, Map<String, String> names,
+			java.util.function.BiFunction<String, String, String> naming) {
 		List<IssueExport.Comment> out = new ArrayList<>();
-		for (IssueComment comment : all) {
+		for (int i = 0; i < all.size(); i++) {
+			IssueComment comment = all.get(i);
 			out.add(new IssueExport.Comment(
 					person(comment.getAuthorId(), names),
 					comment.getCreatedAt(),
-					MarkdownBlocks.of(LexicalToMarkdown.fromStored(
-							comment.getTextDoc(), comment.getText()))));
+					SmartLinks.resolve(bodies.get(i), naming)));
 		}
 		return out;
 	}
@@ -171,10 +268,16 @@ public class IssueExportService {
 	 * already drops dangling ones and anything whose far end this caller may not
 	 * see, so an export cannot become a way to learn that an issue exists.
 	 */
-	private List<IssueExport.Link> links(String idOrReadableId, User user) {
+	private List<IssueExport.Link> links(String idOrReadableId, User user, ExportWords words) {
 		List<IssueExport.Link> out = new ArrayList<>();
 		for (IssueLinkService.LinkView view : links.linksOf(idOrReadableId, user)) {
-			out.add(new IssueExport.Link(view.verb(),
+			// The verb the service hands over is the English one it renders in the
+			// API. It is a phrase in a sentence the reader is meant to read
+			// ("blocks HIN-42"), so it is translated like any other label; the type
+			// and the direction are what identify it, not the English words.
+			String verb = words.or("export.link." + view.type().name()
+					+ (view.outward() ? ".outward" : ".inward"), view.verb());
+			out.add(new IssueExport.Link(verb,
 					nz(view.issue().getReadableId()), nz(view.issue().getTitle())));
 		}
 		return out;
@@ -196,23 +299,52 @@ public class IssueExportService {
 				issue.getId(), PageRequest.of(0, MAX_ACTIVITY)).getContent();
 	}
 
-	private List<IssueExport.Activity> activity(List<IssueActivity> all, Map<String, String> names) {
+	private List<IssueExport.Activity> activity(List<IssueActivity> all, Map<String, String> names,
+			ExportWords words) {
 		List<IssueExport.Activity> out = new ArrayList<>();
 		for (IssueActivity entry : all) {
-			out.add(new IssueExport.Activity(instant(entry.getCreatedAt()),
-					person(entry.getActorId(), names), describe(entry)));
+			out.add(new IssueExport.Activity(entry.getCreatedAt(),
+					person(entry.getActorId(), names), describe(entry, words)));
 		}
 		return out;
 	}
 
-	private static String describe(IssueActivity entry) {
-		String field = entry.getField() == null ? "changed" : entry.getField().name();
+	private static String describe(IssueActivity entry, ExportWords words) {
+		String field = entry.getField() == null
+				? words.t("export.activity.changed")
+				: words.or("export.field." + fieldKey(entry.getField()), entry.getField().name());
 		String from = entry.getFromValue();
 		String to = entry.getToValue();
 		if (from == null && to == null) {
 			return field;
 		}
 		return field + ": " + nz(from) + " → " + nz(to);
+	}
+
+	/**
+	 * The message key for an activity field, reusing the labels the head already
+	 * has: {@code START_DATE} is the same "Start date" the fields table prints,
+	 * and a history that named its columns differently from the table above it
+	 * would read as two different documents.
+	 */
+	private static String fieldKey(IssueActivity.Field field) {
+		return switch (field) {
+			case CREATED -> "created";
+			case TITLE -> "title";
+			case DESCRIPTION -> "description";
+			case STATE -> "status";
+			case ASSIGNEE -> "assignees";
+			case PRIORITY -> "priority";
+			case TYPE -> "type";
+			case SPRINT -> "sprint";
+			case START_DATE -> "startDate";
+			case DUE_DATE -> "dueDate";
+			case ESTIMATE -> "estimate";
+			case STORY_POINTS -> "storyPoints";
+			case TAGS -> "labels";
+			case PARENT -> "parent";
+			case PROJECT -> "project";
+		};
 	}
 
 	// --- naming --------------------------------------------------------------
@@ -238,7 +370,8 @@ public class IssueExportService {
 	 * nobody reads.
 	 */
 	private Map<String, String> names(Issue issue, List<IssueComment> thread,
-			List<Issue.Attachment> files, List<IssueActivity> history) {
+			List<Issue.Attachment> files, List<IssueActivity> history,
+			List<ExportBlock> description, List<List<ExportBlock>> bodies) {
 		Set<String> ids = new LinkedHashSet<>();
 		if (issue.getAssigneeIds() != null) {
 			ids.addAll(issue.getAssigneeIds());
@@ -253,6 +386,18 @@ public class IssueExportService {
 		for (IssueActivity entry : history) {
 			ids.add(entry.getActorId());
 		}
+		// The people the prose mentions belong in this batch too, for exactly the
+		// reason the batch exists: a description may @-mention anybody, and
+		// resolving each one where it is rendered would put a query inside a
+		// paragraph. Bounded separately because this is the only source here that
+		// somebody can lengthen at will — a description holds a lot of mentions
+		// long before it holds a lot of anything else.
+		Set<String> mentioned = new LinkedHashSet<>();
+		SmartLinks.userIds(description, mentioned, MAX_MENTIONS);
+		for (List<ExportBlock> body : bodies) {
+			SmartLinks.userIds(body, mentioned, MAX_MENTIONS);
+		}
+		ids.addAll(mentioned);
 		ids.removeIf(id -> id == null || id.isBlank());
 		Map<String, String> names = new HashMap<>();
 		if (ids.isEmpty()) {
@@ -417,20 +562,8 @@ public class IssueExportService {
 		return rest == 0 ? hours + "h" : hours + "h " + rest + "m";
 	}
 
-	private static String instant(Instant value) {
-		return value == null ? "" : ExportText.DATE_TIME.format(value);
-	}
-
-	private static String date(LocalDate value) {
-		return value == null ? "" : value.toString();
-	}
-
 	private static String join(List<String> values) {
 		return values == null || values.isEmpty() ? "" : String.join(", ", values);
-	}
-
-	private static String name(Enum<?> value) {
-		return value == null ? "" : value.name();
 	}
 
 	private static String nz(String value) {

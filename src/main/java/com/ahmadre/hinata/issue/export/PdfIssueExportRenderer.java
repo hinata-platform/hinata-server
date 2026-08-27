@@ -161,7 +161,7 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 		if (export.description().isEmpty()) {
 			return;
 		}
-		section(document, "Description");
+		section(document, export.words().t("export.section.description"));
 		blocks(document, export.description());
 	}
 
@@ -169,10 +169,10 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 		if (export.comments().isEmpty()) {
 			return;
 		}
-		section(document, "Comments (" + export.comments().size() + ")");
+		section(document, export.words().t("export.section.comments", export.comments().size()));
 		for (IssueExport.Comment comment : export.comments()) {
 			String meta = comment.author()
-					+ (comment.at() == null ? "" : " · " + ExportText.DATE_TIME.format(comment.at()));
+					+ (comment.at() == null ? "" : " · " + export.words().instant(comment.at()));
 			document.add(paragraph(meta, SMALL, 8, 2));
 			blocks(document, comment.body());
 		}
@@ -182,7 +182,7 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 		if (export.links().isEmpty()) {
 			return;
 		}
-		section(document, "Linked issues");
+		section(document, export.words().t("export.section.links"));
 		PdfPTable table = table(new float[] { 1.1f, 0.8f, 2.4f });
 		for (IssueExport.Link link : export.links()) {
 			table.addCell(cell(link.verb(), TD, null));
@@ -196,12 +196,12 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 		if (export.attachments().isEmpty()) {
 			return;
 		}
-		section(document, "Attachments");
+		section(document, export.words().t("export.section.attachments"));
 		PdfPTable table = table(new float[] { 2.2f, 1.4f, 0.7f, 1.2f });
-		table.addCell(cell("File", TH, HEAD_BG));
-		table.addCell(cell("Type", TH, HEAD_BG));
-		table.addCell(cell("Size", TH, HEAD_BG));
-		table.addCell(cell("Uploaded by", TH, HEAD_BG));
+		table.addCell(cell(export.words().t("export.column.file"), TH, HEAD_BG));
+		table.addCell(cell(export.words().t("export.column.type"), TH, HEAD_BG));
+		table.addCell(cell(export.words().t("export.column.size"), TH, HEAD_BG));
+		table.addCell(cell(export.words().t("export.column.uploadedBy"), TH, HEAD_BG));
 		for (IssueExport.Attachment file : export.attachments()) {
 			table.addCell(cell(file.fileName(), TD, null));
 			table.addCell(cell(file.contentType(), TD, null));
@@ -215,10 +215,10 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 		if (export.activity().isEmpty()) {
 			return;
 		}
-		section(document, "History");
+		section(document, export.words().t("export.section.history"));
 		PdfPTable table = table(new float[] { 1.2f, 1.1f, 2.7f });
 		for (IssueExport.Activity entry : export.activity()) {
-			table.addCell(cell(entry.at(), TD, null));
+			table.addCell(cell(export.words().instant(entry.at()), TD, null));
 			table.addCell(cell(entry.actor(), TD, null));
 			table.addCell(cell(entry.what(), TD, null));
 		}
@@ -227,7 +227,7 @@ class PdfIssueExportRenderer implements IssueExportRenderer {
 
 	private void footer(Document document, IssueExport export) {
 		String org = export.organization().isBlank() ? "hinata" : export.organization();
-		Paragraph line = paragraph(org + " · " + ExportText.DATE_TIME.format(export.generatedAt()),
+		Paragraph line = paragraph(org + " · " + export.words().instant(export.generatedAt()),
 				SMALL, 20, 0);
 		line.setAlignment(Element.ALIGN_CENTER);
 		document.add(line);

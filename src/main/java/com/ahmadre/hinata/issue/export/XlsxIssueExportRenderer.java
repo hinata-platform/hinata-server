@@ -64,55 +64,96 @@ class XlsxIssueExportRenderer implements IssueExportRenderer {
 	}
 
 	private void fieldsSheet(Workbook workbook, IssueExport export, CellStyle header, CellStyle text) {
-		Sheet sheet = workbook.createSheet("Fields");
+		ExportWords words = export.words();
+		// Sheet names are localized too: a workbook with a "Fields" tab and German
+		// content in it is half-translated, and a tab is the first thing a reader
+		// sees. Bounded and cleaned by sheetName() because Excel refuses several
+		// characters in one and truncates at 31.
+		Sheet sheet = workbook.createSheet(sheetName(workbook, words.t("export.sheet.fields")));
 		sheet.setColumnWidth(0, LABEL_WIDTH);
 		sheet.setColumnWidth(1, VALUE_WIDTH);
 		int r = 0;
-		r = headerRow(sheet, r, header, "Field", "Value");
-		r = row(sheet, r, text, "Key", export.readableId());
-		r = row(sheet, r, text, "Title", export.title());
-		r = row(sheet, r, text, "Project", export.project());
+		r = headerRow(sheet, r, header, words.t("export.column.field"), words.t("export.column.value"));
+		r = row(sheet, r, text, words.t("export.field.key"), export.readableId());
+		r = row(sheet, r, text, words.t("export.field.title"), export.title());
+		r = row(sheet, r, text, words.t("export.field.project"), export.project());
 		for (IssueExport.Field field : export.fields()) {
 			r = row(sheet, r, text, field.label(), field.value());
 		}
-		r = row(sheet, r, text, "Description", plainText(export.description()));
+		r = row(sheet, r, text, words.t("export.field.description"), plainText(export.description()));
 		if (!export.links().isEmpty()) {
-			r = headerRow(sheet, r + 1, header, "Link", "Issue");
+			r = headerRow(sheet, r + 1, header, words.t("export.column.link"),
+					words.t("export.column.issue"));
 			for (IssueExport.Link link : export.links()) {
 				r = row(sheet, r, text, link.verb(), link.readableId() + " " + link.title());
 			}
 		}
 		if (!export.attachments().isEmpty()) {
-			r = headerRow(sheet, r + 1, header, "Attachment", "Details");
+			r = headerRow(sheet, r + 1, header, words.t("export.column.attachment"),
+					words.t("export.column.details"));
 			for (IssueExport.Attachment file : export.attachments()) {
 				r = row(sheet, r, text, file.fileName(),
 						file.contentType() + " · " + file.size() + " · " + file.uploader());
 			}
 		}
 		if (!export.activity().isEmpty()) {
-			r = headerRow(sheet, r + 1, header, "Activity", "Change");
+			r = headerRow(sheet, r + 1, header, words.t("export.column.activity"),
+					words.t("export.column.change"));
 			for (IssueExport.Activity entry : export.activity()) {
-				row(sheet, r++, text, entry.at() + " " + entry.actor(), entry.what());
+				row(sheet, r++, text, words.instant(entry.at()) + " " + entry.actor(), entry.what());
 			}
 		}
 	}
 
 	private void commentsSheet(Workbook workbook, IssueExport export, CellStyle header, CellStyle text) {
-		Sheet sheet = workbook.createSheet("Comments");
+		ExportWords words = export.words();
+		Sheet sheet = workbook.createSheet(sheetName(workbook, words.t("export.sheet.comments")));
 		sheet.setColumnWidth(0, 24 * 256);
 		sheet.setColumnWidth(1, 24 * 256);
 		sheet.setColumnWidth(2, 90 * 256);
 		Row head = sheet.createRow(0);
-		cell(head, 0, header, "Date");
-		cell(head, 1, header, "Author");
-		cell(head, 2, header, "Comment");
+		cell(head, 0, header, words.t("export.column.date"));
+		cell(head, 1, header, words.t("export.column.author"));
+		cell(head, 2, header, words.t("export.column.comment"));
 		int r = 1;
 		for (IssueExport.Comment comment : export.comments()) {
 			Row row = sheet.createRow(r++);
-			cell(row, 0, text, comment.at() == null ? "" : ExportText.DATE_TIME.format(comment.at()));
+			cell(row, 0, text, words.instant(comment.at()));
 			cell(row, 1, text, comment.author());
 			cell(row, 2, text, plainText(comment.body()));
 		}
+	}
+
+	/**
+	 * A sheet name Excel will accept: no {@code : \\ / ? * [ ]}, at most 31
+	 * characters, never blank, and not one this workbook already uses.
+	 *
+	 * <p>Needed only because the names are translated now. They used to be two
+	 * ASCII literals that could not offend anything; a translation is a string
+	 * from a bundle, and a bundle that ever gained a colon or a long phrase would
+	 * turn every export of every issue into a 500. Sanitised rather than
+	 * validated, because a slightly shortened tab name is a far better outcome
+	 * than a failed download.
+	 */
+	private static String sheetName(Workbook workbook, String wanted) {
+		String cleaned = wanted == null ? "" : wanted.replaceAll("[\\\\/:*?\\[\\]]", " ").trim();
+		if (cleaned.isEmpty()) {
+			cleaned = "Sheet";
+		}
+		if (cleaned.length() > 31) {
+			cleaned = cleaned.substring(0, 31).trim();
+		}
+		if (workbook.getSheet(cleaned) == null) {
+			return cleaned;
+		}
+		String stem = cleaned.length() > 29 ? cleaned.substring(0, 29) : cleaned;
+		for (int i = 2; i < 100; i++) {
+			String candidate = stem + " " + i;
+			if (workbook.getSheet(candidate) == null) {
+				return candidate;
+			}
+		}
+		return stem + " x";
 	}
 
 	// --- cells ---------------------------------------------------------------
