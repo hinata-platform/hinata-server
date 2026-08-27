@@ -68,17 +68,19 @@ class IssueExportRenderersTest {
 	private static IssueExport export(String title, List<ExportBlock> description, byte[] logo) {
 		return new IssueExport(
 				"HIN-50", title, "hinata platform",
-				List.of(new IssueExport.Field("Status", "In Progress"),
-						new IssueExport.Field("Priority", "MAJOR"),
-						new IssueExport.Field("Assignees", "Rebar Ahmad")),
+				List.of(new IssueExport.Field("status", "Status", "In Progress"),
+						new IssueExport.Field("priority", "Priority", "Major"),
+						new IssueExport.Field("assignees", "Assignees", "Rebar Ahmad")),
 				description,
 				List.of(new IssueExport.Comment("Lena", Instant.parse("2026-08-19T10:00:00Z"),
 						MarkdownBlocks.of("A comment with **weight**."))),
 				List.of(new IssueExport.Link("blocks", "HIN-51", "Issues klonen")),
 				List.of(new IssueExport.Attachment("shot.png", "image/png", "2.0 KB",
 						"Rebar Ahmad", Instant.parse("2026-08-18T09:00:00Z"))),
-				List.of(new IssueExport.Activity("2026-08-19 10:00 UTC", "Lena", "STATE: Open → In Progress")),
-				"AStA", logo, Instant.parse("2026-08-20T08:00:00Z"));
+				List.of(new IssueExport.Activity(Instant.parse("2026-08-19T10:00:00Z"), "Lena",
+						"Status: Open → In Progress")),
+				"AStA", logo, Instant.parse("2026-08-20T08:00:00Z"),
+				ExportWordsFixture.english());
 	}
 
 	private static IssueExport standard() {
@@ -364,13 +366,14 @@ class IssueExportRenderersTest {
 	void hostileContentCannotBreakTheDocument() throws Exception {
 		IssueExport export = new IssueExport(
 				"HIN-50", "</issue><script>alert(1)</script>", "a & b",
-				List.of(new IssueExport.Field("<name>", "]]>")),
+				List.of(new IssueExport.Field("<key>", "<name>", "]]>")),
 				MarkdownBlocks.of("text with <tags> & \"quotes\""),
 				List.of(new IssueExport.Comment("<b>", Instant.parse("2026-08-19T10:00:00Z"),
 						MarkdownBlocks.of("]]><!--"))),
 				List.of(new IssueExport.Link("\"", "&", "<")),
 				List.of(new IssueExport.Attachment("../x\".png", "text/plain", "1 B", "'", null)),
-				List.of(), "<org>", null, Instant.parse("2026-08-20T08:00:00Z"));
+				List.of(), "<org>", null, Instant.parse("2026-08-20T08:00:00Z"),
+				ExportWordsFixture.english());
 
 		byte[] bytes = xml.render(export);
 
@@ -383,7 +386,7 @@ class IssueExportRenderersTest {
 	void theDocumentDeclaresItsSchemaVersion() {
 		String text = new String(xml.render(standard()), StandardCharsets.UTF_8);
 
-		assertThat(text).contains("<issue version=\"1\"");
+		assertThat(text).contains("<issue version=\"2\"");
 		// A shape a consumer can rely on: the blocks keep their kind.
 		assertThat(text).contains("<heading level=\"1\">Ziel</heading>")
 				.contains("<list ordered=\"false\">")
@@ -399,7 +402,7 @@ class IssueExportRenderersTest {
 		factory.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "");
 		factory.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
 		try (InputStream xsd = IssueExportRenderersTest.class
-				.getResourceAsStream("/schema/issue-export-v1.xsd")) {
+				.getResourceAsStream("/schema/issue-export-v2.xsd")) {
 			Schema schema = factory.newSchema(new StreamSource(xsd));
 			Validator validator = schema.newValidator();
 			validator.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "");
@@ -408,7 +411,7 @@ class IssueExportRenderersTest {
 				validator.validate(new StreamSource(new ByteArrayInputStream(xmlBytes)));
 			}
 			catch (SAXException invalid) {
-				throw new AssertionError("The export does not match issue-export-v1.xsd: "
+				throw new AssertionError("The export does not match issue-export-v2.xsd: "
 						+ invalid.getMessage() + "\n" + new String(xmlBytes, StandardCharsets.UTF_8),
 						invalid);
 			}

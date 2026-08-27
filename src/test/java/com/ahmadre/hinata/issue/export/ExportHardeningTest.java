@@ -64,7 +64,8 @@ class ExportHardeningTest {
 
 	private static IssueExport export(String title, List<ExportBlock> description) {
 		return new IssueExport("HIN-50", title, "p", List.of(), description,
-				List.of(), List.of(), List.of(), List.of(), "org", null, AT);
+				List.of(), List.of(), List.of(), List.of(), "org", null, AT,
+				ExportWordsFixture.english());
 	}
 
 	/**
@@ -297,7 +298,8 @@ class ExportHardeningTest {
 		when(issues.canAccess(secret, caller)).thenReturn(false);
 		when(issues.canAccess(visible, caller)).thenReturn(true);
 
-		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller);
+		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller,
+				ExportWordsFixture.english());
 
 		assertThat(valueOf(export, "Depends on")).isEqualTo("HIN-7");
 		assertThat(new String(new XmlIssueExportRenderer().render(export), StandardCharsets.UTF_8))
@@ -319,7 +321,8 @@ class ExportHardeningTest {
 		when(issues.findOrNull("stranded")).thenReturn(parent);
 		when(issues.canAccess(parent, caller)).thenReturn(false);
 
-		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller);
+		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller,
+				ExportWordsFixture.english());
 
 		assertThat(valueOf(export, "Parent")).isEmpty();
 	}
@@ -341,7 +344,8 @@ class ExportHardeningTest {
 		// Names arrive in one batched read now, so that is the call to answer.
 		when(users.findAllById(anyIterable())).thenReturn(List.of(quiet));
 
-		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller);
+		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller,
+				ExportWordsFixture.english());
 
 		assertThat(valueOf(export, "Reporter")).isEqualTo("tomas");
 		assertThat(new String(new XmlIssueExportRenderer().render(export), StandardCharsets.UTF_8))
@@ -364,7 +368,8 @@ class ExportHardeningTest {
 		when(boards.findById("board")).thenReturn(Optional.of(
 				AgileBoard.builder().id("board").projectIds(List.of("closed")).build()));
 
-		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller);
+		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller,
+				ExportWordsFixture.english());
 
 		assertThat(valueOf(export, "Sprint")).isEmpty();
 	}
@@ -380,7 +385,8 @@ class ExportHardeningTest {
 		when(boards.findById("board")).thenReturn(Optional.of(
 				AgileBoard.builder().id("board").projectIds(List.of("open")).build()));
 
-		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller);
+		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller,
+				ExportWordsFixture.english());
 
 		assertThat(valueOf(export, "Sprint")).isEqualTo("Sprint 7");
 	}
@@ -417,7 +423,8 @@ class ExportHardeningTest {
 				.thenReturn(new PageImpl<>(history));
 
 		IssueExport export = exports.gather("HIN-50",
-				new IssueExport.Options(true, true, true, true), caller);
+				new IssueExport.Options(true, true, true, true), caller,
+				ExportWordsFixture.english());
 
 		assertThat(export.comments()).hasSize(200);
 		assertThat(export.activity()).hasSize(200);

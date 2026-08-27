@@ -67,7 +67,7 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 			title(document, export);
 			fields(document, export);
 			if (!export.description().isEmpty()) {
-				section(document, "Description");
+				section(document, export.words().t("export.section.description"));
 				blocks(document, export.description());
 			}
 			comments(document, export);
@@ -166,10 +166,11 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 	}
 
 	private void fields(XWPFDocument document, IssueExport export) {
-		section(document, "Details");
+		section(document, export.words().t("export.section.details"));
 		XWPFTable table = document.createTable(1, 2);
 		table.setWidth("100%");
-		fill(table.getRow(0), List.of("Field", "Value"), true);
+		fill(table.getRow(0), List.of(export.words().t("export.column.field"),
+				export.words().t("export.column.value")), true);
 		for (IssueExport.Field field : export.fields()) {
 			if (!field.value().isBlank()) {
 				fill(table.createRow(), List.of(field.label(), field.value()), false);
@@ -181,12 +182,12 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 		if (export.comments().isEmpty()) {
 			return;
 		}
-		section(document, "Comments (" + export.comments().size() + ")");
+		section(document, export.words().t("export.section.comments", export.comments().size()));
 		for (IssueExport.Comment comment : export.comments()) {
 			XWPFParagraph meta = document.createParagraph();
 			meta.setSpacingBefore(160);
 			run(meta, comment.author() + " · "
-					+ (comment.at() == null ? "" : ExportText.DATE_TIME.format(comment.at())),
+					+ (comment.at() == null ? "" : export.words().instant(comment.at())),
 					9, true, MUTED);
 			blocks(document, comment.body());
 		}
@@ -196,7 +197,7 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 		if (export.links().isEmpty()) {
 			return;
 		}
-		section(document, "Linked issues");
+		section(document, export.words().t("export.section.links"));
 		for (IssueExport.Link link : export.links()) {
 			XWPFParagraph paragraph = document.createParagraph();
 			run(paragraph, link.verb() + "  ", 10, true, NAVY);
@@ -208,10 +209,12 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 		if (export.attachments().isEmpty()) {
 			return;
 		}
-		section(document, "Attachments");
+		section(document, export.words().t("export.section.attachments"));
 		XWPFTable table = document.createTable(1, 4);
 		table.setWidth("100%");
-		fill(table.getRow(0), List.of("File", "Type", "Size", "Uploaded by"), true);
+		fill(table.getRow(0), List.of(export.words().t("export.column.file"),
+				export.words().t("export.column.type"), export.words().t("export.column.size"),
+				export.words().t("export.column.uploadedBy")), true);
 		for (IssueExport.Attachment file : export.attachments()) {
 			fill(table.createRow(),
 					List.of(file.fileName(), file.contentType(), file.size(), file.uploader()),
@@ -223,10 +226,11 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 		if (export.activity().isEmpty()) {
 			return;
 		}
-		section(document, "History");
+		section(document, export.words().t("export.section.history"));
 		for (IssueExport.Activity entry : export.activity()) {
 			XWPFParagraph paragraph = document.createParagraph();
-			run(paragraph, entry.at() + " · " + entry.actor() + " · ", 9, false, MUTED);
+			run(paragraph, export.words().instant(entry.at()) + " · " + entry.actor() + " · ",
+					9, false, MUTED);
 			run(paragraph, entry.what(), 9, false, null);
 		}
 	}
@@ -236,7 +240,7 @@ class DocxIssueExportRenderer implements IssueExportRenderer {
 		paragraph.setSpacingBefore(320);
 		paragraph.setAlignment(ParagraphAlignment.CENTER);
 		String org = export.organization().isBlank() ? "hinata" : export.organization();
-		run(paragraph, org + " · " + ExportText.DATE_TIME.format(export.generatedAt()),
+		run(paragraph, org + " · " + export.words().instant(export.generatedAt()),
 				8, false, MUTED);
 	}
 

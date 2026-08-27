@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * The machine-readable export: one {@code <issue>} document against the schema
- * in {@code issue-export-v1.xsd}.
+ * in {@code issue-export-v2.xsd}.
  *
  * <p>Versioned in the root element from the first release, because the moment
  * somebody scripts against this it is a contract. Adding an element leaves
@@ -30,7 +30,7 @@ class XmlIssueExportRenderer implements IssueExportRenderer {
 	 * schema file is updated in place for an addition, so one holding an older
 	 * copy of it rejects the newer document until it takes the new copy.
 	 */
-	private static final String SCHEMA_VERSION = "1";
+	private static final String SCHEMA_VERSION = "2";
 
 	@Override
 	public IssueExportFormat format() {
@@ -46,11 +46,15 @@ class XmlIssueExportRenderer implements IssueExportRenderer {
 		element(xml, 1, "title", export.title());
 		element(xml, 1, "project", export.project());
 		element(xml, 1, "organization", export.organization());
-		element(xml, 1, "generatedAt", ExportText.DATE_TIME.format(export.generatedAt()));
+		element(xml, 1, "generatedAt", export.words().isoInstant(export.generatedAt()));
 
 		xml.append("\t<fields>\n");
 		for (IssueExport.Field field : export.fields()) {
-			xml.append("\t\t<field name=\"").append(ExportText.forXml(field.label())).append("\">")
+			// Two names on purpose: `name` is the stable key a consumer matches on
+			// and never changes with the reader's language, `label` is the same
+			// field as the document above it spells it.
+			xml.append("\t\t<field name=\"").append(ExportText.forXml(field.key()))
+					.append("\" label=\"").append(ExportText.forXml(field.label())).append("\">")
 					.append(ExportText.forXml(field.value())).append("</field>\n");
 		}
 		xml.append("\t</fields>\n");
@@ -62,7 +66,7 @@ class XmlIssueExportRenderer implements IssueExportRenderer {
 		xml.append("\t<comments count=\"").append(export.comments().size()).append("\">\n");
 		for (IssueExport.Comment comment : export.comments()) {
 			xml.append("\t\t<comment author=\"").append(ExportText.forXml(comment.author()))
-					.append("\" at=\"").append(instant(comment.at())).append("\">\n");
+					.append("\" at=\"").append(instant(export, comment.at())).append("\">\n");
 			blocks(xml, 3, comment.body());
 			xml.append("\t\t</comment>\n");
 		}
@@ -82,14 +86,14 @@ class XmlIssueExportRenderer implements IssueExportRenderer {
 					.append("\" contentType=\"").append(ExportText.forXml(file.contentType()))
 					.append("\" size=\"").append(ExportText.forXml(file.size()))
 					.append("\" uploader=\"").append(ExportText.forXml(file.uploader()))
-					.append("\" uploadedAt=\"").append(instant(file.uploadedAt()))
+					.append("\" uploadedAt=\"").append(instant(export, file.uploadedAt()))
 					.append("\"/>\n");
 		}
 		xml.append("\t</attachments>\n");
 
 		xml.append("\t<activity count=\"").append(export.activity().size()).append("\">\n");
 		for (IssueExport.Activity entry : export.activity()) {
-			xml.append("\t\t<entry at=\"").append(ExportText.forXml(entry.at()))
+			xml.append("\t\t<entry at=\"").append(instant(export, entry.at()))
 					.append("\" actor=\"").append(ExportText.forXml(entry.actor())).append("\">")
 					.append(ExportText.forXml(entry.what())).append("</entry>\n");
 		}
@@ -172,7 +176,7 @@ class XmlIssueExportRenderer implements IssueExportRenderer {
 		xml.append("\t".repeat(depth));
 	}
 
-	private static String instant(Instant value) {
-		return value == null ? "" : ExportText.forXml(ExportText.DATE_TIME.format(value));
+	private static String instant(IssueExport export, Instant value) {
+		return value == null ? "" : ExportText.forXml(export.words().isoInstant(value));
 	}
 }
