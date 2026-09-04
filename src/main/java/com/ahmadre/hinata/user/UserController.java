@@ -89,7 +89,8 @@ public class UserController {
 	}
 
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
-			@Size(max = 120) String title, @Pattern(regexp = "de|en") String locale) {
+			@Size(max = 120) String title, @Size(max = 120) String pronouns,
+			@Pattern(regexp = "de|en") String locale) {
 	}
 
 	@PatchMapping("/api/v1/users/me")
@@ -97,6 +98,7 @@ public class UserController {
 		User user = currentUser.require();
 		if (request.displayName() != null) user.setDisplayName(request.displayName());
 		if (request.title() != null) user.setTitle(request.title());
+		if (request.pronouns() != null) user.setPronouns(request.pronouns());
 		if (request.locale() != null) user.setLocale(request.locale());
 		return users.save(user);
 	}

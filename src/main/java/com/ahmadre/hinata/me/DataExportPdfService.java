@@ -175,6 +175,7 @@ public class DataExportPdfService {
 		kv(t, de ? "Anzeigename" : "Display name", nullSafe(user.getDisplayName()));
 		kv(t, de ? "Benutzername" : "Username", nullSafe(user.getUsername()));
 		kv(t, de ? "Titel" : "Title", nullSafe(user.getTitle()));
+		kv(t, de ? "Pronomen" : "Pronouns", nullSafe(user.getPronouns()));
 		kv(t, de ? "E-Mail" : "Email", nullSafe(user.getEmail()));
 		kv(t, de ? "E-Mail bestätigt" : "Email verified", yesNo(user.isEmailVerified(), de));
 		if (user.getPendingEmail() != null) {

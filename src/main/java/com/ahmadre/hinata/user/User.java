@@ -66,6 +66,9 @@ public class User {
 	@TextIndexed(weight = 3)
 	private String title;
 
+	/** Free-text pronouns (e.g. "she/her"), set by the user themselves. */
+	private String pronouns;
+
 	@Builder.Default
 	private String locale = "en";
 

@@ -63,9 +63,11 @@ public class MeService {
 
 	// --- Profile --------------------------------------------------------------
 
-	public User updateProfile(User user, String displayName, String title, String locale) {
+	public User updateProfile(User user, String displayName, String title, String pronouns,
+			String locale) {
 		if (displayName != null) user.setDisplayName(displayName.trim());
 		if (title != null) user.setTitle(title.trim());
+		if (pronouns != null) user.setPronouns(pronouns.trim());
 		if (locale != null) user.setLocale(locale);
 		return users.save(user);
 	}
@@ -299,6 +301,7 @@ public class MeService {
 		profile.put("username", user.getUsername());
 		profile.put("email", user.getEmail());
 		profile.put("title", user.getTitle());
+		profile.put("pronouns", user.getPronouns());
 		profile.put("locale", user.getLocale());
 		profile.put("origin", user.getOrigin().name());
 		profile.put("roles", user.getRoles().stream().map(Enum::name).sorted().toList());

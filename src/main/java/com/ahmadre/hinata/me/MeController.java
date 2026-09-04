@@ -50,8 +50,8 @@ public class MeController {
 	// --- DTOs -----------------------------------------------------------------
 
 	public record MeResponse(String id, String displayName, String username, String email,
-			boolean emailVerified, String pendingEmail, String title, String locale, String origin,
-			List<String> roles, boolean active, String avatarUrl, Instant createdAt,
+			boolean emailVerified, String pendingEmail, String title, String pronouns, String locale,
+			String origin, List<String> roles, boolean active, String avatarUrl, Instant createdAt,
 			Instant passwordChangedAt, TwoFactorDto twoFactor,
 			NotificationPreferences notificationPreferences) {
 
@@ -61,9 +61,10 @@ public class MeController {
 			// "ingest"), so the client always sees each event with its proper default.
 			prefs = (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
 			return new MeResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
-					u.isEmailVerified(), u.getPendingEmail(), u.getTitle(), u.getLocale(),
-					u.getOrigin().name(), u.getRoles().stream().map(Enum::name).sorted().toList(),
-					u.isActive(), u.getAvatarUrl(), u.getCreatedAt(), u.getPasswordChangedAt(),
+					u.isEmailVerified(), u.getPendingEmail(), u.getTitle(), u.getPronouns(),
+					u.getLocale(), u.getOrigin().name(),
+					u.getRoles().stream().map(Enum::name).sorted().toList(), u.isActive(),
+					u.getAvatarUrl(), u.getCreatedAt(), u.getPasswordChangedAt(),
 					new TwoFactorDto(u.isTotpEnabled(), "TOTP", u.recoveryCodesRemaining(),
 							u.getTotpEnabledAt()),
 					prefs);
@@ -87,7 +88,8 @@ public class MeController {
 	// Only en/de are actually translated (templates, e-mails, message bundles), so
 	// reject locales we can't serve rather than silently downgrading them to English.
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
-			@Size(max = 120) String title, @Pattern(regexp = "de|en") String locale) {
+			@Size(max = 120) String title, @Size(max = 120) String pronouns,
+			@Pattern(regexp = "de|en") String locale) {
 	}
 
 	public record EmailChangeRequest(@NotBlank @Email String newEmail) {
@@ -116,11 +118,11 @@ public class MeController {
 		return MeResponse.from(user);
 	}
 
-	@Operation(summary = "Update my profile (display name, title, locale)")
+	@Operation(summary = "Update my profile (display name, title, pronouns, locale)")
 	@PatchMapping
 	public MeResponse updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
 		User saved = me.updateProfile(currentUser.require(), request.displayName(), request.title(),
-				request.locale());
+				request.pronouns(), request.locale());
 		return MeResponse.from(saved);
 	}
 
