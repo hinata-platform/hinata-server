@@ -16,6 +16,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
@@ -171,6 +173,10 @@ public class MeService {
 
 	public List<RefreshSession> sessions(String userId) {
 		return sessions.list(userId);
+	}
+
+	public Page<RefreshSession> sessions(String userId, Pageable pageable) {
+		return sessions.list(userId, pageable);
 	}
 
 	public void revokeSession(String userId, String sessionId, String currentSessionId) {
