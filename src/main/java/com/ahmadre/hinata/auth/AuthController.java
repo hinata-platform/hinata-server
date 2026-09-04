@@ -54,13 +54,15 @@ public class AuthController {
 	}
 
 	public record UserResponse(String id, String email, String username, String displayName,
-			Set<String> roles, String avatarUrl, String title, String locale, String origin) {
+			Set<String> roles, String avatarUrl, String title, String pronouns, String locale,
+			String origin) {
 
 		static UserResponse from(User user) {
 			return new UserResponse(user.getId(), user.getEmail(), user.getUsername(),
 					user.getDisplayName(),
 					user.getRoles().stream().map(Enum::name).collect(Collectors.toSet()),
-					user.getAvatarUrl(), user.getTitle(), user.getLocale(), user.getOrigin().name());
+					user.getAvatarUrl(), user.getTitle(), user.getPronouns(), user.getLocale(),
+					user.getOrigin().name());
 		}
 	}
 
