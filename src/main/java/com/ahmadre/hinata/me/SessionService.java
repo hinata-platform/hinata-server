@@ -4,6 +4,8 @@ import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -91,6 +93,10 @@ public class SessionService {
 
 	public List<RefreshSession> list(String userId) {
 		return sessions.findByUserIdOrderByLastActiveAtDesc(userId);
+	}
+
+	public Page<RefreshSession> list(String userId, Pageable pageable) {
+		return sessions.findByUserIdOrderByLastActiveAtDesc(userId, pageable);
 	}
 
 	/** Revokes one session; only the owner may. No-op if it isn't theirs. */

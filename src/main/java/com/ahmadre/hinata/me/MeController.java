@@ -12,6 +12,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -171,14 +173,29 @@ public class MeController {
 
 	// --- Sessions -------------------------------------------------------------
 
+	/**
+	 * The caller's device sessions, most recently active first.
+	 *
+	 * <p>
+	 * Paginated because this list only ever grows: every browser, every phone
+	 * and every reinstall adds a row, and an account a few years old answers
+	 * with hundreds. The first page is what the settings screen shows; the rest
+	 * is fetched only if the reader asks to see it.
+	 */
 	@Operation(summary = "List my active device sessions")
 	@GetMapping("/sessions")
-	public List<SessionDto> sessions() {
+	public Page<SessionDto> sessions(@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "25") int size) {
 		String userId = currentUser.requireId();
 		String current = currentUser.currentSessionId();
-		return me.sessions(userId).stream().map(s -> new SessionDto(s.getId(),
-				s.getId().equals(current), s.getKind().name(), s.getOs(), s.getClient(), s.getApp(),
-				s.getLocation(), s.getIpMasked(), s.getLastActiveAt())).toList();
+		// Both bounds, not just the upper one: PageRequest.of throws on a
+		// negative page or a zero size, and an unhandled IllegalArgumentException
+		// is a 500 with a stack trace in the log — one authenticated caller could
+		// fill the error log from a query string.
+		return me.sessions(userId, PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, 100)))
+				.map(s -> new SessionDto(s.getId(), s.getId().equals(current), s.getKind().name(),
+						s.getOs(), s.getClient(), s.getApp(), s.getLocation(), s.getIpMasked(),
+						s.getLastActiveAt()));
 	}
 
 	/**
