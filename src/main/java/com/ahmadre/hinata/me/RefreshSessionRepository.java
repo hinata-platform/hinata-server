@@ -12,8 +12,6 @@ public interface RefreshSessionRepository extends MongoRepository<RefreshSession
 
 	Page<RefreshSession> findByUserIdOrderByLastActiveAtDesc(String userId, Pageable pageable);
 
-	long countByUserId(String userId);
-
 	void deleteByUserId(String userId);
 
 	void deleteByUserIdAndIdNot(String userId, String id);

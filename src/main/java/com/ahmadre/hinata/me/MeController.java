@@ -188,7 +188,11 @@ public class MeController {
 			@RequestParam(defaultValue = "25") int size) {
 		String userId = currentUser.requireId();
 		String current = currentUser.currentSessionId();
-		return me.sessions(userId, PageRequest.of(page, Math.min(size, 100)))
+		// Both bounds, not just the upper one: PageRequest.of throws on a
+		// negative page or a zero size, and an unhandled IllegalArgumentException
+		// is a 500 with a stack trace in the log — one authenticated caller could
+		// fill the error log from a query string.
+		return me.sessions(userId, PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, 100)))
 				.map(s -> new SessionDto(s.getId(), s.getId().equals(current), s.getKind().name(),
 						s.getOs(), s.getClient(), s.getApp(), s.getLocation(), s.getIpMasked(),
 						s.getLastActiveAt()));

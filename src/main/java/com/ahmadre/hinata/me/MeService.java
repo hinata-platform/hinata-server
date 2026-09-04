@@ -171,10 +171,6 @@ public class MeService {
 
 	// --- Sessions -------------------------------------------------------------
 
-	public List<RefreshSession> sessions(String userId) {
-		return sessions.list(userId);
-	}
-
 	public Page<RefreshSession> sessions(String userId, Pageable pageable) {
 		return sessions.list(userId, pageable);
 	}

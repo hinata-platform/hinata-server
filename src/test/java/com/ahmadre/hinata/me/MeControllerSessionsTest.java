@@ -110,6 +110,22 @@ class MeControllerSessionsTest {
 	}
 
 	@Test
+	void refusesToBeTurnedIntoAStackTraceGenerator() {
+		// PageRequest.of throws on a negative page or a zero size, and an
+		// unhandled IllegalArgumentException is a 500 with a stack trace in the
+		// log — one authenticated caller could fill the error log from a query
+		// string. Both bounds are clamped, so neither is reachable.
+		stub(new PageImpl<>(List.of(), PageRequest.of(0, 1), 0));
+
+		controller.sessions(-5, 0);
+
+		var pageable = forClass(Pageable.class);
+		verify(me).sessions(eq(USER_ID), pageable.capture());
+		assertThat(pageable.getValue().getPageNumber()).isZero();
+		assertThat(pageable.getValue().getPageSize()).isEqualTo(1);
+	}
+
+	@Test
 	void passesThePageThroughSoLaterPagesAreReachable() {
 		stub(new PageImpl<>(List.of(), PageRequest.of(3, 25), 0));
 
