@@ -93,8 +93,33 @@ class EmailTemplateRenderTest {
 	/** The eyebrow key is resolved through preprocessing, not printed raw. */
 	@Test
 	void notificationShowsItsTypeLabel() {
-		assertThat(render("email/notification", "de")).contains("Dir zugewiesen");
-		assertThat(render("email/notification", "en")).contains("Assigned to you");
+		assertThat(render("email/notification", "de")).contains("Vorgang aktualisiert");
+		assertThat(render("email/notification", "en")).contains("Issue updated");
+	}
+
+	/**
+	 * Both change mails paint the same diff: the state before struck through in
+	 * red, the state after in green. Asserted on the mark-up rather than on the
+	 * words, because the words are the sample's and the mark-up is the promise —
+	 * a client that drops the colours still has the strikethrough, and a reader
+	 * still has both halves.
+	 */
+	@Test
+	void bothChangeMailsPaintTheDiff() {
+		for (String template : List.of("email/issue-changes", "email/notification")) {
+			assertThat(render(template, "de"))
+					.as(template)
+					.contains("text-decoration:line-through")
+					.contains("color:#C0392B")
+					.contains("color:#2FA06E")
+					.contains("&#8594;")
+					// The state before and the state after, both in full: the defect this
+					// replaced showed only what left.
+					.contains("Jördis Brandt, Ada Lovelace")
+					.contains("Ada Lovelace, Marek Wilczyński")
+					// A description edit shows the words that moved, never the bare word.
+					.doesNotContain(">geändert<");
+		}
 	}
 
 	/** Every CTA must carry a real href, and the copy-paste fallback with it. */

@@ -174,7 +174,7 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 		});
 		// The e-mail is sent without a CTA, the push without a deep link.
 		verify(mail).sendNotification(eq("ext@example.org"), anyString(), anyString(), anyString(),
-				isNull(), anyString(), anyString(), anyString());
+				isNull(), anyString(), anyString(), anyString(), any());
 		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), isNull());
 	}
 

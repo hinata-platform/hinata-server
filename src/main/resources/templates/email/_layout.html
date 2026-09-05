@@ -19,7 +19,7 @@
    * Images arrive as inlined cid: parts (see MailService), so mail still renders
      on an instance that the recipient's network cannot reach.
 
-  Fragments: page · cta · fallback · panel · note · copy · sectionLabel · fineprint · rule
+  Fragments: page · cta · fallback · panel · diff · note · copy · sectionLabel · fineprint · rule
   (names deliberately avoid HTML element names — a `:: meta` selector would
   match the <meta> tags in this very <head> instead of the fragment.)
 */-->
@@ -71,6 +71,11 @@
       .hn-ok      { background: #16291F !important; border-color: #24503A !important; }
       .hn-ok-ink  { color: #6FCF9B !important; }
       .hn-danger  { background: #33201E !important; color: #E8877E !important; }
+      /* Inline diff: the two halves of a change. Backgrounds stay faint so a
+         panel full of them still reads as text rather than as a heat map. */
+      .hn-was     { background: #33201E !important; color: #E8877E !important; }
+      .hn-now     { background: #16291F !important; color: #6FCF9B !important; }
+      .hn-arrow   { color: #6F6D88 !important; }
       /* Text-only variant: the pill wants the fill, a bare date does not. */
       .hn-danger-ink { color: #E8877E !important; }
     }
@@ -238,6 +243,57 @@
            style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
                   font-size:15.5px;font-weight:600;line-height:1.4;color:#23223F;word-break:break-word"
            th:text="${value}">Value</div>
+    </td>
+  </tr>
+</table>
+
+
+<!--/* =====================================================================
+       diff(line) — one changed field as a before/after pair.
+
+       This is the whole point of a change mail: a watcher should be able to
+       read what an issue looked like before and what it looks like now without
+       opening it. "Description: changed" and "Assignees: −Hicham" both failed
+       that — the first says nothing, the second says what left and hides what
+       remains.
+
+       `line` is an IssueChangeRenderer.Line. Its `segments` carry the diff and
+       `inline` says how to set them: false is the ordinary two-part change,
+       read as "before → after"; true is a word-level diff of a longer text,
+       whose segments interleave and are read as one sentence.
+
+       Colour is a second channel, never the only one: the old half is struck
+       through as well as red, so a colour-blind reader and a client that drops
+       the backgrounds both still see which half is which.
+       ===================================================================== */-->
+<table xmlns:th="http://www.thymeleaf.org" th:fragment="diff(line)" role="presentation" width="100%"
+       cellpadding="0" cellspacing="0" border="0" style="margin:0 0 6px 0">
+  <tr>
+    <td class="hn-panel"
+        style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:14px 16px">
+      <div class="hn-faint"
+           style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10.5px;
+                  font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#9A99B0;margin:0 0 5px 0"
+           th:text="${line.label}">LABEL</div>
+      <div class="hn-ink"
+           th:styleappend="${line.inline} ? ';font-weight:400;font-size:14.5px' : ''"
+           style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+                  font-size:15.5px;font-weight:600;line-height:1.55;color:#23223F;word-break:break-word">
+        <th:block th:each="seg, pos : ${line.segments}">
+          <!--/* The arrow only separates the two halves of a plain change; inside a
+               word diff the segments are one running sentence and the space that
+               the source break already produces is the only separator wanted. */-->
+          <span th:if="${!pos.first and !line.inline}" class="hn-arrow"
+                style="color:#9A99B0;font-weight:400">&#8594;</span>
+          <span th:if="${seg.same()}" th:text="${seg.text}">unchanged</span>
+          <span th:if="${seg.removed()}" class="hn-was"
+                style="background:#FBE7E4;color:#C0392B;text-decoration:line-through;
+                       padding:1px 5px;border-radius:5px" th:text="${seg.text}">before</span>
+          <span th:if="${seg.added()}" class="hn-now"
+                style="background:#E4F2EC;color:#2FA06E;padding:1px 5px;border-radius:5px"
+                th:text="${seg.text}">after</span>
+        </th:block>
+      </div>
     </td>
   </tr>
 </table>

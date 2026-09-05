@@ -132,16 +132,61 @@ class IssueChangeDiffTest {
 		assertThat(collapsed).isEmpty();
 	}
 
-	/** A description carries no values, so "unchanged" can't be read off it — it
-	 *  is only ever recorded when the document really did differ. */
+	/**
+	 * A description's stored values are an <em>excerpt</em> of a longer text, so
+	 * two equal ends do not prove it came back to where it started — the edit may
+	 * sit past the cut, or be formatting the plain text does not carry. It is only
+	 * ever recorded when the document really did differ, so it survives collapsing
+	 * unconditionally.
+	 */
 	@Test
-	void aValuelessDescriptionEditSurvivesCollapsing() {
+	void anExcerptedDescriptionEditSurvivesCollapsing() {
 		List<FieldChange> collapsed = FieldChange.collapse(List.of(
-				new FieldChange(IssueChangeDiff.DESCRIPTION, null, null),
-				new FieldChange(IssueChangeDiff.DESCRIPTION, null, null)));
+				new FieldChange(IssueChangeDiff.DESCRIPTION, "same", "same"),
+				new FieldChange(IssueChangeDiff.DESCRIPTION, "same", "same")));
 
 		assertThat(collapsed).singleElement()
 				.returns(IssueChangeDiff.DESCRIPTION, FieldChange::field);
+	}
+
+	/**
+	 * The change carries the plain text of both sides, which is what lets the mail
+	 * show the words that moved instead of the word "changed".
+	 */
+	@Test
+	void aDescriptionEditCarriesThePlainTextOfBothSides() {
+		Issue before = issue();
+		before.setDescriptionDoc("{\"root\":{\"v\":1}}");
+		before.setDescription("The week starts on Sunday.");
+		Issue after = issue();
+		after.setDescriptionDoc("{\"root\":{\"v\":2}}");
+		after.setDescription("The week starts on Monday.");
+
+		assertThat(IssueChangeDiff.between(before, after)).singleElement()
+				.returns(IssueChangeDiff.DESCRIPTION, FieldChange::field)
+				.returns("The week starts on Sunday.", FieldChange::oldValue)
+				.returns("The week starts on Monday.", FieldChange::newValue);
+	}
+
+	/**
+	 * And no more than an excerpt of it. A queued bundle may hold hundreds of
+	 * changes for one issue; storing a whole description per change is how one
+	 * document grows past Mongo's limit and every later change to that issue
+	 * starts throwing.
+	 */
+	@Test
+	void aLongDescriptionIsStoredAsABoundedExcerpt() {
+		Issue before = issue();
+		before.setDescriptionDoc("{\"root\":{\"v\":1}}");
+		before.setDescription("x".repeat(50_000));
+		Issue after = issue();
+		after.setDescriptionDoc("{\"root\":{\"v\":2}}");
+		after.setDescription("y".repeat(50_000));
+
+		assertThat(IssueChangeDiff.between(before, after)).singleElement().satisfies(change -> {
+			assertThat(change.oldValue()).hasSize(IssueChangeDiff.TEXT_MAX + 1).endsWith("…");
+			assertThat(change.newValue()).hasSize(IssueChangeDiff.TEXT_MAX + 1).endsWith("…");
+		});
 	}
 
 	@Test

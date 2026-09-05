@@ -110,10 +110,17 @@ public class MailService {
 	 * {@code email.eyebrow.<TYPE>} message so the recipient can tell an
 	 * assignment from a mention before reading a word; pass {@code null} for the
 	 * neutral label. Title and body arrive already localized from the caller.
+	 *
+	 * <p>{@code changes} is the before/after diff of an issue update, already
+	 * worded in the recipient's language, and {@code null} for every other notice.
+	 * The body copy says <em>that</em> something changed; this is what says
+	 * <em>what</em>, which is the difference between a mail a watcher can act on
+	 * and one that only tells them to go and look.
 	 */
 	@Async
 	public void sendNotification(String to, String subject, String headline, String body, String link,
-			String buttonLabel, String locale, String eyebrowKey) {
+			String buttonLabel, String locale, String eyebrowKey,
+			List<IssueChangeRenderer.Line> changes) {
 		Map<String, Object> model = new HashMap<>();
 		model.put("locale", locale);
 		model.put("headline", headline);
@@ -121,6 +128,7 @@ public class MailService {
 		model.put("ctaLink", link);
 		model.put("ctaLabel", buttonLabel);
 		model.put("eyebrowKey", eyebrowKey);
+		model.put("lines", changes);
 		sendTemplateSync(to, subject, "email/notification", model);
 	}
 

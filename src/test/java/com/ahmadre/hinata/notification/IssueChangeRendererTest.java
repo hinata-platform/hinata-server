@@ -21,10 +21,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * A change list is only useful if it reads like something a person wrote. These
- * pin down the parts a raw dump would get wrong: an id where a name belongs, an
- * ISO date in a German mail, a whole rich-text body pasted into a push, and two
- * comma lists left for the reader to diff by eye.
+ * A change list is only useful if it reads like something a person wrote, and
+ * only worth sending if it says what actually changed. These pin down both: an
+ * id where a name belongs, an ISO date in a German mail, a whole rich-text body
+ * pasted into a push — and, on the other side, a notice that reports a removal
+ * without saying what is left, or a description edit as the bare word "changed".
  */
 class IssueChangeRendererTest {
 
@@ -50,6 +51,17 @@ class IssueChangeRendererTest {
 
 	private String value(FieldChange change, java.util.Locale locale) {
 		return renderer.lines(List.of(change), locale).get(0).value();
+	}
+
+	private IssueChangeRenderer.Line line(FieldChange change, java.util.Locale locale) {
+		return renderer.lines(List.of(change), locale).get(0);
+	}
+
+	/** The line's segments as "part:text", which is what a mail actually paints. */
+	private List<String> painted(FieldChange change, java.util.Locale locale) {
+		return line(change, locale).segments().stream()
+				.map(segment -> segment.part() + ":" + segment.text())
+				.toList();
 	}
 
 	private String label(FieldChange change, java.util.Locale locale) {
@@ -108,26 +120,87 @@ class IssueChangeRendererTest {
 				.isEqualTo("Aug 23, 2026 → —");
 	}
 
-	/** A description is a whole document; the change list says that it moved, not
-	 *  what it now contains. */
+	/**
+	 * A description edit with nothing to show it — the excerpts came back equal,
+	 * so the edit was formatting only or sits past the cut — still says that
+	 * something moved. It is the fallback, not the normal case.
+	 */
 	@Test
-	void aDescriptionEditIsReportedNotDumped() {
+	void aDescriptionEditWithNoVisibleDiffStillSaysItChanged() {
 		FieldChange description = new FieldChange(IssueChangeDiff.DESCRIPTION, null, null);
 
 		assertThat(value(description, java.util.Locale.GERMAN)).isEqualTo("geändert");
 		assertThat(value(description, java.util.Locale.ENGLISH)).isEqualTo("changed");
 	}
 
+	/**
+	 * The defect this feature was raised for: "Description: changed" told a
+	 * watcher only that they had to go and look. The words that moved are shown
+	 * instead, with the untouched ones around them for context.
+	 */
 	@Test
-	void assigneesResolveToDisplayNamesAsAdditionsAndRemovals() {
+	void aDescriptionEditShowsTheWordsThatMoved() {
+		FieldChange description = new FieldChange(IssueChangeDiff.DESCRIPTION,
+				"The week view starts on Sunday for every locale.",
+				"The week view starts on Monday for every locale.");
+
+		assertThat(painted(description, java.util.Locale.ENGLISH)).containsExactly(
+				"SAME:The week view starts on",
+				"REMOVED:Sunday",
+				"ADDED:Monday",
+				"SAME:for every locale.");
+		assertThat(line(description, java.util.Locale.ENGLISH).inline())
+				.as("a word diff is read as one sentence, not as before → after")
+				.isTrue();
+	}
+
+	/** Unchanged text far from the edit is condensed away: a notification carries
+	 *  the sentence that moved, not the description. */
+	@Test
+	void aLongUnchangedRunIsCondensedAroundTheEdit() {
+		String tail = " tail".repeat(40).trim();
+		FieldChange description = new FieldChange(IssueChangeDiff.DESCRIPTION,
+				"before " + tail, "after " + tail);
+
+		assertThat(painted(description, java.util.Locale.ENGLISH)).containsExactly(
+				"REMOVED:before",
+				"ADDED:after",
+				"SAME:tail tail tail tail tail tail …");
+	}
+
+	/**
+	 * The other half of the defect: "Assignees: −Hicham" reported a removal and
+	 * hid who is on the issue now, so the reader still had to open it. Both sides
+	 * are given in full.
+	 */
+	@Test
+	void assigneesShowTheWholeListBeforeAndAfter() {
 		when(users.findById("u1")).thenReturn(
 				Optional.of(User.builder().id("u1").displayName("Rebar").build()));
 		when(users.findById("u2")).thenReturn(
 				Optional.of(User.builder().id("u2").displayName("Sam").build()));
 
-		String rendered = value(new FieldChange(IssueChangeDiff.ASSIGNEES, "u1", "u2"), java.util.Locale.GERMAN);
+		FieldChange change = new FieldChange(IssueChangeDiff.ASSIGNEES,
+				"u1" + IssueChangeDiff.LIST_SEPARATOR + "u2", "u2");
 
-		assertThat(rendered).isEqualTo("+Sam, −Rebar");
+		assertThat(value(change, java.util.Locale.GERMAN)).isEqualTo("Rebar, Sam → Sam");
+		assertThat(painted(change, java.util.Locale.GERMAN))
+				.containsExactly("REMOVED:Rebar, Sam", "ADDED:Sam");
+	}
+
+	/** An assignee on both sides of the change is looked up once, not once per
+	 *  side — every one of those is a point read. */
+	@Test
+	void aValueOnBothSidesIsResolvedOnce() {
+		when(users.findById("u1")).thenReturn(
+				Optional.of(User.builder().id("u1").displayName("Rebar").build()));
+		when(users.findById("u2")).thenReturn(
+				Optional.of(User.builder().id("u2").displayName("Sam").build()));
+
+		value(new FieldChange(IssueChangeDiff.ASSIGNEES,
+				"u1" + IssueChangeDiff.LIST_SEPARATOR + "u2", "u1"), java.util.Locale.ENGLISH);
+
+		org.mockito.Mockito.verify(users, org.mockito.Mockito.times(1)).findById("u1");
 	}
 
 	@Test

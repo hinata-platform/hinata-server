@@ -103,12 +103,16 @@ public final class IssueChangeDiff {
 	 */
 	private static final List<Rule> RULES = List.of(
 			new Rule(TITLE, (a, b) -> scalar(TITLE, a.getTitle(), b.getTitle())),
-			// Diffed on the stored document, not on its derived plain text: bolding a
-			// word or adding a table is an edit the watchers asked to hear about, and
-			// it leaves the plain-text projection byte-identical.
+			// Detected on the stored document, not on its derived plain text: bolding
+			// a word or adding a table is an edit the watchers asked to hear about,
+			// and it leaves the plain-text projection byte-identical. Carried as that
+			// projection, though — an excerpt of it — because what a reader needs from
+			// a notification is the sentence that moved, and a Lexical document is not
+			// something anybody reads in an inbox.
 			new Rule(DESCRIPTION, (a, b) -> Objects.equals(a.getDescriptionDoc(), b.getDescriptionDoc())
 					? null
-					: new FieldChange(DESCRIPTION, null, null)),
+					: new FieldChange(DESCRIPTION, excerpt(a.getDescription()),
+							excerpt(b.getDescription()))),
 			new Rule(STATE, (a, b) -> scalar(STATE, a.getState(), b.getState())),
 			new Rule(PRIORITY, (a, b) -> scalar(PRIORITY, name(a.getPriority()), name(b.getPriority()))),
 			new Rule(TYPE, (a, b) -> scalar(TYPE, name(a.getType()), name(b.getType()))),
@@ -132,13 +136,39 @@ public final class IssueChangeDiff {
 	public static final List<String> WATCHED_FIELDS = RULES.stream().map(Rule::field).toList();
 
 	/**
-	 * Fields recorded as "this changed" without a before/after pair. A description
-	 * is a whole rich-text document: dumping it into a push body, a bell entry and
-	 * an e-mail would be unreadable, and carrying it through a 30-minute digest
-	 * queue would store the issue body twice.
+	 * Fields whose stored before/after is an <em>excerpt</em> of something larger
+	 * rather than the value itself.
+	 *
+	 * <p>A description is a whole rich-text document. Carrying all of it through a
+	 * 30-minute digest queue would store the issue body twice per queued change,
+	 * so only {@link #TEXT_MAX} characters of its plain text are kept — enough for
+	 * the diff a reader triages from, bounded enough that a retry-looping
+	 * automation cannot grow one bundle past Mongo's document limit.
+	 *
+	 * <p>The consequence the callers care about: two equal excerpts do
+	 * <em>not</em> prove the field is unchanged (the edit may sit past the cut),
+	 * so {@link FieldChange#collapse} must never cancel such a change out, and
+	 * {@code IssueChangeRenderer} falls back to a plain "changed" when the diff
+	 * has nothing visible to show.
 	 */
-	public static boolean valueless(String field) {
+	public static boolean excerpted(String field) {
 		return DESCRIPTION.equals(field);
+	}
+
+	/**
+	 * How much of a long text field is kept. Roughly a full screen of prose —
+	 * past that, a change mail stops being a notification and becomes a copy of
+	 * the issue.
+	 */
+	public static final int TEXT_MAX = 1_000;
+
+	/** A long text field cut to {@link #TEXT_MAX}, with the cut marked so a reader
+	 *  can tell "the description ends here" from "the excerpt does". */
+	private static String excerpt(String text) {
+		if (text == null || text.isBlank()) return null;
+		String trimmed = text.strip();
+		if (trimmed.length() <= TEXT_MAX) return trimmed;
+		return trimmed.substring(0, TEXT_MAX).stripTrailing() + "…";
 	}
 
 	/** Whether the list encodes several values (rendered as additions/removals). */
