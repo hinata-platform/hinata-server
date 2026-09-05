@@ -82,8 +82,22 @@ class MeControllerPagesTest {
 				.contains("Update password");
 		// A language we do not translate, and a browser that sends no header at
 		// all, both fall back to English rather than to the key.
-		assertThat(resetForm("fr-FR")).contains("Choose a new password");
+		assertThat(resetForm("sv-SE")).contains("Choose a new password");
 		assertThat(resetForm(null)).contains("Choose a new password");
+	}
+
+	/**
+	 * These two pages are hand-written HTML with no layout engine to ask which
+	 * way the language runs, so the attribute has to be set from the language
+	 * itself. Without it, Arabic copy is laid out left-aligned with its
+	 * punctuation on the wrong side.
+	 */
+	@Test
+	void marksTheDirectionOfARightToLeftLanguage() {
+		assertThat(resetForm("ar")).contains("<html lang=\"ar\" dir=\"rtl\"");
+		assertThat(resetForm("de-DE")).contains("<html lang=\"de\" dir=\"ltr\"");
+		assertThat(controller.confirmEmailChange("tok-1", "ar").getBody())
+				.contains("dir=\"rtl\"");
 	}
 
 	@Test

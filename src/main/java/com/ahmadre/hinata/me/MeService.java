@@ -74,7 +74,8 @@ public class MeService {
 	}
 
 	/** Locales we ship translations for; anything else is ignored on auto-sync. */
-	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de", "zh", "hi", "es");
+	private static final Set<String> SUPPORTED_LOCALES =
+			Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
 
 	/**
 	 * Reconciles the stored {@link User#getLocale() locale} with the language the

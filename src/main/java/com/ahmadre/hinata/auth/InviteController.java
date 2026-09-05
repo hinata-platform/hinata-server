@@ -35,7 +35,7 @@ public class InviteController {
 
 	/** Languages we ship email templates for; anything else keeps the default. */
 	private static final java.util.Set<String> SUPPORTED_LOCALES =
-			java.util.Set.of("en", "de", "zh", "hi", "es");
+			java.util.Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
 
 	private final UserRepository users;
 	private final UserService userService;

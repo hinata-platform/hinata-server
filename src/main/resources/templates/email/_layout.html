@@ -18,6 +18,17 @@
      do. Sora ships inside the masthead image; text uses system stacks.
    * Images arrive as inlined cid: parts (see MailService), so mail still renders
      on an instance that the recipient's network cannot reach.
+   * `dir` is set on <html> from the recipient's language, and the two cells that
+     force an alignment follow it. Everything else here is centred or full-width,
+     so Arabic mirrors without a second layout — which is the reason the card was
+     never given a hard left edge in the first place.
+   * Blocks carrying *user* text (a headline with an issue title in it, a panel
+     value, a diff) get `dir="auto"` so each picks its direction from its own
+     first strong character. Without it an English sentence inside an Arabic mail
+     is laid out right-to-left and its full stop jumps to the front of the line.
+     Localized copy deliberately does NOT get it: that text is already in the
+     document's language, and `auto` would flip a paragraph that merely opens
+     with a Latin product name.
 
   Fragments: page · cta · fallback · panelLabel · panel · diff · changes · note ·
              copy · sectionLabel · fineprint · rule
@@ -25,7 +36,8 @@
   match the <meta> tags in this very <head> instead of the fragment.)
 */-->
 <html xmlns:th="http://www.thymeleaf.org" th:fragment="page(eyebrow, headline, preheader, footerNote, content)"
-      th:lang="${locale}" lang="en" style="margin:0;padding:0">
+      th:lang="${locale}" lang="en"
+      th:dir="${locale == 'ar'} ? 'rtl' : 'ltr'" dir="ltr" style="margin:0;padding:0">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -120,7 +132,7 @@
                    disappear. */-->
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <td bgcolor="#211F3D" align="left"
+                  <td bgcolor="#211F3D" th:align="${locale == 'ar'} ? 'right' : 'left'" align="left"
                       th:style="'background:#211F3D;line-height:0;font-size:0;height:' + ${mastheadHeight} + 'px'"
                       style="background:#211F3D;line-height:0;font-size:0;height:118px">
                     <img th:src="${mastheadSrc}" src="masthead.jpg" width="600"
@@ -149,7 +161,7 @@
                         style="margin:0 0 18px 0;font-family:'Sora','Avenir Next','Segoe UI',system-ui,
                                -apple-system,'Helvetica Neue',Arial,sans-serif;font-size:25px;line-height:1.24;
                                font-weight:700;letter-spacing:-0.5px;color:#23223F"
-                        th:text="${headline}">Headline</h1>
+                        dir="auto" th:text="${headline}">Headline</h1>
 
                     <th:block th:replace="${content}">body</th:block>
 
@@ -162,7 +174,8 @@
 
           <!--/* ---- footer, outside the card ------------------------------- */-->
           <tr>
-            <td align="left" style="padding:20px 8px 0 8px">
+            <td th:align="${locale == 'ar'} ? 'right' : 'left'" align="left"
+                style="padding:20px 8px 0 8px">
               <!--/* The organization owns the top line: this mail is theirs, and on a
                    self-hosted instance the recipient's relationship is with them, not
                    with us. Hinata stays named underneath — the recipient still needs
@@ -251,7 +264,7 @@
       <div class="hn-ink"
            style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
                   font-size:15.5px;font-weight:600;line-height:1.4;color:#23223F;word-break:break-word"
-           th:text="${value}">Value</div>
+           dir="auto" th:text="${value}">Value</div>
     </td>
   </tr>
 </table>
@@ -283,6 +296,7 @@
       <th:block th:replace="~{email/_layout :: panelLabel(${line.label})}"/>
       <div class="hn-ink"
            th:styleappend="${line.wordDiff} ? ';font-weight:400;font-size:14.5px' : ''"
+           dir="auto"
            style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
                   font-size:15.5px;font-weight:600;line-height:1.55;color:#23223F;word-break:break-word">
         <th:block th:each="seg, pos : ${line.segments}">

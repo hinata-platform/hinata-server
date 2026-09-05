@@ -45,7 +45,8 @@ class EmailPreviewTest {
 
 	private static final Path OUT = Path.of("build", "email-preview");
 
-	private static final List<String> LOCALES = List.of("de", "en", "zh", "hi", "es");
+	private static final List<String> LOCALES =
+			List.of("de", "en", "zh", "hi", "es", "ja", "fr", "ru", "ar");
 
 	/**
 	 * Both branding states, because they are genuinely different mails: an

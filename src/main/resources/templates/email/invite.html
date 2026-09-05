@@ -16,7 +16,12 @@
   <table th:if="${message != null and !message.isBlank()}" role="presentation" width="100%"
          cellpadding="0" cellspacing="0" border="0" style="margin:2px 0 18px 0">
     <tr>
+      <!--/* The rule sits on the side the reading starts from, so it opens the
+           quote rather than closing it. */-->
       <td class="hn-accent"
+          th:styleappend="${locale == 'ar'}
+              ? ';border-right:3px solid #D9A032;border-radius:12px 0 0 12px'
+              : ';border-left:3px solid #D9A032;border-radius:0 12px 12px 0'"
           style="background:#F3E9D2;border-left:3px solid #D9A032;border-radius:0 12px 12px 0;padding:14px 18px">
         <div class="hn-eyebrow"
              style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10.5px;
@@ -25,7 +30,7 @@
         <div class="hn-soft"
              style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
                     font-size:14.5px;line-height:1.6;color:#6B4E12;white-space:pre-line"
-             th:text="${message}">A personal note</div>
+             dir="auto" th:text="${message}">A personal note</div>
       </td>
     </tr>
   </table>
