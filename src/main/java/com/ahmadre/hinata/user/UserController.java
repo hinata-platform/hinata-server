@@ -97,7 +97,7 @@ public class UserController {
 
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
 			@Size(max = 120) String title, @Size(max = 120) String pronouns,
-			@Pattern(regexp = "de|en") String locale) {
+			@Pattern(regexp = "de|en|zh|hi|es") String locale) {
 	}
 
 	@PatchMapping("/api/v1/users/me")

@@ -50,6 +50,7 @@ public class IssueChangeRenderer {
 	private final SprintRepository sprints;
 	private final IssueRepository issues;
 	private final ProjectRepository projects;
+	private final com.ahmadre.hinata.common.UserWords words;
 
 	/** One rendered change: the field's name, and what happened to it. */
 	public record Line(String label, String value) {
@@ -65,51 +66,34 @@ public class IssueChangeRenderer {
 	/** Stands in for "nothing" on both sides of an arrow. */
 	private static final String NONE = "—";
 
-	private static final Map<String, String> LABELS_DE = Map.ofEntries(
-			Map.entry(IssueChangeDiff.TITLE, "Titel"),
-			Map.entry(IssueChangeDiff.DESCRIPTION, "Beschreibung"),
-			Map.entry(IssueChangeDiff.STATE, "Status"),
-			Map.entry(IssueChangeDiff.PRIORITY, "Priorität"),
-			Map.entry(IssueChangeDiff.TYPE, "Typ"),
-			Map.entry(IssueChangeDiff.ASSIGNEES, "Zuständig"),
-			Map.entry(IssueChangeDiff.SPRINT, "Sprint"),
-			Map.entry(IssueChangeDiff.PARENT, "Übergeordnet"),
-			Map.entry(IssueChangeDiff.PROJECT, "Projekt"),
-			Map.entry(IssueChangeDiff.START_DATE, "Start"),
-			Map.entry(IssueChangeDiff.DUE_DATE, "Fällig"),
-			Map.entry(IssueChangeDiff.ESTIMATE, "Schätzung"),
-			Map.entry(IssueChangeDiff.STORY_POINTS, "Story Points"),
-			Map.entry(IssueChangeDiff.TAGS, "Labels"),
-			Map.entry(IssueChangeDiff.DEPENDS_ON, "Abhängigkeiten"),
-			Map.entry(IssueChangeDiff.ARCHIVED, "Archiviert"));
-
-	private static final Map<String, String> LABELS_EN = Map.ofEntries(
-			Map.entry(IssueChangeDiff.TITLE, "Title"),
-			Map.entry(IssueChangeDiff.DESCRIPTION, "Description"),
-			Map.entry(IssueChangeDiff.STATE, "Status"),
-			Map.entry(IssueChangeDiff.PRIORITY, "Priority"),
-			Map.entry(IssueChangeDiff.TYPE, "Type"),
-			Map.entry(IssueChangeDiff.ASSIGNEES, "Assignees"),
-			Map.entry(IssueChangeDiff.SPRINT, "Sprint"),
-			Map.entry(IssueChangeDiff.PARENT, "Parent"),
-			Map.entry(IssueChangeDiff.PROJECT, "Project"),
-			Map.entry(IssueChangeDiff.START_DATE, "Start"),
-			Map.entry(IssueChangeDiff.DUE_DATE, "Due"),
-			Map.entry(IssueChangeDiff.ESTIMATE, "Estimate"),
-			Map.entry(IssueChangeDiff.STORY_POINTS, "Story points"),
-			Map.entry(IssueChangeDiff.TAGS, "Labels"),
-			Map.entry(IssueChangeDiff.DEPENDS_ON, "Dependencies"),
-			Map.entry(IssueChangeDiff.ARCHIVED, "Archived"));
+	/** Field id -> message key. The words themselves live in the bundles. */
+	private static final Map<String, String> LABEL_KEYS = Map.ofEntries(
+			Map.entry(IssueChangeDiff.TITLE, "change.field.title"),
+			Map.entry(IssueChangeDiff.DESCRIPTION, "change.field.description"),
+			Map.entry(IssueChangeDiff.STATE, "change.field.state"),
+			Map.entry(IssueChangeDiff.PRIORITY, "change.field.priority"),
+			Map.entry(IssueChangeDiff.TYPE, "change.field.type"),
+			Map.entry(IssueChangeDiff.ASSIGNEES, "change.field.assignees"),
+			Map.entry(IssueChangeDiff.SPRINT, "change.field.sprint"),
+			Map.entry(IssueChangeDiff.PARENT, "change.field.parent"),
+			Map.entry(IssueChangeDiff.PROJECT, "change.field.project"),
+			Map.entry(IssueChangeDiff.START_DATE, "change.field.startDate"),
+			Map.entry(IssueChangeDiff.DUE_DATE, "change.field.dueDate"),
+			Map.entry(IssueChangeDiff.ESTIMATE, "change.field.estimate"),
+			Map.entry(IssueChangeDiff.STORY_POINTS, "change.field.storyPoints"),
+			Map.entry(IssueChangeDiff.TAGS, "change.field.tags"),
+			Map.entry(IssueChangeDiff.DEPENDS_ON, "change.field.dependsOn"),
+			Map.entry(IssueChangeDiff.ARCHIVED, "change.field.archived"));
 
 	/** Every change as a label/value pair, ready for a mail panel or a list row. */
-	public List<Line> lines(List<FieldChange> changes, boolean de) {
+	public List<Line> lines(List<FieldChange> changes, Locale locale) {
 		List<Line> lines = new ArrayList<>();
 		if (changes == null) return lines;
 		for (FieldChange change : changes) {
 			if (change == null || change.field() == null) continue;
-			String label = label(change.field(), de);
+			String label = label(change.field(), locale);
 			if (label == null) continue; // a field id this build no longer knows
-			lines.add(new Line(label, value(change, de)));
+			lines.add(new Line(label, value(change, locale)));
 		}
 		return lines;
 	}
@@ -118,12 +102,12 @@ public class IssueChangeRenderer {
 	 * The same changes squeezed onto one line, for a push body and the bell entry
 	 * — both of which have room for a sentence, not a table.
 	 */
-	public String summary(List<FieldChange> changes, boolean de) {
-		return summaryOf(lines(changes, de));
+	public String summary(List<FieldChange> changes, Locale locale) {
+		return summaryOf(lines(changes, locale));
 	}
 
 	/**
-	 * As {@link #summary(List, boolean)} for a caller that already rendered the
+	 * As {@link #summary(List, Locale)} for a caller that already rendered the
 	 * lines. Every value in a line may have cost a point read to resolve — a
 	 * display name, a sprint name, a parent's key — so a caller that needs both
 	 * the table and the one-liner must pay for that exactly once.
@@ -140,25 +124,26 @@ public class IssueChangeRenderer {
 		return text.toString();
 	}
 
-	private String label(String field, boolean de) {
-		return (de ? LABELS_DE : LABELS_EN).get(field);
+	private String label(String field, Locale locale) {
+		String key = LABEL_KEYS.get(field);
+		return key == null ? null : words.in(locale, key);
 	}
 
-	private String value(FieldChange change, boolean de) {
+	private String value(FieldChange change, Locale locale) {
 		String field = change.field();
 		if (IssueChangeDiff.valueless(field)) {
-			return de ? "geändert" : "changed";
+			return words.in(locale, "change.value.changed");
 		}
 		if (IssueChangeDiff.ARCHIVED.equals(field)) {
 			boolean archived = Boolean.parseBoolean(change.newValue());
-			if (de) return archived ? "ja" : "nein — wiederhergestellt";
-			return archived ? "yes" : "no — restored";
+			return words.in(locale,
+					archived ? "change.value.archivedYes" : "change.value.archivedNo");
 		}
 		if (IssueChangeDiff.multiValued(field)) {
-			return delta(field, change.oldValue(), change.newValue(), de);
+			return delta(field, change.oldValue(), change.newValue(), locale);
 		}
-		String from = render(field, change.oldValue(), de);
-		String to = render(field, change.newValue(), de);
+		String from = render(field, change.oldValue(), locale);
+		String to = render(field, change.newValue(), locale);
 		// A field that was empty reads better as a plain statement of the new value
 		// than as "— → 23.08.2026".
 		if (from == null) return to != null ? to : NONE;
@@ -169,15 +154,15 @@ public class IssueChangeRenderer {
 	 * Additions and removals rather than two comma lists: "+Rebar, −Sam" is read
 	 * at a glance, while "Rebar, Nora → Nora, Sam" makes the reader diff by eye.
 	 */
-	private String delta(String field, String oldValue, String newValue, boolean de) {
+	private String delta(String field, String oldValue, String newValue, Locale locale) {
 		Set<String> before = split(oldValue);
 		Set<String> after = split(newValue);
 		List<String> parts = new ArrayList<>();
 		for (String added : after) {
-			if (!before.contains(added)) parts.add("+" + render(field, added, de));
+			if (!before.contains(added)) parts.add("+" + render(field, added, locale));
 		}
 		for (String removed : before) {
-			if (!after.contains(removed)) parts.add("−" + render(field, removed, de));
+			if (!after.contains(removed)) parts.add("−" + render(field, removed, locale));
 		}
 		return parts.isEmpty() ? NONE : String.join(DISPLAY_SEPARATOR, parts);
 	}
@@ -195,14 +180,14 @@ public class IssueChangeRenderer {
 	}
 
 	/** One stored value, resolved and formatted; {@code null} for "nothing". */
-	private String render(String field, String raw, boolean de) {
+	private String render(String field, String raw, Locale locale) {
 		if (raw == null || raw.isBlank()) return null;
 		return switch (field) {
 			case IssueChangeDiff.ASSIGNEES -> clip(displayName(raw));
 			case IssueChangeDiff.SPRINT -> clip(sprintName(raw));
 			case IssueChangeDiff.PROJECT -> clip(projectName(raw));
 			case IssueChangeDiff.PARENT, IssueChangeDiff.DEPENDS_ON -> clip(issueKey(raw));
-			case IssueChangeDiff.START_DATE, IssueChangeDiff.DUE_DATE -> date(raw, de);
+			case IssueChangeDiff.START_DATE, IssueChangeDiff.DUE_DATE -> date(raw, locale);
 			case IssueChangeDiff.ESTIMATE -> duration(raw);
 			default -> clip(raw);
 		};
@@ -229,10 +214,10 @@ public class IssueChangeRenderer {
 	 * 2026 for an English one. Falls back to the stored ISO form if the value
 	 * predates a format change and no longer parses.
 	 */
-	private String date(String iso, boolean de) {
+	private String date(String iso, Locale locale) {
 		try {
 			return DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
-					.withLocale(de ? Locale.GERMAN : Locale.ENGLISH)
+					.withLocale(locale)
 					.format(LocalDate.parse(iso));
 		}
 		catch (RuntimeException unparseable) {

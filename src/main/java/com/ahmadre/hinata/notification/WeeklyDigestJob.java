@@ -38,6 +38,7 @@ public class WeeklyDigestJob {
 	private final UserRepository users;
 	private final WeeklySummaryService weeklySummary;
 	private final NotificationService notificationService;
+	private final com.ahmadre.hinata.common.UserWords words;
 
 	@Scheduled(cron = "0 0 7 * * MON")
 	public void send() {
@@ -47,10 +48,9 @@ public class WeeklyDigestJob {
 			if (summary.isEmpty()) {
 				continue; // nothing worth a digest this week
 			}
-			boolean de = "de".equalsIgnoreCase(user.getLocale());
-			String title = de ? "Deine Wochenübersicht" : "Your weekly summary";
-			String body = summaryBody(summary, de);
-			notificationService.notifyWeeklySummary(user, title, body, mailModel(user, summary, de));
+			String title = words.of(user, "notify.weekly.title");
+			String body = summaryBody(user, summary);
+			notificationService.notifyWeeklySummary(user, title, body, mailModel(user, summary));
 			sent++;
 		}
 		if (sent > 0) {
@@ -59,27 +59,22 @@ public class WeeklyDigestJob {
 	}
 
 	/** One-line teaser for the in-app (bell) notice and the push. */
-	private String summaryBody(WeeklySummary s, boolean de) {
+	private String summaryBody(User user, WeeklySummary s) {
 		long done = s.team().completed();
 		long todo = s.upcoming().total();
 		long overdue = s.upcoming().overdue();
-		if (de) {
-			String base = "Das Team hat letzte Woche " + done + " Vorgänge abgeschlossen. "
-					+ todo + " To-Dos stehen an";
-			return overdue > 0 ? base + " (" + overdue + " überfällig)." : base + ".";
-		}
-		String base = "Your team closed " + done + " issues last week. "
-				+ todo + " to-dos coming up";
-		return overdue > 0 ? base + " (" + overdue + " overdue)." : base + ".";
+		return overdue > 0
+				? words.of(user, "notify.weekly.bodyOverdue", done, todo, overdue)
+				: words.of(user, "notify.weekly.body", done, todo);
 	}
 
 	/** Flat model for {@code email/weekly-summary.html} (Thymeleaf reads map keys). */
-	private Map<String, Object> mailModel(User user, WeeklySummary s, boolean de) {
-		Locale locale = de ? Locale.GERMAN : Locale.ENGLISH;
+	private Map<String, Object> mailModel(User user, WeeklySummary s) {
+		Locale locale = words.localeOf(user);
 		DateTimeFormatter dayFmt = DateTimeFormatter.ofPattern("MMM d", locale);
 
 		Map<String, Object> model = new HashMap<>();
-		model.put("locale", de ? "de" : "en");
+		model.put("locale", locale.getLanguage());
 		model.put("displayName", user.getDisplayName());
 		model.put("weekRange", s.weekStart().format(dayFmt) + " – " + s.weekEnd().format(dayFmt));
 		model.put("completed", s.team().completed());

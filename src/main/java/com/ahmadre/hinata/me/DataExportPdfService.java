@@ -96,6 +96,7 @@ public class DataExportPdfService {
 	private final AuditLogRepository auditLogs;
 	private final SettingsService settings;
 	private final BrandLogoService brandLogo;
+	private final com.ahmadre.hinata.common.UserWords words;
 
 	/**
 	 * A suggested, filesystem-safe download name for {@code user}'s export. The
@@ -112,23 +113,23 @@ public class DataExportPdfService {
 
 	/** Builds the full PDF document and returns its bytes. */
 	public byte[] build(User user) {
-		boolean de = "de".equalsIgnoreCase(user.getLocale());
+		Locale locale = words.localeOf(user);
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		Document doc = new Document(PageSize.A4, 48, 48, 56, 48);
 		try {
 			PdfWriter.getInstance(doc, out);
 			doc.open();
 
-			header(doc, user, de);
-			profileSection(doc, user, de);
-			securitySection(doc, user, de);
-			notificationSection(doc, user, de);
-			sessionsSection(doc, user, de);
-			membershipsSection(doc, user, de);
-			issuesSection(doc, user, de);
-			commentsSection(doc, user, de);
-			activitySection(doc, user, de);
-			footer(doc, de);
+			header(doc, user, locale);
+			profileSection(doc, user, locale);
+			securitySection(doc, user, locale);
+			notificationSection(doc, user, locale);
+			sessionsSection(doc, user, locale);
+			membershipsSection(doc, user, locale);
+			issuesSection(doc, user, locale);
+			commentsSection(doc, user, locale);
+			activitySection(doc, user, locale);
+			footer(doc, locale);
 
 			doc.close();
 		} catch (Exception e) {
@@ -139,15 +140,13 @@ public class DataExportPdfService {
 
 	// --- Sections -------------------------------------------------------------
 
-	private void header(Document doc, User user, boolean de) {
+	private void header(Document doc, User user, Locale locale) {
 		masthead(doc);
 
-		Paragraph title = new Paragraph(de ? "Datenexport" : "Data export", H_TITLE);
+		Paragraph title = new Paragraph(t(locale, "export.pdf.title"), H_TITLE);
 		doc.add(title);
 
-		Paragraph sub = new Paragraph(de
-				? "Auskunft über deine personenbezogenen Daten gemäß Art. 15 DSGVO"
-				: "Disclosure of your personal data under GDPR Art. 15", BODY_MUTED);
+		Paragraph sub = new Paragraph(t(locale, "export.pdf.subtitle"), BODY_MUTED);
 		sub.setSpacingAfter(10);
 		doc.add(sub);
 
@@ -158,88 +157,88 @@ public class DataExportPdfService {
 		} catch (Exception ignored) {
 			// fixed widths are best-effort; default layout is acceptable
 		}
-		metaRow(meta, de ? "Konto" : "Account", nullSafe(user.getDisplayName()));
-		metaRow(meta, de ? "Benutzername" : "Username", nullSafe(user.getUsername()));
-		metaRow(meta, de ? "E-Mail" : "Email", nullSafe(user.getEmail()));
-		metaRow(meta, de ? "Erstellt am" : "Generated", DT.format(Instant.now()));
+		metaRow(meta, t(locale, "export.pdf.account"), nullSafe(user.getDisplayName()));
+		metaRow(meta, t(locale, "export.pdf.username"), nullSafe(user.getUsername()));
+		metaRow(meta, t(locale, "export.pdf.email"), nullSafe(user.getEmail()));
+		metaRow(meta, t(locale, "export.pdf.generated"), DT.format(Instant.now()));
 		meta.setSpacingBefore(6);
 		meta.setSpacingAfter(8);
 		doc.add(meta);
 		doc.add(rule());
 	}
 
-	private void profileSection(Document doc, User user, boolean de) {
-		section(doc, de ? "Profil" : "Profile");
+	private void profileSection(Document doc, User user, Locale locale) {
+		section(doc, t(locale, "export.pdf.profile"));
 		PdfPTable t = kvTable();
 		kv(t, "ID", user.getId());
-		kv(t, de ? "Anzeigename" : "Display name", nullSafe(user.getDisplayName()));
-		kv(t, de ? "Benutzername" : "Username", nullSafe(user.getUsername()));
-		kv(t, de ? "Titel" : "Title", nullSafe(user.getTitle()));
-		kv(t, de ? "Pronomen" : "Pronouns", nullSafe(user.getPronouns()));
-		kv(t, de ? "E-Mail" : "Email", nullSafe(user.getEmail()));
-		kv(t, de ? "E-Mail bestätigt" : "Email verified", yesNo(user.isEmailVerified(), de));
+		kv(t, t(locale, "export.pdf.displayName"), nullSafe(user.getDisplayName()));
+		kv(t, t(locale, "export.pdf.username"), nullSafe(user.getUsername()));
+		kv(t, t(locale, "export.pdf.jobTitle"), nullSafe(user.getTitle()));
+		kv(t, t(locale, "export.pdf.pronouns"), nullSafe(user.getPronouns()));
+		kv(t, t(locale, "export.pdf.email"), nullSafe(user.getEmail()));
+		kv(t, t(locale, "export.pdf.emailVerified"), yesNo(user.isEmailVerified(), locale));
 		if (user.getPendingEmail() != null) {
-			kv(t, de ? "Ausstehende E-Mail" : "Pending email", user.getPendingEmail());
+			kv(t, t(locale, "export.pdf.pendingEmail"), user.getPendingEmail());
 		}
-		kv(t, de ? "Sprache" : "Locale", nullSafe(user.getLocale()));
-		kv(t, de ? "Herkunft" : "Origin", user.getOrigin() == null ? "—" : user.getOrigin().name());
-		kv(t, de ? "Rollen" : "Roles",
+		kv(t, t(locale, "export.pdf.locale"), nullSafe(user.getLocale()));
+		kv(t, t(locale, "export.pdf.origin"), user.getOrigin() == null ? "—" : user.getOrigin().name());
+		kv(t, t(locale, "export.pdf.roles"),
 				String.join(", ", user.getRoles().stream().map(Enum::name).sorted().toList()));
-		kv(t, de ? "Aktiv" : "Active", yesNo(user.isActive(), de));
-		kv(t, de ? "Konto erstellt" : "Account created", fmt(user.getCreatedAt()));
+		kv(t, t(locale, "export.pdf.active"), yesNo(user.isActive(), locale));
+		kv(t, t(locale, "export.pdf.accountCreated"), fmt(user.getCreatedAt()));
 		doc.add(t);
 	}
 
-	private void securitySection(Document doc, User user, boolean de) {
-		section(doc, de ? "Sicherheit" : "Security");
+	private void securitySection(Document doc, User user, Locale locale) {
+		section(doc, t(locale, "export.pdf.security"));
 		PdfPTable t = kvTable();
-		kv(t, de ? "Passwort zuletzt geändert" : "Password last changed", fmt(user.getPasswordChangedAt()));
-		kv(t, de ? "Zwei-Faktor (TOTP)" : "Two-factor (TOTP)",
-				user.isTotpEnabled() ? (de ? "Aktiviert" : "Enabled") : (de ? "Deaktiviert" : "Disabled"));
+		kv(t, t(locale, "export.pdf.passwordChanged"), fmt(user.getPasswordChangedAt()));
+		kv(t, t(locale, "export.pdf.twoFactor"),
+				user.isTotpEnabled() ? t(locale, "export.pdf.enabled") : t(locale, "export.pdf.disabled"));
 		if (user.isTotpEnabled()) {
-			kv(t, de ? "2FA aktiviert am" : "2FA enabled at", fmt(user.getTotpEnabledAt()));
+			kv(t, t(locale, "export.pdf.twoFactorAt"), fmt(user.getTotpEnabledAt()));
 		}
 		doc.add(t);
 	}
 
-	private void notificationSection(Document doc, User user, boolean de) {
-		section(doc, de ? "Benachrichtigungseinstellungen" : "Notification preferences");
+	private void notificationSection(Document doc, User user, Locale locale) {
+		section(doc, t(locale, "export.pdf.notifications"));
 		NotificationPreferences prefs = me.notificationPreferences(user);
 		PdfPTable head = kvTable();
-		kv(head, de ? "E-Mail global" : "Email globally", yesNo(prefs.isEmailEnabled(), de));
-		kv(head, de ? "Push global" : "Push globally", yesNo(prefs.isPushEnabled(), de));
+		kv(head, t(locale, "export.pdf.emailGlobally"), yesNo(prefs.isEmailEnabled(), locale));
+		kv(head, t(locale, "export.pdf.pushGlobally"), yesNo(prefs.isPushEnabled(), locale));
 		doc.add(head);
 
 		PdfPTable t = new PdfPTable(3);
 		t.setWidthPercentage(100);
 		t.setSpacingBefore(4);
-		th(t, de ? "Ereignis" : "Event");
+		th(t, t(locale, "export.pdf.event"));
 		th(t, "E-Mail");
 		th(t, "Push");
 		Map<String, NotificationPreferences.Channel> events = prefs.getEvents();
 		for (String id : NotificationPreferences.EVENTS) {
 			NotificationPreferences.Channel c = events == null ? null : events.get(id);
 			td(t, id);
-			td(t, yesNo(c != null && c.isEmail(), de));
-			td(t, yesNo(c != null && c.isPush(), de));
+			td(t, yesNo(c != null && c.isEmail(), locale));
+			td(t, yesNo(c != null && c.isPush(), locale));
 		}
 		doc.add(t);
 	}
 
-	private void sessionsSection(Document doc, User user, boolean de) {
+	private void sessionsSection(Document doc, User user, Locale locale) {
 		List<RefreshSession> list = sessions.list(user.getId());
-		section(doc, (de ? "Aktive Sitzungen" : "Active sessions") + " (" + list.size() + ")");
+		section(doc, t(locale, "export.pdf.sessions") + " (" + list.size() + ")");
 		if (list.isEmpty()) {
-			doc.add(emptyNote(de));
+			doc.add(emptyNote(locale));
 			return;
 		}
 		PdfPTable t = new PdfPTable(new float[]{2, 3, 3, 3, 3});
 		t.setWidthPercentage(100);
-		th(t, de ? "Typ" : "Type");
-		th(t, de ? "Betriebssystem" : "OS");
-		th(t, de ? "Client" : "Client");
-		th(t, de ? "Standort" : "Location");
-		th(t, de ? "Zuletzt aktiv" : "Last active");
+		th(t, t(locale, "export.pdf.type"));
+		th(t, t(locale, "export.pdf.os"));
+		th(t, t(locale, "export.pdf.client"));
+		th(t, t(locale, "export.pdf.location"));
+		th(t, t(locale, "export.pdf.lastActive"));
 		for (RefreshSession s : list) {
 			td(t, s.getKind() == null ? "—" : s.getKind().name());
 			td(t, nullSafe(s.getOs()));
@@ -250,16 +249,16 @@ public class DataExportPdfService {
 		doc.add(t);
 	}
 
-	private void membershipsSection(Document doc, User user, boolean de) {
+	private void membershipsSection(Document doc, User user, Locale locale) {
 		List<Team> teams = me.teamsOf(user.getId());
-		section(doc, (de ? "Teams" : "Teams") + " (" + teams.size() + ")");
+		section(doc, t(locale, "export.pdf.teams") + " (" + teams.size() + ")");
 		if (teams.isEmpty()) {
-			doc.add(emptyNote(de));
+			doc.add(emptyNote(locale));
 		} else {
 			PdfPTable t = new PdfPTable(new float[]{1, 3});
 			t.setWidthPercentage(100);
-			th(t, de ? "Schlüssel" : "Key");
-			th(t, de ? "Name" : "Name");
+			th(t, t(locale, "export.pdf.key"));
+			th(t, t(locale, "export.pdf.name"));
 			for (Team team : teams) {
 				td(t, nullSafe(team.getKey()));
 				td(t, nullSafe(team.getName()));
@@ -268,16 +267,16 @@ public class DataExportPdfService {
 		}
 
 		List<Project> projects = me.projectsOf(user);
-		section(doc, (de ? "Projekte" : "Projects") + " (" + projects.size() + ")");
+		section(doc, t(locale, "export.pdf.projects") + " (" + projects.size() + ")");
 		if (projects.isEmpty()) {
-			doc.add(emptyNote(de));
+			doc.add(emptyNote(locale));
 			return;
 		}
 		PdfPTable t = new PdfPTable(new float[]{1, 3, 2});
 		t.setWidthPercentage(100);
-		th(t, de ? "Schlüssel" : "Key");
-		th(t, de ? "Name" : "Name");
-		th(t, de ? "Rolle" : "Role");
+		th(t, t(locale, "export.pdf.key"));
+		th(t, t(locale, "export.pdf.name"));
+		th(t, t(locale, "export.pdf.role"));
 		for (Project p : projects) {
 			td(t, nullSafe(p.getKey()));
 			td(t, nullSafe(p.getName()));
@@ -286,29 +285,29 @@ public class DataExportPdfService {
 		doc.add(t);
 	}
 
-	private void issuesSection(Document doc, User user, boolean de) {
+	private void issuesSection(Document doc, User user, Locale locale) {
 		List<Issue> reported = issues.findByReporterIdOrderByCreatedAtDesc(user.getId());
 		List<Issue> assigned = issues.findByAssigneeIdsContainsOrderByCreatedAtDesc(user.getId());
 
-		section(doc, (de ? "Von dir gemeldete Vorgänge" : "Issues you reported") + " (" + reported.size() + ")");
-		issueTable(doc, reported, de);
+		section(doc, t(locale, "export.pdf.issuesReported") + " (" + reported.size() + ")");
+		issueTable(doc, reported, locale);
 
-		section(doc, (de ? "Dir zugewiesene Vorgänge" : "Issues assigned to you") + " (" + assigned.size() + ")");
-		issueTable(doc, assigned, de);
+		section(doc, t(locale, "export.pdf.issuesAssigned") + " (" + assigned.size() + ")");
+		issueTable(doc, assigned, locale);
 	}
 
-	private void issueTable(Document doc, List<Issue> list, boolean de) {
+	private void issueTable(Document doc, List<Issue> list, Locale locale) {
 		if (list.isEmpty()) {
-			doc.add(emptyNote(de));
+			doc.add(emptyNote(locale));
 			return;
 		}
 		PdfPTable t = new PdfPTable(new float[]{2, 5, 2, 2, 3});
 		t.setWidthPercentage(100);
 		th(t, "ID");
-		th(t, de ? "Titel" : "Title");
-		th(t, de ? "Typ" : "Type");
-		th(t, de ? "Status" : "State");
-		th(t, de ? "Erstellt" : "Created");
+		th(t, t(locale, "export.pdf.jobTitle"));
+		th(t, t(locale, "export.pdf.type"));
+		th(t, t(locale, "export.pdf.issueState"));
+		th(t, t(locale, "export.pdf.created"));
 		for (Issue i : list) {
 			td(t, nullSafe(i.getReadableId()));
 			td(t, nullSafe(i.getTitle()));
@@ -319,17 +318,17 @@ public class DataExportPdfService {
 		doc.add(t);
 	}
 
-	private void commentsSection(Document doc, User user, boolean de) {
+	private void commentsSection(Document doc, User user, Locale locale) {
 		List<IssueComment> list = comments.findByAuthorIdOrderByCreatedAtDesc(user.getId());
-		section(doc, (de ? "Von dir verfasste Kommentare" : "Comments you wrote") + " (" + list.size() + ")");
+		section(doc, t(locale, "export.pdf.comments") + " (" + list.size() + ")");
 		if (list.isEmpty()) {
-			doc.add(emptyNote(de));
+			doc.add(emptyNote(locale));
 			return;
 		}
 		PdfPTable t = new PdfPTable(new float[]{3, 7});
 		t.setWidthPercentage(100);
-		th(t, de ? "Erstellt" : "Created");
-		th(t, de ? "Kommentar" : "Comment");
+		th(t, t(locale, "export.pdf.created"));
+		th(t, t(locale, "export.pdf.comment"));
 		for (IssueComment c : list) {
 			td(t, fmt(c.getCreatedAt()));
 			td(t, nullSafe(c.getText()));
@@ -337,18 +336,18 @@ public class DataExportPdfService {
 		doc.add(t);
 	}
 
-	private void activitySection(Document doc, User user, boolean de) {
+	private void activitySection(Document doc, User user, Locale locale) {
 		List<AuditLog> logs = auditLogs.findTop200ByActorIdOrderByTimestampDesc(user.getId());
-		section(doc, (de ? "Kontoaktivität" : "Account activity") + " (" + logs.size() + ")");
+		section(doc, t(locale, "export.pdf.activity") + " (" + logs.size() + ")");
 		if (logs.isEmpty()) {
-			doc.add(emptyNote(de));
+			doc.add(emptyNote(locale));
 			return;
 		}
 		PdfPTable t = new PdfPTable(new float[]{3, 4, 2});
 		t.setWidthPercentage(100);
-		th(t, de ? "Zeitpunkt" : "Time");
-		th(t, de ? "Aktion" : "Action");
-		th(t, de ? "Ergebnis" : "Outcome");
+		th(t, t(locale, "export.pdf.time"));
+		th(t, t(locale, "export.pdf.action"));
+		th(t, t(locale, "export.pdf.outcome"));
 		for (AuditLog l : logs) {
 			td(t, fmt(l.getTimestamp()));
 			td(t, l.getAction() == null ? "—" : l.getAction().name());
@@ -357,23 +356,17 @@ public class DataExportPdfService {
 		doc.add(t);
 	}
 
-	private void footer(Document doc, boolean de) {
+	private void footer(Document doc, Locale locale) {
 		doc.add(rule());
 		String controller = organizationName();
-		Paragraph p = new Paragraph(de
-				? "Dieser Export umfasst die personenbezogenen Daten, die " + controller
-						+ " zu deinem Konto speichert. "
-						+ "Fragen zur Verarbeitung richtest du an den Verantwortlichen."
-				: "This export contains the personal data " + controller
-						+ " stores about your account. "
-						+ "Direct any questions about processing to the data controller.", BODY_MUTED);
+		Paragraph p = new Paragraph(t(locale, "export.pdf.intro", controller), BODY_MUTED);
 		p.setSpacingBefore(8);
 		doc.add(p);
 
 		// The credit the masthead gave up. The reader still needs to know what
 		// produced the file — just not to mistake it for who answers for it.
 		Paragraph credit = new Paragraph(
-				de ? "Erstellt mit " + PRODUCT + "." : "Generated with " + PRODUCT + ".", CREDIT);
+				t(locale, "export.pdf.credit", PRODUCT), CREDIT);
 		credit.setSpacingBefore(4);
 		doc.add(credit);
 	}
@@ -513,8 +506,8 @@ public class DataExportPdfService {
 		t.addCell(c);
 	}
 
-	private Paragraph emptyNote(boolean de) {
-		Paragraph p = new Paragraph(de ? "Keine Einträge." : "No entries.", BODY_MUTED);
+	private Paragraph emptyNote(Locale locale) {
+		Paragraph p = new Paragraph(t(locale, "export.pdf.empty"), BODY_MUTED);
 		p.setSpacingBefore(2);
 		return p;
 	}
@@ -530,9 +523,13 @@ public class DataExportPdfService {
 		return instant == null ? "—" : DT.format(instant);
 	}
 
-	private String yesNo(boolean value, boolean de) {
-		if (de) return value ? "Ja" : "Nein";
-		return value ? "Yes" : "No";
+	private String yesNo(boolean value, Locale locale) {
+		return t(locale, value ? "export.pdf.yes" : "export.pdf.no");
+	}
+
+	/** One label of this document, in the language its reader chose. */
+	private String t(Locale locale, String key, Object... args) {
+		return words.in(locale, key, args);
 	}
 
 	private String nullSafe(String s) {

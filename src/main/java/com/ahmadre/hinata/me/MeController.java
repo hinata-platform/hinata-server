@@ -85,11 +85,12 @@ public class MeController {
 	public record AccessProjectDto(String id, String key, String name, String color, String role) {
 	}
 
-	// Only en/de are actually translated (templates, e-mails, message bundles), so
-	// reject locales we can't serve rather than silently downgrading them to English.
+	// Only the languages we ship translations for (templates, e-mails, message
+	// bundles) are accepted — a locale we cannot serve is rejected rather than
+	// silently downgraded to English.
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
 			@Size(max = 120) String title, @Size(max = 120) String pronouns,
-			@Pattern(regexp = "de|en") String locale) {
+			@Pattern(regexp = "de|en|zh|hi|es") String locale) {
 	}
 
 	public record EmailChangeRequest(@NotBlank @Email String newEmail) {
@@ -380,6 +381,10 @@ public class MeController {
 
 	// --- minimal public pages -------------------------------------------------
 
+	/** The languages the mailed-link pages are translated into. */
+	private static final java.util.Set<String> PAGE_LOCALES =
+			java.util.Set.of("en", "de", "zh", "hi", "es");
+
 	/** The wordmark these pages carried before organizations could brand them. */
 	private static final String PRODUCT_NAME = "hinata";
 
@@ -410,12 +415,17 @@ public class MeController {
 	 * The language of a page nobody opened from the app: these are landed on
 	 * from a link in an e-mail, so the browser's {@code Accept-Language} is the
 	 * only signal there is — the same rule {@code export.pdf} follows. Only
-	 * en/de are translated, so everything else lands on English.
+	 * Only the languages we ship bundles for are honoured; the rest land on
+	 * English.
 	 */
 	private static Locale localeOf(String acceptLanguage) {
-		return acceptLanguage != null && acceptLanguage.toLowerCase().startsWith("de")
-				? Locale.GERMAN
-				: Locale.ENGLISH;
+		if (acceptLanguage == null) {
+			return Locale.ENGLISH;
+		}
+		// Just the primary tag of the first entry: "de-AT,de;q=0.9" is German to a
+		// bundle that only has a language, and anything we do not speak is English.
+		String tag = acceptLanguage.split(",")[0].trim().split("-")[0].toLowerCase(Locale.ROOT);
+		return PAGE_LOCALES.contains(tag) ? Locale.forLanguageTag(tag) : Locale.ENGLISH;
 	}
 
 	/** Resolves page copy from {@code messages*.properties}, key as fallback. */

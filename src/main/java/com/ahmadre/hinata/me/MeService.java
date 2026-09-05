@@ -57,6 +57,7 @@ public class MeService {
 	private final AuditService audit;
 	private final com.ahmadre.hinata.auth.TokenService tokens;
 	private final com.ahmadre.hinata.auth.PasswordResetService passwordResetService;
+	private final com.ahmadre.hinata.common.UserWords words;
 
 	/** How long the e-mailed data-export download link stays valid. */
 	private static final long EXPORT_TOKEN_TTL_SECONDS = 72 * 3600L;
@@ -73,7 +74,7 @@ public class MeService {
 	}
 
 	/** Locales we ship translations for; anything else is ignored on auto-sync. */
-	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de");
+	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de", "zh", "hi", "es");
 
 	/**
 	 * Reconciles the stored {@link User#getLocale() locale} with the language the
@@ -140,9 +141,8 @@ public class MeService {
 		users.save(user);
 		sessions.revokeAll(user.getId());
 		notifications.notifySecurityAlert(user,
-				de(user) ? "E-Mail-Adresse geändert" : "Email address changed",
-				de(user) ? "Deine Anmelde-E-Mail wurde aktualisiert."
-						: "Your sign-in email was updated.");
+				words.of(user, "notify.security.emailChanged.title"),
+				words.of(user, "notify.security.emailChanged.body"));
 		audit.event(AuditAction.EMAIL_CHANGED).actor(user).meta("email", user.getEmail()).log();
 		return user;
 	}
@@ -166,8 +166,8 @@ public class MeService {
 		users.save(user);
 		sessions.revokeAll(user.getId());
 		notifications.notifySecurityAlert(user,
-				de(user) ? "Passwort geändert" : "Password changed",
-				de(user) ? "Dein Passwort wurde zurückgesetzt." : "Your password was reset.");
+				words.of(user, "notify.security.passwordReset.title"),
+				words.of(user, "notify.security.passwordReset.body"));
 		audit.event(AuditAction.PASSWORD_RESET_COMPLETED).actor(user).log();
 	}
 
@@ -238,8 +238,8 @@ public class MeService {
 		user.setRecoveryCodeHashes(recoveryCodes.hashAll(plain));
 		users.save(user);
 		notifications.notifySecurityAlert(user,
-				de(user) ? "Zwei-Faktor-Authentifizierung aktiviert" : "Two-factor authentication enabled",
-				de(user) ? "2FA wurde für dein Konto aktiviert." : "2FA was enabled on your account.");
+				words.of(user, "notify.security.twoFactorEnabled.title"),
+				words.of(user, "notify.security.twoFactorEnabled.body"));
 		audit.event(AuditAction.TWO_FACTOR_ENABLED).actor(user).log();
 		return plain;
 	}
@@ -268,8 +268,8 @@ public class MeService {
 		user.getRecoveryCodeHashes().clear();
 		users.save(user);
 		notifications.notifySecurityAlert(user,
-				de(user) ? "Zwei-Faktor-Authentifizierung deaktiviert" : "Two-factor authentication disabled",
-				de(user) ? "2FA wurde für dein Konto deaktiviert." : "2FA was disabled on your account.");
+				words.of(user, "notify.security.twoFactorDisabled.title"),
+				words.of(user, "notify.security.twoFactorDisabled.body"));
 		audit.event(AuditAction.TWO_FACTOR_DISABLED).actor(user).log();
 	}
 
@@ -396,7 +396,4 @@ public class MeService {
 		return base == null ? "" : base.replaceAll("/+$", "");
 	}
 
-	private boolean de(User user) {
-		return "de".equalsIgnoreCase(user.getLocale());
-	}
 }

@@ -20,7 +20,13 @@ import java.util.Locale;
 @Configuration
 public class LocaleConfig {
 
-	private static final List<Locale> SUPPORTED = List.of(Locale.ENGLISH, Locale.GERMAN);
+	/**
+	 * The languages this server can answer in — one per {@code messages_*} and
+	 * {@code email-messages_*} bundle pair. English stays the fallback for
+	 * anything else a browser asks for.
+	 */
+	private static final List<Locale> SUPPORTED = List.of(Locale.ENGLISH, Locale.GERMAN,
+			Locale.CHINESE, Locale.forLanguageTag("hi"), Locale.forLanguageTag("es"));
 
 	@Bean
 	public LocaleResolver localeResolver() {
