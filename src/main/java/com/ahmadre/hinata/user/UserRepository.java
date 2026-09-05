@@ -50,7 +50,19 @@ public interface UserRepository extends MongoRepository<User, String> {
 	 * want one field, and a full {@link User} carries the TOTP secret and the
 	 * recovery-code hashes — no reason to page those into memory to print
 	 * "she/her" beside a row.
+	 *
+	 * <p>An interface projection, not a field-limited {@link User}: a partial
+	 * document cannot build a User at all, because its primitive fields
+	 * ({@code active} and friends) have no null to be absent as.
 	 */
-	@Query(value = "{ '_id': { $in: ?0 } }", fields = "{ 'pronouns': 1 }")
-	List<User> findPronounsByIdIn(Collection<String> ids);
+	@Query("{ '_id': { $in: ?0 } }")
+	List<PronounsView> findPronounsByIdIn(Collection<String> ids);
+
+	/** Id + pronouns, and nothing else off the wire. */
+	interface PronounsView {
+
+		String getId();
+
+		String getPronouns();
+	}
 }
