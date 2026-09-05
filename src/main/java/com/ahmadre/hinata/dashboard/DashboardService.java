@@ -63,7 +63,7 @@ public class DashboardService {
 	}
 
 	public record RankEntry(String userId, String displayName, String title, String avatarUrl,
-			long points) {
+			String pronouns, long points) {
 	}
 
 	public record TrackerDay(LocalDate date, int focusMinutes) {
@@ -73,7 +73,8 @@ public class DashboardService {
 	public record TrackerWeek(int week, int focusMinutes) {
 	}
 
-	public record SprintMember(String userId, String displayName, String avatarUrl) {
+	public record SprintMember(String userId, String displayName, String avatarUrl,
+			String pronouns) {
 	}
 
 	/**
@@ -270,7 +271,8 @@ public class DashboardService {
 				.collect(Collectors.groupingBy(Issue::getAssigneeId, Collectors.counting()));
 		List<RankEntry> entries = new ArrayList<>();
 		points.forEach((userId, count) -> users.findById(userId).ifPresent(u -> entries.add(
-				new RankEntry(u.getId(), u.getDisplayName(), u.getTitle(), u.getAvatarUrl(), count))));
+				new RankEntry(u.getId(), u.getDisplayName(), u.getTitle(), u.getAvatarUrl(),
+						u.getPronouns(), count))));
 		entries.sort(Comparator.comparingLong(RankEntry::points).reversed());
 		return entries.size() > 10 ? entries.subList(0, 10) : entries;
 	}
@@ -413,7 +415,8 @@ public class DashboardService {
 	private List<SprintMember> resolveMembers(LinkedHashSet<String> memberIds) {
 		return memberIds.stream().limit(6)
 				.map(id -> users.findById(id)
-						.map(u -> new SprintMember(u.getId(), u.getDisplayName(), u.getAvatarUrl()))
+						.map(u -> new SprintMember(u.getId(), u.getDisplayName(), u.getAvatarUrl(),
+									u.getPronouns()))
 						.orElse(null))
 				.filter(java.util.Objects::nonNull)
 				.toList();

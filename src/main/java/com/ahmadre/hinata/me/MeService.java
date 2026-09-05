@@ -67,7 +67,7 @@ public class MeService {
 			String locale) {
 		if (displayName != null) user.setDisplayName(displayName.trim());
 		if (title != null) user.setTitle(title.trim());
-		if (pronouns != null) user.setPronouns(pronouns.trim());
+		if (pronouns != null) user.setPronouns(com.ahmadre.hinata.user.Pronouns.sanitize(pronouns));
 		if (locale != null) user.setLocale(locale);
 		return users.save(user);
 	}

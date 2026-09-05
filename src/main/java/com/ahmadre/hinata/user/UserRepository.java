@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -42,4 +43,26 @@ public interface UserRepository extends MongoRepository<User, String> {
 			+ "{ 'username': { $regex: ?0, $options: 'i' } }, "
 			+ "{ 'title': { $regex: ?0, $options: 'i' } } ] }")
 	Page<User> searchActive(String regex, Pageable pageable);
+
+	/**
+	 * Just the pronouns of the given accounts, for a screen that renders a list
+	 * of names it already has. Projected rather than loaded whole: the callers
+	 * want one field, and a full {@link User} carries the TOTP secret and the
+	 * recovery-code hashes — no reason to page those into memory to print
+	 * "she/her" beside a row.
+	 *
+	 * <p>An interface projection, not a field-limited {@link User}: a partial
+	 * document cannot build a User at all, because its primitive fields
+	 * ({@code active} and friends) have no null to be absent as.
+	 */
+	@Query("{ '_id': { $in: ?0 } }")
+	List<PronounsView> findPronounsByIdIn(Collection<String> ids);
+
+	/** Id + pronouns, and nothing else off the wire. */
+	interface PronounsView {
+
+		String getId();
+
+		String getPronouns();
+	}
 }

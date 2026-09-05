@@ -63,7 +63,7 @@ public class WeeklySummaryService {
 	 * the client renders without extra lookups.
 	 */
 	public record Contributor(String userId, String displayName, String title,
-			String avatarUrl, long completed) {
+			String avatarUrl, String pronouns, long completed) {
 	}
 
 	/**
@@ -163,7 +163,7 @@ public class WeeklySummaryService {
 		List<Contributor> entries = new ArrayList<>();
 		points.forEach((userId, count) -> users.findById(userId).ifPresent(u ->
 				entries.add(new Contributor(u.getId(), u.getDisplayName(), u.getTitle(),
-						u.getAvatarUrl(), count))));
+						u.getAvatarUrl(), u.getPronouns(), count))));
 		entries.sort(Comparator.comparingLong(Contributor::completed).reversed()
 				.thenComparing(Contributor::displayName));
 		return entries.size() > CONTRIBUTORS ? entries.subList(0, CONTRIBUTORS) : entries;
