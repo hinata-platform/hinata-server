@@ -111,11 +111,20 @@ public class MailService {
 	 * assignment from a mention before reading a word; pass {@code null} for the
 	 * neutral label. Title and body arrive already localized from the caller.
 	 *
-	 * <p>{@code changes} is the before/after diff of an issue update, already
-	 * worded in the recipient's language, and {@code null} for every other notice.
-	 * The body copy says <em>that</em> something changed; this is what says
-	 * <em>what</em>, which is the difference between a mail a watcher can act on
-	 * and one that only tells them to go and look.
+	 */
+	@Async
+	public void sendNotification(String to, String subject, String headline, String body, String link,
+			String buttonLabel, String locale, String eyebrowKey) {
+		sendNotification(to, subject, headline, body, link, buttonLabel, locale, eyebrowKey, null);
+	}
+
+	/**
+	 * As {@link #sendNotification(String, String, String, String, String, String,
+	 * String, String)}, for the one notice that has a diff to show: {@code changes}
+	 * is the before/after of an issue update, already worded in the recipient's
+	 * language. The body copy says <em>that</em> something changed; this is what
+	 * says <em>what</em>, which is the difference between a mail a watcher can act
+	 * on and one that only tells them to go and look.
 	 */
 	@Async
 	public void sendNotification(String to, String subject, String headline, String body, String link,

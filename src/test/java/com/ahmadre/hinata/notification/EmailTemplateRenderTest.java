@@ -93,8 +93,9 @@ class EmailTemplateRenderTest {
 	/** The eyebrow key is resolved through preprocessing, not printed raw. */
 	@Test
 	void notificationShowsItsTypeLabel() {
-		assertThat(render("email/notification", "de")).contains("Vorgang aktualisiert");
-		assertThat(render("email/notification", "en")).contains("Issue updated");
+		assertThat(render("email/notification", "de")).contains("Dir zugewiesen");
+		assertThat(render("email/notification", "en")).contains("Assigned to you");
+		assertThat(render("email/notification#update", "de")).contains("Vorgang aktualisiert");
 	}
 
 	/**
@@ -106,12 +107,14 @@ class EmailTemplateRenderTest {
 	 */
 	@Test
 	void bothChangeMailsPaintTheDiff() {
-		for (String template : List.of("email/issue-changes", "email/notification")) {
+		for (String template : List.of("email/issue-changes", "email/notification#update")) {
 			assertThat(render(template, "de"))
 					.as(template)
+					// The classes, not the shades: they are what the dark-mode block keys
+					// off, and a palette tweak is not a broken promise.
+					.contains("class=\"hn-danger\"")
+					.contains("class=\"hn-now\"")
 					.contains("text-decoration:line-through")
-					.contains("color:#C0392B")
-					.contains("color:#2FA06E")
 					.contains("&#8594;")
 					// The state before and the state after, both in full: the defect this
 					// replaced showed only what left.
@@ -120,6 +123,16 @@ class EmailTemplateRenderTest {
 					// A description edit shows the words that moved, never the bare word.
 					.doesNotContain(">geändert<");
 		}
+	}
+
+	/** The notification template serves every other notice too, and those have no
+	 *  diff — the change section must simply not appear. */
+	@Test
+	void aNotificationWithoutChangesHasNoChangeSection() {
+		assertThat(render("email/notification", "de"))
+				.doesNotContain("class=\"hn-now\"")
+				.doesNotContain("ÄNDERUNGEN")
+				.doesNotContain("Änderungen");
 	}
 
 	/** Every CTA must carry a real href, and the copy-paste fallback with it. */
@@ -157,6 +170,7 @@ class EmailTemplateRenderTest {
 	}
 
 	private String render(String template, String locale) {
-		return mail.render(engine, template, EmailFixtures.model(template, locale));
+		return mail.render(engine, EmailFixtures.templateOf(template),
+				EmailFixtures.model(template, locale));
 	}
 }

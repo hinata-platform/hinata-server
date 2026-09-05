@@ -169,24 +169,59 @@ class IssueChangeDiffTest {
 	}
 
 	/**
-	 * And no more than an excerpt of it. A queued bundle may hold hundreds of
-	 * changes for one issue; storing a whole description per change is how one
-	 * document grows past Mongo's limit and every later change to that issue
-	 * starts throwing.
+	 * And no more than a window of it. A queued bundle may hold hundreds of
+	 * changes for one issue, and one per watcher; storing a whole description per
+	 * change is how one document grows past Mongo's limit and every later change
+	 * to that issue starts throwing.
 	 */
 	@Test
-	void aLongDescriptionIsStoredAsABoundedExcerpt() {
-		Issue before = issue();
-		before.setDescriptionDoc("{\"root\":{\"v\":1}}");
-		before.setDescription("x".repeat(50_000));
-		Issue after = issue();
-		after.setDescriptionDoc("{\"root\":{\"v\":2}}");
-		after.setDescription("y".repeat(50_000));
+	void aLongDescriptionIsStoredAsABoundedWindow() {
+		assertThat(descriptionChange("x ".repeat(50_000), "y ".repeat(50_000)))
+				.satisfies(change -> {
+					assertThat(change.oldValue()).hasSizeLessThanOrEqualTo(IssueChangeDiff.TEXT_MAX + 4);
+					assertThat(change.newValue()).hasSizeLessThanOrEqualTo(IssueChangeDiff.TEXT_MAX + 4);
+				});
+	}
 
-		assertThat(IssueChangeDiff.between(before, after)).singleElement().satisfies(change -> {
-			assertThat(change.oldValue()).hasSize(IssueChangeDiff.TEXT_MAX + 1).endsWith("…");
-			assertThat(change.newValue()).hasSize(IssueChangeDiff.TEXT_MAX + 1).endsWith("…");
-		});
+	/**
+	 * The window is centred on the edit rather than cut from the front. A prefix
+	 * says nothing about a change made further down: the two sides would come back
+	 * identical and the notice would be reduced to the bare word "changed", which
+	 * is the defect the diff exists to fix.
+	 */
+	@Test
+	void theWindowFollowsTheEditHoweverFarIntoTheTextItIs() {
+		String head = "unchanged ".repeat(500);
+
+		FieldChange change = descriptionChange(head + "before the end", head + "after the end");
+
+		assertThat(change.oldValue()).contains("before").doesNotContain("after");
+		assertThat(change.newValue()).contains("after").doesNotContain("before");
+		assertThat(change.oldValue()).as("and it says that it is a window")
+				.startsWith("… ").endsWith("before the end");
+	}
+
+	/** The window is cut at whitespace: a diff of two halves of a word would show
+	 *  a change to a word nobody edited. */
+	@Test
+	void theWindowIsCutAtWordBoundaries() {
+		String head = "reproducible ".repeat(200);
+
+		FieldChange change = descriptionChange(head + "one", head + "two");
+
+		for (String word : change.oldValue().replace("… ", "").split(" ")) {
+			assertThat(word).isIn("reproducible", "one", "…");
+		}
+	}
+
+	private FieldChange descriptionChange(String before, String after) {
+		Issue a = issue();
+		a.setDescriptionDoc("{\"root\":{\"v\":1}}");
+		a.setDescription(before);
+		Issue b = issue();
+		b.setDescriptionDoc("{\"root\":{\"v\":2}}");
+		b.setDescription(after);
+		return IssueChangeDiff.between(a, b).getFirst();
 	}
 
 	@Test

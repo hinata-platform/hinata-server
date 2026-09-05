@@ -98,7 +98,8 @@ class EmailPreviewTest {
 		// A browser cannot resolve cid:, so the gallery points at the band on disk.
 		model.put("mastheadSrc", bandFile(template, orgBranded));
 		model.put("mastheadHeight", MailBandComposer.DISPLAY_HEIGHT);
-		return engine.process(template, new Context(Locale.forLanguageTag(locale), model));
+		return engine.process(EmailFixtures.templateOf(template),
+				new Context(Locale.forLanguageTag(locale), model));
 	}
 
 	/**

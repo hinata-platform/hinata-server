@@ -15,9 +15,12 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -42,6 +45,8 @@ class IssueChangeRendererTest {
 		issues = mock(IssueRepository.class);
 		projects = mock(ProjectRepository.class);
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
+		lenient().when(users.findAllById(any())).thenReturn(List.of());
+		lenient().when(issues.findAllById(any())).thenReturn(List.of());
 		lenient().when(sprints.findById(anyString())).thenReturn(Optional.empty());
 		lenient().when(issues.findById(anyString())).thenReturn(Optional.empty());
 		lenient().when(projects.findById(anyString())).thenReturn(Optional.empty());
@@ -51,6 +56,10 @@ class IssueChangeRendererTest {
 
 	private String value(FieldChange change, java.util.Locale locale) {
 		return renderer.lines(List.of(change), locale).get(0).value();
+	}
+
+	private String summary(List<FieldChange> changes, java.util.Locale locale) {
+		return renderer.summaryOf(renderer.lines(changes, locale), locale);
 	}
 
 	private IssueChangeRenderer.Line line(FieldChange change, java.util.Locale locale) {
@@ -149,7 +158,7 @@ class IssueChangeRendererTest {
 				"REMOVED:Sunday",
 				"ADDED:Monday",
 				"SAME:for every locale.");
-		assertThat(line(description, java.util.Locale.ENGLISH).inline())
+		assertThat(line(description, java.util.Locale.ENGLISH).wordDiff())
 				.as("a word diff is read as one sentence, not as before → after")
 				.isTrue();
 	}
@@ -200,7 +209,7 @@ class IssueChangeRendererTest {
 		value(new FieldChange(IssueChangeDiff.ASSIGNEES,
 				"u1" + IssueChangeDiff.LIST_SEPARATOR + "u2", "u1"), java.util.Locale.ENGLISH);
 
-		org.mockito.Mockito.verify(users, org.mockito.Mockito.times(1)).findById("u1");
+		verify(users, times(1)).findAllById(any());
 	}
 
 	@Test
@@ -246,9 +255,9 @@ class IssueChangeRendererTest {
 				new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"),
 				new FieldChange(IssueChangeDiff.DUE_DATE, null, "2026-08-23"));
 
-		assertThat(renderer.summary(changes, java.util.Locale.GERMAN))
+		assertThat(summary(changes, java.util.Locale.GERMAN))
 				.isEqualTo("Priorität: NORMAL → MAJOR · Fällig: 23.08.2026");
-		assertThat(renderer.summary(changes, java.util.Locale.ENGLISH))
+		assertThat(summary(changes, java.util.Locale.ENGLISH))
 				.isEqualTo("Priority: NORMAL → MAJOR · Due: Aug 23, 2026");
 	}
 
@@ -263,6 +272,79 @@ class IssueChangeRendererTest {
 				new FieldChange(IssueChangeDiff.TITLE, null, "y".repeat(200)),
 				new FieldChange(IssueChangeDiff.STATE, "o".repeat(200), "Done"),
 				new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"));
-		assertThat(renderer.summary(many, java.util.Locale.ENGLISH)).hasSize(160).endsWith("…");
+		assertThat(summary(many, java.util.Locale.ENGLISH)).hasSizeLessThanOrEqualTo(160);
+	}
+
+	/**
+	 * The defect a plain cut at 160 characters produces: one long change — and a
+	 * description almost always is one — pushes every short one out of the
+	 * sentence, so the push says nothing about the status change the reader
+	 * actually cares about. Whole changes are taken, as many as fit, and the rest
+	 * are counted.
+	 */
+	@Test
+	void oneLongChangeDoesNotHideTheShortOnesBehindIt() {
+		List<FieldChange> changes = List.of(
+				new FieldChange(IssueChangeDiff.DESCRIPTION, "w ".repeat(60) + "before",
+						"w ".repeat(60) + "after"),
+				new FieldChange(IssueChangeDiff.STATE, "Open", "In Progress"),
+				new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"),
+				new FieldChange(IssueChangeDiff.STORY_POINTS, "3", "5"));
+
+		assertThat(summary(changes, java.util.Locale.ENGLISH))
+				// The description is condensed to the words that moved, so the three
+				// short changes behind it survive rather than being cut off.
+				.contains("Description: … before → … after")
+				.contains("Status: Open → In Progress")
+				.contains("Priority: NORMAL → MAJOR")
+				.contains("Story points: 3 → 5")
+				.hasSizeLessThanOrEqualTo(160);
+	}
+
+	/** And when they genuinely cannot all fit, the ones left out are counted
+	 *  rather than dropped in silence. */
+	@Test
+	void whatDoesNotFitInTheSummaryIsCounted() {
+		List<FieldChange> changes = List.of(
+				new FieldChange(IssueChangeDiff.TITLE, "t".repeat(60), "u".repeat(60)),
+				new FieldChange(IssueChangeDiff.STATE, "s".repeat(60), "Done"),
+				new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"),
+				new FieldChange(IssueChangeDiff.STORY_POINTS, "3", "5"));
+
+		assertThat(summary(changes, java.util.Locale.ENGLISH))
+				.contains("Priority: NORMAL → MAJOR")
+				.containsPattern("\\+\\d+ more")
+				.hasSizeLessThanOrEqualTo(160);
+	}
+
+	/**
+	 * A recipient who cannot open the issue is still told that it moved, and still
+	 * told every field that moved — but not what the body now says. Mailing them
+	 * the description would hand them through the inbox exactly the content the
+	 * project answers with a 403.
+	 */
+	@Test
+	void aRecipientWithoutAccessIsNotToldWhatTheDescriptionSays() {
+		List<FieldChange> changes = List.of(
+				new FieldChange(IssueChangeDiff.DESCRIPTION, "the secret is hunter2", "redacted"),
+				new FieldChange(IssueChangeDiff.STATE, "Open", "In Progress"));
+
+		List<IssueChangeRenderer.Line> redacted =
+				renderer.linesWithoutBodyText(changes, java.util.Locale.ENGLISH);
+
+		assertThat(redacted).hasSize(2);
+		assertThat(redacted.getFirst().value()).isEqualTo("changed");
+		assertThat(redacted.getFirst().wordDiff()).isFalse();
+		assertThat(redacted.getLast().value()).isEqualTo("Open → In Progress");
+		assertThat(renderer.summaryOf(redacted, java.util.Locale.ENGLISH))
+				.doesNotContain("hunter2")
+				.doesNotContain("redacted");
+	}
+
+	/** Clearing a description says so rather than showing the old text alone. */
+	@Test
+	void clearingADescriptionReadsAsAnArrowIntoNothing() {
+		assertThat(value(new FieldChange(IssueChangeDiff.DESCRIPTION, "the old body", null),
+				java.util.Locale.ENGLISH)).isEqualTo("the old body → —");
 	}
 }

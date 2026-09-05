@@ -23,11 +23,12 @@
 <th:block th:fragment="content">
   <th:block th:replace="~{email/_layout :: copy(${body})}"/>
 
+  <!--/* th:if on its own element, with the replace nested inside it: Thymeleaf
+       runs fragment inclusion before conditional evaluation, so a th:replace
+       sharing a tag with a th:if substitutes the tag — condition and all —
+       before the condition is ever asked. */-->
   <th:block th:if="${lines != null and !#lists.isEmpty(lines)}">
-    <th:block th:replace="~{email/_layout :: sectionLabel(#{email.issueChanges.section})}"/>
-    <th:block th:each="line : ${lines}">
-      <th:block th:replace="~{email/_layout :: diff(${line})}"/>
-    </th:block>
+    <th:block th:replace="~{email/_layout :: changes(${lines})}"/>
   </th:block>
 
   <th:block th:if="${ctaLink != null}"

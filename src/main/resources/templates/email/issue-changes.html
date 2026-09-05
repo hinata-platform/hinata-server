@@ -21,10 +21,7 @@
 <th:block th:fragment="content">
   <th:block th:replace="~{email/_layout :: copy(#{email.issueChanges.intro})}"/>
 
-  <th:block th:replace="~{email/_layout :: sectionLabel(#{email.issueChanges.section})}"/>
-  <th:block th:each="line : ${lines}">
-    <th:block th:replace="~{email/_layout :: diff(${line})}"/>
-  </th:block>
+  <th:block th:replace="~{email/_layout :: changes(${lines})}"/>
 
   <th:block th:if="${ctaLink != null}"
             th:replace="~{email/_layout :: cta(${ctaLink}, #{email.cta.open})}"/>

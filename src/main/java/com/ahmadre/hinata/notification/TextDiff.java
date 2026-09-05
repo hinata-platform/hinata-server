@@ -35,9 +35,9 @@ public final class TextDiff {
 
 	/**
 	 * One run of text with a single fate. The {@code added}/{@code removed}/
-	 * {@code same} accessors exist for the templates: Thymeleaf compares enums
-	 * only through fully-qualified {@code T(...)} expressions, which would put a
-	 * Java class name into three e-mail templates.
+	 * {@code same} accessors exist for the templates: three {@code th:if}s reading
+	 * {@code seg.added()} beat three {@code seg.part.name() == '…'} string
+	 * comparisons, where a typo is a silent {@code false} rather than an error.
 	 */
 	public record Segment(Part part, String text) {
 
@@ -56,13 +56,20 @@ public final class TextDiff {
 
 	/**
 	 * Ceiling on the quadratic table the longest-common-subsequence walk fills.
-	 * The inputs are already clipped upstream (a description excerpt is at most
-	 * {@code IssueChangeDiff.TEXT_MAX} characters), so this is the second belt on
-	 * the same trousers: whatever slips through gets the coarse "all of the old,
-	 * then all of the new" diff instead of a mail send that stalls on a table
-	 * nobody sized.
+	 * The inputs are already bounded upstream — a description window is at most
+	 * {@code IssueChangeDiff.TEXT_MAX} characters, so at most half that many
+	 * words — and this is the second belt on the same trousers: a value stored by
+	 * a build with a wider cap gets the coarse "all of the old, then all of the
+	 * new" diff instead of a mail send that stalls on a table nobody sized.
 	 */
-	private static final int MAX_CELLS = 250_000;
+	private static final int MAX_CELLS = 40_000;
+
+	/**
+	 * Ceiling on either dimension of that table. The product alone would still
+	 * admit a 40 000 × 1 shape, which is 40 000 row objects for one column — the
+	 * table's memory is not its cell count.
+	 */
+	private static final int MAX_TOKENS = 400;
 
 	/** Stands in for the words a long unchanged run is condensed away to. */
 	private static final String ELLIPSIS = "…";
@@ -79,39 +86,56 @@ public final class TextDiff {
 	 * mailing the whole description back: the reader wants the sentence that
 	 * moved, with enough around it to place it, not the document.
 	 *
+	 * <p>{@code maxSegments} is the last line of defence on the size of the
+	 * result: a rewrite that alternates word for word produces one segment per
+	 * word, and each of those is a styled span in an e-mail. Past the cap the
+	 * diff stops and says so.
+	 *
 	 * @return an empty list when both sides are blank, or when they are equal —
 	 *         "nothing visibly changed" is a real answer, and the caller has to be
 	 *         able to tell it from a change it can show
 	 */
-	public static List<Segment> words(String before, String after, int context) {
+	public static List<Segment> words(String before, String after, int context, int maxSegments) {
 		List<String> a = tokens(before);
 		List<String> b = tokens(after);
 		if (a.isEmpty() && b.isEmpty()) return List.of();
 		if (a.equals(b)) return List.of();
-		return join(condense(runs(a, b), Math.max(0, context)));
+		return join(cap(condense(runs(a, b), Math.max(0, context)), maxSegments));
 	}
 
 	/**
-	 * Flattens segments back into the text as it was: everything the reader would
-	 * have seen before the change. Empty when the field was empty before.
+	 * The text as it read before, for a surface that has one line to say it in:
+	 * the words that went, with everything they sat between standing as an
+	 * ellipsis.
+	 *
+	 * <p>Eliding the context is the whole point. A push body is a sentence, and
+	 * two near-identical paragraphs joined by an arrow leave the reader to spot
+	 * the difference themselves — which is what they opened the issue for before
+	 * this existed. A diff with nothing changed at all (the "it changed but we
+	 * cannot show you where" fallback) has no context to elide and comes back
+	 * whole.
 	 */
-	public static String before(List<Segment> segments) {
+	public static String summaryBefore(List<Segment> segments) {
 		return flatten(segments, Part.ADDED);
 	}
 
-	/** Flattens segments into the text as it is now. */
-	public static String after(List<Segment> segments) {
+	/** The text as it reads now, on the same terms as {@link #summaryBefore}. */
+	public static String summaryAfter(List<Segment> segments) {
 		return flatten(segments, Part.REMOVED);
 	}
 
 	private static String flatten(List<Segment> segments, Part skip) {
+		boolean anyChange = segments.stream().anyMatch(segment -> !segment.same());
 		StringBuilder text = new StringBuilder();
 		for (Segment segment : segments) {
 			if (segment.part() == skip) continue;
+			String part = segment.same() && anyChange ? ELLIPSIS : segment.text();
+			// Two elided runs on either side of a dropped change read as one gap.
+			if (ELLIPSIS.equals(part) && text.toString().endsWith(ELLIPSIS)) continue;
 			if (!text.isEmpty()) text.append(' ');
-			text.append(segment.text());
+			text.append(part);
 		}
-		return text.toString();
+		return text.toString().strip();
 	}
 
 	// --- the diff itself -------------------------------------------------------
@@ -143,7 +167,8 @@ public final class TextDiff {
 
 		List<Run> runs = new ArrayList<>();
 		add(runs, Part.SAME, a.subList(0, prefix));
-		if ((long) midA.size() * midB.size() > MAX_CELLS) {
+		if (midA.size() > MAX_TOKENS || midB.size() > MAX_TOKENS
+				|| (long) midA.size() * midB.size() > MAX_CELLS) {
 			// Too big to align word by word. Saying "all of this went, all of that
 			// arrived" is still true, still readable, and cannot be mistaken for a
 			// finer answer than we have.
@@ -267,13 +292,26 @@ public final class TextDiff {
 		return tokens;
 	}
 
-	/** Runs back into segments, their words rejoined by single spaces. */
+	/**
+	 * Stops the diff after {@code max} runs, marking that it was stopped. The
+	 * marker is an unchanged run, so the one-line flattening reads it as elided
+	 * context and the mail sets it in the ordinary ink.
+	 */
+	private static List<Run> cap(List<Run> runs, int max) {
+		if (max <= 0 || runs.size() <= max) return runs;
+		List<Run> capped = new ArrayList<>(runs.subList(0, max));
+		capped.add(new Run(Part.SAME, new ArrayList<>(List.of(ELLIPSIS))));
+		return capped;
+	}
+
+	/** Runs back into segments, their words rejoined by single spaces. Immutable:
+	 *  the result is handed to an {@code @Async} mail send. */
 	private static List<Segment> join(List<Run> runs) {
 		List<Segment> segments = new ArrayList<>(runs.size());
 		for (Run run : runs) {
 			String text = String.join(" ", run.tokens());
 			if (!text.isEmpty()) segments.add(new Segment(run.part(), text));
 		}
-		return segments;
+		return List.copyOf(segments);
 	}
 }

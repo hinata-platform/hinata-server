@@ -49,7 +49,7 @@ public class AccountMailService {
 	/** Security alert: 2FA enabled/disabled, password or email changed. */
 	public void sendSecurityAlert(User user, String headline, String body) {
 		mail.sendNotification(user.getEmail(), mail.subjectPrefix() + headline, headline, body, null, null,
-				words.localeOf(user).getLanguage(), "email.eyebrow.SECURITY_ALERT", null);
+				words.localeOf(user).getLanguage(), "email.eyebrow.SECURITY_ALERT");
 	}
 
 	private Map<String, Object> base(User user) {

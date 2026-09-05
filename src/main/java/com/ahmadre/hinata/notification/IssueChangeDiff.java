@@ -111,8 +111,7 @@ public final class IssueChangeDiff {
 			// something anybody reads in an inbox.
 			new Rule(DESCRIPTION, (a, b) -> Objects.equals(a.getDescriptionDoc(), b.getDescriptionDoc())
 					? null
-					: new FieldChange(DESCRIPTION, excerpt(a.getDescription()),
-							excerpt(b.getDescription()))),
+					: excerptOf(a.getDescription(), b.getDescription())),
 			new Rule(STATE, (a, b) -> scalar(STATE, a.getState(), b.getState())),
 			new Rule(PRIORITY, (a, b) -> scalar(PRIORITY, name(a.getPriority()), name(b.getPriority()))),
 			new Rule(TYPE, (a, b) -> scalar(TYPE, name(a.getType()), name(b.getType()))),
@@ -140,38 +139,120 @@ public final class IssueChangeDiff {
 	 * rather than the value itself.
 	 *
 	 * <p>A description is a whole rich-text document. Carrying all of it through a
-	 * 30-minute digest queue would store the issue body twice per queued change,
-	 * so only {@link #TEXT_MAX} characters of its plain text are kept — enough for
-	 * the diff a reader triages from, bounded enough that a retry-looping
-	 * automation cannot grow one bundle past Mongo's document limit.
+	 * 30-minute digest queue would store the issue body twice per queued change —
+	 * per <em>watcher</em>, since every recipient gets their own bundle — so only
+	 * a {@link #TEXT_MAX}-character window of its plain text is kept.
 	 *
-	 * <p>The consequence the callers care about: two equal excerpts do
-	 * <em>not</em> prove the field is unchanged (the edit may sit past the cut),
-	 * so {@link FieldChange#collapse} must never cancel such a change out, and
-	 * {@code IssueChangeRenderer} falls back to a plain "changed" when the diff
-	 * has nothing visible to show.
+	 * <p>Two consequences the callers depend on:
+	 * <ul>
+	 *   <li>Two equal excerpts do <em>not</em> prove the field is unchanged, so
+	 *       {@link FieldChange#collapse} never cancels such a change out and
+	 *       {@code IssueChangeRenderer} falls back to a plain "changed" when the
+	 *       diff has nothing visible to show.</li>
+	 *   <li>The text is long enough that a reader wants it diffed word by word
+	 *       rather than read as "before → after".</li>
+	 * </ul>
 	 */
-	public static boolean excerpted(String field) {
+	public static boolean longText(String field) {
 		return DESCRIPTION.equals(field);
 	}
 
 	/**
-	 * How much of a long text field is kept. Roughly a full screen of prose —
-	 * past that, a change mail stops being a notification and becomes a copy of
-	 * the issue.
+	 * How much of a long text field is kept per side. Small on purpose: the window
+	 * is centred on the edit (see {@link #excerptOf}), so this is how much
+	 * <em>context</em> travels, not how much of the document — and every character
+	 * of it is stored once per watcher, per queued change.
 	 */
-	public static final int TEXT_MAX = 1_000;
+	public static final int TEXT_MAX = 400;
 
-	/** A long text field cut to {@link #TEXT_MAX}, with the cut marked so a reader
-	 *  can tell "the description ends here" from "the excerpt does". */
-	private static String excerpt(String text) {
-		if (text == null || text.isBlank()) return null;
-		String trimmed = text.strip();
-		if (trimmed.length() <= TEXT_MAX) return trimmed;
-		return trimmed.substring(0, TEXT_MAX).stripTrailing() + "…";
+	/** Marks a window that does not start or end where the text does. */
+	private static final String CUT = "…";
+
+	/**
+	 * A description change as the pair of windows a reader is shown: the same
+	 * region of the text, before and after, centred on what actually moved.
+	 *
+	 * <p>Centred rather than cut from the front, because a prefix says nothing
+	 * about an edit made further down — the two windows would come back identical
+	 * and the mail would be reduced to the bare word "changed", which is the
+	 * defect this whole path exists to fix. Reading the region off the two texts
+	 * costs one character walk from each end and needs no diff.
+	 *
+	 * <p>Returns {@code null} only when neither side has any text, which the
+	 * caller has already ruled out by comparing the documents.
+	 */
+	private static FieldChange excerptOf(String before, String after) {
+		String a = blankToNull(before);
+		String b = blankToNull(after);
+		if (a == null && b == null) return new FieldChange(DESCRIPTION, null, null);
+		int prefix = commonPrefix(a, b);
+		return new FieldChange(DESCRIPTION,
+				window(a, prefix, a == null ? 0 : a.length() - commonSuffix(a, b, prefix)),
+				window(b, prefix, b == null ? 0 : b.length() - commonSuffix(a, b, prefix)));
 	}
 
-	/** Whether the list encodes several values (rendered as additions/removals). */
+	private static int commonPrefix(String a, String b) {
+		if (a == null || b == null) return 0;
+		int index = 0;
+		int max = Math.min(a.length(), b.length());
+		while (index < max && a.charAt(index) == b.charAt(index)) index++;
+		return index;
+	}
+
+	/** Trailing characters the two texts share, never reaching back past the
+	 *  common prefix — a text and itself must not be counted twice. */
+	private static int commonSuffix(String a, String b, int prefix) {
+		if (a == null || b == null) return 0;
+		int index = 0;
+		int max = Math.min(a.length(), b.length()) - prefix;
+		while (index < max && a.charAt(a.length() - 1 - index) == b.charAt(b.length() - 1 - index)) {
+			index++;
+		}
+		return index;
+	}
+
+	/**
+	 * At most {@link #TEXT_MAX} characters of {@code text} around {@code [from,
+	 * to)}, cut at whitespace and marked where it was cut.
+	 *
+	 * <p>Whitespace is where the cut has to land: the renderer diffs these two
+	 * windows word by word, and a window that starts mid-word would show the
+	 * reader a removed and an added fragment of a word that was never edited. It
+	 * is also what keeps the cut off a surrogate pair.
+	 */
+	private static String window(String text, int from, int to) {
+		if (text == null) return null;
+		if (text.length() <= TEXT_MAX) return text.strip();
+		int span = Math.max(0, Math.min(to, text.length()) - Math.min(from, text.length()));
+		int start = Math.max(0, Math.min(from, text.length()) - Math.max(0, TEXT_MAX - span) / 2);
+		int end = Math.min(text.length(), start + TEXT_MAX);
+		start = Math.max(0, Math.min(start, end - TEXT_MAX));
+		// Out to the nearest word boundary on each side, inwards, so no partial
+		// word survives. A run without any space in TEXT_MAX characters keeps the
+		// hard cut — there is no boundary to find.
+		int word = start == 0 ? start : boundaryAfter(text, start, end);
+		if (word < end) start = word;
+		word = end == text.length() ? end : boundaryBefore(text, start, end);
+		if (word > start) end = word;
+		String cut = text.substring(start, end).strip();
+		if (cut.isEmpty()) return text.substring(start, end);
+		return (start > 0 ? CUT + " " : "") + cut + (end < text.length() ? " " + CUT : "");
+	}
+
+	private static int boundaryAfter(String text, int start, int end) {
+		int index = start;
+		while (index < end && !Character.isWhitespace(text.charAt(index))) index++;
+		return index;
+	}
+
+	private static int boundaryBefore(String text, int start, int end) {
+		int index = end;
+		while (index > start && !Character.isWhitespace(text.charAt(index - 1))) index--;
+		return index;
+	}
+
+	/** Whether the list encodes several values — rendered as the whole list on
+	 *  both sides of the change, not as what was added and removed. */
 	public static boolean multiValued(String field) {
 		return ASSIGNEES.equals(field) || TAGS.equals(field) || DEPENDS_ON.equals(field);
 	}
@@ -197,6 +278,9 @@ public final class IssueChangeDiff {
 	 * eventually break it against Mongo's 16 MB limit.
 	 */
 	private static final int VALUE_MAX = 200;
+
+	/** Most elements of a multi-valued field that are stored — see {@link #join}. */
+	private static final int LIST_MAX = 50;
 
 	private IssueChangeDiff() {
 	}
@@ -245,10 +329,25 @@ public final class IssueChangeDiff {
 		return new FieldChange(field, join(a), join(b));
 	}
 
+	/**
+	 * Bounded on both axes: {@link #VALUE_MAX} per element and {@link #LIST_MAX}
+	 * elements.
+	 *
+	 * <p>The count matters as much as the length. Nothing validates how many tags
+	 * or dependencies one PATCH may set, so a single request could otherwise turn
+	 * one queued entry into megabytes — and a bundle that outgrows Mongo's
+	 * document limit does not merely lose a mail: {@code $push} then throws inside
+	 * the fan-out, which runs per recipient and, for a sprint completion, inside a
+	 * transaction. What is dropped here was never displayed anyway; the renderer
+	 * clips a whole side to a fraction of this.
+	 */
 	private static String join(List<String> values) {
 		if (values.isEmpty()) return null;
-		List<String> clipped = new ArrayList<>(values.size());
-		for (String value : values) clipped.add(clip(value));
+		List<String> clipped = new ArrayList<>(Math.min(values.size(), LIST_MAX));
+		for (String value : values) {
+			if (clipped.size() == LIST_MAX) break;
+			clipped.add(clip(value));
+		}
 		return String.join(LIST_SEPARATOR, clipped);
 	}
 

@@ -31,8 +31,17 @@ final class EmailFixtures {
 	}
 
 	/** Every template that ships, in the order the gallery should show them. */
+	/**
+	 * Every mail in the gallery. {@code email/notification} appears twice on
+	 * purpose: it is one template serving two genuinely different mails — an
+	 * assignment, which is the common case and carries no diff, and an issue
+	 * update, which is the only notice that does. Reviewing one of them leaves the
+	 * other free to drift, and rendering only the update would leave the branch
+	 * that every other notification type takes untested.
+	 */
 	static final List<String> TEMPLATES = List.of(
 			"email/notification",
+			"email/notification#update",
 			"email/verify-email",
 			"email/invite",
 			"email/password-reset",
@@ -110,6 +119,12 @@ final class EmailFixtures {
 		return brand;
 	}
 
+	/** The template a gallery entry renders — see {@link #TEMPLATES}. */
+	static String templateOf(String sample) {
+		int variant = sample.indexOf('#');
+		return variant < 0 ? sample : sample.substring(0, variant);
+	}
+
 	/** Sample model for {@code template} in {@code locale} ("de" / "en"). */
 	static Map<String, Object> model(String template, String locale) {
 		Map<String, Object> m = new LinkedHashMap<>();
@@ -120,15 +135,25 @@ final class EmailFixtures {
 
 		switch (template) {
 			case "email/notification" -> {
-				// An issue update, of the notification types this one template serves.
-				// It is the only one that carries a diff, and the diff is the reason
-				// the template has a change section at all — so the gallery shows that
-				// case, exactly as NotificationService composes it: the body is the
-				// same change list squeezed onto the one line the push and the bell
-				// get, above the diff the mail has room to paint.
-				m.put("headline", de ? "HIN-142 aktualisiert" : "HIN-142 updated");
+				m.put("headline", de ? "HIN-142 wurde dir zugewiesen" : "HIN-142 was assigned to you");
+				m.put("body", de
+						? "Marek Wilczyński hat dir \"Kalenderansicht: Woche beginnt am falschen Tag\" "
+								+ "zugewiesen. Fällig am 22. August."
+						: "Marek Wilczyński assigned you \"Calendar view: week starts on the wrong day\". "
+								+ "Due on 22 August.");
+				m.put("ctaLink", BASE + "/issues/HIN-142");
+				m.put("ctaLabel", de ? "Vorgang öffnen" : "Open issue");
+				m.put("eyebrowKey", "email.eyebrow.ISSUE_ASSIGNED");
+				// No `lines`: every notification but an update takes this branch.
+			}
+			case "email/notification#update" -> {
+				// Composed exactly as NotificationService composes it: the body is the
+				// change list squeezed onto the one line the push and the bell get,
+				// above the diff the mail has room to paint.
+				Locale language = de ? Locale.GERMAN : Locale.ENGLISH;
 				List<IssueChangeRenderer.Line> lines = changeLines(de);
-				m.put("body", renderer().summaryOf(lines));
+				m.put("headline", de ? "HIN-142 aktualisiert" : "HIN-142 updated");
+				m.put("body", renderer().summaryOf(lines, language));
 				m.put("lines", lines);
 				m.put("ctaLink", BASE + "/issues/HIN-142");
 				m.put("ctaLabel", de ? "Vorgang öffnen" : "Open issue");

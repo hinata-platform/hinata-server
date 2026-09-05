@@ -13,9 +13,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class TextDiffTest {
 
+	/** More segments than any of these produce — the cap has its own test. */
+	private static final int NO_CAP = 1_000;
+
 	/** Segments as "PART:text", which is the shape a template paints. */
 	private static List<String> painted(String before, String after, int context) {
-		return TextDiff.words(before, after, context).stream()
+		return TextDiff.words(before, after, context, NO_CAP).stream()
 				.map(segment -> segment.part() + ":" + segment.text())
 				.toList();
 	}
@@ -42,9 +45,9 @@ class TextDiffTest {
 	 *  able to tell "no visible change" from a change it can show. */
 	@Test
 	void equalTextsDiffToNothing() {
-		assertThat(TextDiff.words("same words", "same  words", 6)).isEmpty();
-		assertThat(TextDiff.words(null, null, 6)).isEmpty();
-		assertThat(TextDiff.words("", "   ", 6)).isEmpty();
+		assertThat(TextDiff.words("same words", "same  words", 6, NO_CAP)).isEmpty();
+		assertThat(TextDiff.words(null, null, 6, NO_CAP)).isEmpty();
+		assertThat(TextDiff.words("", "   ", 6, NO_CAP)).isEmpty();
 	}
 
 	@Test
@@ -85,7 +88,7 @@ class TextDiffTest {
 	 *  could show a break at all. A reflowed paragraph is not a change. */
 	@Test
 	void lineBreaksAreNotChanges() {
-		assertThat(TextDiff.words("first line\nsecond line", "first line second line", 6)).isEmpty();
+		assertThat(TextDiff.words("first line\nsecond line", "first line second line", 6, NO_CAP)).isEmpty();
 	}
 
 	/** Two texts with nothing in common still diff — the coarse path takes over
@@ -95,23 +98,12 @@ class TextDiffTest {
 		String before = "alpha ".repeat(600).trim();
 		String after = "beta ".repeat(600).trim();
 
-		List<TextDiff.Segment> diff = TextDiff.words(before, after, 6);
+		List<TextDiff.Segment> diff = TextDiff.words(before, after, 6, NO_CAP);
 
 		assertThat(diff).hasSize(2);
 		assertThat(diff.get(0).part()).isEqualTo(TextDiff.Part.REMOVED);
 		assertThat(diff.get(1).part()).isEqualTo(TextDiff.Part.ADDED);
-		assertThat(TextDiff.before(diff)).isEqualTo(before);
-		assertThat(TextDiff.after(diff)).isEqualTo(after);
-	}
-
-	/** Flattening is the push body's view of the same diff, so it has to read as
-	 *  the text did before and as it reads now — never as a mixture. */
-	@Test
-	void flatteningGivesBackEachSideOnItsOwn() {
-		List<TextDiff.Segment> diff = TextDiff.words(
-				"the week starts on Sunday", "the week starts on Monday", 6);
-
-		assertThat(TextDiff.before(diff)).isEqualTo("the week starts on Sunday");
-		assertThat(TextDiff.after(diff)).isEqualTo("the week starts on Monday");
+		assertThat(TextDiff.summaryBefore(diff)).isEqualTo(before);
+		assertThat(TextDiff.summaryAfter(diff)).isEqualTo(after);
 	}
 }
