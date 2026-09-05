@@ -25,7 +25,8 @@ class MessageBundleCompletenessTest {
 	 * fails as a missing translation, which is what it is.
 	 */
 	private static final Locale[] SUPPORTED = {Locale.ENGLISH, Locale.GERMAN, Locale.CHINESE,
-			Locale.forLanguageTag("hi"), Locale.forLanguageTag("es")};
+			Locale.forLanguageTag("hi"), Locale.forLanguageTag("es"), Locale.JAPANESE,
+			Locale.FRENCH, Locale.forLanguageTag("ru"), Locale.forLanguageTag("ar")};
 
 	@Test
 	void everyLiteralServerErrorKeyExistsInEverySupportedBundle() throws IOException {

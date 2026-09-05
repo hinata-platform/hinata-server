@@ -419,7 +419,7 @@ public class MeController {
 
 	/** The languages the mailed-link pages are translated into. */
 	private static final java.util.Set<String> PAGE_LOCALES =
-			java.util.Set.of("en", "de", "zh", "hi", "es");
+			java.util.Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
 
 	/** The wordmark these pages carried before organizations could brand them. */
 	private static final String PRODUCT_NAME = "hinata";
@@ -522,7 +522,7 @@ public class MeController {
 		Brand brand = brand();
 		String title = t(locale, titleKey);
 		return """
-				<!doctype html><html lang="%s"><head><meta charset="utf-8"/>
+				<!doctype html><html lang="%s" dir="%s"><head><meta charset="utf-8"/>
 				<meta name="viewport" content="width=device-width,initial-scale=1"/>
 				<title>%s · %s</title></head>
 				<body style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F4F3EF">
@@ -533,15 +533,16 @@ public class MeController {
 				<h1 style="color:#23223F;font-size:20px;margin:0 0 12px">%s</h1>
 				<p style="color:#6B6A85;font-size:15px;line-height:1.6;margin:0">%s</p>
 				</div></div></body></html>
-				""".formatted(locale.getLanguage(), escape(title), escape(brand.name()),
-				masthead(brand), escape(title), escape(t(locale, bodyKey)));
+				""".formatted(locale.getLanguage(), direction(locale), escape(title),
+				escape(brand.name()), masthead(brand), escape(title),
+				escape(t(locale, bodyKey)));
 	}
 
 	private String passwordFormPage(String token, Locale locale) {
 		int min = securityPolicy.passwordMinLength();
 		Brand brand = brand();
 		return """
-				<!doctype html><html lang="%s"><head><meta charset="utf-8"/>
+				<!doctype html><html lang="%s" dir="%s"><head><meta charset="utf-8"/>
 				<meta name="viewport" content="width=device-width,initial-scale=1"/>
 				<title>%s · %s</title></head>
 				<body style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#F4F3EF">
@@ -558,12 +559,25 @@ public class MeController {
 				  style="width:100%%;padding:13px;background:#2D2B55;color:#fff;border:0;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">
 				  %s</button>
 				</form></div></div></body></html>
-				""".formatted(locale.getLanguage(),
+				""".formatted(locale.getLanguage(), direction(locale),
 				escape(t(locale, "web.passwordReset.pageTitle")), escape(brand.name()),
 				masthead(brand), escape(t(locale, "web.passwordReset.heading")), escape(token), min,
 				escape(t(locale, "web.passwordReset.placeholder", min)),
 				escape(t(locale, "web.passwordReset.submit")));
 	}
+
+	/**
+	 * Which way this language runs. Arabic is the only right-to-left language the
+	 * server answers in, and these two pages are plain hand-written HTML with no
+	 * layout engine to ask — without the attribute, Arabic copy would be laid out
+	 * left-aligned with its punctuation on the wrong side.
+	 */
+	private static String direction(Locale locale) {
+		return RIGHT_TO_LEFT.contains(locale.getLanguage()) ? "rtl" : "ltr";
+	}
+
+	/** Languages written right to left, by language tag. */
+	private static final java.util.Set<String> RIGHT_TO_LEFT = java.util.Set.of("ar");
 
 	/**
 	 * Everything interpolated into these pages goes through here — copy, the

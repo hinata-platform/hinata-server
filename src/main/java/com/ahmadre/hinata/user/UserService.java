@@ -164,7 +164,8 @@ public class UserService {
 	}
 
 	/** Languages we ship email templates for; anything else keeps the default. */
-	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de", "zh", "hi", "es");
+	private static final Set<String> SUPPORTED_LOCALES =
+			Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
 
 	/**
 	 * Find-or-create for accounts arriving via OIDC, SAML or LDAP. The profile is

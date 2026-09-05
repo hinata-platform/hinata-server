@@ -57,19 +57,32 @@ public final class ExportFonts {
 	 */
 	private static final Map<Script, Character> PROBE = Map.of(
 			Script.DEVANAGARI, 'क',
+			Script.ARABIC, 'ب',
 			Script.CJK, '数',
+			Script.CYRILLIC, 'Д',
 			Script.LATIN, 'A');
 
 	/** Filename fragments identifying a face that covers each script. */
 	private static final Map<Script, List<String>> FACE_NAMES = Map.of(
 			Script.DEVANAGARI, List.of("NotoSansDevanagari", "NotoSerifDevanagari", "Devanagari"),
+			Script.ARABIC, List.of("NotoSansArabic", "NotoNaskhArabic", "Arabic"),
+			// Cyrillic lives in the same Noto Sans that already covers Latin, so the
+			// generic faces come first here — a machine with any Noto Sans can draw
+			// Russian without a script-specific download.
+			Script.CYRILLIC, List.of("NotoSans-Regular", "NotoSans", "DejaVuSans", "Arial"),
 			Script.CJK, List.of("NotoSansCJK", "NotoSansSC", "NotoSerifCJK", "SourceHanSans",
 					"PingFang", "Hiragino Sans GB", "wqy-zenhei", "DroidSansFallback"),
 			Script.LATIN, List.of());
 
-	/** The writing systems this platform ships a language for. */
+	/**
+	 * The writing systems this platform ships a language for.
+	 *
+	 * <p>Two of them cannot be typeset here at all — see {@link #baseFontFor}.
+	 * They are named anyway, because "we know what this needs and cannot do it"
+	 * is what lets the caller fall back deliberately instead of drawing nothing.
+	 */
 	public enum Script {
-		LATIN, DEVANAGARI, CJK
+		LATIN, DEVANAGARI, ARABIC, CYRILLIC, CJK
 	}
 
 	/** Resolved once per script — reading and parsing a CJK face is not cheap. */
@@ -85,9 +98,17 @@ public final class ExportFonts {
 			if (c < 0x0100) {
 				continue;
 			}
+			if (c >= 0x0400 && c <= 0x04FF) {
+				return Script.CYRILLIC;
+			}
+			if (c >= 0x0600 && c <= 0x06FF || c >= 0x0750 && c <= 0x077F
+					|| c >= 0xFB50 && c <= 0xFDFF || c >= 0xFE70 && c <= 0xFEFF) {
+				return Script.ARABIC;
+			}
 			if (c >= 0x0900 && c <= 0x097F) {
 				return Script.DEVANAGARI;
 			}
+			// Japanese kana and Han both sit in this range, so one branch serves both.
 			if (c >= 0x2E80 && c <= 0x9FFF || c >= 0xF900 && c <= 0xFAFF) {
 				return Script.CJK;
 			}
@@ -123,15 +144,17 @@ public final class ExportFonts {
 		if (script == Script.LATIN) {
 			return null; // the built-in face is right, and needs no embedding
 		}
-		if (script == Script.DEVANAGARI) {
+		if (script == Script.DEVANAGARI || script == Script.ARABIC) {
 			// Not a missing font — a missing shaper. Devanagari is written by
-			// reordering matras and fusing consonants into conjuncts, which is
-			// OpenType GSUB/GPOS work; OpenPDF maps code points to glyphs one to
-			// one and does none of it. Handing it Devanagari produces a page with
-			// the text silently absent (measured: zero extractable characters),
-			// so we report it as unrenderable and let the caller fall back to a
-			// document somebody can actually read. CJK needs no shaping, which is
-			// why it works.
+			// reordering matras and fusing consonants into conjuncts; Arabic joins
+			// every letter to its neighbours and picks one of four forms per letter
+			// by position, and is then laid out right to left. Both are OpenType
+			// GSUB/GPOS work; OpenPDF maps code points to glyphs one to one and does
+			// none of it. Handing it either produces a page with the text silently
+			// absent, or one of disconnected letters in the wrong order — so we
+			// report it as unrenderable and let the caller fall back to a document
+			// somebody can actually read. CJK and Cyrillic need no shaping, which is
+			// why they work.
 			return null;
 		}
 		return RESOLVED.computeIfAbsent(script, ExportFonts::load);

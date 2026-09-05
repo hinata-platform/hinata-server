@@ -26,7 +26,9 @@ public class LocaleConfig {
 	 * anything else a browser asks for.
 	 */
 	private static final List<Locale> SUPPORTED = List.of(Locale.ENGLISH, Locale.GERMAN,
-			Locale.CHINESE, Locale.forLanguageTag("hi"), Locale.forLanguageTag("es"));
+			Locale.CHINESE, Locale.forLanguageTag("hi"), Locale.forLanguageTag("es"),
+			Locale.JAPANESE, Locale.FRENCH, Locale.forLanguageTag("ru"),
+			Locale.forLanguageTag("ar"));
 
 	@Bean
 	public LocaleResolver localeResolver() {

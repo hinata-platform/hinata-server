@@ -31,8 +31,12 @@ class PdfScriptCoverageTest {
 			"en", "Data export",
 			"de", "Datenexport",
 			"es", "Exportación de datos",
+			"fr", "Export des données",
 			"zh", "数据导出",
-			"hi", "डेटा निर्यात"));
+			"ja", "データエクスポート",
+			"ru", "Экспорт данных",
+			"hi", "डेटा निर्यात",
+			"ar", "تصدير البيانات"));
 
 	@Test
 	void everyScriptWithAnInstalledFontSurvivesTheRoundTrip() throws Exception {
@@ -56,11 +60,49 @@ class PdfScriptCoverageTest {
 				.isEmpty();
 	}
 
-	/** Latin has no excuse: it works with the built-in face, always. */
+	/** Latin has no excuse: it works with the built-in face, always. French is
+	 *  Latin-1 the whole way down, accents included. */
 	@Test
 	void latinNeedsNoInstalledFont() throws Exception {
 		assertThat(ExportFonts.missingFontFor("Exportación de datos")).isNull();
+		assertThat(ExportFonts.missingFontFor("Export des données")).isNull();
 		assertThat(renderAndExtract("Exportacion de datos")).contains("Exportacion de datos");
+	}
+
+	/**
+	 * Each script is recognised as itself. Getting this wrong is not a crash: the
+	 * text is drawn with the wrong face and comes out blank, which is exactly the
+	 * failure this whole file exists to prevent.
+	 */
+	@Test
+	void eachShippedLanguageIsReadAsItsOwnScript() {
+		assertThat(ExportFonts.scriptOf("Export des données")).isEqualTo(ExportFonts.Script.LATIN);
+		assertThat(ExportFonts.scriptOf("数据导出")).isEqualTo(ExportFonts.Script.CJK);
+		assertThat(ExportFonts.scriptOf("データエクスポート")).isEqualTo(ExportFonts.Script.CJK);
+		assertThat(ExportFonts.scriptOf("Экспорт данных")).isEqualTo(ExportFonts.Script.CYRILLIC);
+		assertThat(ExportFonts.scriptOf("डेटा निर्यात")).isEqualTo(ExportFonts.Script.DEVANAGARI);
+		assertThat(ExportFonts.scriptOf("تصدير البيانات")).isEqualTo(ExportFonts.Script.ARABIC);
+	}
+
+	/**
+	 * The two scripts OpenPDF cannot typeset say so, in every environment.
+	 *
+	 * <p>Both are written by transforming the letters themselves — Devanagari
+	 * reorders matras and fuses conjuncts, Arabic joins each letter to its
+	 * neighbours and picks one of four forms by position — which is OpenType
+	 * shaping that OpenPDF does not do. Installing a font does not change that,
+	 * so this holds on the build machine and in the container alike, and it is
+	 * what makes the export fall back to a document the reader can actually read
+	 * instead of a correctly-labelled blank one.
+	 */
+	@Test
+	void theUnshapeableScriptsAreReportedRatherThanDrawnBlank() {
+		assertThat(ExportFonts.missingFontFor("डेटा निर्यात"))
+				.isEqualTo(ExportFonts.Script.DEVANAGARI);
+		assertThat(ExportFonts.missingFontFor("تصدير البيانات"))
+				.isEqualTo(ExportFonts.Script.ARABIC);
+		assertThat(ExportFonts.renderableLocale(java.util.Locale.forLanguageTag("ar"),
+				"تصدير البيانات")).isEqualTo(java.util.Locale.ENGLISH);
 	}
 
 	private String renderAndExtract(String text) throws Exception {
