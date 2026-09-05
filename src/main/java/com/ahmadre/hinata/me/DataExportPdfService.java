@@ -14,6 +14,7 @@ import com.ahmadre.hinata.user.User;
 import com.lowagie.text.Chunk;
 import com.lowagie.text.Document;
 import com.lowagie.text.Element;
+import com.ahmadre.hinata.issue.export.ExportFonts;
 import com.lowagie.text.Font;
 import com.lowagie.text.Image;
 import com.lowagie.text.PageSize;
@@ -61,14 +62,40 @@ public class DataExportPdfService {
 	private static final Color HEAD_BG = new Color(0xF4, 0xF3, 0xEF);
 	private static final Color LINE = new Color(0xE7, 0xE5, 0xDE);
 
-	private static final Font BRAND = new Font(Font.HELVETICA, 12, Font.BOLD, AMBER);
-	private static final Font H_TITLE = new Font(Font.HELVETICA, 22, Font.BOLD, NAVY);
-	private static final Font H_SECTION = new Font(Font.HELVETICA, 13, Font.BOLD, NAVY);
-	private static final Font BODY = new Font(Font.HELVETICA, 10, Font.NORMAL, INK);
-	private static final Font BODY_MUTED = new Font(Font.HELVETICA, 9, Font.NORMAL, MUTED);
-	private static final Font CREDIT = new Font(Font.HELVETICA, 8, Font.NORMAL, MUTED);
-	private static final Font TH = new Font(Font.HELVETICA, 8, Font.BOLD, NAVY);
-	private static final Font TD = new Font(Font.HELVETICA, 9, Font.NORMAL, INK);
+	// The face is chosen from the text being drawn rather than fixed here: the
+	// built-in PDF fonts hold Latin-1 only, so a Chinese label set in Helvetica
+	// does not fail, it comes out blank. See ExportFonts.
+	private static Font brand(String text) {
+		return ExportFonts.forText(text, 12, Font.BOLD, AMBER);
+	}
+
+	private static Font hTitle(String text) {
+		return ExportFonts.forText(text, 22, Font.BOLD, NAVY);
+	}
+
+	private static Font hSection(String text) {
+		return ExportFonts.forText(text, 13, Font.BOLD, NAVY);
+	}
+
+	private static Font body(String text) {
+		return ExportFonts.forText(text, 10, Font.NORMAL, INK);
+	}
+
+	private static Font bodyMuted(String text) {
+		return ExportFonts.forText(text, 9, Font.NORMAL, MUTED);
+	}
+
+	private static Font credit(String text) {
+		return ExportFonts.forText(text, 8, Font.NORMAL, MUTED);
+	}
+
+	private static Font th(String text) {
+		return ExportFonts.forText(text, 8, Font.BOLD, NAVY);
+	}
+
+	private static Font td(String text) {
+		return ExportFonts.forText(text, 9, Font.NORMAL, INK);
+	}
 
 	/**
 	 * The box the organization's mark is contained in, in points. Contained, never
@@ -146,10 +173,10 @@ public class DataExportPdfService {
 	private void header(Document doc, User user, Locale locale) {
 		masthead(doc);
 
-		Paragraph title = new Paragraph(t(locale, "export.pdf.title"), H_TITLE);
+		Paragraph title = new Paragraph(t(locale, "export.pdf.title"), hTitle(t(locale, "export.pdf.title")));
 		doc.add(title);
 
-		Paragraph sub = new Paragraph(t(locale, "export.pdf.subtitle"), BODY_MUTED);
+		Paragraph sub = new Paragraph(t(locale, "export.pdf.subtitle"), bodyMuted(t(locale, "export.pdf.subtitle")));
 		sub.setSpacingAfter(10);
 		doc.add(sub);
 
@@ -362,14 +389,15 @@ public class DataExportPdfService {
 	private void footer(Document doc, Locale locale) {
 		doc.add(rule());
 		String controller = organizationName();
-		Paragraph p = new Paragraph(t(locale, "export.pdf.intro", controller), BODY_MUTED);
+		Paragraph p = new Paragraph(t(locale, "export.pdf.intro", controller),
+				bodyMuted(t(locale, "export.pdf.intro", controller)));
 		p.setSpacingBefore(8);
 		doc.add(p);
 
 		// The credit the masthead gave up. The reader still needs to know what
 		// produced the file — just not to mistake it for who answers for it.
 		Paragraph credit = new Paragraph(
-				t(locale, "export.pdf.credit", PRODUCT), CREDIT);
+				t(locale, "export.pdf.credit", PRODUCT), credit(t(locale, "export.pdf.credit", PRODUCT)));
 		credit.setSpacingBefore(4);
 		doc.add(credit);
 	}
@@ -392,7 +420,7 @@ public class DataExportPdfService {
 	 */
 	private void masthead(Document doc) {
 		logo(doc);
-		Paragraph brand = new Paragraph(organizationName(), BRAND);
+		Paragraph brand = new Paragraph(organizationName(), brand(organizationName()));
 		brand.setSpacingAfter(2);
 		doc.add(brand);
 	}
@@ -457,7 +485,7 @@ public class DataExportPdfService {
 	// --- Building blocks ------------------------------------------------------
 
 	private void section(Document doc, String title) {
-		Paragraph p = new Paragraph(title, H_SECTION);
+		Paragraph p = new Paragraph(title, hSection(title));
 		p.setSpacingBefore(16);
 		p.setSpacingAfter(6);
 		doc.add(p);
@@ -470,11 +498,11 @@ public class DataExportPdfService {
 	}
 
 	private void kv(PdfPTable t, String key, String value) {
-		PdfPCell k = new PdfPCell(new Phrase(key, BODY_MUTED));
+		PdfPCell k = new PdfPCell(new Phrase(key, bodyMuted(key)));
 		k.setBorder(Rectangle.BOTTOM);
 		k.setBorderColor(LINE);
 		k.setPadding(5);
-		PdfPCell v = new PdfPCell(new Phrase(value == null || value.isBlank() ? "—" : value, BODY));
+		PdfPCell v = new PdfPCell(new Phrase(value == null || value.isBlank() ? "—" : value, body(value)));
 		v.setBorder(Rectangle.BOTTOM);
 		v.setBorderColor(LINE);
 		v.setPadding(5);
@@ -483,10 +511,10 @@ public class DataExportPdfService {
 	}
 
 	private void metaRow(PdfPTable t, String key, String value) {
-		PdfPCell k = new PdfPCell(new Phrase(key, BODY_MUTED));
+		PdfPCell k = new PdfPCell(new Phrase(key, bodyMuted(key)));
 		k.setBorder(Rectangle.NO_BORDER);
 		k.setPadding(2);
-		PdfPCell v = new PdfPCell(new Phrase(value, BODY));
+		PdfPCell v = new PdfPCell(new Phrase(value, body(value)));
 		v.setBorder(Rectangle.NO_BORDER);
 		v.setPadding(2);
 		t.addCell(k);
@@ -494,7 +522,7 @@ public class DataExportPdfService {
 	}
 
 	private void th(PdfPTable t, String label) {
-		PdfPCell c = new PdfPCell(new Phrase(label, TH));
+		PdfPCell c = new PdfPCell(new Phrase(label, th(label)));
 		c.setBackgroundColor(HEAD_BG);
 		c.setBorderColor(LINE);
 		c.setPadding(5);
@@ -502,7 +530,7 @@ public class DataExportPdfService {
 	}
 
 	private void td(PdfPTable t, String value) {
-		PdfPCell c = new PdfPCell(new Phrase(value == null || value.isBlank() ? "—" : value, TD));
+		PdfPCell c = new PdfPCell(new Phrase(value == null || value.isBlank() ? "—" : value, td(value)));
 		c.setBorderColor(LINE);
 		c.setPadding(5);
 		c.setVerticalAlignment(Element.ALIGN_TOP);
@@ -510,7 +538,7 @@ public class DataExportPdfService {
 	}
 
 	private Paragraph emptyNote(Locale locale) {
-		Paragraph p = new Paragraph(t(locale, "export.pdf.empty"), BODY_MUTED);
+		Paragraph p = new Paragraph(t(locale, "export.pdf.empty"), bodyMuted(t(locale, "export.pdf.empty")));
 		p.setSpacingBefore(2);
 		return p;
 	}
