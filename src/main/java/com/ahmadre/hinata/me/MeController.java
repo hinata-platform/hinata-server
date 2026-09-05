@@ -207,8 +207,11 @@ public class MeController {
 	 * never asked for.
 	 *
 	 * <p>Routed by the absence of both parameters, which is exactly what the old
-	 * client sends and never what the new one does (it always sends both). It can
-	 * go when 10.2.1 is no longer in the field.
+	 * client sends and never what the new one does (it always sends both).
+	 *
+	 * <p><strong>Temporary.</strong> It exists until 10.3.0 has replaced 10.2.1 in
+	 * the stores, and should be deleted then — a store rollout is not instant, and
+	 * an app that has not been opened in a month is still 10.2.1 on the day it is.
 	 *
 	 * <p>Bounded at the same 100 the page clamps to, because an unbounded read of
 	 * this table is what pagination was introduced to stop. An account with more
