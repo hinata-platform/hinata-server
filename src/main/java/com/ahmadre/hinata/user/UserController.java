@@ -105,7 +105,7 @@ public class UserController {
 		User user = currentUser.require();
 		if (request.displayName() != null) user.setDisplayName(request.displayName());
 		if (request.title() != null) user.setTitle(request.title());
-		if (request.pronouns() != null) user.setPronouns(request.pronouns());
+		if (request.pronouns() != null) user.setPronouns(Pronouns.sanitize(request.pronouns()));
 		if (request.locale() != null) user.setLocale(request.locale());
 		return users.save(user);
 	}

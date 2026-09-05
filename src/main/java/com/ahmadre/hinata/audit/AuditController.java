@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.ahmadre.hinata.user.UserRepository;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -36,7 +38,7 @@ import java.util.stream.Stream;
 public class AuditController {
 
 	private final MongoTemplate mongo;
-	private final com.ahmadre.hinata.user.UserRepository users;
+	private final UserRepository users;
 
 	// --- DTOs ----------------------------------------------------------------
 
@@ -144,7 +146,7 @@ public class AuditController {
 			return java.util.Map.of();
 		}
 		java.util.Map<String, String> out = new java.util.HashMap<>();
-		users.findAllById(ids).forEach(u -> {
+		users.findPronounsByIdIn(ids).forEach(u -> {
 			if (notBlank(u.getPronouns())) {
 				out.put(u.getId(), u.getPronouns());
 			}

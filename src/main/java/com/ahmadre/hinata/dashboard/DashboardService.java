@@ -416,7 +416,7 @@ public class DashboardService {
 		return memberIds.stream().limit(6)
 				.map(id -> users.findById(id)
 						.map(u -> new SprintMember(u.getId(), u.getDisplayName(), u.getAvatarUrl(),
-							u.getPronouns()))
+									u.getPronouns()))
 						.orElse(null))
 				.filter(java.util.Objects::nonNull)
 				.toList();
