@@ -37,7 +37,8 @@ class MeServiceProfileTest {
 				mock(SessionService.class), mock(TotpService.class), mock(RecoveryCodeService.class),
 				mock(AccountMailService.class), mock(HinataProperties.class), mock(TeamRepository.class),
 				mock(ProjectService.class), mock(NotificationService.class), mock(GatewayService.class),
-				mock(AuditService.class), mock(TokenService.class), mock(PasswordResetService.class));
+				mock(AuditService.class), mock(TokenService.class), mock(PasswordResetService.class),
+				com.ahmadre.hinata.common.UserWordsFixture.real());
 	}
 
 	@Test

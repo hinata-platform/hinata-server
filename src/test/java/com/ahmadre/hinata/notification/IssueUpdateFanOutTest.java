@@ -68,8 +68,9 @@ class IssueUpdateFanOutTest {
 		service = new NotificationService(notifications, users, mail, push,
 				mock(GatewayService.class), new RichTextService(), reach,
 				new IssueChangeRenderer(users, mock(SprintRepository.class),
-						mock(IssueRepository.class), mock(ProjectRepository.class)),
-				digests);
+mock(IssueRepository.class), mock(ProjectRepository.class),
+com.ahmadre.hinata.common.UserWordsFixture.real()),
+				com.ahmadre.hinata.common.UserWordsFixture.real(), digests);
 	}
 
 	// --- fixtures -------------------------------------------------------------

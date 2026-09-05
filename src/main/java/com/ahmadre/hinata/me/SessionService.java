@@ -26,6 +26,7 @@ public class SessionService {
 	private final HinataProperties properties;
 	private final UserEvents userEvents;
 	private final NotificationService notifications;
+	private final com.ahmadre.hinata.common.UserWords words;
 
 	/** Opens a new session for a fresh sign-in. Best-effort device metadata. */
 	public RefreshSession start(User user, String ip, String userAgent) {
@@ -62,13 +63,9 @@ public class SessionService {
 	/** Security alert for a sign-in from a device not previously seen for this user. */
 	private void notifyNewSignIn(User user, RefreshSession session) {
 		String device = describe(session);
-		boolean de = "de".equalsIgnoreCase(user.getLocale());
 		notifications.notifySecurityAlert(user,
-				de ? "Neue Anmeldung" : "New sign-in",
-				de ? "Neue Anmeldung bei deinem Konto: " + device
-						+ ". Warst du das nicht, ändere sofort dein Passwort."
-						: "New sign-in to your account: " + device
-								+ ". If this wasn't you, change your password immediately.");
+				words.of(user, "notify.security.newSignIn.title"),
+				words.of(user, "notify.security.newSignIn.body", device));
 	}
 
 	/** Human-readable "Client · OS" for an alert, tolerant of missing metadata. */

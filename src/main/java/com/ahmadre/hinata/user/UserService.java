@@ -35,6 +35,7 @@ public class UserService {
 	private final com.ahmadre.hinata.audit.AuditService audit;
 	private final com.ahmadre.hinata.notification.NotificationService notifications;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
+	private final com.ahmadre.hinata.common.UserWords words;
 
 	public User get(String id) {
 		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
@@ -163,7 +164,7 @@ public class UserService {
 	}
 
 	/** Languages we ship email templates for; anything else keeps the default. */
-	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de");
+	private static final Set<String> SUPPORTED_LOCALES = Set.of("en", "de", "zh", "hi", "es");
 
 	/**
 	 * Find-or-create for accounts arriving via OIDC, SAML or LDAP. The profile is
@@ -243,11 +244,9 @@ public class UserService {
 		user.setPasswordHash(passwordEncoder.encode(newPassword));
 		users.save(user);
 		audit.event(com.ahmadre.hinata.audit.AuditAction.PASSWORD_CHANGED).actor(user).log();
-		boolean de = "de".equalsIgnoreCase(user.getLocale());
 		notifications.notifySecurityAlert(user,
-				de ? "Passwort geändert" : "Password changed",
-				de ? "Das Passwort deines Kontos wurde geändert. Warst du das nicht, ändere es sofort."
-						: "Your account password was changed. If this wasn't you, change it immediately.");
+				words.of(user, "notify.security.passwordChanged.title"),
+				words.of(user, "notify.security.passwordChanged.body"));
 	}
 
 	/**

@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -73,6 +74,7 @@ public class IssueDigestService {
 	private final UserRepository users;
 	private final MailService mail;
 	private final GatewayService gateway;
+	private final com.ahmadre.hinata.common.UserWords words;
 	// The same rule the immediate fan-out applies — asked again here because time
 	// has passed since the change was queued.
 	private final ProjectReach reach;
@@ -342,30 +344,31 @@ public class IssueDigestService {
 		if (changes.isEmpty()) {
 			return false; // everything cancelled itself out — nothing worth a mail
 		}
-		boolean de = "de".equalsIgnoreCase(recipient.getLocale());
-		mail.sendTemplate(recipient.getEmail(), subject(issue, changes.size(), de),
-				"email/issue-changes", model(issue, changes, de));
+		Locale locale = words.localeOf(recipient);
+		mail.sendTemplate(recipient.getEmail(), subject(issue, changes.size(), locale),
+				"email/issue-changes", model(issue, changes, locale));
 		return true;
 	}
 
 	/** "[Hinata] HIN-42: 3 Änderungen" — the issue key first, so a threaded
 	 *  mailbox groups a watched issue's mails together. */
-	private String subject(Issue issue, int count, boolean de) {
-		String noun = de
-				? (count == 1 ? "Änderung" : "Änderungen")
-				: (count == 1 ? "change" : "changes");
-		return mail.subjectPrefix() + issue.getReadableId() + ": " + count + " " + noun;
+	private String subject(Issue issue, int count, Locale locale) {
+		String noun = words.in(locale,
+				count == 1 ? "email.subject.issueChange.one" : "email.subject.issueChange.many");
+		return mail.subjectPrefix()
+				+ words.in(locale, "email.subject.issueChanges", issue.getReadableId(),
+						count + " " + noun);
 	}
 
-	private Map<String, Object> model(Issue issue, List<FieldChange> changes, boolean de) {
+	private Map<String, Object> model(Issue issue, List<FieldChange> changes, Locale locale) {
 		Map<String, Object> model = new HashMap<>();
-		model.put("locale", de ? "de" : "en");
+		model.put("locale", locale.getLanguage());
 		model.put("headline", issue.getReadableId() + " · " + issue.getTitle());
 		// Rendered once. Every line can cost a point read to resolve a display name,
 		// a sprint name or a parent's key, and the preheader is the same lines
 		// squeezed onto one — asking the renderer twice would pay for all of them
 		// twice, per recipient.
-		List<IssueChangeRenderer.Line> lines = renderer.lines(changes, de);
+		List<IssueChangeRenderer.Line> lines = renderer.lines(changes, locale);
 		model.put("preheader", renderer.summaryOf(lines));
 		model.put("lines", new ArrayList<>(lines));
 		// The recipient's access was just re-checked, so the CTA is theirs to

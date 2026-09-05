@@ -22,13 +22,14 @@ public class AuthMailService {
 
 
 	private final MailService mail;
+	private final com.ahmadre.hinata.common.UserWords words;
 
 	/** Sign-up: confirm the email address to activate the account. */
 	public void sendVerification(User user, String verifyUrl) {
 		Map<String, Object> model = base(user);
 		model.put("verifyUrl", verifyUrl);
 		model.put("expiresHours", 24);
-		String subject = de(user) ? "Bestätige deine E-Mail-Adresse" : "Confirm your email address";
+		String subject = words.of(user, "email.subject.verifyEmail");
 		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + subject, "email/verify-email", model);
 	}
 
@@ -38,20 +39,15 @@ public class AuthMailService {
 		model.put("newUserName", newUser.getDisplayName());
 		model.put("newUserEmail", newUser.getEmail());
 		model.put("reviewUrl", reviewUrl);
-		String subject = de(admin)
-				? "Neue Registrierung wartet auf Freigabe"
-				: "A new registration awaits approval";
+		String subject = words.of(admin, "email.subject.approvalRequest");
 		mail.sendTemplate(admin.getEmail(), mail.subjectPrefix() + subject, "email/approval-request", model);
 	}
 
 	private Map<String, Object> base(User user) {
 		Map<String, Object> model = new HashMap<>();
 		model.put("displayName", user.getDisplayName());
-		model.put("locale", de(user) ? "de" : "en");
+		model.put("locale", words.localeOf(user).getLanguage());
 		return model;
 	}
 
-	private boolean de(User user) {
-		return "de".equalsIgnoreCase(user.getLocale());
-	}
 }

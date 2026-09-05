@@ -57,7 +57,9 @@ class NotificationServiceTest {
 		service = new NotificationService(notifications, users, mail, push,
 				mock(GatewayService.class), richText, reach,
 				new IssueChangeRenderer(users, mock(SprintRepository.class),
-						mock(IssueRepository.class), mock(ProjectRepository.class)),
+mock(IssueRepository.class), mock(ProjectRepository.class),
+com.ahmadre.hinata.common.UserWordsFixture.real()),
+				com.ahmadre.hinata.common.UserWordsFixture.real(),
 				mock(IssueDigestService.class));
 	}
 

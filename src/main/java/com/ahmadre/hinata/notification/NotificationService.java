@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -39,6 +40,7 @@ public class NotificationService {
 	// the rule component, not ProjectService — that service depends on this one.
 	private final ProjectReach reach;
 	private final IssueChangeRenderer changeRenderer;
+	private final com.ahmadre.hinata.common.UserWords words;
 	// Where the watchers' change mails go instead of the mail server; the bell and
 	// the push still fire from here, immediately.
 	private final IssueDigestService digests;
@@ -50,9 +52,8 @@ public class NotificationService {
 		if (actor != null) recipients.remove(actor.getId());
 		if (recipients.isEmpty()) return;
 		deliver(recipients, Notification.Type.ISSUE_ASSIGNED,
-				de -> de ? issue.getReadableId() + " dir zugewiesen"
-						: issue.getReadableId() + " assigned to you",
-				de -> issue.getTitle(), // user content — same in every language
+				locale -> words.in(locale, "notify.issueAssigned.title", issue.getReadableId()),
+				locale -> issue.getTitle(), // user content — same in every language
 				issueLink(issue), issue.getProjectId());
 	}
 
@@ -68,11 +69,9 @@ public class NotificationService {
 		boolean hasSender = senderEmail != null && !senderEmail.isBlank()
 				&& !"unknown".equalsIgnoreCase(senderEmail);
 		deliver(recipients, Notification.Type.ISSUE_INGESTED,
-				de -> de ? "Neue Aufgabe per E-Mail: " + issue.getReadableId()
-						: "New issue via e-mail: " + issue.getReadableId(),
-				de -> hasSender
-						? (de ? "Von " + senderEmail + ": \"" + issue.getTitle() + "\""
-								: "From " + senderEmail + ": \"" + issue.getTitle() + "\"")
+				locale -> words.in(locale, "notify.issueIngested.title", issue.getReadableId()),
+				locale -> hasSender
+						? words.in(locale, "notify.issueIngested.body", senderEmail, issue.getTitle())
 						: issue.getTitle(),
 				issueLink(issue), issue.getProjectId());
 	}
@@ -110,12 +109,9 @@ public class NotificationService {
 		// change list costs a point read per value — a display name, a sprint name,
 		// a parent's key — and there are only ever two distinct results, one per
 		// language, however many watchers an issue has.
-		String summaryDe = changeRenderer.summary(collapsed, true);
-		String summaryEn = changeRenderer.summary(collapsed, false);
 		deliver(recipients, Notification.Type.ISSUE_UPDATED,
-				de -> de ? issue.getReadableId() + " aktualisiert"
-						: issue.getReadableId() + " updated",
-				de -> de ? summaryDe : summaryEn,
+				locale -> words.in(locale, "notify.issueUpdated.title", issue.getReadableId()),
+				locale -> changeRenderer.summary(collapsed, locale),
 				issueLink(issue), issue.getProjectId(),
 				new Routing(
 						// A watcher subscribed themselves and switches that off under
@@ -162,13 +158,11 @@ public class NotificationService {
 			// straight from the push/e-mail; fall back to the issue title when the
 			// comment has no readable text (e.g. attachment-only).
 			deliver(watchers, Notification.Type.ISSUE_COMMENTED,
-					de -> de ? "Neuer Kommentar zu " + issue.getReadableId()
-							: "New comment on " + issue.getReadableId(),
-					de -> preview.isBlank()
-							? (de ? author.getDisplayName() + " hat \"" + issue.getTitle() + "\" kommentiert"
-									: author.getDisplayName() + " commented on \"" + issue.getTitle() + "\"")
-							: author.getDisplayName() + (de ? " kommentierte: \"" : " commented: \"")
-									+ preview + "\"",
+					locale -> words.in(locale, "notify.issueComment.title", issue.getReadableId()),
+					locale -> preview.isBlank()
+							? words.in(locale, "notify.mention.body", author.getDisplayName(),
+									issue.getTitle())
+							: words.in(locale, "notify.preview.body", author.getDisplayName(), preview),
 					issueLink(issue), issue.getProjectId());
 		}
 	}
@@ -191,17 +185,12 @@ public class NotificationService {
 		if (!notified.add(recipient)) return; // already mentioned — don't double-ping
 		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(Set.of(recipient), Notification.Type.COMMENT_REPLY,
-				de -> de
-						? actor.getDisplayName() + " hat auf deinen Kommentar in "
-								+ issue.getReadableId() + " geantwortet"
-						: actor.getDisplayName() + " replied to your comment on "
-								+ issue.getReadableId(),
-				de -> hasPreview
-						? actor.getDisplayName() + ": \"" + preview + "\""
-						: (de ? actor.getDisplayName() + " hat auf deinen Kommentar zu \""
-								+ issue.getTitle() + "\" geantwortet"
-								: actor.getDisplayName() + " replied to your comment on \""
-										+ issue.getTitle() + "\""),
+				locale -> words.in(locale, "notify.commentReply.title", actor.getDisplayName(),
+						issue.getReadableId()),
+				locale -> hasPreview
+						? words.in(locale, "notify.preview.body", actor.getDisplayName(), preview)
+						: words.in(locale, "notify.commentReply.body", actor.getDisplayName(),
+								issue.getTitle()),
 				commentLink(issue, comment.getId()), issue.getProjectId());
 	}
 
@@ -227,13 +216,12 @@ public class NotificationService {
 		if (recipients.isEmpty()) return;
 		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(recipients, Notification.Type.MENTION,
-				de -> de
-						? actor.getDisplayName() + " hat dich in " + issue.getReadableId() + " erwähnt"
-						: actor.getDisplayName() + " mentioned you in " + issue.getReadableId(),
-				de -> hasPreview
-						? actor.getDisplayName() + ": \"" + preview + "\""
-						: (de ? actor.getDisplayName() + " hat dich zu \"" + issue.getTitle() + "\" erwähnt"
-								: actor.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\""),
+				locale -> words.in(locale, "notify.mention.title", actor.getDisplayName(),
+						issue.getReadableId()),
+				locale -> hasPreview
+						? words.in(locale, "notify.preview.body", actor.getDisplayName(), preview)
+						: words.in(locale, "notify.mention.body", actor.getDisplayName(),
+								issue.getTitle()),
 				issueLink(issue), issue.getProjectId());
 	}
 
@@ -295,38 +283,25 @@ public class NotificationService {
 
 	public void notifyAddedToTeam(String userId, String teamId, String teamName) {
 		users.findById(userId).filter(User::isActive).ifPresent(user -> {
-			String title = de(user) ? "Zu einem Team hinzugefügt" : "Added to a team";
-			String body = de(user)
-					? "Du wurdest dem Team \"" + teamName + "\" hinzugefügt."
-					: "You've been added to the team \"" + teamName + "\".";
+			String title = words.of(user, "notify.teamAdded.title");
+			String body = words.of(user, "notify.teamAdded.body", teamName);
 			deliverGated(user, Notification.Type.TEAM_ADDED, title, body, teamLink(teamId));
 		});
 	}
 
 	public void notifyTeamRoleChanged(String userId, String teamId, String teamName, boolean admin) {
 		users.findById(userId).filter(User::isActive).ifPresent(user -> {
-			String title = de(user) ? "Team-Rolle aktualisiert" : "Team role updated";
-			String body;
-			if (de(user)) {
-				body = admin
-						? "Du bist jetzt Team-Admin von \"" + teamName + "\"."
-						: "Deine Rolle in \"" + teamName + "\" ist jetzt Mitglied.";
-			}
-			else {
-				body = admin
-						? "You are now a Team-Admin of \"" + teamName + "\"."
-						: "Your role in \"" + teamName + "\" is now Member.";
-			}
+			String title = words.of(user, "notify.teamRole.title");
+			String body = words.of(user,
+					admin ? "notify.teamRole.admin" : "notify.teamRole.member", teamName);
 			deliverOne(user, Notification.Type.TEAM_ROLE_CHANGED, title, body, teamLink(teamId));
 		});
 	}
 
 	public void notifyRemovedFromTeam(String userId, String teamName) {
 		users.findById(userId).filter(User::isActive).ifPresent(user -> {
-			String title = de(user) ? "Aus einem Team entfernt" : "Removed from a team";
-			String body = de(user)
-					? "Du wurdest aus dem Team \"" + teamName + "\" entfernt."
-					: "You've been removed from the team \"" + teamName + "\".";
+			String title = words.of(user, "notify.teamRemoved.title");
+			String body = words.of(user, "notify.teamRemoved.body", teamName);
 			deliverOne(user, Notification.Type.TEAM_REMOVED, title, body, null);
 		});
 	}
@@ -339,10 +314,8 @@ public class NotificationService {
 	 */
 	public void notifyAddedToProject(String userId, String projectId, String projectName) {
 		users.findById(userId).filter(User::isActive).ifPresent(user -> {
-			String title = de(user) ? "Zu einem Projekt hinzugefügt" : "Added to a project";
-			String body = de(user)
-					? "Du wurdest dem Projekt \"" + projectName + "\" hinzugefügt."
-					: "You've been added to the project \"" + projectName + "\".";
+			String title = words.of(user, "notify.projectAdded.title");
+			String body = words.of(user, "notify.projectAdded.body", projectName);
 			deliverGated(user, Notification.Type.PROJECT_ADDED, title, body, projectLink(projectId));
 		});
 	}
@@ -353,7 +326,7 @@ public class NotificationService {
 		// In-app notifications keep the relative route; the e-mail button needs an
 		// absolute deep link that the native app intercepts as a Universal/App Link.
 		mail.sendNotification(user.getEmail(), mail.subjectPrefix() + title, title, body, appLink(link),
-				buttonLabel(de(user)), localeOf(user), eyebrowKey(type));
+				buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		push.sendToUser(user.getId(), title, body, link);
 	}
 
@@ -369,10 +342,9 @@ public class NotificationService {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
 		NotificationPreferences prefs = prefsOf(user);
-		boolean de = de(user);
 		if (prefs.deliversEmail(eventId)) {
 			mail.sendNotification(user.getEmail(), mail.subjectPrefix() + title, title, body, appLink(link),
-					buttonLabel(de), localeOf(user), eyebrowKey(type));
+					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		}
 		if (prefs.deliversPush(eventId)) {
 			push.sendToUser(user.getId(), title, body, link);
@@ -390,9 +362,8 @@ public class NotificationService {
 		if (actor != null) ids.remove(actor.getId());
 		if (ids.isEmpty()) return;
 		deliver(ids, Notification.Type.SPRINT_STARTED,
-				de -> de ? "Sprint gestartet: " + sprintName : "Sprint started: " + sprintName,
-				de -> de ? "Der Sprint \"" + sprintName + "\" wurde gestartet."
-						: "The sprint \"" + sprintName + "\" has started.",
+				locale -> words.in(locale, "notify.sprintStarted.title", sprintName),
+				locale -> words.in(locale, "notify.sprintStarted.body", sprintName),
 				link);
 	}
 
@@ -403,9 +374,8 @@ public class NotificationService {
 		if (actor != null) ids.remove(actor.getId());
 		if (ids.isEmpty()) return;
 		deliver(ids, Notification.Type.SPRINT_COMPLETED,
-				de -> de ? "Sprint abgeschlossen: " + sprintName : "Sprint completed: " + sprintName,
-				de -> de ? "Der Sprint \"" + sprintName + "\" wurde abgeschlossen."
-						: "The sprint \"" + sprintName + "\" has been completed.",
+				locale -> words.in(locale, "notify.sprintCompleted.title", sprintName),
+				locale -> words.in(locale, "notify.sprintCompleted.body", sprintName),
 				link);
 	}
 
@@ -418,10 +388,9 @@ public class NotificationService {
 		Set<String> ids = new HashSet<>(recipients != null ? recipients : Set.of());
 		if (ids.isEmpty()) return;
 		deliver(ids, Notification.Type.ISSUE_DUE_SOON,
-				de -> de ? issue.getReadableId() + " ist bald fällig"
-						: issue.getReadableId() + " is due soon",
-				de -> de ? "\"" + issue.getTitle() + "\" ist am " + issue.getDueDate() + " fällig."
-						: "\"" + issue.getTitle() + "\" is due on " + issue.getDueDate() + ".",
+				locale -> words.in(locale, "notify.dueSoon.title", issue.getReadableId()),
+				locale -> words.in(locale, "notify.dueSoon.body", issue.getTitle(),
+						issue.getDueDate()),
 				issueLink(issue), issue.getProjectId());
 	}
 
@@ -481,23 +450,19 @@ public class NotificationService {
 	// deleted), so they bypass the active-user filter used for issue fan-out.
 
 	public void notifyAccountActivated(User user) {
-		String title = de(user) ? "Konto aktiviert" : "Account activated";
+		String title = words.of(user, "notify.accountActivated.title");
 		// The account belongs to the organization running this instance, not to us.
 		String org = mail.organizationName();
-		String body = de(user)
-				? "Dein Konto bei " + org + " wurde aktiviert. Du kannst dich jetzt wieder anmelden."
-				: "Your " + org + " account has been activated. You can sign in again now.";
+		String body = words.of(user, "notify.accountActivated.body", org);
 		persist(user, Notification.Type.ACCOUNT_ACTIVATED, title, body, "/login");
 		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/account-activated",
 				accountModel(user, signInLink()));
 	}
 
 	public void notifyAccountDeactivated(User user) {
-		String title = de(user) ? "Konto deaktiviert" : "Account deactivated";
+		String title = words.of(user, "notify.accountDeactivated.title");
 		String org = mail.organizationName();
-		String body = de(user)
-				? "Dein Konto bei " + org + " wurde deaktiviert. Du kannst dich derzeit nicht anmelden."
-				: "Your " + org + " account has been deactivated. You currently cannot sign in.";
+		String body = words.of(user, "notify.accountDeactivated.body", org);
 		persist(user, Notification.Type.ACCOUNT_DEACTIVATED, title, body, null);
 		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/account-deactivated",
 				accountModel(user, null));
@@ -505,16 +470,9 @@ public class NotificationService {
 
 	public void notifyRolesChanged(User user) {
 		boolean isAdmin = user.isAdmin();
-		String title = de(user) ? "Rollen aktualisiert" : "Roles updated";
-		String body;
-		if (de(user)) {
-			body = isAdmin ? "Dir wurden Administrator-Rechte erteilt."
-					: "Deine Administrator-Rechte wurden entfernt.";
-		}
-		else {
-			body = isAdmin ? "You have been granted administrator privileges."
-					: "Your administrator privileges have been removed.";
-		}
+		String title = words.of(user, "notify.rolesUpdated.title");
+		String body = words.of(user,
+				isAdmin ? "notify.rolesUpdated.granted" : "notify.rolesUpdated.revoked");
 		persist(user, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body, null);
 		Map<String, Object> model = accountModel(user, null);
 		model.put("isAdmin", isAdmin);
@@ -529,7 +487,7 @@ public class NotificationService {
 	 * values.
 	 */
 	public void notifyAccountDeleted(User user) {
-		String title = de(user) ? "Konto gelöscht" : "Account deleted";
+		String title = words.of(user, "notify.accountDeleted.title");
 		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/account-deleted",
 				accountModel(user, null));
 	}
@@ -542,12 +500,9 @@ public class NotificationService {
 	public void notifyAdminsPendingApproval(java.util.Collection<User> admins, User newUser) {
 		for (User admin : admins) {
 			if (admin == null) continue;
-			String title = de(admin) ? "Registrierung wartet auf Freigabe"
-					: "Registration awaiting approval";
-			String body = (de(admin)
-					? "%s (%s) hat sich registriert und benötigt deine Freigabe."
-					: "%s (%s) registered and needs your approval.")
-					.formatted(newUser.getDisplayName(), newUser.getEmail());
+			String title = words.of(admin, "notify.pendingApproval.title");
+			String body = words.of(admin, "notify.pendingApproval.body",
+					newUser.getDisplayName(), newUser.getEmail());
 			persist(admin, Notification.Type.SYSTEM, title, body,
 					"/admin/users?user=" + newUser.getId());
 		}
@@ -562,17 +517,14 @@ public class NotificationService {
 	private Map<String, Object> accountModel(User user, String ctaLink) {
 		Map<String, Object> model = new HashMap<>();
 		model.put("displayName", user.getDisplayName());
-		model.put("locale", de(user) ? "de" : "en");
+		model.put("locale", words.localeOf(user).getLanguage());
 		model.put("ctaLink", ctaLink);
 		return model;
 	}
 
-	private boolean de(User user) {
-		return "de".equalsIgnoreCase(user.getLocale());
-	}
 
 	private String localeOf(User user) {
-		return de(user) ? "de" : "en";
+		return words.localeOf(user).getLanguage();
 	}
 
 	/**
@@ -585,7 +537,7 @@ public class NotificationService {
 	}
 
 	private String roleLabels(User user) {
-		String member = de(user) ? "Mitglied" : "Member";
+		String member = words.of(user, "notify.role.member");
 		return user.getRoles().stream()
 				.sorted()
 				.map(role -> role == Role.ADMIN ? "Administrator" : member)
@@ -709,9 +661,9 @@ public class NotificationService {
 		for (String userId : userIds) {
 			if (userId == null) continue;
 			users.findById(userId).filter(User::isActive).ifPresent(user -> {
-				boolean de = de(user);
-				String t = title.of(de);
-				String b = body.of(de);
+				Locale locale = words.localeOf(user);
+				String t = title.of(locale);
+				String b = body.of(locale);
 				String userLink = linkFor(user, link, linkProjectId, canFollowLink);
 				String eventId = routing.eventFor().apply(user.getId());
 				// The in-app (bell) notification is always recorded; e-mail and push
@@ -724,7 +676,7 @@ public class NotificationService {
 				// Universal/App Link, straight to the issue.
 				if (prefs.deliversEmail(eventId) && !routing.emailSink().takeOver(user)) {
 					mail.sendNotification(user.getEmail(), mail.subjectPrefix() + t, t, b, appLink(userLink),
-							buttonLabel(de), localeOf(user), eyebrowKey(type));
+							buttonLabel(locale), localeOf(user), eyebrowKey(type));
 				}
 				if (prefs.deliversPush(eventId)) {
 					push.sendToUser(user.getId(), t, b, userLink);
@@ -805,10 +757,10 @@ public class NotificationService {
 		return canFollowLink.contains(user.getId()) ? link : null;
 	}
 
-	/** Produces a string in the recipient's language ({@code true} ⇒ German). */
+	/** Produces a string in the recipient's language. */
 	@FunctionalInterface
 	private interface L10n {
-		String of(boolean de);
+		String of(Locale locale);
 	}
 
 	/**
@@ -816,8 +768,8 @@ public class NotificationService {
 	 * opened rather than the product doing the opening — the recipient is going to
 	 * their own tracker.
 	 */
-	private String buttonLabel(boolean de) {
-		return de ? "Vorgang öffnen" : "Open issue";
+	private String buttonLabel(Locale locale) {
+		return words.in(locale, "notify.cta.openIssue");
 	}
 
 	/** Recipient's notification preferences, normalised (defaults for legacy users). */
