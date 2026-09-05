@@ -356,8 +356,8 @@ public class IssueDigestService {
 		String noun = words.in(locale,
 				count == 1 ? "email.subject.issueChange.one" : "email.subject.issueChange.many");
 		return mail.subjectPrefix()
-				+ words.in(locale, "email.subject.issueChanges", count + " " + noun,
-						issue.getReadableId());
+				+ words.in(locale, "email.subject.issueChanges", issue.getReadableId(),
+						count + " " + noun);
 	}
 
 	private Map<String, Object> model(Issue issue, List<FieldChange> changes, Locale locale) {

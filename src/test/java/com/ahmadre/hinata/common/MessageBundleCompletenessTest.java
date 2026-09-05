@@ -19,6 +19,14 @@ class MessageBundleCompletenessTest {
 
 	private static final Pattern ERROR_KEY = Pattern.compile("\\\"(error\\.[A-Za-z0-9.]+)\\\"");
 
+	/**
+	 * Every language {@code LocaleConfig} advertises. Kept here rather than read
+	 * from it so that adding a locale to the resolver without adding its bundle
+	 * fails as a missing translation, which is what it is.
+	 */
+	private static final Locale[] SUPPORTED = {Locale.ENGLISH, Locale.GERMAN, Locale.CHINESE,
+			Locale.forLanguageTag("hi"), Locale.forLanguageTag("es")};
+
 	@Test
 	void everyLiteralServerErrorKeyExistsInEverySupportedBundle() throws IOException {
 		Set<String> keys = new TreeSet<>();
@@ -28,7 +36,7 @@ class MessageBundleCompletenessTest {
 					.forEach(source -> addErrorKeys(source, keys));
 		}
 
-		for (Locale locale : new Locale[] {Locale.ENGLISH, Locale.GERMAN}) {
+		for (Locale locale : SUPPORTED) {
 			ResourceBundle bundle = ResourceBundle.getBundle("messages", locale);
 			for (String key : keys) {
 				assertThat(bundle.containsKey(key))

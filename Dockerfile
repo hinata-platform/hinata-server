@@ -15,6 +15,11 @@ FROM eclipse-temurin:21-jre-alpine
 # Run the container in UTC so timestamps are timezone-deterministic (the app also
 # pins the JVM default zone to UTC in code; this keeps OS-level tools aligned).
 ENV TZ=UTC
+# A PDF export has to draw the reader's script itself, and the base-14 PDF
+# fonts hold Latin-1 only — without a Unicode face a Chinese export arrives
+# correctly laid out and completely blank. Noto is OFL, so it ships with the
+# image rather than living in the source tree (the CJK face alone is ~10 MB).
+RUN apk add --no-cache font-noto font-noto-cjk
 RUN addgroup -S hinata && adduser -S hinata -G hinata
 USER hinata:hinata
 WORKDIR /app

@@ -11,6 +11,8 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
+
+import java.util.Locale;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -160,7 +162,15 @@ public class IssueExportController {
 		// Metered before the issue is read: an export is worth metering whether or
 		// not the caller turns out to be allowed to have it.
 		limiter.require(user.getId());
-		ExportWords words = new ExportWords(messages, LocaleContextHolder.getLocale(), zone(tz));
+		// PDF is the only format that has to draw glyphs itself; the others hand
+		// text to a reader that already knows how. So only PDF falls back when the
+		// requested language's script cannot be drawn.
+		Locale asked = LocaleContextHolder.getLocale();
+		Locale locale = format == IssueExportFormat.PDF
+				? ExportFonts.renderableLocale(asked,
+						messages.getMessage("export.field.title", null, "", asked))
+				: asked;
+		ExportWords words = new ExportWords(messages, locale, zone(tz));
 		IssueExport export = exports.gather(idOrReadableId, options, user, words);
 		byte[] body = renderer(format).render(export);
 		audit.event(AuditAction.ISSUE_EXPORTED).actor(user)

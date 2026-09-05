@@ -44,15 +44,16 @@ class IssueChangeRendererTest {
 		lenient().when(sprints.findById(anyString())).thenReturn(Optional.empty());
 		lenient().when(issues.findById(anyString())).thenReturn(Optional.empty());
 		lenient().when(projects.findById(anyString())).thenReturn(Optional.empty());
-		renderer = new IssueChangeRenderer(users, sprints, issues, projects);
+		renderer = new IssueChangeRenderer(users, sprints, issues, projects,
+				com.ahmadre.hinata.common.UserWordsFixture.real());
 	}
 
-	private String value(FieldChange change, boolean de) {
-		return renderer.lines(List.of(change), de).get(0).value();
+	private String value(FieldChange change, java.util.Locale locale) {
+		return renderer.lines(List.of(change), locale).get(0).value();
 	}
 
-	private String label(FieldChange change, boolean de) {
-		return renderer.lines(List.of(change), de).get(0).label();
+	private String label(FieldChange change, java.util.Locale locale) {
+		return renderer.lines(List.of(change), locale).get(0).label();
 	}
 
 	/**
@@ -64,9 +65,9 @@ class IssueChangeRendererTest {
 	void everyWhitelistedFieldHasALabelInBothLanguages() {
 		for (String field : IssueChangeDiff.WATCHED_FIELDS) {
 			FieldChange change = new FieldChange(field, "a", "b");
-			assertThat(renderer.lines(List.of(change), true))
+			assertThat(renderer.lines(List.of(change), java.util.Locale.GERMAN))
 					.as("German label for %s", field).hasSize(1);
-			assertThat(renderer.lines(List.of(change), false))
+			assertThat(renderer.lines(List.of(change), java.util.Locale.ENGLISH))
 					.as("English label for %s", field).hasSize(1);
 		}
 	}
@@ -75,13 +76,13 @@ class IssueChangeRendererTest {
 	void labelsAreTranslated() {
 		FieldChange priority = new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR");
 
-		assertThat(label(priority, true)).isEqualTo("Priorität");
-		assertThat(label(priority, false)).isEqualTo("Priority");
+		assertThat(label(priority, java.util.Locale.GERMAN)).isEqualTo("Priorität");
+		assertThat(label(priority, java.util.Locale.ENGLISH)).isEqualTo("Priority");
 	}
 
 	@Test
 	void aScalarChangeReadsAsAnArrow() {
-		assertThat(value(new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"), true))
+		assertThat(value(new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"), java.util.Locale.GERMAN))
 				.isEqualTo("NORMAL → MAJOR");
 	}
 
@@ -89,7 +90,7 @@ class IssueChangeRendererTest {
 	 *  simply not set before. */
 	@Test
 	void settingAPreviouslyEmptyFieldReadsAsAStatement() {
-		assertThat(value(new FieldChange(IssueChangeDiff.DUE_DATE, null, "2026-08-23"), true))
+		assertThat(value(new FieldChange(IssueChangeDiff.DUE_DATE, null, "2026-08-23"), java.util.Locale.GERMAN))
 				.isEqualTo("23.08.2026");
 	}
 
@@ -97,13 +98,13 @@ class IssueChangeRendererTest {
 	void datesAreFormattedForTheReadersLanguage() {
 		FieldChange due = new FieldChange(IssueChangeDiff.DUE_DATE, "2026-08-20", "2026-08-23");
 
-		assertThat(value(due, true)).isEqualTo("20.08.2026 → 23.08.2026");
-		assertThat(value(due, false)).isEqualTo("Aug 20, 2026 → Aug 23, 2026");
+		assertThat(value(due, java.util.Locale.GERMAN)).isEqualTo("20.08.2026 → 23.08.2026");
+		assertThat(value(due, java.util.Locale.ENGLISH)).isEqualTo("Aug 20, 2026 → Aug 23, 2026");
 	}
 
 	@Test
 	void clearingAFieldSaysSoRatherThanShowingNothing() {
-		assertThat(value(new FieldChange(IssueChangeDiff.DUE_DATE, "2026-08-23", null), false))
+		assertThat(value(new FieldChange(IssueChangeDiff.DUE_DATE, "2026-08-23", null), java.util.Locale.ENGLISH))
 				.isEqualTo("Aug 23, 2026 → —");
 	}
 
@@ -113,8 +114,8 @@ class IssueChangeRendererTest {
 	void aDescriptionEditIsReportedNotDumped() {
 		FieldChange description = new FieldChange(IssueChangeDiff.DESCRIPTION, null, null);
 
-		assertThat(value(description, true)).isEqualTo("geändert");
-		assertThat(value(description, false)).isEqualTo("changed");
+		assertThat(value(description, java.util.Locale.GERMAN)).isEqualTo("geändert");
+		assertThat(value(description, java.util.Locale.ENGLISH)).isEqualTo("changed");
 	}
 
 	@Test
@@ -124,7 +125,7 @@ class IssueChangeRendererTest {
 		when(users.findById("u2")).thenReturn(
 				Optional.of(User.builder().id("u2").displayName("Sam").build()));
 
-		String rendered = value(new FieldChange(IssueChangeDiff.ASSIGNEES, "u1", "u2"), true);
+		String rendered = value(new FieldChange(IssueChangeDiff.ASSIGNEES, "u1", "u2"), java.util.Locale.GERMAN);
 
 		assertThat(rendered).isEqualTo("+Sam, −Rebar");
 	}
@@ -134,7 +135,7 @@ class IssueChangeRendererTest {
 		when(sprints.findById("s1")).thenReturn(
 				Optional.of(Sprint.builder().id("s1").name("Sprint 12").build()));
 
-		assertThat(value(new FieldChange(IssueChangeDiff.SPRINT, null, "s1"), false))
+		assertThat(value(new FieldChange(IssueChangeDiff.SPRINT, null, "s1"), java.util.Locale.ENGLISH))
 				.isEqualTo("Sprint 12");
 	}
 
@@ -143,26 +144,26 @@ class IssueChangeRendererTest {
 		when(issues.findById("i0")).thenReturn(
 				Optional.of(Issue.builder().id("i0").readableId("HIN-7").build()));
 
-		assertThat(value(new FieldChange(IssueChangeDiff.PARENT, null, "i0"), false))
+		assertThat(value(new FieldChange(IssueChangeDiff.PARENT, null, "i0"), java.util.Locale.ENGLISH))
 				.isEqualTo("HIN-7");
 	}
 
 	/** A watcher reads "45 min", not "45". */
 	@Test
 	void estimatesReadAsTime() {
-		assertThat(value(new FieldChange(IssueChangeDiff.ESTIMATE, null, "45"), false))
+		assertThat(value(new FieldChange(IssueChangeDiff.ESTIMATE, null, "45"), java.util.Locale.ENGLISH))
 				.isEqualTo("45 min");
-		assertThat(value(new FieldChange(IssueChangeDiff.ESTIMATE, null, "150"), false))
+		assertThat(value(new FieldChange(IssueChangeDiff.ESTIMATE, null, "150"), java.util.Locale.ENGLISH))
 				.isEqualTo("2 h 30 min");
-		assertThat(value(new FieldChange(IssueChangeDiff.ESTIMATE, null, "120"), false))
+		assertThat(value(new FieldChange(IssueChangeDiff.ESTIMATE, null, "120"), java.util.Locale.ENGLISH))
 				.isEqualTo("2 h");
 	}
 
 	@Test
 	void archivingAndRestoringAreBothStated() {
-		assertThat(value(new FieldChange(IssueChangeDiff.ARCHIVED, "false", "true"), true))
+		assertThat(value(new FieldChange(IssueChangeDiff.ARCHIVED, "false", "true"), java.util.Locale.GERMAN))
 				.isEqualTo("ja");
-		assertThat(value(new FieldChange(IssueChangeDiff.ARCHIVED, "true", "false"), false))
+		assertThat(value(new FieldChange(IssueChangeDiff.ARCHIVED, "true", "false"), java.util.Locale.ENGLISH))
 				.isEqualTo("no — restored");
 	}
 
@@ -172,9 +173,9 @@ class IssueChangeRendererTest {
 				new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"),
 				new FieldChange(IssueChangeDiff.DUE_DATE, null, "2026-08-23"));
 
-		assertThat(renderer.summary(changes, true))
+		assertThat(renderer.summary(changes, java.util.Locale.GERMAN))
 				.isEqualTo("Priorität: NORMAL → MAJOR · Fällig: 23.08.2026");
-		assertThat(renderer.summary(changes, false))
+		assertThat(renderer.summary(changes, java.util.Locale.ENGLISH))
 				.isEqualTo("Priority: NORMAL → MAJOR · Due: Aug 23, 2026");
 	}
 
@@ -182,13 +183,13 @@ class IssueChangeRendererTest {
 	 *  the summary into an essay. */
 	@Test
 	void longValuesAndLongSummariesAreCutRatherThanShipped() {
-		String value = value(new FieldChange(IssueChangeDiff.TITLE, null, "x".repeat(400)), false);
+		String value = value(new FieldChange(IssueChangeDiff.TITLE, null, "x".repeat(400)), java.util.Locale.ENGLISH);
 		assertThat(value).hasSize(80).endsWith("…");
 
 		List<FieldChange> many = List.of(
 				new FieldChange(IssueChangeDiff.TITLE, null, "y".repeat(200)),
 				new FieldChange(IssueChangeDiff.STATE, "o".repeat(200), "Done"),
 				new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"));
-		assertThat(renderer.summary(many, false)).hasSize(160).endsWith("…");
+		assertThat(renderer.summary(many, java.util.Locale.ENGLISH)).hasSize(160).endsWith("…");
 	}
 }

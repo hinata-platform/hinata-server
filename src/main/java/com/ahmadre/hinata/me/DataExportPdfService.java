@@ -113,7 +113,10 @@ public class DataExportPdfService {
 
 	/** Builds the full PDF document and returns its bytes. */
 	public byte[] build(User user) {
-		Locale locale = words.localeOf(user);
+		// The reader's language, unless a PDF cannot carry its script — a complete
+		// report in English beats a correctly-labelled one with every label blank.
+		Locale locale = com.ahmadre.hinata.issue.export.ExportFonts.renderableLocale(
+				words.localeOf(user), t(words.localeOf(user), "export.pdf.title"));
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		Document doc = new Document(PageSize.A4, 48, 48, 56, 48);
 		try {
