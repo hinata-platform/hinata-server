@@ -10,6 +10,9 @@ import java.util.Objects;
  * One field of an issue that changed, as raw as {@link IssueChangeDiff} saw it:
  * the field id, the value before, the value after — both as plain strings.
  *
+ * <p>For a long text field the two values are a bounded window of it around the
+ * edit rather than the whole thing — see {@link IssueChangeDiff#longText}.
+ *
  * <p>Deliberately <em>not</em> pre-rendered. One change reaches recipients who
  * read different languages, and a bundled change can sit in the digest queue for
  * half an hour before anyone turns it into a sentence, so the wording is decided
@@ -40,10 +43,12 @@ public record FieldChange(String field, String oldValue, String newValue) {
 		}
 		List<FieldChange> collapsed = new ArrayList<>();
 		for (FieldChange change : byField.values()) {
-			// A valueless field (a description edit) carries no before/after to
-			// compare, so "it ended where it started" cannot be read off it; it is
-			// only ever recorded when the stored document really did differ.
-			if (IssueChangeDiff.valueless(change.field())
+			// A long text field carries only a window of the text around the edit, so
+			// equal ends do not prove the field came back to where it started — two
+			// unrelated edits can be windowed onto the same region. It is only ever
+			// recorded when the stored document really did differ, so it is kept
+			// unconditionally.
+			if (IssueChangeDiff.longText(change.field())
 					|| !Objects.equals(change.oldValue(), change.newValue())) {
 				collapsed.add(change);
 			}

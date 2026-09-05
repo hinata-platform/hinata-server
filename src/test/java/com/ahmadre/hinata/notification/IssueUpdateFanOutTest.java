@@ -169,7 +169,7 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 				.returns("u-ext", Notification::getUserId)
 				.returns(null, Notification::getLink);
 		verify(mail).sendNotification(eq("u-ext@example.org"), anyString(), anyString(), anyString(),
-				isNull(), anyString(), anyString(), anyString());
+				isNull(), anyString(), anyString(), anyString(), any());
 	}
 
 	// --- one notice per update ------------------------------------------------
@@ -189,11 +189,11 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 
 		service.notifyUpdated(issue(List.of("u-watch"), List.of(), null), both, user("u-actor"));
 
-		// The delta's VALUES, not the field's label: what this test protects is that
-		// one save produces one notice carrying both changes, and it must not go red
-		// because somebody renamed the word "Assignees" in the renderer.
+		// The changes' VALUES, not the fields' labels: what this test protects is
+		// that one save produces one notice carrying both changes, and it must not go
+		// red because somebody renamed the word "Assignees" in the renderer.
 		assertThat(saved()).singleElement().satisfies(n ->
-				assertThat(n.getBody()).contains("+u2").contains("Open → In Progress"));
+				assertThat(n.getBody()).contains("u2").contains("Open → In Progress"));
 	}
 
 	@Test
@@ -310,9 +310,9 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 
 		verify(digests).queue(any(), argThatIs("u-watch"), anyList());
 		verify(mail).sendNotification(eq("u-assignee@example.org"), anyString(), anyString(),
-				anyString(), any(), anyString(), anyString(), anyString());
+				anyString(), any(), anyString(), anyString(), anyString(), any());
 		verify(mail, never()).sendNotification(eq("u-watch@example.org"), anyString(), anyString(),
-				anyString(), any(), anyString(), anyString(), anyString());
+				anyString(), any(), anyString(), anyString(), anyString(), any());
 	}
 
 	private static User argThatIs(String id) {

@@ -19,7 +19,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Locale;
@@ -369,8 +368,10 @@ public class IssueDigestService {
 		// squeezed onto one — asking the renderer twice would pay for all of them
 		// twice, per recipient.
 		List<IssueChangeRenderer.Line> lines = renderer.lines(changes, locale);
-		model.put("preheader", renderer.summaryOf(lines));
-		model.put("lines", new ArrayList<>(lines));
+		model.put("preheader", renderer.summaryOf(lines, locale));
+		// The renderer hands back an immutable list, which is what a hand-off to an
+		// @Async send wants; copying it into a mutable one would only undo that.
+		model.put("lines", lines);
 		// The recipient's access was just re-checked, so the CTA is theirs to
 		// follow; it is relayed through Hinata Connect like every other mail link so
 		// the native app intercepts it as a Universal/App Link. The button's label

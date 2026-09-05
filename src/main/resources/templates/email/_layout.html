@@ -19,7 +19,8 @@
    * Images arrive as inlined cid: parts (see MailService), so mail still renders
      on an instance that the recipient's network cannot reach.
 
-  Fragments: page · cta · fallback · panel · note · copy · sectionLabel · fineprint · rule
+  Fragments: page · cta · fallback · panelLabel · panel · diff · changes · note ·
+             copy · sectionLabel · fineprint · rule
   (names deliberately avoid HTML element names — a `:: meta` selector would
   match the <meta> tags in this very <head> instead of the fragment.)
 */-->
@@ -71,6 +72,10 @@
       .hn-ok      { background: #16291F !important; border-color: #24503A !important; }
       .hn-ok-ink  { color: #6FCF9B !important; }
       .hn-danger  { background: #33201E !important; color: #E8877E !important; }
+      /* The "after" half of a diff. Its own token rather than hn-ok + hn-ok-ink,
+         because that green is only ever used at 29px display size, where 3:1 is
+         enough; at 15px it needs 4.5:1, so the light value below is darker. */
+      .hn-now     { background: #16291F !important; color: #6FCF9B !important; }
       /* Text-only variant: the pill wants the fill, a bare date does not. */
       .hn-danger-ink { color: #E8877E !important; }
     }
@@ -222,6 +227,18 @@
 
 
 <!--/* =====================================================================
+       panelLabel(text) — the mono caption that names what a panel shows.
+       Its own fragment because `panel` and `diff` are two different cards of
+       the same family and a caption that drifted between them would read as
+       two designs.
+       ===================================================================== */-->
+<div xmlns:th="http://www.thymeleaf.org" th:fragment="panelLabel(text)" class="hn-faint"
+     style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10.5px;
+            font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#9A99B0;margin:0 0 5px 0"
+     th:text="${text}">LABEL</div>
+
+
+<!--/* =====================================================================
        panel(label, value) — a muted card for the one piece of data the
        recipient has to verify: the new address, the applicant, the roles.
        ===================================================================== */-->
@@ -230,10 +247,7 @@
   <tr>
     <td class="hn-panel"
         style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:14px 16px">
-      <div class="hn-faint"
-           style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:10.5px;
-                  font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#9A99B0;margin:0 0 5px 0"
-           th:text="${label}">LABEL</div>
+      <th:block th:replace="~{email/_layout :: panelLabel(${label})}"/>
       <div class="hn-ink"
            style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
                   font-size:15.5px;font-weight:600;line-height:1.4;color:#23223F;word-break:break-word"
@@ -241,6 +255,67 @@
     </td>
   </tr>
 </table>
+
+
+<!--/* =====================================================================
+       diff(line) — one changed field as a before/after pair.
+
+       This is the whole point of a change mail: a watcher should be able to
+       read what an issue looked like before and what it looks like now without
+       opening it. "Description: changed" and "Assignees: −Hicham" both failed
+       that — the first says nothing, the second says what left and hides what
+       remains.
+
+       `line` is an IssueChangeRenderer.Line. Its `segments` carry the diff and
+       `inline` says how to set them: false is the ordinary two-part change,
+       read as "before → after"; true is a word-level diff of a longer text,
+       whose segments interleave and are read as one sentence.
+
+       Colour is a second channel, never the only one: the old half is struck
+       through as well as red, so a colour-blind reader and a client that drops
+       the backgrounds both still see which half is which.
+       ===================================================================== */-->
+<table xmlns:th="http://www.thymeleaf.org" th:fragment="diff(line)" role="presentation" width="100%"
+       cellpadding="0" cellspacing="0" border="0" style="margin:0 0 6px 0">
+  <tr>
+    <td class="hn-panel"
+        style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:14px 16px">
+      <th:block th:replace="~{email/_layout :: panelLabel(${line.label})}"/>
+      <div class="hn-ink"
+           th:styleappend="${line.wordDiff} ? ';font-weight:400;font-size:14.5px' : ''"
+           style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+                  font-size:15.5px;font-weight:600;line-height:1.55;color:#23223F;word-break:break-word">
+        <th:block th:each="seg, pos : ${line.segments}">
+          <!--/* The arrow only separates the two halves of a plain change; inside a
+               word diff the segments are one running sentence and the space that
+               the source break already produces is the only separator wanted. */-->
+          <span th:if="${!pos.first and !line.wordDiff}" class="hn-faint"
+                style="color:#9A99B0;font-weight:400">&#8594;</span>
+          <span th:if="${seg.same()}" th:text="${seg.text}">unchanged</span>
+          <span th:if="${seg.removed()}" class="hn-danger"
+                style="background:#FBE7E4;color:#C0392B;text-decoration:line-through;
+                       padding:1px 5px;border-radius:5px" th:text="${seg.text}">before</span>
+          <span th:if="${seg.added()}" class="hn-now"
+                style="background:#E4F2EC;color:#1E7A50;padding:1px 5px;border-radius:5px"
+                th:text="${seg.text}">after</span>
+        </th:block>
+      </div>
+    </td>
+  </tr>
+</table>
+
+
+<!--/* =====================================================================
+       changes(lines) — a whole change list, headed. Both mails that carry one
+       show it identically; a count, a rule or a different heading has to be a
+       change in one place, not two that drift.
+       ===================================================================== */-->
+<th:block xmlns:th="http://www.thymeleaf.org" th:fragment="changes(lines)">
+  <th:block th:replace="~{email/_layout :: sectionLabel(#{email.issueChanges.section})}"/>
+  <th:block th:each="line : ${lines}">
+    <th:block th:replace="~{email/_layout :: diff(${line})}"/>
+  </th:block>
+</th:block>
 
 
 <!--/* =====================================================================

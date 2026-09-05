@@ -105,13 +105,53 @@ public class NotificationService {
 		Set<String> recipients = new HashSet<>(watchers);
 		recipients.addAll(stakeholders);
 		if (recipients.isEmpty()) return;
-		// Rendered twice for the whole fan-out, not once per recipient. Resolving a
-		// change list costs a point read per value — a display name, a sprint name,
-		// a parent's key — and there are only ever two distinct results, one per
-		// language, however many watchers an issue has.
+		// Watchers were filtered for access by audienceFor; assignees and the
+		// reporter deliberately were not (see linkFor), so this set is not empty
+		// only because somebody is on an issue in a project they cannot open —
+		// most often an e-mail-ingested ticket attributed to its sender. They still
+		// hear that their own request moved, but not what the issue now says: a
+		// notice that quoted the body would hand them through the inbox exactly the
+		// content the project answers with a 403.
+		Set<String> reachable = reach.whoCanSee(issue.getProjectId(), recipients);
+		Set<String> unreachable = new HashSet<>(recipients);
+		unreachable.removeAll(reachable);
+		recipients.retainAll(reachable);
+
+		if (!recipients.isEmpty()) {
+			deliverChanges(issue, collapsed, recipients, watchers, true);
+		}
+		if (!unreachable.isEmpty()) {
+			deliverChanges(issue, collapsed, unreachable, watchers, false);
+		}
+	}
+
+	/**
+	 * One fan-out of an update, to recipients who share an answer to "may they be
+	 * told what the issue says".
+	 *
+	 * @param withBodyText whether the notice may quote the description. False for
+	 *                     a recipient who cannot open the issue, whose notice then
+	 *                     carries every other field and reports the description as
+	 *                     having changed — which is all it ever said.
+	 */
+	private void deliverChanges(Issue issue, List<FieldChange> changes, Set<String> recipients,
+			Set<String> watchers, boolean withBodyText) {
+		// Rendered once per language, not once per recipient, and not once per
+		// surface either: the mail's diff, the push body and the bell entry are three
+		// views of one render. Resolving a change list costs a read per value (a
+		// display name, a sprint name, a parent's key), and however many watchers an
+		// issue has there are only ever as many distinct renders as they read
+		// languages. The map is only ever touched from deliver()'s own loop.
+		Map<Locale, List<IssueChangeRenderer.Line>> rendered = new HashMap<>();
+		Function<Locale, List<IssueChangeRenderer.Line>> diff = locale ->
+				rendered.computeIfAbsent(locale, language -> withBodyText
+						? changeRenderer.lines(changes, language)
+						: changeRenderer.linesWithoutBodyText(changes, language));
 		deliver(recipients, Notification.Type.ISSUE_UPDATED,
 				locale -> words.in(locale, "notify.issueUpdated.title", issue.getReadableId()),
-				locale -> changeRenderer.summary(collapsed, locale),
+				// The bell entry and the push body get the one-line form of the very
+				// same diff the mail paints, so the three never tell different stories.
+				locale -> changeRenderer.summaryOf(diff.apply(locale), locale),
 				issueLink(issue), issue.getProjectId(),
 				new Routing(
 						// A watcher subscribed themselves and switches that off under
@@ -124,7 +164,14 @@ public class NotificationService {
 						// Only the watcher stream is bundled. An assignee's mail keeps
 						// arriving at the moment of the change, as it always has.
 						recipient -> watchers.contains(recipient.getId())
-								&& digests.queue(issue, recipient, collapsed)));
+								&& digests.queue(issue, recipient, changes),
+						// An assignee's or the reporter's mail is sent at the moment of
+						// the change, so it is the one that has to carry the diff itself;
+						// the watchers' bundled mail renders its own from the queue. A
+						// recipient who cannot open the issue gets no table at all — the
+						// one-line body is exactly what they received before there was
+						// one, and a table of every field is more than that.
+						withBodyText ? diff::apply : locale -> null));
 	}
 
 	/** As {@link #notifyUpdated(Issue, List, User, Set)} with nobody pre-notified. */
@@ -658,12 +705,20 @@ public class NotificationService {
 		Set<String> canFollowLink = (link == null || linkProjectId == null)
 				? Set.of()
 				: reach.whoCanSee(linkProjectId, userIds);
+		// Composed once per language rather than once per recipient. A hundred
+		// watchers of one issue read two or three languages between them, and every
+		// title and body here is at least a MessageSource lookup and at most a change
+		// list that costs a read per value. Two maps rather than one keyed pair: a
+		// body lambda may itself memoise (notifyUpdated's does), and computeIfAbsent
+		// re-entered on the SAME map throws.
+		Map<Locale, String> titles = new HashMap<>();
+		Map<Locale, String> bodies = new HashMap<>();
 		for (String userId : userIds) {
 			if (userId == null) continue;
 			users.findById(userId).filter(User::isActive).ifPresent(user -> {
 				Locale locale = words.localeOf(user);
-				String t = title.of(locale);
-				String b = body.of(locale);
+				String t = titles.computeIfAbsent(locale, title::of);
+				String b = bodies.computeIfAbsent(locale, body::of);
 				String userLink = linkFor(user, link, linkProjectId, canFollowLink);
 				String eventId = routing.eventFor().apply(user.getId());
 				// The in-app (bell) notification is always recorded; e-mail and push
@@ -676,7 +731,8 @@ public class NotificationService {
 				// Universal/App Link, straight to the issue.
 				if (prefs.deliversEmail(eventId) && !routing.emailSink().takeOver(user)) {
 					mail.sendNotification(user.getEmail(), mail.subjectPrefix() + t, t, b, appLink(userLink),
-							buttonLabel(locale), localeOf(user), eyebrowKey(type));
+							buttonLabel(locale), localeOf(user), eyebrowKey(type),
+							routing.changeLines().apply(locale));
 				}
 				if (prefs.deliversPush(eventId)) {
 					push.sendToUser(user.getId(), t, b, userLink);
@@ -693,14 +749,19 @@ public class NotificationService {
 	 * watcher and an assignee), and honesty demands each be switchable by the
 	 * reason they actually have. {@code emailSink} answers where their e-mail goes
 	 * instead of the mail server, which keeps the bundling decision here rather
-	 * than duplicating the whole fan-out for one type.
+	 * than duplicating the whole fan-out for one type. {@code changeLines} is the
+	 * before/after diff the mail paints under its body copy, in the recipient's
+	 * language — {@code null} for the notices that have no diff to show, which is
+	 * all of them but an issue update.
 	 */
-	private record Routing(Function<String, String> eventFor, EmailSink emailSink) {
+	private record Routing(Function<String, String> eventFor, EmailSink emailSink,
+			Function<Locale, List<IssueChangeRenderer.Line>> changeLines) {
 
-		/** The ordinary case: one event for everyone, every mail sent at once. */
+		/** The ordinary case: one event for everyone, every mail sent at once, and
+		 *  no diff — the body copy is the whole message. */
 		static Routing of(Notification.Type type) {
 			String fixed = NotificationService.eventId(type);
-			return new Routing(userId -> fixed, EmailSink.NONE);
+			return new Routing(userId -> fixed, EmailSink.NONE, locale -> null);
 		}
 	}
 

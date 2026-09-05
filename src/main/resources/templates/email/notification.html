@@ -5,6 +5,12 @@
   are composed and localized by NotificationService; this template only dresses
   them. `eyebrowKey` names an email.eyebrow.<TYPE> message so the recipient can
   tell an assignment from a mention before reading a word.
+
+  `lines` is optional and only an issue update carries it: the fields that
+  changed, each as a before/after diff. The body copy above it stays — it is the
+  same change squeezed onto one line, which is what the inbox preview and the
+  push body show, and a mail that opened with a bare table would read as a
+  machine's output rather than as a notice.
 */-->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{email/_layout :: page(
@@ -16,6 +22,14 @@
 <body>
 <th:block th:fragment="content">
   <th:block th:replace="~{email/_layout :: copy(${body})}"/>
+
+  <!--/* th:if on its own element, with the replace nested inside it: Thymeleaf
+       runs fragment inclusion before conditional evaluation, so a th:replace
+       sharing a tag with a th:if substitutes the tag — condition and all —
+       before the condition is ever asked. */-->
+  <th:block th:if="${lines != null and !#lists.isEmpty(lines)}">
+    <th:block th:replace="~{email/_layout :: changes(${lines})}"/>
+  </th:block>
 
   <th:block th:if="${ctaLink != null}"
             th:replace="~{email/_layout :: cta(${ctaLink}, ${ctaLabel != null} ? ${ctaLabel} : #{email.cta.open})}"/>

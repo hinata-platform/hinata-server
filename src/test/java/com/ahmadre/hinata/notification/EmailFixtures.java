@@ -10,6 +10,7 @@ import org.thymeleaf.templatemode.TemplateMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -30,8 +31,17 @@ final class EmailFixtures {
 	}
 
 	/** Every template that ships, in the order the gallery should show them. */
+	/**
+	 * Every mail in the gallery. {@code email/notification} appears twice on
+	 * purpose: it is one template serving two genuinely different mails — an
+	 * assignment, which is the common case and carries no diff, and an issue
+	 * update, which is the only notice that does. Reviewing one of them leaves the
+	 * other free to drift, and rendering only the update would leave the branch
+	 * that every other notification type takes untested.
+	 */
 	static final List<String> TEMPLATES = List.of(
 			"email/notification",
+			"email/notification#update",
 			"email/verify-email",
 			"email/invite",
 			"email/password-reset",
@@ -109,6 +119,12 @@ final class EmailFixtures {
 		return brand;
 	}
 
+	/** The template a gallery entry renders — see {@link #TEMPLATES}. */
+	static String templateOf(String sample) {
+		int variant = sample.indexOf('#');
+		return variant < 0 ? sample : sample.substring(0, variant);
+	}
+
 	/** Sample model for {@code template} in {@code locale} ("de" / "en"). */
 	static Map<String, Object> model(String template, String locale) {
 		Map<String, Object> m = new LinkedHashMap<>();
@@ -128,6 +144,20 @@ final class EmailFixtures {
 				m.put("ctaLink", BASE + "/issues/HIN-142");
 				m.put("ctaLabel", de ? "Vorgang öffnen" : "Open issue");
 				m.put("eyebrowKey", "email.eyebrow.ISSUE_ASSIGNED");
+				// No `lines`: every notification but an update takes this branch.
+			}
+			case "email/notification#update" -> {
+				// Composed exactly as NotificationService composes it: the body is the
+				// change list squeezed onto the one line the push and the bell get,
+				// above the diff the mail has room to paint.
+				Locale language = de ? Locale.GERMAN : Locale.ENGLISH;
+				List<IssueChangeRenderer.Line> lines = changeLines(de);
+				m.put("headline", de ? "HIN-142 aktualisiert" : "HIN-142 updated");
+				m.put("body", renderer().summaryOf(lines, language));
+				m.put("lines", lines);
+				m.put("ctaLink", BASE + "/issues/HIN-142");
+				m.put("ctaLabel", de ? "Vorgang öffnen" : "Open issue");
+				m.put("eyebrowKey", "email.eyebrow.ISSUE_UPDATED");
 			}
 			case "email/verify-email" -> {
 				m.put("verifyUrl", BASE + "/verify-email?token=" + TOKEN);
@@ -175,17 +205,7 @@ final class EmailFixtures {
 				m.put("preheader", de
 						? "Status: Open → In Arbeit · Priorität: NORMAL → MAJOR"
 						: "Status: Open → In Progress · Priority: NORMAL → MAJOR");
-				m.put("lines", List.of(
-						new IssueChangeRenderer.Line(de ? "Status" : "Status",
-								de ? "Open → In Arbeit" : "Open → In Progress"),
-						new IssueChangeRenderer.Line(de ? "Priorität" : "Priority",
-								"NORMAL → MAJOR"),
-						new IssueChangeRenderer.Line(de ? "Fällig" : "Due",
-								de ? "20.08.2026 → 23.08.2026" : "Aug 20, 2026 → Aug 23, 2026"),
-						new IssueChangeRenderer.Line(de ? "Zuständig" : "Assignees",
-								"+Marek Wilczyński, −Jördis Brandt"),
-						new IssueChangeRenderer.Line(de ? "Beschreibung" : "Description",
-								de ? "geändert" : "changed")));
+				m.put("lines", changeLines(de));
 				// No ctaLabel: the change mail lets the layout fall back to
 				// email.cta.open, exactly as it does in production.
 				m.put("ctaLink", BASE + "/issues/HIN-142");
@@ -194,6 +214,60 @@ final class EmailFixtures {
 			default -> throw new IllegalArgumentException("No sample model for " + template);
 		}
 		return m;
+	}
+
+	/**
+	 * A change list covering every shape the {@code diff} fragment has to set: a
+	 * plain before/after, a list that both gained and lost a member, a field that
+	 * was empty before, and a word-level diff of a description.
+	 *
+	 * <p>Built through the real {@link IssueChangeRenderer} rather than by hand, so
+	 * the gallery cannot show a layout the renderer would never produce.
+	 */
+	static List<IssueChangeRenderer.Line> changeLines(boolean de) {
+		return renderer().lines(List.of(
+				new FieldChange(IssueChangeDiff.STATE, "Open", "In Progress"),
+				new FieldChange(IssueChangeDiff.PRIORITY, "NORMAL", "MAJOR"),
+				new FieldChange(IssueChangeDiff.DUE_DATE, "2026-08-20", "2026-08-23"),
+				new FieldChange(IssueChangeDiff.ESTIMATE, null, "150"),
+				new FieldChange(IssueChangeDiff.ASSIGNEES,
+						join("Jördis Brandt", "Ada Lovelace"),
+						join("Ada Lovelace", "Marek Wilczyński")),
+				new FieldChange(IssueChangeDiff.TAGS, join("frontend"), join("frontend", "regression")),
+				new FieldChange(IssueChangeDiff.DESCRIPTION,
+						de
+								? "Die Wochenansicht beginnt am Sonntag, obwohl das Gebietsschema "
+										+ "Montag als ersten Tag der Woche führt. Betrifft nur den "
+										+ "Kalender, nicht das Board."
+								: "The week view starts on Sunday even though the locale lists "
+										+ "Monday as the first day of the week. Only the calendar is "
+										+ "affected, not the board.",
+						de
+								? "Die Wochenansicht beginnt am Sonntag, obwohl das Gebietsschema "
+										+ "Montag als ersten Tag der Woche führt. Betrifft den "
+										+ "Kalender und den Sprint-Bericht."
+								: "The week view starts on Sunday even though the locale lists "
+										+ "Monday as the first day of the week. It affects the "
+										+ "calendar and the sprint report.")),
+				de ? Locale.GERMAN : Locale.ENGLISH);
+	}
+
+	/** The renderer with every lookup answered by the id itself — the sample values
+	 *  above are already display names, not ids. */
+	private static IssueChangeRenderer renderer() {
+		var users = org.mockito.Mockito.mock(com.ahmadre.hinata.user.UserRepository.class);
+		var sprints = org.mockito.Mockito.mock(com.ahmadre.hinata.board.SprintRepository.class);
+		var issues = org.mockito.Mockito.mock(com.ahmadre.hinata.issue.IssueRepository.class);
+		var projects = org.mockito.Mockito.mock(com.ahmadre.hinata.project.ProjectRepository.class);
+		org.mockito.Mockito.when(users.findById(org.mockito.ArgumentMatchers.anyString()))
+				.thenAnswer(call -> java.util.Optional.of(com.ahmadre.hinata.user.User.builder()
+						.displayName(call.getArgument(0)).build()));
+		return new IssueChangeRenderer(users, sprints, issues, projects,
+				com.ahmadre.hinata.common.UserWordsFixture.real());
+	}
+
+	private static String join(String... values) {
+		return String.join(IssueChangeDiff.LIST_SEPARATOR, values);
 	}
 
 	/** Mirrors the flat map that {@code WeeklyDigestJob#mailModel} builds. */
