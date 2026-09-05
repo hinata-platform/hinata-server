@@ -125,6 +125,40 @@ class MeControllerSessionsTest {
 		assertThat(pageable.getValue().getPageSize()).isEqualTo(1);
 	}
 
+	/**
+	 * The published app casts this response to a list. Paginating it made that
+	 * cast throw, and because its settings screen loads the account, the sessions,
+	 * the teams and the projects together, the whole page failed — the account did
+	 * not fail to load, it was never asked for. Until 10.2.1 is out of the field,
+	 * a request with neither bound answers the shape that client can read.
+	 */
+	@Test
+	void aRequestWithoutBoundsAnswersTheArrayThePublishedAppExpects() {
+		stub(new PageImpl<>(List.of(session(CURRENT_SESSION), session("s-other")),
+				PageRequest.of(0, 100), 2));
+
+		List<MeController.SessionDto> rows = controller.sessionsLegacy();
+
+		assertThat(rows).extracting(MeController.SessionDto::id)
+				.containsExactly(CURRENT_SESSION, "s-other");
+		assertThat(rows).extracting(MeController.SessionDto::current)
+				.containsExactly(true, false);
+	}
+
+	/** Bounded all the same: an unbounded read of this table is what pagination
+	 *  was introduced to stop. */
+	@Test
+	void theLegacyArrayIsStillBounded() {
+		stub(new PageImpl<>(List.of(), PageRequest.of(0, 100), 0));
+
+		controller.sessionsLegacy();
+
+		var pageable = forClass(Pageable.class);
+		verify(me).sessions(eq(USER_ID), pageable.capture());
+		assertThat(pageable.getValue().getPageNumber()).isZero();
+		assertThat(pageable.getValue().getPageSize()).isEqualTo(100);
+	}
+
 	@Test
 	void passesThePageThroughSoLaterPagesAreReachable() {
 		stub(new PageImpl<>(List.of(), PageRequest.of(3, 25), 0));

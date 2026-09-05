@@ -189,13 +189,49 @@ public class MeController {
 	@GetMapping("/sessions")
 	public Page<SessionDto> sessions(@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
-		String userId = currentUser.requireId();
-		String current = currentUser.currentSessionId();
 		// Both bounds, not just the upper one: PageRequest.of throws on a
 		// negative page or a zero size, and an unhandled IllegalArgumentException
 		// is a 500 with a stack trace in the log — one authenticated caller could
 		// fill the error log from a query string.
-		return me.sessions(userId, PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, 100)))
+		return sessionPage(PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, 100)));
+	}
+
+	/**
+	 * The same sessions as a plain array, for a client that predates the page.
+	 *
+	 * <p>Paginating this list changed its response from an array to a page
+	 * envelope, and a published app cannot be recompiled: 10.2.1 reads the answer
+	 * as a list, a cast that throws on an object. Its settings screen loads the
+	 * account, the sessions, the teams and the projects together, so that one
+	 * throw took the whole page down — the account did not fail to load, it was
+	 * never asked for.
+	 *
+	 * <p>Routed by the absence of both parameters, which is exactly what the old
+	 * client sends and never what the new one does (it always sends both).
+	 *
+	 * <p><strong>Temporary.</strong> It exists until 10.3.0 has replaced 10.2.1 in
+	 * the stores, and should be deleted then — a store rollout is not instant, and
+	 * an app that has not been opened in a month is still 10.2.1 on the day it is.
+	 *
+	 * <p>Bounded at the same 100 the page clamps to, because an unbounded read of
+	 * this table is what pagination was introduced to stop. An account with more
+	 * sessions than that sees its hundred most recent ones — which is the whole
+	 * list for anyone who has not been signing in for years, and a bounded answer
+	 * for everyone else.
+	 */
+	@Operation(summary = "List my active device sessions (legacy array; use the paged form)")
+	@GetMapping(value = "/sessions", params = { "!page", "!size" })
+	public List<SessionDto> sessionsLegacy() {
+		return sessionPage(PageRequest.of(0, LEGACY_SESSION_LIMIT)).getContent();
+	}
+
+	/** Most sessions the pre-pagination response carries — see {@link #sessionsLegacy}. */
+	private static final int LEGACY_SESSION_LIMIT = 100;
+
+	private Page<SessionDto> sessionPage(PageRequest request) {
+		String userId = currentUser.requireId();
+		String current = currentUser.currentSessionId();
+		return me.sessions(userId, request)
 				.map(s -> new SessionDto(s.getId(), s.getId().equals(current), s.getKind().name(),
 						s.getOs(), s.getClient(), s.getApp(), s.getLocation(), s.getIpMasked(),
 						s.getLastActiveAt()));
