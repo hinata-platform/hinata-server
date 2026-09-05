@@ -119,7 +119,7 @@ class EmailPreviewTest {
 	private void writeBands() throws IOException {
 		byte[] logo = sampleLogo();
 		for (String template : EmailFixtures.TEMPLATES) {
-			String backdrop = MailService.backdropFor(template);
+			String backdrop = MailService.backdropFor(EmailFixtures.templateOf(template));
 			Files.write(OUT.resolve(bandFile(template, false)),
 					MailBandComposer.composeHinata(backdrop).orElseThrow());
 			Files.write(OUT.resolve(bandFile(template, true)),
@@ -127,9 +127,16 @@ class EmailPreviewTest {
 		}
 	}
 
+	/**
+	 * Named after the <em>template</em>, not the gallery entry: two entries can
+	 * render one template (an assignment and an update both go through
+	 * {@code email/notification}) and they share its illustration, exactly as a
+	 * send does. It also keeps the {@code #} out of the file name, which a browser
+	 * would read as the start of a fragment and drop the rest of.
+	 */
 	private static String bandFile(String template, boolean orgBranded) {
 		return "band." + (orgBranded ? "org." : "hinata.")
-				+ MailService.backdropFor(template) + ".jpg";
+				+ MailService.backdropFor(EmailFixtures.templateOf(template)) + ".jpg";
 	}
 
 	/**
@@ -156,8 +163,10 @@ class EmailPreviewTest {
 		Files.writeString(OUT.resolve(file), html, StandardCharsets.UTF_8);
 	}
 
+	/** The gallery page's file name. The variant marker becomes a dash: a browser
+	 *  reads a {@code #} in a URL as the start of a fragment. */
 	private static String name(String template, String brand, String locale, String theme) {
-		return template.substring(template.indexOf('/') + 1)
+		return template.substring(template.indexOf('/') + 1).replace('#', '-')
 				+ "." + brand + "." + locale + "." + theme + ".html";
 	}
 
