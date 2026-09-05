@@ -17,7 +17,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Read-only admin surface over the security audit log: a filtered, paginated
@@ -33,20 +36,31 @@ import java.util.regex.Pattern;
 public class AuditController {
 
 	private final MongoTemplate mongo;
+	private final com.ahmadre.hinata.user.UserRepository users;
 
 	// --- DTOs ----------------------------------------------------------------
 
+	/**
+	 * {@code actorLabel} / {@code targetLabel} are snapshots taken when the event
+	 * was written — they must keep saying who acted even after that account is
+	 * renamed or deleted. Pronouns are deliberately the opposite: they are looked
+	 * up live ({@code pronounsById}) so a reader never sees a stale set that
+	 * misgenders someone who has since changed them. An id with no user behind it
+	 * any more simply resolves to null.
+	 */
 	public record AuditEntryResponse(String id, Instant timestamp, String action, String category,
-			String severity, String outcome, String actorId, String actorLabel, String targetId,
-			String targetLabel, String ip, String userAgent, java.util.Map<String, String> metadata) {
+			String severity, String outcome, String actorId, String actorLabel, String actorPronouns,
+			String targetId, String targetLabel, String targetPronouns, String ip, String userAgent,
+			java.util.Map<String, String> metadata) {
 
-		static AuditEntryResponse from(AuditLog l) {
+		static AuditEntryResponse from(AuditLog l, java.util.Map<String, String> pronounsById) {
 			return new AuditEntryResponse(l.getId(), l.getTimestamp(),
 					l.getAction() == null ? null : l.getAction().name(),
 					l.getCategory() == null ? null : l.getCategory().name(),
 					l.getSeverity() == null ? null : l.getSeverity().name(),
 					l.getOutcome() == null ? null : l.getOutcome().name(),
-					l.getActorId(), l.getActorLabel(), l.getTargetId(), l.getTargetLabel(),
+					l.getActorId(), l.getActorLabel(), pronounsById.get(l.getActorId()),
+					l.getTargetId(), l.getTargetLabel(), pronounsById.get(l.getTargetId()),
 					l.getIp(), l.getUserAgent(), l.getMetadata());
 		}
 	}
@@ -109,9 +123,33 @@ public class AuditController {
 				.with(Sort.by(Sort.Direction.DESC, "timestamp"))
 				.skip((long) (current - 1) * pp)
 				.limit(pp);
-		List<AuditEntryResponse> items = mongo.find(q, AuditLog.class).stream()
-				.map(AuditEntryResponse::from).toList();
+		List<AuditLog> rows = mongo.find(q, AuditLog.class);
+		java.util.Map<String, String> pronouns = pronounsFor(rows);
+		List<AuditEntryResponse> items = rows.stream()
+				.map(l -> AuditEntryResponse.from(l, pronouns)).toList();
 		return new AuditPageResponse(items, total, current, pp);
+	}
+
+	/**
+	 * Current pronouns for every account named on this page, actors and targets
+	 * alike — one batched lookup for the whole page rather than a read per row,
+	 * and only for the rows actually being returned.
+	 */
+	private java.util.Map<String, String> pronounsFor(List<AuditLog> rows) {
+		Set<String> ids = rows.stream()
+				.flatMap(l -> Stream.of(l.getActorId(), l.getTargetId()))
+				.filter(AuditController::notBlank)
+				.collect(Collectors.toSet());
+		if (ids.isEmpty()) {
+			return java.util.Map.of();
+		}
+		java.util.Map<String, String> out = new java.util.HashMap<>();
+		users.findAllById(ids).forEach(u -> {
+			if (notBlank(u.getPronouns())) {
+				out.put(u.getId(), u.getPronouns());
+			}
+		});
+		return out;
 	}
 
 	@Operation(summary = "Catalogue of audit event types (for the per-event toggles)")

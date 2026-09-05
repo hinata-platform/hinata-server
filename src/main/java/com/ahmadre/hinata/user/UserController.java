@@ -22,12 +22,19 @@ public class UserController {
 	private final UserRepository users;
 	private final CurrentUser currentUser;
 
+	/**
+	 * The user summary every people-chip in the app renders from — comment
+	 * authors, assignees, watchers, member rows, pickers. {@code pronouns} rides
+	 * along so those surfaces can address a person correctly without a second
+	 * round-trip; it is resolved live here rather than snapshotted anywhere, so
+	 * a change to it takes effect everywhere at once.
+	 */
 	public record DirectoryUser(String id, String username, String displayName, String avatarUrl,
-			String title) {
+			String title, String pronouns) {
 
 		public static DirectoryUser from(User user) {
 			return new DirectoryUser(user.getId(), user.getUsername(), user.getDisplayName(),
-					user.getAvatarUrl(), user.getTitle());
+					user.getAvatarUrl(), user.getTitle(), user.getPronouns());
 		}
 	}
 

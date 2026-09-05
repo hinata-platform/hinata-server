@@ -337,9 +337,9 @@ public class AdminUserService {
 	public AdminUserResponse toResponse(User u) {
 		List<RefreshSession> ss = sessions.list(u.getId());
 		return new AdminUserResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
-				u.getAvatarUrl(), u.getTitle(), effectiveRole(u), u.getOrigin().name(), status(u),
-				u.isTotpEnabled(), u.isSso(), ss.size(), lastActiveOf(ss), u.getInvitedAt(),
-				u.getInvitedBy(), u.getJoinedAt());
+				u.getAvatarUrl(), u.getTitle(), u.getPronouns(), effectiveRole(u),
+				u.getOrigin().name(), status(u), u.isTotpEnabled(), u.isSso(), ss.size(),
+				lastActiveOf(ss), u.getInvitedAt(), u.getInvitedBy(), u.getJoinedAt());
 	}
 
 	private String effectiveRole(User u) {
