@@ -12,7 +12,6 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -34,7 +33,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/me")
 @RequiredArgsConstructor
-@Slf4j
 public class MeController {
 
 	private final MeService me;
@@ -197,60 +195,6 @@ public class MeController {
 		// fill the error log from a query string.
 		return sessionPage(PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, 100)));
 	}
-
-	/**
-	 * The same sessions as a plain array, for a client that predates the page.
-	 *
-	 * <p>Paginating this list changed its response from an array to a page
-	 * envelope, and a published app cannot be recompiled: 10.2.1 reads the answer
-	 * as a list, a cast that throws on an object. Its settings screen loads the
-	 * account, the sessions, the teams and the projects together, so that one
-	 * throw took the whole page down — the account did not fail to load, it was
-	 * never asked for.
-	 *
-	 * <p>Routed by the absence of both parameters, which is exactly what the old
-	 * client sends and never what the new one does (it always sends both).
-	 *
-	 * <p><strong>Temporary.</strong> It exists until 10.3.0 has replaced 10.2.1 in
-	 * the stores, and should be deleted then — a store rollout is not instant, and
-	 * an app that has not been opened in a month is still 10.2.1 on the day it is.
-	 * <em>When</em> that is, is not a date anyone can name in advance, so the route
-	 * says so itself: the first call after a restart logs
-	 * {@value #LEGACY_SESSION_MARKER}. A deployment that runs for a week without
-	 * that line in its log has no pre-pagination client left, and HIN-74 can take
-	 * this method out. One line per JVM run, because the question it answers is
-	 * "did anyone at all", not "how many".
-	 *
-	 * <p>Bounded at the same 100 the page clamps to, because an unbounded read of
-	 * this table is what pagination was introduced to stop. An account with more
-	 * sessions than that sees its hundred most recent ones — which is the whole
-	 * list for anyone who has not been signing in for years, and a bounded answer
-	 * for everyone else.
-	 */
-	@Operation(summary = "List my active device sessions (legacy array; use the paged form)")
-	@GetMapping(value = "/sessions", params = { "!page", "!size" })
-	public List<SessionDto> sessionsLegacy() {
-		if (legacySessionsSeen.compareAndSet(false, true)) {
-			log.warn(LEGACY_SESSION_MARKER);
-		}
-		return sessionPage(PageRequest.of(0, LEGACY_SESSION_LIMIT)).getContent();
-	}
-
-	/** Most sessions the pre-pagination response carries — see {@link #sessionsLegacy}. */
-	private static final int LEGACY_SESSION_LIMIT = 100;
-
-	/**
-	 * Grepped, so it is one fixed string with no interpolation in it. Says what to
-	 * do rather than only what happened, because the person reading it will be
-	 * reading a log, not this file.
-	 */
-	static final String LEGACY_SESSION_MARKER = "A pre-pagination client called GET /me/sessions "
-			+ "without page/size. The 10.2.1 compatibility array is still carrying traffic — "
-			+ "do not remove it yet (HIN-74).";
-
-	/** One line per JVM run; see {@link #sessionsLegacy}. */
-	private final java.util.concurrent.atomic.AtomicBoolean legacySessionsSeen =
-			new java.util.concurrent.atomic.AtomicBoolean();
 
 	private Page<SessionDto> sessionPage(PageRequest request) {
 		String userId = currentUser.requireId();
