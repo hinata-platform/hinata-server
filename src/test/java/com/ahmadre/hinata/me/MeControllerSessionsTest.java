@@ -1,5 +1,8 @@
 package com.ahmadre.hinata.me;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.issue.IssueWatchService;
@@ -13,6 +16,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 
 import java.time.Instant;
@@ -157,6 +161,51 @@ class MeControllerSessionsTest {
 		verify(me).sessions(eq(USER_ID), pageable.capture());
 		assertThat(pageable.getValue().getPageNumber()).isZero();
 		assertThat(pageable.getValue().getPageSize()).isEqualTo(100);
+	}
+
+	/**
+	 * The compatibility array cannot be removed on a date — it can be removed when
+	 * nothing calls it any more, and this line is how anyone finds that out. It is
+	 * load-bearing for HIN-74, so it is asserted rather than assumed.
+	 */
+	@Test
+	void theLegacyArraySaysSoInTheLogTheFirstTimeItIsUsed() {
+		stub(new PageImpl<>(List.of(), PageRequest.of(0, 100), 0));
+
+		List<String> lines = captureLog(() -> {
+			controller.sessionsLegacy();
+			controller.sessionsLegacy();
+			controller.sessionsLegacy();
+		});
+
+		// Once per run, not once per call: the question it answers is whether
+		// anyone at all is still on the old client, and a per-call line would bury
+		// that answer in the noise it creates.
+		assertThat(lines).containsExactly(MeController.LEGACY_SESSION_MARKER);
+	}
+
+	/** The paged form is what the current app sends, and it says nothing at all. */
+	@Test
+	void thePagedFormIsSilent() {
+		stub(new PageImpl<>(List.of(), PageRequest.of(0, 25), 0));
+
+		assertThat(captureLog(() -> controller.sessions(0, 25))).isEmpty();
+	}
+
+	/** Runs [action] with the controller's logger captured, and returns its lines. */
+	private List<String> captureLog(Runnable action) {
+		Logger logger = (Logger) LoggerFactory.getLogger(MeController.class);
+		ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		logger.addAppender(appender);
+		try {
+			action.run();
+			return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+		}
+		finally {
+			logger.detachAppender(appender);
+			appender.stop();
+		}
 	}
 
 	@Test
