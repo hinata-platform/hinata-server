@@ -21,7 +21,10 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.support.PageableExecutionUtils;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationOperation;
+import org.springframework.data.mongodb.core.aggregation.ConditionalOperators;
 import org.springframework.data.mongodb.core.aggregation.DateOperators;
+import org.springframework.data.mongodb.core.aggregation.Fields;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -78,6 +81,26 @@ public class TimeTrackingService {
 	public static final int MAX_DAYS_BACK = 365;
 	/** Longest timesheet range, in days. */
 	public static final int MAX_RANGE_DAYS = 92;
+	/**
+	 * Longest window the module's two grid views accept, counted inclusively —
+	 * the same day at both ends is one day, not none.
+	 *
+	 * <p>A month is the most either screen draws, and both answer per day: the
+	 * calendar with the entries themselves, the timesheet with a day-to-minutes
+	 * map on every row it returns. Nothing else bounds that width, so the window
+	 * is where the bound goes.
+	 */
+	public static final int MAX_WINDOW_DAYS = 31;
+	/**
+	 * Most entries one calendar window hands back.
+	 *
+	 * <p>Reached only by a month nobody could read — sixty-four entries a day —
+	 * so the answer says {@code truncated} and stops there. Paging is not an
+	 * option a grid can use: it has to place everything at once or place nothing,
+	 * and half a week drawn twice is worse than a week drawn once with a notice.
+	 * The window fills from its start, so what is missing is its tail.
+	 */
+	public static final int CALENDAR_CAP = 2_000;
 
 	private static final String DEFAULT_ACTIVITY = "Development";
 
@@ -89,6 +112,25 @@ public class TimeTrackingService {
 	 */
 	private static final Sort ENTRIES_NEWEST_FIRST = Sort.by(Sort.Order.desc("date"),
 			Sort.Order.desc("startedAt"), Sort.Order.desc("_id"));
+
+	/**
+	 * How a calendar window is ordered: forwards, the way it is read. Only the
+	 * cap makes the order matter, and then it decides which end of the window
+	 * survives — the beginning, so the grid is complete where the reader starts.
+	 */
+	private static final Sort CALENDAR_ORDER = Sort.by(Sort.Order.asc("date"),
+			Sort.Order.asc("startedAt"), Sort.Order.asc("_id"));
+
+	/**
+	 * What a timesheet's sort keys stand in for a row that names no user or no
+	 * project.
+	 *
+	 * <p>Mongo orders a missing value <em>before</em> every string, and these
+	 * rows belong at the end — where the array-shaped route has always put them.
+	 * {@code ~} is above every character an id can begin with, ids being
+	 * ObjectId hex; it is only ever a sort key, and the row keeps the real null.
+	 */
+	private static final String ROW_KEY_LAST = "~";
 
 	private final WorkItemRepository workItems;
 	private final IssueService issues;
@@ -126,6 +168,14 @@ public class TimeTrackingService {
 
 	public record TimesheetRow(String userId, String projectId, Map<LocalDate, Integer> minutesPerDay,
 			int totalMinutes) {
+	}
+
+	/**
+	 * A window of somebody's own entries in calendar order, and whether the
+	 * window held more than {@link #CALENDAR_CAP} of them.
+	 */
+	public record CalendarWindow(LocalDate from, LocalDate to, List<WorkItem> entries,
+			boolean truncated) {
 	}
 
 	// --- reads -------------------------------------------------------------
@@ -509,6 +559,60 @@ public class TimeTrackingService {
 	}
 
 	/**
+	 * Every entry of the caller's own inside a window, for the calendar to draw.
+	 *
+	 * <p>Own, with no way to ask otherwise, exactly as {@link #entries} is: R2 of
+	 * the epic makes a person's time their own, and a calendar is their day laid
+	 * out. Reading somebody else's is what the timesheet and the reports are for,
+	 * each with its own rule.
+	 *
+	 * <p>Not paged, because a grid cannot use a page — it has to place the whole
+	 * window or place nothing. So the window is bounded twice instead: at most
+	 * {@link #MAX_WINDOW_DAYS} days wide, and at most {@link #CALENDAR_CAP}
+	 * entries, with a flag when there were more.
+	 *
+	 * <p>Entries with no start and end come back too. A plain duration occupies
+	 * no hours and cannot be drawn on the grid, but leaving it out would make a
+	 * day somebody logged look empty — a worse lie than showing it beside the
+	 * grid. Where it goes is the client's decision; that it is in the answer is
+	 * this method's.
+	 */
+	public CalendarWindow calendar(LocalDate from, LocalDate to, User user) {
+		assertWindow(from, to);
+		Query query = Query
+				.query(Criteria.where("userId").is(user.getId()).and("date").gte(from).lte(to))
+				.with(CALENDAR_ORDER)
+				// One over the cap: enough to know the window ran past it,
+				// without counting the collection a second time to find out.
+				.limit(CALENDAR_CAP + 1);
+		List<WorkItem> found = mongo.find(query, WorkItem.class);
+		boolean truncated = found.size() > CALENDAR_CAP;
+		return new CalendarWindow(from, to,
+				truncated ? List.copyOf(found.subList(0, CALENDAR_CAP)) : found, truncated);
+	}
+
+	/**
+	 * The window rule the module's two grid views share.
+	 *
+	 * <p>Two keys where the frozen {@code /timesheet} has one, because they are
+	 * two different mistakes and a caller can only fix the one they made. That
+	 * route keeps answering {@code error.time.invalidRange} for both: the
+	 * published app shows the message it names, and its meaning is not ours to
+	 * change under it.
+	 */
+	private void assertWindow(LocalDate from, LocalDate to) {
+		if (from.isAfter(to)) {
+			throw ApiException.badRequest("error.time.rangeNotAscending");
+		}
+		// Counted, never offset. `from.plusDays(31)` on a date near LocalDate.MAX
+		// throws before the guard can answer, and ISO_LOCAL_DATE binds a year of
+		// +999999999 without complaint.
+		if (ChronoUnit.DAYS.between(from, to) >= MAX_WINDOW_DAYS) {
+			throw ApiException.badRequest("error.time.rangeTooLong");
+		}
+	}
+
+	/**
 	 * The caller's other entries on the same day that share time with this one.
 	 *
 	 * <p>A warning, never a refusal. Two entries that overlap are usually a
@@ -680,6 +784,43 @@ public class TimeTrackingService {
 		if (from.isAfter(to) || ChronoUnit.DAYS.between(from, to) > MAX_RANGE_DAYS) {
 			throw ApiException.badRequest("error.time.invalidRange");
 		}
+		return rowsOf(timesheetCriteria(from, to, userId, projectId, requester));
+	}
+
+	/**
+	 * The same matrix, one page of rows at a time — the module's own route.
+	 *
+	 * <p>Same scope and same ordering as the array-shaped one, so the two never
+	 * describe the same week differently; what is new is that an instance whose
+	 * matrix has thousands of rows can now be read at all. The window is the
+	 * module's {@link #MAX_WINDOW_DAYS}, not the quarter the frozen route allows:
+	 * this one is drawn as a grid with a column per day, and a quarter of columns
+	 * is not a grid anybody scrolls.
+	 */
+	public Page<TimesheetRow> timesheetPage(LocalDate from, LocalDate to, String userId,
+			String projectId, int page, int size, User requester) {
+		assertWindow(from, to);
+		Criteria criteria = timesheetCriteria(from, to, userId, projectId, requester);
+		Pageable pageable = PageRequest.of(Math.clamp(page, 0, PAGE_INDEX_MAX),
+				Math.clamp(size, 1, PAGE_MAX));
+		List<TimesheetRow> rows = pagedRowsOf(criteria, pageable);
+		// The count is a second pass over the same grouping, so it is worth
+		// avoiding: PageableExecutionUtils skips it when a first page came back
+		// short, which is every ordinary person reading their own week.
+		return PageableExecutionUtils.getPage(rows, pageable, () -> countRowsOf(criteria));
+	}
+
+	/**
+	 * Who and what a timesheet request may see, expressed as a query.
+	 *
+	 * <p>Shared by both routes so there is one answer rather than two that drift.
+	 * An admin may name any user and any project, or neither; everybody else gets
+	 * their own rows — a foreign {@code userId} is refused, never quietly
+	 * replaced — and may narrow to a project they can see. Both filters are
+	 * applied together, so a project can never widen a user.
+	 */
+	private Criteria timesheetCriteria(LocalDate from, LocalDate to, String userId,
+			String projectId, User requester) {
 		String effectiveUser = userId;
 		if (!requester.isAdmin()) {
 			if (userId == null) {
@@ -699,7 +840,7 @@ public class TimeTrackingService {
 		if (projectId != null) {
 			criteria = criteria.and("projectId").is(projectId);
 		}
-		return rowsOf(criteria);
+		return criteria;
 	}
 
 	/**
@@ -750,6 +891,96 @@ public class TimeTrackingService {
 		rows.sort(Comparator.comparing(TimesheetRow::userId, Comparator.nullsLast(Comparator.naturalOrder()))
 				.thenComparing(TimesheetRow::projectId, Comparator.nullsLast(Comparator.naturalOrder())));
 		return rows;
+	}
+
+	/**
+	 * Rows for one page: grouped, ordered and cut in the database.
+	 *
+	 * <p>Two groupings. The first sums a person's minutes per project and day —
+	 * the same one the array-shaped route runs. The second folds those days into
+	 * the row that carries them, which is the unit being paged: a row is a person
+	 * and a project, and its days are its columns. Only after that is the result
+	 * ordered and cut, so a page costs a page; assembling in Java would build
+	 * every row an instance has to hand back a hundred of them.
+	 *
+	 * <p>The order needs to be total, or the page boundaries are not stable and a
+	 * row is shown twice or not at all as the reader pages on. User and project
+	 * together are unique per row, so those two are the whole key — see
+	 * {@link #ROW_KEY_LAST} for how a row that names neither is kept last.
+	 */
+	private List<TimesheetRow> pagedRowsOf(Criteria criteria, Pageable pageable) {
+		List<AggregationOperation> stages = dayStages(criteria);
+		stages.add(Aggregation
+				.group(Fields.from(Fields.field("userId", "_id.userId"),
+						Fields.field("projectId", "_id.projectId")))
+				.push(new Document("day", "$_id.day").append("minutes", "$minutes")).as("days"));
+		stages.add(Aggregation.addFields()
+				.addField("sortUser")
+				.withValueOf(ConditionalOperators.ifNull("userId").then(ROW_KEY_LAST))
+				.addField("sortProject")
+				.withValueOf(ConditionalOperators.ifNull("projectId").then(ROW_KEY_LAST))
+				.build());
+		stages.add(Aggregation.sort(Sort.by("sortUser", "sortProject")));
+		stages.add(Aggregation.skip(pageable.getOffset()));
+		stages.add(Aggregation.limit(pageable.getPageSize()));
+		List<TimesheetRow> rows = new ArrayList<>();
+		for (Document group : mongo.aggregate(Aggregation.newAggregation(stages), WorkItem.class,
+				Document.class)) {
+			rows.add(rowOf(group));
+		}
+		return rows;
+	}
+
+	/**
+	 * How many rows the whole matrix has — the same grouping without the days,
+	 * which is the half of the work a count actually needs.
+	 */
+	private long countRowsOf(Criteria criteria) {
+		List<AggregationOperation> stages = dayStages(criteria);
+		stages.add(Aggregation.group(Fields.from(Fields.field("userId", "_id.userId"),
+				Fields.field("projectId", "_id.projectId"))));
+		stages.add(Aggregation.count().as("rows"));
+		Document counted = mongo
+				.aggregate(Aggregation.newAggregation(stages), WorkItem.class, Document.class)
+				.getUniqueMappedResult();
+		return counted != null && counted.get("rows") instanceof Number rows ? rows.longValue() : 0;
+	}
+
+	/**
+	 * Minutes per user, project and day — where both paged pipelines start.
+	 *
+	 * <p>Mutable on purpose: each caller appends the stages that make it its own.
+	 */
+	private List<AggregationOperation> dayStages(Criteria criteria) {
+		return new ArrayList<>(List.of(
+				Aggregation.match(criteria),
+				Aggregation.project("userId", "projectId", "durationMinutes")
+						.and(DateOperators.dateOf("date").toString("%Y-%m-%d")).as("day"),
+				Aggregation.group("userId", "projectId", "day").sum("durationMinutes")
+						.as("minutes")));
+	}
+
+	/**
+	 * One grouped document read back as a row.
+	 *
+	 * <p>The total is summed from the days rather than accumulated in the
+	 * pipeline, so it can never disagree with the map beside it — a day the map
+	 * drops is a day the total drops with it.
+	 */
+	private static TimesheetRow rowOf(Document group) {
+		Document key = group.get("_id", Document.class);
+		Map<LocalDate, Integer> perDay = new TreeMap<>();
+		for (Document day : group.getList("days", Document.class, List.of())) {
+			String label = day.getString("day");
+			if (label == null) {
+				continue; // an entry with no date at all belongs to no column
+			}
+			int minutes = day.get("minutes") instanceof Number sum ? sum.intValue() : 0;
+			perDay.merge(LocalDate.parse(label), minutes, Integer::sum);
+		}
+		return new TimesheetRow(key == null ? null : key.getString("userId"),
+				key == null ? null : key.getString("projectId"), perDay,
+				perDay.values().stream().mapToInt(Integer::intValue).sum());
 	}
 
 	// --- rules -------------------------------------------------------------------

@@ -279,6 +279,69 @@ class TimerApiIntegrationTest {
 		assertThat(page.path("size").asInt()).isEqualTo(TimeTrackingService.PAGE_MAX);
 	}
 
+	/**
+	 * A day nothing else in this class writes to, and the demo seed does not
+	 * reach — it fills the last few weeks. These tests read the <em>whole</em> of
+	 * a window, so each needs a day it owns: the context (and its database) is
+	 * shared, and two tests on one day see each other's entries. Well inside the
+	 * 365 days an entry may be dated back.
+	 */
+	private static String quietDay(int daysBack) {
+		return java.time.LocalDate.now(java.time.ZoneOffset.UTC).minusDays(daysBack).toString();
+	}
+
+	@Test
+	@DisplayName("the calendar answers with the window it was asked for")
+	void theCalendarIsAWindow() {
+		String day = quietDay(200);
+		post("/api/v1/time/entries",
+				"{\"durationMinutes\":30,\"date\":\"%s\",\"description\":\"drawn\"}".formatted(day));
+
+		JsonNode window = body(get("/api/v1/time/calendar?from=%s&to=%s".formatted(day, day)));
+
+		assertThat(window.path("from").asText()).isEqualTo(day);
+		assertThat(window.path("to").asText()).isEqualTo(day);
+		assertThat(window.path("truncated").asBoolean()).isFalse();
+		assertThat(window.path("entries")).hasSize(1);
+		assertThat(window.path("entries").get(0).path("description").asText()).isEqualTo("drawn");
+	}
+
+	@Test
+	@DisplayName("a window wider than a month is a 400 that names which limit was hit")
+	void theCalendarWindowIsBounded() {
+		java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+
+		HttpResponse<String> tooWide = get("/api/v1/time/calendar?from=%s&to=%s"
+				.formatted(today.minusDays(60), today));
+		assertThat(tooWide.statusCode()).isEqualTo(400);
+		assertThat(body(tooWide).path("message").asText())
+				.isEqualTo("Range must be at most 31 days");
+
+		HttpResponse<String> backwards = get("/api/v1/time/calendar?from=%s&to=%s"
+				.formatted(today, today.minusDays(1)));
+		assertThat(backwards.statusCode()).isEqualTo(400);
+		assertThat(body(backwards).path("message").asText())
+				.isEqualTo("The end of the range must not be before its start");
+	}
+
+	@Test
+	@DisplayName("the module's timesheet is a page of rows; the frozen one is still an array")
+	void theTimesheetIsAPage() {
+		String day = quietDay(210);
+		post("/api/v1/time/entries",
+				"{\"durationMinutes\":30,\"date\":\"%s\",\"description\":\"filed\"}".formatted(day));
+		String range = "from=%s&to=%s".formatted(day, day);
+
+		JsonNode paged = body(get("/api/v1/time/timesheet?" + range));
+		assertThat(paged.path("totalElements").asInt()).isEqualTo(1);
+		JsonNode row = paged.path("content").get(0);
+		assertThat(row.path("totalMinutes").asInt()).isEqualTo(30);
+		assertThat(row.path("minutesPerDay").path(day).asInt()).isEqualTo(30);
+
+		// The published app reads the other one, and it still answers an array.
+		assertThat(body(get("/api/v1/timesheet?" + range)).isArray()).isTrue();
+	}
+
 	@Test
 	@DisplayName("an entry is edited and deleted through the module's own routes")
 	void editAndDelete() {

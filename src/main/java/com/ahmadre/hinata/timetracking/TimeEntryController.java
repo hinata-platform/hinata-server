@@ -89,6 +89,31 @@ public class TimeEntryController {
 		}
 	}
 
+	/**
+	 * A window of the caller's own entries, for the calendar to draw.
+	 *
+	 * <p>The window is echoed back so a client can tell an answer apart from the
+	 * one it asked for two navigations ago; {@code truncated} says the window
+	 * held more than the server hands out, and the grid says so rather than
+	 * quietly drawing a partial week.
+	 *
+	 * <p>The later layers this view grows — external events (stage 13), absences
+	 * and holidays (stage 10) — are deliberately <em>not</em> here yet as empty
+	 * arrays. An array whose element type is nothing documents nothing and pins
+	 * no shape; the client reads a missing layer as an empty one, so the day
+	 * those stages land they add a field and nothing else has to move.
+	 */
+	public record CalendarResponse(LocalDate from, LocalDate to,
+			List<TimeTrackingController.WorkItemResponse> entries, boolean truncated) {
+
+		static CalendarResponse from(TimeTrackingService.CalendarWindow window) {
+			return new CalendarResponse(window.from(), window.to(),
+					window.entries().stream()
+							.map(TimeTrackingController.WorkItemResponse::from).toList(),
+					window.truncated());
+		}
+	}
+
 	// --- the list --------------------------------------------------------------
 
 	/**
@@ -110,6 +135,22 @@ public class TimeEntryController {
 		return timeTracking
 				.entries(new TimeTrackingService.EntryFilter(from, to, projectId, q), page, size, user)
 				.map(TimeTrackingController.WorkItemResponse::from);
+	}
+
+	/**
+	 * The same entries arranged as a window instead of a page — what the calendar
+	 * reads.
+	 *
+	 * <p>A grid cannot use a page: it places the whole window or places nothing.
+	 * So this route answers with everything in the window at once, and pays for
+	 * that with two bounds — a month wide at most, and
+	 * {@link TimeTrackingService#CALENDAR_CAP} entries at most.
+	 */
+	@GetMapping("/calendar")
+	public CalendarResponse calendar(
+			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+		return CalendarResponse.from(timeTracking.calendar(from, to, currentUser.require()));
 	}
 
 	// --- one entry -------------------------------------------------------------

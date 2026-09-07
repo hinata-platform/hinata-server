@@ -427,6 +427,82 @@ class TimeEntryIntegrationTest {
 				HttpStatus.BAD_REQUEST, "error.time.rangeNotAscending");
 	}
 
+	// --- the calendar window ---------------------------------------------------------
+
+	private TimeTrackingService.CalendarWindow window(LocalDate from, LocalDate to, User as) {
+		return timeTracking.calendar(from, to, as);
+	}
+
+	@Test
+	@DisplayName("a window holds the caller's own entries, earliest first")
+	void theCalendarIsOwnEntriesInOrder() {
+		WorkItem later = create(spanning(project.getId(), issue.getId(), 14, 15), owner);
+		WorkItem earlier = create(spanning(null, null, 9, 10), owner);
+		create(spanning(project.getId(), issue.getId(), 9, 10), peer);
+
+		TimeTrackingService.CalendarWindow window = window(TODAY, TODAY, owner);
+
+		assertThat(window.entries()).extracting(WorkItem::getId)
+				.as("the peer's identical hours are not in the owner's calendar")
+				.containsExactly(earlier.getId(), later.getId());
+		assertThat(window.truncated()).isFalse();
+		assertThat(window.from()).isEqualTo(TODAY);
+		assertThat(window.to()).isEqualTo(TODAY);
+	}
+
+	@Test
+	@DisplayName("an entry with no clock is in the window too")
+	void theCalendarKeepsDurationOnlyEntries() {
+		// It cannot be drawn on the grid, but leaving it out would make a day
+		// somebody logged look empty — where to put it is the client's problem.
+		WorkItem plain = create(new TimeTrackingService.NewEntry(null, null, 90, TODAY, null,
+				"no clock", null, null, null, null), owner);
+
+		assertThat(window(TODAY, TODAY, owner).entries()).extracting(WorkItem::getId)
+				.containsExactly(plain.getId());
+	}
+
+	@Test
+	@DisplayName("the window is bounded at both ends, each with its own message")
+	void theWindowHasTwoLimits() {
+		assertStatus(() -> window(TODAY, TODAY.minusDays(1), owner), HttpStatus.BAD_REQUEST,
+				"error.time.rangeNotAscending");
+		// Inclusive: thirty-one days is a window, thirty-two is not.
+		assertThat(window(TODAY.minusDays(30), TODAY, owner).entries()).isEmpty();
+		assertStatus(() -> window(TODAY.minusDays(31), TODAY, owner), HttpStatus.BAD_REQUEST,
+				"error.time.rangeTooLong");
+	}
+
+	@Test
+	@DisplayName("a year of +999999999 is a bad request, not a stack trace")
+	void anAbsurdWindowIsRefusedByCounting() {
+		// The guard counts the days between rather than offsetting one end, which
+		// would throw on a date near LocalDate.MAX before it could answer.
+		assertStatus(() -> window(TODAY, LocalDate.MAX, owner), HttpStatus.BAD_REQUEST,
+				"error.time.rangeTooLong");
+		assertStatus(() -> window(LocalDate.MIN, TODAY, owner), HttpStatus.BAD_REQUEST,
+				"error.time.rangeTooLong");
+	}
+
+	@Test
+	@DisplayName("a window past the cap is cut and says so")
+	void anOverfullWindowIsTruncated() {
+		// Inserted straight into the collection: this is about what the read does
+		// when a window holds more than it hands out, and writing two thousand
+		// entries through the service would only test the service twice.
+		List<WorkItem> many = new ArrayList<>();
+		for (int i = 0; i < TimeTrackingService.CALENDAR_CAP + 1; i++) {
+			many.add(WorkItem.builder().userId(owner.getId()).date(TODAY).durationMinutes(1)
+					.activityType("Development").source(WorkItem.Source.APP).build());
+		}
+		mongo.insert(many, WorkItem.class);
+
+		TimeTrackingService.CalendarWindow window = window(TODAY, TODAY, owner);
+
+		assertThat(window.entries()).hasSize(TimeTrackingService.CALENDAR_CAP);
+		assertThat(window.truncated()).isTrue();
+	}
+
 	// --- the overlap advice ---------------------------------------------------------
 
 	@Test
