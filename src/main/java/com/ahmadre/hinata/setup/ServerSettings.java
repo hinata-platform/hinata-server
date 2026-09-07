@@ -2,6 +2,7 @@ package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.common.ApprovalPeriodConsistent;
 import com.ahmadre.hinata.common.TimePolicy;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -490,6 +491,10 @@ public class ServerSettings {
 		 */
 		@Transient
 		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		// Omitted when absent, so the view inside the view does not serialize its
+		// own empty "effective": null — the block is a TimeTracking like any
+		// other, and only the outer one ever carries a resolution.
+		@JsonInclude(JsonInclude.Include.NON_NULL)
 		private TimeTracking effective;
 
 		/** Per-field overrides for the required-field policy. */

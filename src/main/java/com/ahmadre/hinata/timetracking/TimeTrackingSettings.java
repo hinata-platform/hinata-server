@@ -194,7 +194,11 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 		return override != null ? override : env().isArbzgHintsEnabled();
 	}
 
-	/** How long entries and their free text are kept; {@code 0} means indefinitely. */
+	/**
+	 * How long entries are kept, and how long a departed person's free text is.
+	 * {@code 0} means indefinitely. The two are different rules — see
+	 * {@link Retention}.
+	 */
 	public Retention retention() {
 		ServerSettings.TimeTracking.Retention override = db().getRetention();
 		HinataProperties.TimeTracking.Retention fallback = env().getRetention();
@@ -239,7 +243,13 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 			LocalDate anchorDate, Integer days) {
 	}
 
-	/** Retention in months from the entry's day; {@code 0} keeps data indefinitely. */
+	/**
+	 * Retention in months from the entry's day; {@code 0} keeps data
+	 * indefinitely. {@code descriptionPurgeMonths} empties the free text on a
+	 * <em>deleted</em> account's entries only — the hours stay, because they are
+	 * the project's record. {@code entryPurgeMonths} removes entries outright,
+	 * for everyone.
+	 */
 	public record Retention(int descriptionPurgeMonths, int entryPurgeMonths) {
 	}
 

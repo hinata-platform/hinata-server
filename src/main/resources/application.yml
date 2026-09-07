@@ -187,7 +187,9 @@ hinata:
     arbzg-hints-enabled: ${HINATA_TIME_TRACKING_ARBZG_HINTS_ENABLED:false}
     retention:
       # Months from an entry's day; 0 keeps the data indefinitely, which is what
-      # an instance without a deletion concept should do.
+      # an instance without a deletion concept should do. Two different rules:
+      # the first empties the free text on the entries of DELETED accounts only,
+      # the second removes entries outright, for everyone.
       description-purge-months: ${HINATA_TIME_TRACKING_DESCRIPTION_PURGE_MONTHS:0}
       entry-purge-months: ${HINATA_TIME_TRACKING_ENTRY_PURGE_MONTHS:0}
     # Shown before the module is first used; blank uses the built-in template.
