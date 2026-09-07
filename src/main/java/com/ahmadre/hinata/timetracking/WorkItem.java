@@ -53,7 +53,16 @@ import java.util.List;
 @CompoundIndex(name = "date_user_project", def = "{'date': 1, 'userId': 1, 'projectId': 1}")
 public class WorkItem {
 
-	/** Where an entry came from. Absent on documents written before 2.0 — read as {@link #APP}. */
+	/**
+	 * Where an entry came from. Absent on documents written before 2.0 — read as
+	 * {@link #APP}.
+	 *
+	 * <p>Four of these are written today: {@code APP}, {@code MCP},
+	 * {@code SMART_COMMIT} and the {@code LEGACY} remainders the schema
+	 * migration settles. The rest name the writers the later stages of the epic
+	 * bring — a timer, a calendar import, a CSV import, a shared entry — and are
+	 * listed here so the stored value never has to change meaning later.
+	 */
 	public enum Source {
 		/** Logged by hand in the app (or through the REST API). */
 		APP,

@@ -15,7 +15,14 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.RecordComponent;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import org.assertj.core.api.InstanceOfAssertFactories;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -85,7 +92,7 @@ class TimeTrackingRequestTest {
 		assertThat(violations(request(30, tooMany, null))).containsExactly("tags");
 
 		assertThat(violations(request(30, List.of("x".repeat(41)), null)))
-				.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
+				.singleElement(InstanceOfAssertFactories.STRING)
 				.startsWith("tags[0]");
 
 		assertThat(violations(request(30, Stream.iterate(1, i -> i + 1).limit(20)
@@ -172,23 +179,38 @@ class TimeTrackingRequestTest {
 	void tagsAreTrimmedDeduplicatedAndNeverNull() {
 		assertThat(TimeTrackingService.normalizeTags(null)).isEmpty();
 		assertThat(TimeTrackingService.normalizeTags(new ArrayList<>(
-				java.util.Arrays.asList(" a ", "a", "", "   ", null, "b"))))
+				Arrays.asList(" a ", "a", "", "   ", null, "b"))))
 				.containsExactly("a", "b");
 	}
 
 	/** Sanity: the response DTO names every entity field, so nothing new can be forgotten. */
 	@Test
 	void theResponseNamesEveryFieldOfTheEntity() {
-		Set<String> entityFields = Stream.of(WorkItem.class.getDeclaredFields())
-				.filter(field -> !field.isSynthetic() && !java.lang.reflect.Modifier
-						.isStatic(field.getModifiers()))
-				.map(java.lang.reflect.Field::getName)
-				.collect(java.util.stream.Collectors.toSet());
-		Set<String> dtoComponents = Stream
-				.of(TimeTrackingController.WorkItemResponse.class.getRecordComponents())
-				.map(java.lang.reflect.RecordComponent::getName)
-				.collect(java.util.stream.Collectors.toSet());
+		assertThat(componentsOf(TimeTrackingController.WorkItemResponse.class))
+				.containsExactlyInAnyOrderElementsOf(entityFields());
+	}
 
-		assertThat(dtoComponents).containsExactlyInAnyOrderElementsOf(entityFields);
+	/**
+	 * The MCP view of an entry is the same shape by a different name, and it has
+	 * no parity test of its own — so a field added to the entity would fail the
+	 * assertion above, be added to the REST DTO, and go quietly missing from
+	 * every MCP client.
+	 */
+	@Test
+	void theMcpViewNamesEveryFieldOfTheEntityToo() {
+		assertThat(componentsOf(com.ahmadre.hinata.mcp.TimeTrackingTools.WorkItemView.class))
+				.containsExactlyInAnyOrderElementsOf(entityFields());
+	}
+
+	private static Set<String> entityFields() {
+		return Stream.of(WorkItem.class.getDeclaredFields())
+				.filter(field -> !field.isSynthetic() && !Modifier.isStatic(field.getModifiers()))
+				.map(Field::getName)
+				.collect(Collectors.toSet());
+	}
+
+	private static Set<String> componentsOf(Class<?> record) {
+		return Stream.of(record.getRecordComponents()).map(RecordComponent::getName)
+				.collect(Collectors.toSet());
 	}
 }

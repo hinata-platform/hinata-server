@@ -169,6 +169,32 @@ class WorkItemLifecycleIntegrationTest {
 				.containsEntry(project.getId(), 30);
 	}
 
+	/**
+	 * Detaching {@code $unset}s the field, so a detached entry has no
+	 * {@code issueId} rather than a null one — and the project-deletion path
+	 * that sweeps these orphans onto the target project asks for them with
+	 * {@code issueId is null}. That those two meet is a Mongo semantic, not a
+	 * visible property of either line, so it is pinned here: rephrase the sweep
+	 * as {@code $ne: null}, or start writing an explicit null instead of
+	 * unsetting, and hours would silently stay behind on a project that is gone.
+	 */
+	@Test
+	void aDetachedEntryIsFoundByAQueryForANullIssue() {
+		WorkItem entry = log(30);
+		issues.delete(issue.getId(), lead);
+
+		assertThat(mongo.getCollection("work_items")
+				.find(new Document("_id", new org.bson.types.ObjectId(entry.getId())))
+				.first())
+				.satisfies(raw -> assertThat(raw.containsKey("issueId"))
+						.as("unset, not set to null").isFalse());
+		assertThat(mongo.find(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("projectId")
+						.is(project.getId()).and("issueId").is(null)), WorkItem.class))
+				.as("the sweep the project deletion runs finds it")
+				.extracting(WorkItem::getId).containsExactly(entry.getId());
+	}
+
 	/** A detached entry is still the owner's to correct or remove — and that must not 500. */
 	@Test
 	void aDetachedEntryCanStillBeEditedAndDeleted() {

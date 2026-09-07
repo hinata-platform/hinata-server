@@ -75,6 +75,14 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 	public record Result(long defaultsBackfilled, long legacyEntriesCreated, long legacyMinutes) {
 	}
 
+	/** What one pass over the remainders did — named, so no caller counts brackets. */
+	private record Settled(long created, long minutes) {
+
+		Settled plus(Settled more) {
+			return new Settled(created + more.created(), minutes + more.minutes());
+		}
+	}
+
 	@Override
 	public void run(ApplicationArguments args) {
 		migrate();
@@ -89,13 +97,13 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 			return new Result(0, 0, 0);
 		}
 		long defaults = backfillDefaults(mongo.getCollection("work_items"));
-		long[] legacy = backfillLegacyRemainders();
+		Settled legacy = backfillLegacyRemainders();
 		markers.insertOne(new Document("_id", MARKER).append("ranAt", Date.from(clock.instant())));
-		if (defaults > 0 || legacy[0] > 0) {
+		if (defaults > 0 || legacy.created() > 0) {
 			log.info("WorkItemSchemaMigration: backfilled defaults on {} entry(ies), created {} legacy "
-					+ "entry(ies) worth {} minute(s)", defaults, legacy[0], legacy[1]);
+					+ "entry(ies) worth {} minute(s)", defaults, legacy.created(), legacy.minutes());
 		}
-		return new Result(defaults, legacy[0], legacy[1]);
+		return new Result(defaults, legacy.created(), legacy.minutes());
 	}
 
 	/**
@@ -114,10 +122,8 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 		return changed;
 	}
 
-	/** Returns {entries created, minutes covered}. */
-	private long[] backfillLegacyRemainders() {
-		long created = 0;
-		long minutes = 0;
+	private Settled backfillLegacyRemainders() {
+		Settled total = new Settled(0, 0);
 		MongoCollection<Document> issues = mongo.getCollection("issues");
 		List<Document> batch = new ArrayList<>(BATCH);
 		try (MongoCursor<Document> cursor = issues
@@ -128,23 +134,19 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 			while (cursor.hasNext()) {
 				batch.add(cursor.next());
 				if (batch.size() == BATCH) {
-					long[] done = settle(batch);
-					created += done[0];
-					minutes += done[1];
+					total = total.plus(settle(batch));
 					batch.clear();
 				}
 			}
 		}
 		if (!batch.isEmpty()) {
-			long[] done = settle(batch);
-			created += done[0];
-			minutes += done[1];
+			total = total.plus(settle(batch));
 		}
-		return new long[] { created, minutes };
+		return total;
 	}
 
 	/** One batch: sum the entries of these issues in one query, insert the remainders. */
-	private long[] settle(List<Document> issues) {
+	private Settled settle(List<Document> issues) {
 		List<String> ids = issues.stream().map(doc -> doc.get("_id").toString()).toList();
 		Map<String, Long> tracked = trackedMinutes(ids);
 		long created = 0;
@@ -172,7 +174,7 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 				}
 			}
 		}
-		return new long[] { created, minutes };
+		return new Settled(created, minutes);
 	}
 
 	/**
