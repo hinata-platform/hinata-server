@@ -495,7 +495,36 @@ class TimeTrackingRulesIntegrationTest {
 		}
 
 		assertThat(workItems.count()).isEqualTo(12);
+		// The counter has to be the sum, not whichever writer wrote last. Read
+		// and write it back and twelve simultaneous entries land as ninety.
 		assertThat(spentMinutes()).isEqualTo(120);
+	}
+
+	/**
+	 * The increments are how the counter is maintained; the sum of the entries
+	 * is what it means. This states that, so the two cannot drift apart quietly
+	 * — a delta dropped on any write path shows up here.
+	 */
+	@Test
+	void theCounterEqualsTheSumOfTheEntriesAfterEveryKindOfWrite() {
+		WorkItem first = add(onDay(TODAY_UTC), member);
+		add(new TimeTrackingService.NewWorkItem(45, TODAY_UTC, null, null, null, null, null, null),
+				member);
+		WorkItem third = add(new TimeTrackingService.NewWorkItem(20, TODAY_UTC, null, null, null,
+				null, null, null), member);
+
+		timeTracking.update(first.getId(), new TimeTrackingService.WorkItemPatch(90, null, null,
+				null, false, null, false, null, null, null), member);
+		timeTracking.delete(third.getId(), member);
+		// A note is not hours: this must move nothing.
+		timeTracking.update(first.getId(), new TimeTrackingService.WorkItemPatch(null, null, null,
+				"a note", false, null, false, null, null, null), member);
+
+		int counted = spentMinutes();
+		assertThat(counted).isEqualTo(90 + 45);
+		timeTracking.syncSpentTime(issue.getId());
+		assertThat(spentMinutes()).as("the increments agree with a full recount")
+				.isEqualTo(counted);
 	}
 
 	/**

@@ -16,9 +16,11 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.util.ArrayList;
 import java.util.Date;
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 /**
  * The one-time backfill that lets {@code spentMinutes} become a derived number
@@ -168,6 +170,58 @@ class WorkItemSchemaMigrationIntegrationTest {
 		assertThat(racing.legacyEntriesCreated()).isZero();
 		assertThat(workItems.findAll()).singleElement()
 				.satisfies(entry -> assertThat(entry.getDurationMinutes()).isEqualTo(480));
+	}
+
+	/**
+	 * Two instances that boot together both finish, and both write the marker.
+	 * The second write must not throw — an exception out of an ApplicationRunner
+	 * is a failed start, which would mean the guard against a race costs a boot
+	 * to the very race it guards.
+	 */
+	@Test
+	void bothInstancesOfARaceFinishAndStart() {
+		issueWith("HIN-1", 480);
+
+		migration.migrate();
+		// The racing instance never saw the marker, and writes its own at the end.
+		WorkItemSchemaMigration.Result racing = assertDoesNotThrow(() -> {
+			mongo.getCollection(WorkItemSchemaMigration.MARKERS).deleteMany(new Document());
+			return migration.migrate();
+		});
+
+		assertThat(racing.legacyEntriesCreated()).isZero();
+		assertThat(workItems.findAll()).singleElement()
+				.satisfies(entry -> assertThat(entry.getDurationMinutes()).isEqualTo(480));
+		assertThat(mongo.getCollection(WorkItemSchemaMigration.MARKERS)
+				.countDocuments(new Document("_id", WorkItemSchemaMigration.MARKER)))
+				.as("one marker, written twice without complaint").isEqualTo(1);
+	}
+
+	/**
+	 * A first run killed halfway — a deploy timeout during a walk of the whole
+	 * issues collection — leaves parts on disk and no marker, so the next boot
+	 * does the work again. It has to write the parts that are missing, not
+	 * measure the remainder against the parts it already wrote: that would make
+	 * every repeat shrink the number, collide its first slices with what is
+	 * there, and silently lose the difference.
+	 */
+	@Test
+	void aRunResumedAfterAnInterruptionWritesWhatIsMissing() {
+		Issue issue = issueWith("HIN-1", 3000);
+		// What an interrupted run leaves behind: the first slice, no marker.
+		mongo.insert(WorkItem.builder().id("legacy:" + issue.getId() + ":0")
+				.issueId(issue.getId()).projectId("p1").userId(null).date(LocalDate.now())
+				.durationMinutes(TimeTrackingService.MAX_MINUTES).activityType("Development")
+				.description("").billable(false).tags(new ArrayList<>())
+				.source(WorkItem.Source.LEGACY).build());
+
+		migration.migrate();
+
+		assertThat(workItems.findAll().stream().mapToInt(WorkItem::getDurationMinutes).sum())
+				.as("every minute the counter claimed is on disk").isEqualTo(3000);
+		assertThat(workItems.findAll()).hasSize(3)
+				.allSatisfy(entry -> assertThat(entry.getDurationMinutes())
+						.isBetween(1, TimeTrackingService.MAX_MINUTES));
 	}
 
 	/**

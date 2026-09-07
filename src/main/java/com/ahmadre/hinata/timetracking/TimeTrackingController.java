@@ -113,9 +113,15 @@ public class TimeTrackingController {
 		private Instant startedAt;
 		@Setter(AccessLevel.NONE)
 		private Instant endedAt;
+		// Neither accessor: these are how the two setters above remember they
+		// were called, and a generated setter would put them in the request
+		// schema — {"startedAtSet": true} would then clear an interval through a
+		// property no API documents.
 		@Getter(AccessLevel.NONE)
+		@Setter(AccessLevel.NONE)
 		private boolean startedAtSet;
 		@Getter(AccessLevel.NONE)
+		@Setter(AccessLevel.NONE)
 		private boolean endedAtSet;
 
 		public void setStartedAt(Instant startedAt) {

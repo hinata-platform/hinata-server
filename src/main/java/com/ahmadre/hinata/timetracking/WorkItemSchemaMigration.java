@@ -3,6 +3,7 @@ package com.ahmadre.hinata.timetracking;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.model.Projections;
+import com.mongodb.client.model.UpdateOptions;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
@@ -98,7 +99,14 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 		}
 		long defaults = backfillDefaults(mongo.getCollection("work_items"));
 		Settled legacy = backfillLegacyRemainders();
-		markers.insertOne(new Document("_id", MARKER).append("ranAt", Date.from(clock.instant())));
+		// Upsert, not insert: two instances that pass the check together both get
+		// here, and the second one's insert would throw a raw driver duplicate-key
+		// error out of the ApplicationRunner — Spring Boot turns that into a
+		// failed start. The race this whole class guards against would have cost
+		// a boot.
+		markers.updateOne(new Document("_id", MARKER),
+				new Document("$setOnInsert", new Document("ranAt", Date.from(clock.instant()))),
+				new UpdateOptions().upsert(true));
 		if (defaults > 0 || legacy.created() > 0) {
 			log.info("WorkItemSchemaMigration: backfilled defaults on {} entry(ies), created {} legacy "
 					+ "entry(ies) worth {} minute(s)", defaults, legacy.created(), legacy.minutes());
@@ -206,10 +214,25 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 		}
 	}
 
-	/** Σ durationMinutes per issue for the given issue ids, straight from Mongo. */
+	/**
+	 * Σ durationMinutes per issue for the given issue ids — of the entries
+	 * somebody actually logged, never of the ones this class wrote.
+	 *
+	 * <p>Counting our own parts would make a resumed run lose time. A run that
+	 * is interrupted halfway (a boot-time walk of the issues collection is the
+	 * kind of thing a deploy timeout kills) leaves some parts on disk and no
+	 * marker, so the next boot does the work again. If those parts counted as
+	 * tracked, the remainder would come out smaller, the loop would start at
+	 * part 0 again, its first slices would collide with the parts already there
+	 * and be skipped as duplicates — and the difference would simply be gone,
+	 * with no error and no log line. Measured against real entries only, the
+	 * part index is a function of the original counter, so a repeat writes
+	 * exactly the parts that are missing.
+	 */
 	private Map<String, Long> trackedMinutes(List<String> issueIds) {
 		Aggregation aggregation = Aggregation.newAggregation(
-				Aggregation.match(Criteria.where("issueId").in(issueIds)),
+				Aggregation.match(Criteria.where("issueId").in(issueIds)
+						.and("source").ne(WorkItem.Source.LEGACY.name())),
 				Aggregation.group("issueId").sum("durationMinutes").as("total"));
 		Map<String, Long> sums = new HashMap<>();
 		for (Document row : mongo.aggregate(aggregation, WorkItem.class, Document.class)) {

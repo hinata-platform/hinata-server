@@ -145,17 +145,29 @@ public class ReportService {
 		return result;
 	}
 
+	/**
+	 * Minutes per activity in one project. Summed in the query for the same
+	 * reason as {@link #timePerProject}: a busy project over the permitted year
+	 * is tens of thousands of entries, and the answer is about six numbers.
+	 */
 	public Map<String, Integer> timePerActivity(String projectId, LocalDate from, LocalDate to,
 			User user) {
 		requireMember(projectId, user);
 		requireRange(from, to);
-		List<WorkItem> items = mongo.find(Query.query(Criteria.where("projectId").is(projectId)
-				.and("date").gte(from).lte(to)), WorkItem.class);
+		Aggregation aggregation = Aggregation.newAggregation(
+				Aggregation.match(Criteria.where("projectId").is(projectId)
+						.and("date").gte(from).lte(to)),
+				Aggregation.group("activityType").sum("durationMinutes").as("minutes"));
 		Map<String, Integer> result = new LinkedHashMap<>();
-		// Nothing is dropped: an entry without an activity counts under the default.
-		items.forEach(item -> result.merge(
-				item.getActivityType() != null ? item.getActivityType() : DEFAULT_ACTIVITY,
-				item.getDurationMinutes(), Integer::sum));
+		for (Document row : mongo.aggregate(aggregation, WorkItem.class, Document.class)) {
+			if (row.get("minutes") instanceof Number minutes) {
+				// Nothing is dropped: an entry without an activity counts under
+				// the default, which is what one written before 2.0 reads as.
+				Object activity = row.get("_id");
+				result.merge(activity != null ? activity.toString() : DEFAULT_ACTIVITY,
+						minutes.intValue(), Integer::sum);
+			}
+		}
 		return result;
 	}
 

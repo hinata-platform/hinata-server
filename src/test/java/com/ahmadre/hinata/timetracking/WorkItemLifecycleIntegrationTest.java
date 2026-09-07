@@ -12,24 +12,30 @@ import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
 import org.bson.Document;
+import org.bson.types.ObjectId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.Date;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
@@ -142,7 +148,7 @@ class WorkItemLifecycleIntegrationTest {
 				assertThat(item.getProjectId()).isEqualTo(target.getId()));
 		assertThat(reports.timePerProject(DAY.minusDays(2), DAY.plusDays(2), lead))
 				.as("the hours count where the issue now lives, and only there")
-				.containsExactly(org.assertj.core.api.Assertions.entry(target.getId(), 75));
+				.containsExactly(entry(target.getId(), 75));
 		assertThat(timeTracking.timesheet(DAY.minusDays(2), DAY.plusDays(2), null,
 				target.getId(), member)).singleElement()
 				.satisfies(row -> assertThat(row.totalMinutes()).isEqualTo(75));
@@ -184,13 +190,12 @@ class WorkItemLifecycleIntegrationTest {
 		issues.delete(issue.getId(), lead);
 
 		assertThat(mongo.getCollection("work_items")
-				.find(new Document("_id", new org.bson.types.ObjectId(entry.getId())))
+				.find(new Document("_id", new ObjectId(entry.getId())))
 				.first())
 				.satisfies(raw -> assertThat(raw.containsKey("issueId"))
 						.as("unset, not set to null").isFalse());
-		assertThat(mongo.find(org.springframework.data.mongodb.core.query.Query.query(
-				org.springframework.data.mongodb.core.query.Criteria.where("projectId")
-						.is(project.getId()).and("issueId").is(null)), WorkItem.class))
+		assertThat(mongo.find(Query.query(Criteria.where("projectId").is(project.getId())
+				.and("issueId").is(null)), WorkItem.class))
 				.as("the sweep the project deletion runs finds it")
 				.extracting(WorkItem::getId).containsExactly(entry.getId());
 	}
@@ -228,7 +233,7 @@ class WorkItemLifecycleIntegrationTest {
 		});
 		assertThat(reports.timePerProject(DAY.minusDays(2), DAY.plusDays(2), admin))
 				.as("no null key — it has no name to show and no JSON to serialize to")
-				.containsExactly(org.assertj.core.api.Assertions.entry(project.getId(), 30));
+				.containsExactly(entry(project.getId(), 30));
 	}
 
 	/**
@@ -245,8 +250,7 @@ class WorkItemLifecycleIntegrationTest {
 				.append("issueId", issue.getId())
 				.append("projectId", project.getId())
 				.append("userId", member.getId())
-				.append("date", java.util.Date.from(
-						DAY.atTime(13, 45).toInstant(java.time.ZoneOffset.UTC)))
+				.append("date", Date.from(DAY.atTime(13, 45).toInstant(ZoneOffset.UTC)))
 				.append("durationMinutes", 20)
 				.append("activityType", "Development")
 				.append("billable", false)
@@ -258,7 +262,7 @@ class WorkItemLifecycleIntegrationTest {
 
 		assertThat(rows).singleElement().satisfies(row -> {
 			assertThat(row.minutesPerDay()).containsExactly(
-					org.assertj.core.api.Assertions.entry(DAY, 50));
+					entry(DAY, 50));
 			assertThat(row.totalMinutes()).isEqualTo(50);
 		});
 	}

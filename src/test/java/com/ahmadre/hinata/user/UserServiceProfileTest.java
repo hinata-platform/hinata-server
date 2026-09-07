@@ -1,4 +1,4 @@
-package com.ahmadre.hinata.me;
+package com.ahmadre.hinata.user;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -8,49 +8,46 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.ahmadre.hinata.auth.PasswordResetService;
-import com.ahmadre.hinata.auth.TokenService;
-import com.ahmadre.hinata.config.HinataProperties;
-import com.ahmadre.hinata.notification.GatewayService;
-import com.ahmadre.hinata.notification.NotificationService;
-import com.ahmadre.hinata.project.ProjectService;
-import com.ahmadre.hinata.team.TeamRepository;
-import com.ahmadre.hinata.user.User;
-import com.ahmadre.hinata.user.UserRepository;
-import com.ahmadre.hinata.user.UserService;
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.UserWordsFixture;
+import com.ahmadre.hinata.notification.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
-import org.springframework.http.HttpStatus;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 /**
- * {@code pronouns} is a free-text profile field like {@code title}: only
- * trimmed and saved when present, left untouched when the request omits it.
+ * Patching a profile: the one implementation behind both {@code /api/v1/me} and
+ * {@code /api/v1/users/me}.
+ *
+ * <p>{@code pronouns} is a free-text field like {@code title} — trimmed and
+ * saved when present, left untouched when the request omits it. The time zone
+ * is the one value that can be refused, and it is checked before anything is
+ * written, so a refusal cannot leave the caller's user half-changed.
  */
-class MeServiceProfileTest {
+class UserServiceProfileTest {
 
 	private UserRepository users;
-	private MeService me;
+	private UserService userService;
 
 	@BeforeEach
 	void setUp() {
 		users = mock(UserRepository.class);
 		when(users.save(any())).thenAnswer(inv -> inv.getArgument(0));
-		me = new MeService(users, mock(UserService.class), mock(PasswordEncoder.class),
-				mock(SessionService.class), mock(TotpService.class), mock(RecoveryCodeService.class),
-				mock(AccountMailService.class), mock(HinataProperties.class), mock(TeamRepository.class),
-				mock(ProjectService.class), mock(NotificationService.class), mock(GatewayService.class),
-				mock(AuditService.class), mock(TokenService.class), mock(PasswordResetService.class),
-				com.ahmadre.hinata.common.UserWordsFixture.real());
+		userService = new UserService(users, mock(PasswordEncoder.class),
+				mock(MongoTemplate.class), mock(AuditService.class),
+				mock(NotificationService.class), mock(SecurityPolicy.class),
+				UserWordsFixture.real());
 	}
 
 	@Test
 	void updateProfile_trimsAndSavesPronouns() {
 		User user = User.builder().id("u-1").build();
 
-		User saved = me.updateProfile(user, null, null, "  she/her  ", null, null);
+		User saved = userService.updateProfile(user, null, null, "  she/her  ", null, null);
 
 		assertThat(saved.getPronouns()).isEqualTo("she/her");
 	}
@@ -59,7 +56,7 @@ class MeServiceProfileTest {
 	void updateProfile_storesAKnownTimezone() {
 		User user = User.builder().id("u-1").build();
 
-		User saved = me.updateProfile(user, null, null, null, null, " Europe/Berlin ");
+		User saved = userService.updateProfile(user, null, null, null, null, " Europe/Berlin ");
 
 		assertThat(saved.getTimezone()).isEqualTo("Europe/Berlin");
 	}
@@ -68,7 +65,7 @@ class MeServiceProfileTest {
 	void updateProfile_rejectsAnUnknownTimezoneBeforeSavingAnything() {
 		User user = User.builder().id("u-1").timezone("Europe/Berlin").build();
 
-		assertThatThrownBy(() -> me.updateProfile(user, "New Name", null, null, null, "Mars/Olympus"))
+		assertThatThrownBy(() -> userService.updateProfile(user, "New Name", null, null, null, "Mars/Olympus"))
 				.isInstanceOf(ApiException.class)
 				.satisfies(thrown -> {
 					assertThat(((ApiException) thrown).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -82,16 +79,16 @@ class MeServiceProfileTest {
 	void updateProfile_blankClearsTheTimezoneAndAbsentKeepsIt() {
 		User user = User.builder().id("u-1").timezone("Europe/Berlin").build();
 
-		assertThat(me.updateProfile(user, null, null, null, null, null).getTimezone())
+		assertThat(userService.updateProfile(user, null, null, null, null, null).getTimezone())
 				.isEqualTo("Europe/Berlin");
-		assertThat(me.updateProfile(user, null, null, null, null, "  ").getTimezone()).isNull();
+		assertThat(userService.updateProfile(user, null, null, null, null, "  ").getTimezone()).isNull();
 	}
 
 	@Test
 	void updateProfile_leavesPronounsUntouchedWhenOmitted() {
 		User user = User.builder().id("u-1").pronouns("they/them").build();
 
-		User saved = me.updateProfile(user, "New Name", null, null, null, null);
+		User saved = userService.updateProfile(user, "New Name", null, null, null, null);
 
 		assertThat(saved.getPronouns()).isEqualTo("they/them");
 	}

@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.mcp.TimeTrackingTools;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
@@ -198,7 +199,7 @@ class TimeTrackingRequestTest {
 	 */
 	@Test
 	void theMcpViewNamesEveryFieldOfTheEntityToo() {
-		assertThat(componentsOf(com.ahmadre.hinata.mcp.TimeTrackingTools.WorkItemView.class))
+		assertThat(componentsOf(TimeTrackingTools.WorkItemView.class))
 				.containsExactlyInAnyOrderElementsOf(entityFields());
 	}
 

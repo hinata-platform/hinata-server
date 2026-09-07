@@ -21,7 +21,7 @@ public class UserController {
 
 	private final UserRepository users;
 	private final CurrentUser currentUser;
-	private final com.ahmadre.hinata.me.MeService me;
+	private final UserService userService;
 
 	/**
 	 * The user summary every people-chip in the app renders from — comment
@@ -105,8 +105,8 @@ public class UserController {
 	/** The older of the two profile routes; both patch through the same service. */
 	@PatchMapping("/api/v1/users/me")
 	public User updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
-		return me.updateProfile(currentUser.require(), request.displayName(), request.title(),
-				request.pronouns(), request.locale(), request.timezone());
+		return userService.updateProfile(currentUser.require(), request.displayName(),
+				request.title(), request.pronouns(), request.locale(), request.timezone());
 	}
 
 	// Admin user management lives in com.ahmadre.hinata.admin.AdminUserController.

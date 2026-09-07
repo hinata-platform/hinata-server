@@ -22,6 +22,33 @@ import java.util.Set;
 public class UserService {
 
 	/**
+	 * Patches a profile. The one implementation behind both
+	 * {@code PATCH /api/v1/me} and {@code PATCH /api/v1/users/me} — two
+	 * hand-kept copies of these five assignments had already drifted apart over
+	 * whether a display name is trimmed.
+	 *
+	 * <p>It lives here rather than in {@code me}, where the rest of the account
+	 * self-service lives, because {@code me} already depends on this package and
+	 * the reverse arrow would make neither readable on its own.
+	 *
+	 * <p>Every field absent from the request is left alone. The zone is
+	 * normalized before anything is written: it is the only value that can be
+	 * refused, and refusing it after four other fields had already been set on
+	 * the caller's live user would leave that object half-changed for the rest
+	 * of the request.
+	 */
+	public User updateProfile(User user, String displayName, String title, String pronouns,
+			String locale, String timezone) {
+		String zone = timezone == null ? null : UserZones.normalize(timezone);
+		if (displayName != null) user.setDisplayName(displayName.trim());
+		if (title != null) user.setTitle(title.trim());
+		if (pronouns != null) user.setPronouns(Pronouns.sanitize(pronouns));
+		if (locale != null) user.setLocale(locale);
+		if (timezone != null) user.setTimezone(zone);
+		return users.save(user);
+	}
+
+	/**
 	 * Baseline default password length (used by the demo seeder and mirrored by the
 	 * {@code hinata.security.password-min-length} env default). NOT the enforcement
 	 * value — {@link #validatePassword} reads the effective minimum from

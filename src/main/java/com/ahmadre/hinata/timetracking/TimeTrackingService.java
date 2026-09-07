@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -154,7 +155,7 @@ public class TimeTrackingService {
 				.source(source == null ? WorkItem.Source.APP : source)
 				.build();
 		WorkItem saved = workItems.save(item);
-		syncSpentTime(issue.getId());
+		shiftSpentTime(issue.getId(), saved.getDurationMinutes());
 		return saved;
 	}
 
@@ -170,6 +171,7 @@ public class TimeTrackingService {
 		if (!own && !canManageForeign(item, user)) {
 			throw ApiException.forbidden("error.time.editOwnOnly");
 		}
+		int before = item.getDurationMinutes();
 		if (patch.startedAtSet()) {
 			item.setStartedAt(patch.startedAt());
 		}
@@ -204,9 +206,7 @@ public class TimeTrackingService {
 		item.setUpdatedAt(clock.instant());
 		item.setUpdatedBy(user.getId());
 		WorkItem saved = workItems.save(item);
-		if (saved.getIssueId() != null) {
-			syncSpentTime(saved.getIssueId());
-		}
+		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes() - before);
 		if (!own) {
 			audit(AuditAction.TIME_ENTRY_UPDATED, saved, user);
 		}
@@ -234,9 +234,7 @@ public class TimeTrackingService {
 			throw ApiException.forbidden("error.time.deleteOwnOnly");
 		}
 		workItems.delete(item);
-		if (item.getIssueId() != null) {
-			syncSpentTime(item.getIssueId());
-		}
+		shiftSpentTime(item.getIssueId(), -item.getDurationMinutes());
 		if (!own) {
 			audit(AuditAction.TIME_ENTRY_DELETED, item, user);
 		}
@@ -280,10 +278,37 @@ public class TimeTrackingService {
 	// --- the derived counter -------------------------------------------------
 
 	/**
-	 * {@code Issue.spentMinutes} is the sum of the issue's entries, and this is
-	 * the only place that writes it. Summed by Mongo and written with a targeted
-	 * {@code $set} — never by saving the whole issue, which would overwrite
-	 * whatever anyone else changed on it between the read and the write.
+	 * Moves {@code Issue.spentMinutes} by what one entry just changed.
+	 *
+	 * <p>{@code $inc}, not a recomputed {@code $set}. The counter is the sum of
+	 * the issue's entries, and reading that sum and then writing it back is a
+	 * lost update the moment two people log time on the same issue at once: one
+	 * of them reads the total before the other's entry exists and writes it
+	 * afterwards, and the minutes in between are simply gone. Twelve concurrent
+	 * entries of ten minutes landed as ninety. An increment carries only this
+	 * writer's own delta, so the arithmetic is Mongo's and every writer's
+	 * contribution survives — which makes the counter more exactly the sum of
+	 * the entries, not less.
+	 *
+	 * <p>A delta of zero writes nothing at all: correcting a note is not a
+	 * change to the hours, and stamping {@code updatedAt} for it would jump the
+	 * issue to the top of every recently-changed list.
+	 */
+	private void shiftSpentTime(String issueId, int minutes) {
+		if (issueId == null || minutes == 0) {
+			return;
+		}
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(issueId)),
+				new Update().inc("spentMinutes", minutes).currentDate("updatedAt"), Issue.class);
+	}
+
+	/**
+	 * Recomputes {@code Issue.spentMinutes} from the entries themselves.
+	 *
+	 * <p>The counter is maintained incrementally on the write paths, so this is
+	 * the repair, not the routine: it is what puts an issue right after entries
+	 * were written around the service — a restore, a fixture, a future importer
+	 * — and what the tests use to state the invariant the increments maintain.
 	 */
 	public void syncSpentTime(String issueId) {
 		if (issueId == null) {
@@ -312,7 +337,11 @@ public class TimeTrackingService {
 	 */
 	public List<TimesheetRow> timesheet(LocalDate from, LocalDate to, String userId, String projectId,
 			User requester) {
-		if (from.isAfter(to) || from.plusDays(MAX_RANGE_DAYS).isBefore(to)) {
+		// Counted, not offset: a year of +999999999 binds fine through
+		// ISO_LOCAL_DATE, and `from.plusDays(...)` on a date near LocalDate.MAX
+		// throws before the guard can answer — one cheap GET for one 500 and one
+		// stack trace on disk, repeatable.
+		if (from.isAfter(to) || ChronoUnit.DAYS.between(from, to) > MAX_RANGE_DAYS) {
 			throw ApiException.badRequest("error.time.invalidRange");
 		}
 		String effectiveUser = userId;
