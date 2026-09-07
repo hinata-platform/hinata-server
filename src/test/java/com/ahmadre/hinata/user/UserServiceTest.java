@@ -32,6 +32,7 @@ class UserServiceTest {
 		SecurityPolicy securityPolicy = mock(SecurityPolicy.class);
 		when(securityPolicy.passwordMinLength()).thenReturn(10);
 		service = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class),
+				mock(org.springframework.context.ApplicationEventPublisher.class),
 				mock(AuditService.class), mock(NotificationService.class), securityPolicy,
 				com.ahmadre.hinata.common.UserWordsFixture.real());
 	}

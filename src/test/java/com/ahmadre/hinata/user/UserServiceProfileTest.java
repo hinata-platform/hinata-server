@@ -38,7 +38,9 @@ class UserServiceProfileTest {
 		users = mock(UserRepository.class);
 		when(users.save(any())).thenAnswer(inv -> inv.getArgument(0));
 		userService = new UserService(users, mock(PasswordEncoder.class),
-				mock(MongoTemplate.class), mock(AuditService.class),
+				mock(MongoTemplate.class),
+				mock(org.springframework.context.ApplicationEventPublisher.class),
+				mock(AuditService.class),
 				mock(NotificationService.class), mock(SecurityPolicy.class),
 				UserWordsFixture.real());
 	}

@@ -208,7 +208,19 @@ public class DemoSeeder {
 		mongo.dropCollection(com.ahmadre.hinata.audit.AuditLog.class);
 		mongo.dropCollection(Space.class);
 		mongo.dropCollection(Article.class);
-		mongo.dropCollection(WorkItem.class);
+		// Emptied, not dropped. Spring Data creates indexes once, at startup, and
+		// this runs after that — so a drop takes the indexes with it and nothing
+		// puts them back until the next restart. For running_timers that would
+		// remove the unique index that is the entire guarantee of one timer per
+		// person; for work_items it would remove the five compound indexes the
+		// personal list and the timesheet are sorted by, leaving a blocking
+		// in-memory sort that fails outright past MongoDB's 32 MB limit.
+		//
+		// running_timers by name rather than by type, because it belongs to the
+		// extended module and the seeder is not allowed to reach into it (see
+		// ModuleBoundaryTest). An emptied collection needs no shape.
+		mongo.getCollection("work_items").deleteMany(new org.bson.Document());
+		mongo.getCollection("running_timers").deleteMany(new org.bson.Document());
 		mongo.dropCollection(GitDevInfo.class);
 		mongo.dropCollection(IssueLink.class);
 		mongo.dropCollection(Issue.class);
@@ -1102,8 +1114,65 @@ public class DemoSeeder {
 		track(tomas, inf, "Add staging environment to CI",
 				"Development", monday, 0, 0, 0, 60, 120);
 
+		// --- what the extended module looks like -----------------------------
+		// Three entries the 1.x rows above cannot show: two that know the hours
+		// they occupied, and one filed under no project at all. Together they are
+		// the empty states of the "Time" list — a screenshot of that page with
+		// only round durations in it proves nothing about the page.
+		timed(admin, hin, "Keyboard shortcut opens the command palette",
+				"Pairing on the shortcut registry", "Development", 1, 9, 30, 75);
+		timed(admin, hin, "Saved board filters per user",
+				"Reviewing the filter serialisation", "Development", 1, 14, 0, 45);
+		unfiled(admin, "Team retro", "Meeting", 1, 16, 0, 60);
+
 		syncSpent();
 		log.info("[demo] seeded {} work items", workItems.count());
+	}
+
+	/**
+	 * One entry that knows when it happened: the shape a stopped timer leaves.
+	 *
+	 * <p>{@code daysAgo} rather than a fixed date, so the demo workspace reads as
+	 * "yesterday" whenever it is seeded. The hour is UTC, like every other date
+	 * this class writes: the seeder has no user to read a zone from, and a demo
+	 * instance more than a few hours off UTC will read its afternoon at an odd
+	 * time of day — which is the same trade the {@code track} rows above make.
+	 */
+	private void timed(User user, Project p, String title, String description, String activity,
+			int daysAgo, int hour, int minute, int minutes) {
+		Issue issue = findIssue(p, title);
+		if (issue == null) {
+			return;
+		}
+		saveTimed(user, p.getId(), issue.getId(), description, activity, daysAgo, hour, minute,
+				minutes, WorkItem.Source.TIMER);
+	}
+
+	/** An entry belonging to no project — visible to its owner and to admins, nobody else. */
+	private void unfiled(User user, String description, String activity, int daysAgo, int hour,
+			int minute, int minutes) {
+		saveTimed(user, null, null, description, activity, daysAgo, hour, minute, minutes,
+				WorkItem.Source.APP);
+	}
+
+	private void saveTimed(User user, String projectId, String issueId, String description,
+			String activity, int daysAgo, int hour, int minute, int minutes,
+			WorkItem.Source source) {
+		LocalDate day = LocalDate.now(ZoneOffset.UTC).minusDays(daysAgo);
+		Instant start = day.atTime(hour, minute).toInstant(ZoneOffset.UTC);
+		workItems.save(WorkItem.builder()
+				.issueId(issueId)
+				.projectId(projectId)
+				.userId(user.getId())
+				.date(day)
+				.durationMinutes(minutes)
+				.activityType(activity)
+				.description(description)
+				.startedAt(start)
+				.endedAt(start.plus(Duration.ofMinutes(minutes)))
+				.source(source)
+				.billable(false)
+				.build());
 	}
 
 	/**

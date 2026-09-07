@@ -3,6 +3,7 @@ package com.ahmadre.hinata.timetracking;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TimeRanges;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.project.ProjectReach;
@@ -15,6 +16,9 @@ import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.support.PageableExecutionUtils;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.DateOperators;
@@ -36,6 +40,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
 
 /**
  * Logged time on issues: who may read and change which entries, what a valid
@@ -57,6 +62,16 @@ public class TimeTrackingService {
 	public static final int LIST_CAP = 200;
 	/** Largest page the paged route hands out. */
 	public static final int PAGE_MAX = 100;
+	/**
+	 * Highest page index a caller may ask for.
+	 *
+	 * <p>The offset is {@code page * size} and the driver takes a 32-bit skip, so
+	 * a page index in the tens of millions overflows it into a negative number
+	 * and the request comes back as a 500 with a stack trace on disk — one cheap
+	 * GET each, repeatable by anyone signed in. Ten thousand pages of a hundred
+	 * is a million entries deep, which nobody reaches by scrolling.
+	 */
+	public static final int PAGE_INDEX_MAX = 10_000;
 	/** Longest a single entry may be: one day. */
 	public static final int MAX_MINUTES = 24 * 60;
 	/** How far back an entry may be dated, in days. */
@@ -66,6 +81,15 @@ public class TimeTrackingService {
 
 	private static final String DEFAULT_ACTIVITY = "Development";
 
+	/**
+	 * How the personal "Time" list is ordered: the newest day first, within a day
+	 * the latest start first, and {@code _id} to break the remaining ties. Entries
+	 * with no start sort last within their day, which is where a plain duration
+	 * belongs — it did not happen at a time.
+	 */
+	private static final Sort ENTRIES_NEWEST_FIRST = Sort.by(Sort.Order.desc("date"),
+			Sort.Order.desc("startedAt"), Sort.Order.desc("_id"));
+
 	private final WorkItemRepository workItems;
 	private final IssueService issues;
 	private final ProjectService projects;
@@ -74,6 +98,7 @@ public class TimeTrackingService {
 	private final MongoTemplate mongo;
 	private final AuditService audit;
 	private final SettingsService settings;
+	private final TimeTrackingSettings policy;
 	private final Clock clock;
 
 	// --- shapes ------------------------------------------------------------
@@ -132,32 +157,15 @@ public class TimeTrackingService {
 	 * commit); the entry is always owned by {@code user}.
 	 */
 	public WorkItem add(String issueIdOrKey, NewWorkItem draft, WorkItem.Source source, User user) {
-		Issue issue = resolveIssue(issueIdOrKey, user);
-		ZoneId zone = zoneOf(user);
-		Instant start = draft.startedAt();
-		Instant end = draft.endedAt();
-		int minutes = resolveDuration(draft.durationMinutes(), start, end);
-		LocalDate date = draft.date() != null ? draft.date()
-				: LocalDate.ofInstant(start != null ? start : clock.instant(), zone);
-		validateDate(date, zone);
-		WorkItem item = WorkItem.builder()
-				.issueId(issue.getId())
-				.projectId(issue.getProjectId())
-				.userId(user.getId())
-				.date(date)
-				.durationMinutes(minutes)
-				.activityType(activityOrDefault(draft.activityType()))
-				.description(draft.description())
-				.startedAt(start)
-				.endedAt(end)
-				.billable(Boolean.TRUE.equals(draft.billable()))
-				.tags(normalizeTags(draft.tags()))
-				.source(source == null ? WorkItem.Source.APP : source)
-				.build();
-		assertWritable(null, item, user);
-		WorkItem saved = workItems.save(item);
-		shiftSpentTime(issue.getId(), saved.getDurationMinutes());
-		return saved;
+		// One builder, not two. The two routes differ only in where the placement
+		// comes from — a URL here, a body there — and everything after that is the
+		// same rules, the same fourteen fields and the same write gate. Kept apart,
+		// the next field the epic adds (stage 6's lock date, stage 7's approval
+		// state) has to be added twice, and the one that gets missed is a route
+		// that silently drops it.
+		return create(new NewEntry(null, issueIdOrKey, draft.durationMinutes(), draft.date(),
+				draft.activityType(), draft.description(), draft.startedAt(), draft.endedAt(),
+				draft.tags(), draft.billable()), source, user);
 	}
 
 	/**
@@ -331,6 +339,239 @@ public class TimeTrackingService {
 		entry.log();
 	}
 
+	// --- entries that stand on their own ---------------------------------------
+
+	/**
+	 * A standalone entry: like {@link NewWorkItem}, but it carries its own
+	 * placement rather than inheriting one from an issue in the URL.
+	 *
+	 * <p>Both references are optional and mean three different things. With an
+	 * issue, the entry is work on that issue. With a project and no issue, it is
+	 * project time that no ticket covers — a meeting, a review. With neither it
+	 * is unfiled: still the person's own record of their day, visible to them and
+	 * to an administrator and to nobody else. The alternative — forcing a
+	 * placeholder issue — is how time tracking stops being used.
+	 */
+	public record NewEntry(String projectId, String issueId, Integer durationMinutes, LocalDate date,
+			String activityType, String description, Instant startedAt, Instant endedAt,
+			List<String> tags, Boolean billable) {
+	}
+
+	/** What narrows the caller's own list. Every field is optional; the owner never is. */
+	public record EntryFilter(LocalDate from, LocalDate to, String projectId, String query) {
+	}
+
+	/**
+	 * Files one entry for {@code user}, placing it wherever the draft says.
+	 *
+	 * <p>The placement is checked before anything is written, and checked against
+	 * what the caller may reach rather than against what they sent: an issue is
+	 * resolved through {@link IssueService#getForUser} (so an invisible one is
+	 * indistinguishable from a missing one), a project through
+	 * {@link ProjectReach}. An issue always supplies its own project — a body
+	 * naming both has to agree with itself, or the entry would be filed under a
+	 * project the issue is not in and every report would disagree with the issue
+	 * page.
+	 */
+	public WorkItem create(NewEntry draft, WorkItem.Source source, User user) {
+		// Placement first, then the body. The order is load-bearing on the 1.x
+		// route this now also serves: `POST /issues/{id}/work-items` has always
+		// answered 403 for an issue the caller cannot see, whatever else was
+		// wrong with the request, and the published 10.3.3 app is entitled to
+		// that answer. Checking the duration first would tell an unauthorised
+		// caller less — the better property in the abstract, and not one worth
+		// changing a frozen route's behaviour to acquire.
+		Placement placement = resolvePlacement(draft.projectId(), draft.issueId(), user);
+		ZoneId zone = zoneOf(user);
+		Instant start = stored(draft.startedAt());
+		Instant end = stored(draft.endedAt());
+		int minutes = resolveDuration(draft.durationMinutes(), start, end);
+		LocalDate date = draft.date() != null ? draft.date()
+				: LocalDate.ofInstant(start != null ? start : clock.instant(), zone);
+		validateDate(date, zone);
+		WorkItem item = WorkItem.builder()
+				.issueId(placement.issueId())
+				.projectId(placement.projectId())
+				.userId(user.getId())
+				.date(date)
+				.durationMinutes(minutes)
+				.activityType(activityOrDefault(draft.activityType()))
+				.description(draft.description())
+				.startedAt(start)
+				.endedAt(end)
+				.billable(billableOf(draft.billable()))
+				.tags(normalizeTags(draft.tags()))
+				.source(source == null ? WorkItem.Source.APP : source)
+				.build();
+		assertWritable(null, item, user);
+		WorkItem saved = workItems.save(item);
+		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
+		return saved;
+	}
+
+	/** Where an entry sits, after the caller's reach has been checked. */
+	public record Placement(String projectId, String issueId) {
+	}
+
+	/**
+	 * Settles project and issue together, because they constrain each other.
+	 * Public because the timer files its entry through {@link #insertTimed} and
+	 * has to have answered the same question at start time.
+	 */
+	public Placement resolvePlacement(String projectId, String issueId, User user) {
+		if (issueId != null) {
+			Issue issue = resolveIssue(issueId, user);
+			if (projectId != null && !projectId.equals(issue.getProjectId())) {
+				throw ApiException.badRequest("error.time.issueProjectMismatch");
+			}
+			return new Placement(issue.getProjectId(), issue.getId());
+		}
+		if (projectId != null && !projectReach.canSee(projectId, user)) {
+			throw ApiException.forbidden("error.project.notMember");
+		}
+		return new Placement(projectId, null);
+	}
+
+	/**
+	 * Inserts an entry that already knows its own id — the stopped timer's.
+	 *
+	 * <p>{@code insert}, not {@code save}: Spring Data upserts a document that
+	 * carries an id, which would make a second stop overwrite the first entry
+	 * instead of colliding with it. The collision is the point, so the caller
+	 * sees {@link org.springframework.dao.DuplicateKeyException} and reads it as
+	 * "already stopped". Nothing here is retried, and the counter is only moved
+	 * once the insert has actually happened.
+	 */
+	public WorkItem insertTimed(WorkItem item, User user) {
+		assertWritable(null, item, user);
+		WorkItem saved = workItems.insert(item);
+		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
+		return saved;
+	}
+
+	/**
+	 * One page of the caller's <em>own</em> entries, newest first.
+	 *
+	 * <p>Own, with no way to ask otherwise: this is the list behind the "Time"
+	 * page, and R2 of the epic makes a person's entries their own by default.
+	 * Reading somebody else's is what the timesheet and the reports are for, each
+	 * with its own rule. So the owner is not a filter here, it is the query.
+	 *
+	 * <p>The sort carries {@code _id} as a tiebreaker for the same reason the
+	 * per-issue list does: without it two entries on the same day may swap places
+	 * between page one and page two, and the one that moves is either shown twice
+	 * or not at all.
+	 */
+	public Page<WorkItem> entries(EntryFilter filter, int page, int size, User user) {
+		LocalDate from = filter.from();
+		LocalDate to = filter.to();
+		if (from != null && to != null && from.isAfter(to)) {
+			// Its own key, not the timesheet's: that one reads "…and at most 92
+			// days", a cap this route does not have, and a message that names a
+			// limit the caller did not hit is a message that sends them looking.
+			throw ApiException.badRequest("error.time.rangeNotAscending");
+		}
+		Criteria criteria = Criteria.where("userId").is(user.getId());
+		if (from != null && to != null) {
+			criteria = criteria.and("date").gte(from).lte(to);
+		}
+		else if (from != null) {
+			criteria = criteria.and("date").gte(from);
+		}
+		else if (to != null) {
+			criteria = criteria.and("date").lte(to);
+		}
+		if (filter.projectId() != null) {
+			// No visibility check: these are the caller's own entries either way,
+			// so an unreachable project can only ever narrow the answer to
+			// nothing. Checking would cost a project read per list request to
+			// refuse a query that already refuses itself.
+			criteria = criteria.and("projectId").is(filter.projectId());
+		}
+		String text = filter.query() == null ? null : filter.query().trim();
+		if (text != null && !text.isEmpty()) {
+			// Quoted, so a description search cannot smuggle a regular expression
+			// into the query — ".*" is a search term here, and a catastrophically
+			// backtracking pattern is not something a caller gets to compile on
+			// the database's time.
+			criteria = criteria.and("description")
+					.regex(Pattern.compile(Pattern.quote(text), Pattern.CASE_INSENSITIVE));
+		}
+		Criteria matched = criteria;
+		Pageable pageable = PageRequest.of(Math.clamp(page, 0, PAGE_INDEX_MAX),
+				Math.clamp(size, 1, PAGE_MAX), ENTRIES_NEWEST_FIRST);
+		List<WorkItem> content = mongo.find(Query.query(matched).with(pageable), WorkItem.class);
+		// The count runs without skip/limit, and only when the page could not
+		// have been the whole answer — PageableExecutionUtils skips it for a
+		// first page that came back short.
+		return PageableExecutionUtils.getPage(content, pageable,
+				() -> mongo.count(Query.query(matched), WorkItem.class));
+	}
+
+	/**
+	 * The caller's other entries on the same day that share time with this one.
+	 *
+	 * <p>A warning, never a refusal. Two entries that overlap are usually a
+	 * mistake and occasionally the truth — a call taken during other work, a
+	 * timer left running while something else was logged by hand — and the
+	 * product that decides which is which for the person is the product they
+	 * stop telling the truth to.
+	 *
+	 * <p>Only entries with both instants take part: a plain duration on a day
+	 * says nothing about which hours it occupied, so it can neither overlap nor
+	 * be overlapped. And only the entry's own day is examined, which is a stated
+	 * limit rather than an oversight — an entry that runs past midnight will not
+	 * be matched against the next morning's, and paying for a two-day scan on
+	 * every save to catch that is not worth it.
+	 *
+	 * <p>Answered for {@code actor} and nobody else. A lead may legitimately edit
+	 * a member's entry, and this list is keyed on the entry's <em>owner</em> — so
+	 * without the check below, one trivial edit would hand the lead the ids of
+	 * every timed entry that person filed that day, in projects the lead cannot
+	 * see and unfiled ones included. That is precisely what R2 makes private, and
+	 * the advice is worthless to a lead anyway: they are not the person whose day
+	 * has a clash in it.
+	 */
+	public List<String> overlapsOf(WorkItem item, User actor) {
+		if (item.getStartedAt() == null || item.getEndedAt() == null
+				|| item.getUserId() == null || item.getDate() == null
+				|| !isOwner(item, actor)) {
+			return List.of();
+		}
+		Query query = Query.query(Criteria.where("userId").is(item.getUserId())
+				.and("date").is(item.getDate())
+				.and("startedAt").ne(null)
+				.and("endedAt").ne(null));
+		// A day of one person's entries is a handful; the cap is there so that a
+		// pathological day cannot turn one save into an unbounded read.
+		query.limit(LIST_CAP);
+		List<String> overlapping = new ArrayList<>();
+		for (WorkItem other : mongo.find(query, WorkItem.class)) {
+			if (other.getId() != null && other.getId().equals(item.getId())) {
+				continue;
+			}
+			if (TimeRanges.overlaps(item.getStartedAt(), item.getEndedAt(),
+					other.getStartedAt(), other.getEndedAt())) {
+				overlapping.add(other.getId());
+			}
+		}
+		return overlapping;
+	}
+
+	/**
+	 * What {@code billable} becomes when the request does not say.
+	 *
+	 * <p>Every write path goes through here, because the flag cannot be
+	 * reconstructed afterwards: an entry written while the policy said "billable
+	 * by default" and one written while it said otherwise are indistinguishable
+	 * a month later except by what was stored at the time. That includes the 1.x
+	 * routes — the policy ships as {@code false}, so an instance that has never
+	 * touched it sees no change, and an administrator who did touch it meant it.
+	 */
+	private boolean billableOf(Boolean given) {
+		return given != null ? given : policy.defaultBillable();
+	}
+
 	// --- the derived counter -------------------------------------------------
 
 	/**
@@ -366,18 +607,57 @@ public class TimeTrackingService {
 	 * were written around the service — a restore, a fixture, a future importer
 	 * — and what the tests use to state the invariant the increments maintain.
 	 */
-	public void syncSpentTime(String issueId) {
+	/**
+	 * Puts {@code Issue.spentMinutes} right <em>if nobody else is writing it</em>.
+	 *
+	 * <p>Same arithmetic as {@link #syncSpentTime}, and a different promise. That
+	 * one is the repair: called when the counter is known to be wrong and nothing
+	 * else is touching the issue. This one runs on a live path — a stop that
+	 * collided with another stop — where somebody else may be logging time on the
+	 * same issue at that moment, and a plain recompute would read the sum, be
+	 * overtaken by their {@code $inc}, and write their minutes away. So the write
+	 * is conditional on the counter still holding what was read: if it moved,
+	 * their increment is the newer truth and this stands down.
+	 *
+	 * @return whether the counter was corrected
+	 */
+	boolean reconcileSpentTime(String issueId) {
 		if (issueId == null) {
-			return;
+			return false;
 		}
+		Document stored = mongo.findOne(Query.query(Criteria.where("_id").is(issueId))
+				.limit(1), Document.class, "issues");
+		if (stored == null) {
+			return false;
+		}
+		int observed = stored.get("spentMinutes") instanceof Number number ? number.intValue() : 0;
+		int total = sumOfEntries(issueId);
+		if (total == observed) {
+			return false;
+		}
+		return mongo.updateFirst(
+				Query.query(Criteria.where("_id").is(issueId).and("spentMinutes").is(observed)),
+				new Update().set("spentMinutes", total).currentDate("updatedAt"),
+				Issue.class).getModifiedCount() > 0;
+	}
+
+	/** What an issue's entries add up to, straight from the collection. */
+	private int sumOfEntries(String issueId) {
 		Aggregation aggregation = Aggregation.newAggregation(
 				Aggregation.match(Criteria.where("issueId").is(issueId)),
 				Aggregation.group().sum("durationMinutes").as("total"));
 		Document row = mongo.aggregate(aggregation, WorkItem.class, Document.class)
 				.getUniqueMappedResult();
-		int total = row != null && row.get("total") instanceof Number number ? number.intValue() : 0;
+		return row != null && row.get("total") instanceof Number number ? number.intValue() : 0;
+	}
+
+	public void syncSpentTime(String issueId) {
+		if (issueId == null) {
+			return;
+		}
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(issueId)),
-				new Update().set("spentMinutes", total).currentDate("updatedAt"), Issue.class);
+				new Update().set("spentMinutes", sumOfEntries(issueId)).currentDate("updatedAt"),
+				Issue.class);
 	}
 
 	// --- timesheet -------------------------------------------------------------
@@ -498,6 +778,21 @@ public class TimeTrackingService {
 		return given;
 	}
 
+	/**
+	 * An instant as MongoDB will hold it: whole milliseconds.
+	 *
+	 * <p>{@code Clock.systemUTC()} reads microseconds on this platform and BSON
+	 * stores milliseconds, so an instant that is not truncated on the way in
+	 * comes back different on the way out. The visible cost is small — a timer
+	 * whose {@code startedAt} shifts by a fraction of a millisecond when the page
+	 * is reloaded — but "what the server just told me" and "what the server
+	 * stored" disagreeing is the kind of difference that is only ever noticed by
+	 * something downstream comparing them.
+	 */
+	static Instant stored(Instant instant) {
+		return instant == null ? null : instant.truncatedTo(ChronoUnit.MILLIS);
+	}
+
 	/** Not after today and not more than a year back — today being the user's today, not the server's. */
 	private void validateDate(LocalDate date, ZoneId zone) {
 		LocalDate today = LocalDate.ofInstant(clock.instant(), zone);
@@ -509,7 +804,8 @@ public class TimeTrackingService {
 		}
 	}
 
-	private static String activityOrDefault(String activityType) {
+	/** Package-private: the timer files entries too, and must not carry a second default. */
+	static String activityOrDefault(String activityType) {
 		return activityType == null || activityType.isBlank() ? DEFAULT_ACTIVITY : activityType.trim();
 	}
 

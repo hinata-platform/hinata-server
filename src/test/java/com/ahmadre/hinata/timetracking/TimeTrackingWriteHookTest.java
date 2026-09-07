@@ -72,7 +72,8 @@ class TimeTrackingWriteHookTest {
 		SettingsService settings = mock(SettingsService.class);
 		when(settings.get()).thenReturn(new ServerSettings());
 		service = spy(new TimeTrackingService(workItems, issues, projects,
-				mock(ProjectReach.class), users, mongo, mock(AuditService.class), settings, CLOCK));
+				mock(ProjectReach.class), users, mongo, mock(AuditService.class), settings,
+				mock(TimeTrackingSettings.class), CLOCK));
 		when(workItems.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 	}
 

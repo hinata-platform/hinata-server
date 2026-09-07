@@ -33,7 +33,7 @@ public class NotificationPreferences {
 	/** Stable event ids — mirror the reference {@code account_data.js → NOTIF_EVENTS}. */
 	public static final String[] EVENTS = {
 			"mentions", "assigned", "comments", "status", WATCHING, "ingest", "sprint", "invites",
-			"digest", "security"
+			"digest", "time", "security"
 	};
 
 	/** Events that can never be turned off (transactional / security mail). */
@@ -65,6 +65,11 @@ public class NotificationPreferences {
 		events.put("sprint", new Channel(true, true));
 		events.put("invites", new Channel(true, false));
 		events.put("digest", new Channel(true, false));
+		// Time tracking speaks to one person about their own day, never about
+		// anyone else's — a timer that ran into its ceiling, and from stage 7 an
+		// approval that was decided. Push on, e-mail off: it is worth a glance,
+		// not an inbox entry.
+		events.put("time", new Channel(false, true));
 		events.put("security", new Channel(true, true)); // locked on
 		return new NotificationPreferences(true, true, events);
 	}

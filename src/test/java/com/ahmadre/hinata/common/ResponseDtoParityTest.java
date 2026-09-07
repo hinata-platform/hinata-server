@@ -6,7 +6,9 @@ import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleController;
 import com.ahmadre.hinata.notification.Notification;
 import com.ahmadre.hinata.notification.NotificationController;
+import com.ahmadre.hinata.timetracking.RunningTimer;
 import com.ahmadre.hinata.timetracking.TimeTrackingController;
+import com.ahmadre.hinata.timetracking.TimerController;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -114,6 +116,43 @@ class ResponseDtoParityTest {
 		assertThat(dtoJson.get("billable").asBoolean()).isTrue();
 		assertThat(dtoJson.get("tags")).hasSize(1);
 		assertThat(dtoJson.get("sharedFromId").isNull()).isTrue();
+	}
+
+	/**
+	 * The timer DTO exposes what a client renders and nothing else.
+	 *
+	 * <p>Not strict equality, unlike the work item: {@code autoStopClaimedAt} is
+	 * the sweep's bookkeeping and {@code pomodoro} is stage 5's, and neither
+	 * belongs on the wire today. The assertion is therefore in two halves — every
+	 * field that is exposed carries its entity value, and the two that are not
+	 * exposed stay off.
+	 */
+	@Test
+	void timerResponse_exposesWhatAClientRendersAndNoMore() {
+		RunningTimer entity = RunningTimer.builder()
+				.id("t1").userId("u1").startedAt(Instant.parse("2026-09-07T08:00:00Z"))
+				.projectId("p1").issueId("i1").description("Pairing").activityType("Development")
+				.tags(new ArrayList<>(List.of("focus"))).billable(true)
+				.mode(RunningTimer.Mode.STOPWATCH).plannedMinutes(null)
+				.autoStopClaimedAt(Instant.parse("2026-09-08T09:00:00Z"))
+				.build();
+
+		JsonNode entityJson = mapper.valueToTree(entity);
+		JsonNode dtoJson = mapper.valueToTree(TimerController.TimerResponse.from(entity));
+
+		dtoJson.properties().forEach(field -> assertThat(field.getValue())
+				.as("field %s", field.getKey())
+				.isEqualTo(entityJson.get(field.getKey())));
+		// The sweep's claim is server bookkeeping; publishing it would tell a
+		// client something about the scheduler and nothing about their timer.
+		assertThat(dtoJson.has("autoStopClaimedAt")).isFalse();
+		assertThat(dtoJson.has("pomodoro")).isFalse();
+		// The owner is who is asking; repeating it back is noise.
+		assertThat(dtoJson.has("userId")).isFalse();
+		// No elapsed time on the wire: the client counts from startedAt, so the
+		// number on screen keeps moving between requests.
+		assertThat(dtoJson.has("elapsedMinutes")).isFalse();
+		assertThat(dtoJson.get("startedAt").asText()).isEqualTo("2026-09-07T08:00:00Z");
 	}
 
 	/** An entry written before 2.0 has none of the new fields; it still reads as an app entry. */

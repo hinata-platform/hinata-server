@@ -210,6 +210,27 @@ tasks.named<Jar>("jar") {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // The suite is mostly @SpringBootTest, and Spring's TestContext framework
+    // keeps every distinct context alive for the whole run — each one a full
+    // application with its own Mongo client, scheduler pool and MCP registry.
+    // The default heap ran out partway through once the time-tracking module
+    // added three more, and the failure does not name a test: the executor
+    // simply dies and the classes after it never run, which reads like a green
+    // build with fewer results.
+    maxHeapSize = "3g"
+    // Two dozen @SpringBootTest classes, each with its own properties block and
+    // therefore its own cached context, against a cache that defaults to 32 —
+    // so nothing is ever evicted. Capping it below the class count forces LRU
+    // eviction, which closes the evicted contexts and releases their Mongo
+    // clients and scheduler pools. Each configuration is visited once anyway
+    // (the containers are per-class statics), so eviction costs almost nothing
+    // and the heap number above stops being load-bearing.
+    systemProperty("spring.test.context.cache.maxSize", "8")
+    // And if it ever does run out, say so. The failure this replaces was an
+    // executor that died without naming a test — which reads as a green build
+    // with fewer results, and is the same symptom an OOM-killed CI runner
+    // produces. A heap problem should name itself.
+    jvmArgs("-XX:+ExitOnOutOfMemoryError")
 }
 
 // Renders every transactional e-mail (12 templates x de/en x light/dark) into
