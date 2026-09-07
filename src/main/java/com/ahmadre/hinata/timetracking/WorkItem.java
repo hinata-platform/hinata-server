@@ -27,7 +27,11 @@ import java.util.List;
  * issue at all. Every reader has to cope with either being absent.
  */
 @Data
-@Builder
+// toBuilder so a write can hold on to what the entry looked like before it was
+// touched: TimeTrackingService#assertWritable is asked about both states, and
+// from stage 6 a lock date or an approval applies to the day an entry is moving
+// off just as much as to the day it is moving to.
+@Builder(toBuilder = true)
 @Document("work_items")
 // The timesheet and the dashboard trackers ask for one user's days in a range:
 // equality on userId, then the date range — ESR — so the scan is bounded to that

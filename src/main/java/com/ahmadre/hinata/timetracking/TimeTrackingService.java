@@ -154,6 +154,7 @@ public class TimeTrackingService {
 				.tags(normalizeTags(draft.tags()))
 				.source(source == null ? WorkItem.Source.APP : source)
 				.build();
+		assertWritable(null, item, user);
 		WorkItem saved = workItems.save(item);
 		shiftSpentTime(issue.getId(), saved.getDurationMinutes());
 		return saved;
@@ -168,10 +169,15 @@ public class TimeTrackingService {
 		WorkItem item = workItems.findById(workItemId)
 				.orElseThrow(() -> ApiException.notFound("workItem"));
 		boolean own = isOwner(item, user);
-		if (!own && !canManageForeign(item, user)) {
-			throw ApiException.forbidden("error.time.editOwnOnly");
-		}
-		int before = item.getDurationMinutes();
+		// The entry as it stands, kept whole, because the patch is applied in place.
+		WorkItem before = item.toBuilder().build();
+		// The gate twice, and deliberately. First on the entry as it stands, so
+		// someone with no business touching it is told exactly that instead of
+		// being walked through validation of a change that was never theirs to
+		// make. Then, below, on the change itself — from stage 6 a lock date or an
+		// approval covers the day an entry is moving off as much as the day it is
+		// moving to, and only the second call can see both.
+		assertWritable(before, before, user);
 		if (patch.startedAtSet()) {
 			item.setStartedAt(patch.startedAt());
 		}
@@ -205,8 +211,10 @@ public class TimeTrackingService {
 		}
 		item.setUpdatedAt(clock.instant());
 		item.setUpdatedBy(user.getId());
+		assertWritable(before, item, user);
 		WorkItem saved = workItems.save(item);
-		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes() - before);
+		shiftSpentTime(saved.getIssueId(),
+				saved.getDurationMinutes() - before.getDurationMinutes());
 		if (!own) {
 			audit(AuditAction.TIME_ENTRY_UPDATED, saved, user);
 		}
@@ -230,14 +238,54 @@ public class TimeTrackingService {
 		WorkItem item = workItems.findById(workItemId)
 				.orElseThrow(() -> ApiException.notFound("workItem"));
 		boolean own = isOwner(item, user);
-		if (!own && !(allowForeign && canManageForeign(item, user))) {
+		// The MCP tool's own contract, narrower than the entry's: holding a token
+		// never turns someone into a lead. It sits here rather than in the gate
+		// because it is a property of the caller, not of the entry.
+		if (!allowForeign && !own) {
 			throw ApiException.forbidden("error.time.deleteOwnOnly");
 		}
+		assertWritable(item, null, user);
 		workItems.delete(item);
 		shiftSpentTime(item.getIssueId(), -item.getDurationMinutes());
 		if (!own) {
 			audit(AuditAction.TIME_ENTRY_DELETED, item, user);
 		}
+	}
+
+	/**
+	 * The one gate every change to an entry passes: creating one, editing one,
+	 * deleting one — from the app, from an MCP tool, from a smart commit. All
+	 * three writes above call it, so a rule added here is a rule that holds
+	 * everywhere, and there is no second path to remember.
+	 *
+	 * <p>Today it states what the service already stated: an entry is written by
+	 * the person it belongs to, or by a lead of its project or an administrator.
+	 * That is deliberately all it does — stage 6 hangs the lock date on it and
+	 * stage 7 the approvals, and both of those need to see the entry on <em>both
+	 * sides</em> of the change, which is what {@code before} and {@code after}
+	 * are for. An edit that moves an entry off a locked day is as much a write to
+	 * that day as one that moves an entry onto it.
+	 *
+	 * @param before the entry as stored, or null when one is being created
+	 * @param after  the entry as it will be stored, or null when one is being deleted
+	 * @param actor  who is making the change
+	 */
+	void assertWritable(WorkItem before, WorkItem after, User actor) {
+		if (before == null) {
+			// A new entry belongs to whoever is logging it. Nothing here builds one
+			// for somebody else, and this is where that stops being an accident of
+			// the call sites and becomes a rule.
+			if (after != null && after.getUserId() != null
+					&& !after.getUserId().equals(actor.getId())) {
+				throw ApiException.forbidden("error.time.editOwnOnly");
+			}
+			return;
+		}
+		if (isOwner(before, actor) || canManageForeign(before, actor)) {
+			return;
+		}
+		throw ApiException.forbidden(
+				after == null ? "error.time.deleteOwnOnly" : "error.time.editOwnOnly");
 	}
 
 	/** Whether {@code user} may edit or delete an entry that is not their own: admin or project lead. */
