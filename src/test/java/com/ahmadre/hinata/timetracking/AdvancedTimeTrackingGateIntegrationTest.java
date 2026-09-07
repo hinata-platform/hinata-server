@@ -351,6 +351,39 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a client that drops the mcp or security section does not reset them either")
+	void aSaveWithoutTheOtherNullableSectionsKeepsThemToo() {
+		String token = login();
+
+		// An administrator switches MCP off and tightens the lockout. Both are
+		// stored as overrides; the environment says otherwise for both.
+		ObjectNode document = (ObjectNode) body(get("/api/v1/admin/settings", token, null));
+		((ObjectNode) document.path("mcp")).put("enabled", false);
+		((ObjectNode) document.path("security")).put("lockoutMinutes", 120);
+		assertThat(putJson("/api/v1/admin/settings", document.toString(), token).statusCode())
+				.isEqualTo(200);
+
+		// Now a client that does not model those sections saves something else.
+		ObjectNode partial = (ObjectNode) body(get("/api/v1/admin/settings", token, null));
+		partial.remove("mcp");
+		partial.remove("security");
+		assertThat(putJson("/api/v1/admin/settings", partial.toString(), token).statusCode())
+				.isEqualTo(200);
+
+		// Both decisions survive. Without the guard the fields resolve to the
+		// environment instead: HINATA_MCP_ENABLED defaults to true, so the
+		// transport and the PAT surface would have switched themselves back on,
+		// and the lockout would silently drop to the env value.
+		ServerSettings stored = settings.get();
+		assertThat(stored.getMcp()).isNotNull();
+		assertThat(stored.getMcp().getEnabled()).isFalse();
+		assertThat(stored.getSecurity()).isNotNull();
+		assertThat(stored.getSecurity().getLockoutMinutes()).isEqualTo(120);
+		assertThat(body(get("/api/v1/meta", null, null))
+				.path("featureFlags").path("mcp").asBoolean(true)).isFalse();
+	}
+
+	@Test
 	@DisplayName("an approval period whose parameters do not fit is refused")
 	void anIncoherentApprovalPeriodIsRejected() {
 		String token = login();

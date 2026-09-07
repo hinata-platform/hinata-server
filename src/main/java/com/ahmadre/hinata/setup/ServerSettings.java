@@ -48,7 +48,17 @@ public class ServerSettings {
 	private General general = new General();
 	private App app = new App();
 	private Smtp smtp = new Smtp();
-	private Security security = new Security();
+	/**
+	 * Security policy overrides. Not initialised, for the same reason
+	 * {@link #timeTracking} is not: every field means "null ⇒ the environment
+	 * decides", so the only way {@link AdminSettingsController#update} can tell
+	 * "the caller left this section out of its whole-document PUT" from "the
+	 * caller cleared a field" is for the absent case to arrive as null. With an
+	 * initialiser it arrives as a fresh all-null block instead, and the stored
+	 * lockout, session lifetime and rate-limit switch are quietly replaced by the
+	 * environment defaults.
+	 */
+	private Security security;
 	private Oidc oidc = new Oidc();
 	private OAuth2 oauth2 = new OAuth2();
 	private Saml saml = new Saml();
@@ -57,7 +67,8 @@ public class ServerSettings {
 	private Cas cas = new Cas();
 	private EmailIngest emailIngest = new EmailIngest();
 	private GitIntegration gitIntegration = new GitIntegration();
-	private Mcp mcp = new Mcp();
+	/** MCP overrides. Not initialised — see {@link #security} for why. */
+	private Mcp mcp;
 	/**
 	 * Time-tracking policy overrides. Deliberately <em>not</em> initialised: an
 	 * admin client that does not know this block leaves it out of its whole-document

@@ -37,7 +37,7 @@ public class SecurityPolicy {
 
 	@EventListener
 	void onSettingsChanged(SettingsService.SettingsChangedEvent event) {
-		cached = event.settings().getSecurity();
+		cached = orEmpty(event.settings().getSecurity());
 	}
 
 	/** Effective minimum password length (DB override, else env default), never below the floor. */
@@ -80,9 +80,17 @@ public class SecurityPolicy {
 	private ServerSettings.Security db() {
 		ServerSettings.Security c = cached;
 		if (c == null) {
-			c = settings.get().getSecurity();
+			// orEmpty before caching, not after: an instance that has never stored
+			// a security block would otherwise cache null, find null again on the
+			// next call, and read Mongo once per password check for the life of
+			// the process.
+			c = orEmpty(settings.get().getSecurity());
 			cached = c;
 		}
-		return c != null ? c : new ServerSettings.Security();
+		return c;
+	}
+
+	private static ServerSettings.Security orEmpty(ServerSettings.Security stored) {
+		return stored != null ? stored : new ServerSettings.Security();
 	}
 }

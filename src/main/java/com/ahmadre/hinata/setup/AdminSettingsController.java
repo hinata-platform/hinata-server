@@ -200,13 +200,24 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
-		// The PUT is a whole-document write, and the published 10.3.3 client keeps
-		// the settings as the raw map it read, so it hands unknown sections back
-		// untouched. A client that instead reserialized from a typed model would
-		// drop this one — and silently switch the module off for everyone. An
-		// omitted block therefore means "no opinion", not "erase what is stored".
+		// The PUT is a whole-document write. The published 10.3.3 client keeps the
+		// settings as the raw map it read, so it hands sections it does not know
+		// back untouched — but a deployment script, a curl body or any client
+		// built from a typed model omits what it does not model. For these three
+		// blocks every field means "null ⇒ the environment decides", so an
+		// omission would not be stored as an omission: it would be resolved to the
+		// environment default and take effect. MCP would switch itself back on, an
+		// administrator's lockout and session limits would revert, and the module
+		// would leave. An omitted block therefore means "no opinion", not "erase
+		// what is stored".
 		if (updated.getTimeTracking() == null) {
 			updated.setTimeTracking(current.getTimeTracking());
+		}
+		if (updated.getMcp() == null) {
+			updated.setMcp(current.getMcp());
+		}
+		if (updated.getSecurity() == null) {
+			updated.setSecurity(current.getSecurity());
 		}
 		// An upload the admin has just switched away from: the stored object would
 		// otherwise shadow the new URL in the /meta/logo proxy and linger as an
@@ -221,8 +232,14 @@ public class AdminSettingsController {
 		// captured (the check reads the pre-save, still-enabled settings).
 		audit.event(AuditAction.SETTINGS_CHANGED)
 				.actor(currentUser.require())
-				.meta("auditEnabled", String.valueOf(updated.getAudit().isEnabled()))
+				// An explicit "audit": null in the body is a 500 otherwise, and the
+				// settings save it was recording never happens.
+				.meta("auditEnabled", String.valueOf(
+						updated.getAudit() != null && updated.getAudit().isEnabled()))
 				.log();
+		if (updated.getAudit() == null) {
+			updated.setAudit(current.getAudit());
+		}
 		ServerSettings saved = settings.save(updated);
 		// After the save: a failed write must not leave the settings pointing at an
 		// object that is already gone.
