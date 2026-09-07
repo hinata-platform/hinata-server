@@ -30,6 +30,20 @@ public class LocaleConfig {
 			Locale.JAPANESE, Locale.FRENCH, Locale.forLanguageTag("ru"),
 			Locale.forLanguageTag("ar"));
 
+	/**
+	 * The same list as a {@code @Pattern} regex for the profile endpoints, which
+	 * accept a language a user picks by hand. A constant, because an annotation
+	 * cannot read the list — and one that {@code ProfileLocaleValidationTest}
+	 * pins to the list, so a tenth language cannot be added to one and not the
+	 * other.
+	 */
+	public static final String LANGUAGE_PATTERN = "en|de|zh|hi|es|ja|fr|ru|ar";
+
+	/** The language tags behind {@link #LANGUAGE_PATTERN}, for tests and callers that need the list. */
+	public static List<String> supportedLanguages() {
+		return SUPPORTED.stream().map(Locale::getLanguage).toList();
+	}
+
 	@Bean
 	public LocaleResolver localeResolver() {
 		AcceptHeaderLocaleResolver resolver = new AcceptHeaderLocaleResolver();

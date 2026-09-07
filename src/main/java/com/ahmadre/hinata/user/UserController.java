@@ -97,7 +97,8 @@ public class UserController {
 
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
 			@Size(max = 120) String title, @Size(max = 120) String pronouns,
-			@Pattern(regexp = "de|en|zh|hi|es") String locale) {
+			@Pattern(regexp = com.ahmadre.hinata.config.LocaleConfig.LANGUAGE_PATTERN) String locale,
+			@Size(max = UserZones.MAX_LENGTH) String timezone) {
 	}
 
 	@PatchMapping("/api/v1/users/me")
@@ -107,6 +108,7 @@ public class UserController {
 		if (request.title() != null) user.setTitle(request.title());
 		if (request.pronouns() != null) user.setPronouns(Pronouns.sanitize(request.pronouns()));
 		if (request.locale() != null) user.setLocale(request.locale());
+		if (request.timezone() != null) user.setTimezone(UserZones.normalize(request.timezone()));
 		return users.save(user);
 	}
 

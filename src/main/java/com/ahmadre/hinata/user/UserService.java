@@ -65,7 +65,9 @@ public class UserService {
 	 * dangle: their in-app notifications are dropped, issues assigned to them are
 	 * unassigned, they are removed from every watcher list and the change mails
 	 * still queued for them are discarded. Historical author references (reporter,
-	 * comment authors) are intentionally retained.
+	 * comment authors, {@code work_items.userId}) are intentionally retained: the
+	 * logged hours stay in the project's record under an id that no longer
+	 * resolves to a person — the same pseudonym convention as comment authors.
 	 */
 	public void delete(User user) {
 		String id = user.getId();

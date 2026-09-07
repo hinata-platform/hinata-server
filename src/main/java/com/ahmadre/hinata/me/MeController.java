@@ -53,7 +53,7 @@ public class MeController {
 			boolean emailVerified, String pendingEmail, String title, String pronouns, String locale,
 			String origin, List<String> roles, boolean active, String avatarUrl, Instant createdAt,
 			Instant passwordChangedAt, TwoFactorDto twoFactor,
-			NotificationPreferences notificationPreferences) {
+			NotificationPreferences notificationPreferences, String timezone) {
 
 		static MeResponse from(User u) {
 			NotificationPreferences prefs = u.getNotificationPreferences();
@@ -67,7 +67,7 @@ public class MeController {
 					u.getAvatarUrl(), u.getCreatedAt(), u.getPasswordChangedAt(),
 					new TwoFactorDto(u.isTotpEnabled(), "TOTP", u.recoveryCodesRemaining(),
 							u.getTotpEnabledAt()),
-					prefs);
+					prefs, u.getTimezone());
 		}
 	}
 
@@ -87,10 +87,13 @@ public class MeController {
 
 	// Only the languages we ship translations for (templates, e-mails, message
 	// bundles) are accepted — a locale we cannot serve is rejected rather than
-	// silently downgraded to English.
+	// silently downgraded to English. The time zone is an IANA id the app reads
+	// off the device; it is validated in MeService (a 400 for anything ZoneId
+	// does not know), and blank clears it.
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
 			@Size(max = 120) String title, @Size(max = 120) String pronouns,
-			@Pattern(regexp = "de|en|zh|hi|es") String locale) {
+			@Pattern(regexp = com.ahmadre.hinata.config.LocaleConfig.LANGUAGE_PATTERN) String locale,
+			@Size(max = com.ahmadre.hinata.user.UserZones.MAX_LENGTH) String timezone) {
 	}
 
 	public record EmailChangeRequest(@NotBlank @Email String newEmail) {
@@ -119,11 +122,11 @@ public class MeController {
 		return MeResponse.from(user);
 	}
 
-	@Operation(summary = "Update my profile (display name, title, pronouns, locale)")
+	@Operation(summary = "Update my profile (display name, title, pronouns, locale, time zone)")
 	@PatchMapping
 	public MeResponse updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
 		User saved = me.updateProfile(currentUser.require(), request.displayName(), request.title(),
-				request.pronouns(), request.locale());
+				request.pronouns(), request.locale(), request.timezone());
 		return MeResponse.from(saved);
 	}
 

@@ -65,11 +65,13 @@ public class MeService {
 	// --- Profile --------------------------------------------------------------
 
 	public User updateProfile(User user, String displayName, String title, String pronouns,
-			String locale) {
+			String locale, String timezone) {
 		if (displayName != null) user.setDisplayName(displayName.trim());
 		if (title != null) user.setTitle(title.trim());
 		if (pronouns != null) user.setPronouns(com.ahmadre.hinata.user.Pronouns.sanitize(pronouns));
 		if (locale != null) user.setLocale(locale);
+		// Validated before anything is saved: an unknown zone is a 400, blank clears.
+		if (timezone != null) user.setTimezone(com.ahmadre.hinata.user.UserZones.normalize(timezone));
 		return users.save(user);
 	}
 
