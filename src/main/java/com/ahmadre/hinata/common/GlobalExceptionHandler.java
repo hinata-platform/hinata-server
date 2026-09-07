@@ -134,6 +134,23 @@ public class GlobalExceptionHandler {
 				.body(ApiError.of(HttpStatus.FORBIDDEN, t("error.accessDenied"), null));
 	}
 
+	/**
+	 * A URL nothing is mapped to. Spring raises this from the static-resource
+	 * handler that picks up whatever no controller claimed, and with no handler
+	 * for it the catch-all below answered every unknown path with a 500 and a
+	 * stack trace at ERROR level — so a client could not tell "wrong URL" from
+	 * "the server broke", and anything walking the API wrote a stack trace per
+	 * probe into the log. It is a 404, and an unremarkable one.
+	 */
+	@ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+	public ResponseEntity<ApiError> handleNoRoute(
+			org.springframework.web.servlet.resource.NoResourceFoundException ex,
+			HttpServletRequest request, HttpServletResponse response) {
+		if (!allowJsonError(request, response)) return null;
+		return ResponseEntity.status(HttpStatus.NOT_FOUND)
+				.body(ApiError.of(HttpStatus.NOT_FOUND, t("error.routeNotFound"), null));
+	}
+
 	@ExceptionHandler(Exception.class)
 	public ResponseEntity<ApiError> handleUnexpected(Exception ex, HttpServletRequest request,
 			HttpServletResponse response) {
