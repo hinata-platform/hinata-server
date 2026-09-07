@@ -98,6 +98,20 @@ class FeatureFlagsTest {
 	}
 
 	@Test
+	void askingAboutOneFlagAgreesWithTheWholeMap() {
+		envDefaults(Map.of("emailReply", true));
+		stored(Map.of("mcp", true));
+		FeatureFlags featureFlags = flags(module("mcp", false));
+
+		// enabled() short-circuits on the module rather than building the map, so
+		// this is the assertion that keeps the shortcut honest.
+		assertThat(featureFlags.enabled("mcp")).isFalse();
+		assertThat(featureFlags.enabled("emailReply")).isTrue();
+		featureFlags.effective().forEach((key, value) ->
+				assertThat(featureFlags.enabled(key)).as(key).isEqualTo(value));
+	}
+
+	@Test
 	void anUnknownFlagIsOffRatherThanNull() {
 		envDefaults(Map.of());
 		stored(Map.of());

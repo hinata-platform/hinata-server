@@ -85,8 +85,21 @@ public class FeatureFlags {
 		return flags;
 	}
 
-	/** Whether one flag is on, by the same rule {@code /meta} answered with. */
+	/**
+	 * Whether one flag is on, by the same rule {@code /meta} answered with.
+	 *
+	 * <p>A module flag is answered by its own resolver and nothing else is
+	 * consulted. That is the same result {@link #effective()} would give — the
+	 * module layer wins there too — but a gate asking about one flag should not
+	 * make every other module resolve itself, and settings-backed resolvers are
+	 * where the cost of that would show up.
+	 */
 	public boolean enabled(String key) {
-		return Boolean.TRUE.equals(effective().get(key));
+		for (Module module : modules) {
+			if (module.flagKey().equals(key)) {
+				return module.flagEnabled();
+			}
+		}
+		return Boolean.TRUE.equals(configurable().get(key));
 	}
 }
