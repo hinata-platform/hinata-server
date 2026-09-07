@@ -10,6 +10,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -41,10 +42,17 @@ import java.util.Map;
  *       difference — attributed to nobody, because nobody is known.</li>
  * </ul>
  *
- * <p>Idempotent by construction: after the first run every remainder is zero,
- * and a remainder is the only thing that creates an entry. Issues are walked
- * with a cursor in batches — never loaded whole — and each batch costs one
- * aggregation over the entries it references.
+ * <p>Idempotent three times over, because one guarantee is not enough here.
+ * A marker document makes the settled case a single read instead of a walk of
+ * the two largest collections on every boot. Under that, each legacy entry
+ * carries an id derived from its issue, so a second insert is a duplicate key
+ * rather than a second entry — which is what protects two instances booting at
+ * the same moment, where a marker written at the end protects neither. And
+ * under that again, a remainder is the only thing that creates an entry at all,
+ * and after one run there are none.
+ *
+ * <p>Issues are walked with a cursor in batches — never loaded whole — and each
+ * batch costs one aggregation over the entries it references.
  */
 @Slf4j
 @Component
@@ -55,6 +63,10 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 
 	static final int BATCH = 500;
 	static final String LEGACY_ACTIVITY = "Development";
+	/** Collection of "this has run" markers, shared with any later migration. */
+	static final String MARKERS = "schema_migrations";
+	/** This migration's marker. */
+	static final String MARKER = "work_items.v2";
 
 	private final MongoTemplate mongo;
 	private final Clock clock;
@@ -69,8 +81,16 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 	}
 
 	public Result migrate() {
+		MongoCollection<Document> markers = mongo.getCollection(MARKERS);
+		if (markers.find(new Document("_id", MARKER)).first() != null) {
+			// The cost of a run that has nothing to do: one indexed read, rather
+			// than three passes over work_items and a walk of every issue that
+			// ever had time booked on it — on every deploy, forever.
+			return new Result(0, 0, 0);
+		}
 		long defaults = backfillDefaults(mongo.getCollection("work_items"));
 		long[] legacy = backfillLegacyRemainders();
+		markers.insertOne(new Document("_id", MARKER).append("ranAt", Date.from(clock.instant())));
 		if (defaults > 0 || legacy[0] > 0) {
 			log.info("WorkItemSchemaMigration: backfilled defaults on {} entry(ies), created {} legacy "
 					+ "entry(ies) worth {} minute(s)", defaults, legacy[0], legacy[1]);
@@ -137,22 +157,51 @@ public class WorkItemSchemaMigration implements ApplicationRunner {
 			if (remainder <= 0) {
 				continue;
 			}
+			LocalDate day = dayOf(issue, today);
+			// A day is the most an entry may hold — the rule every write path
+			// enforces — and a remainder from years of #time bumps can be far
+			// more than that. One entry of two hundred hours would be a document
+			// the API itself would refuse to edit, so it is spread over as many
+			// entries as it takes.
+			int part = 0;
+			for (long left = remainder; left > 0; left -= TimeTrackingService.MAX_MINUTES, part++) {
+				int slice = (int) Math.min(left, TimeTrackingService.MAX_MINUTES);
+				if (insertLegacy(issueId, issue.getString("projectId"), day, slice, part)) {
+					created++;
+					minutes += slice;
+				}
+			}
+		}
+		return new long[] { created, minutes };
+	}
+
+	/**
+	 * One legacy entry, at an id derived from its issue so a repeat is a
+	 * duplicate key rather than a duplicate entry. Returns whether it was this
+	 * call that wrote it.
+	 */
+	private boolean insertLegacy(String issueId, String projectId, LocalDate day, int minutes,
+			int part) {
+		try {
 			mongo.insert(WorkItem.builder()
+					.id("legacy:" + issueId + ":" + part)
 					.issueId(issueId)
-					.projectId(issue.getString("projectId"))
+					.projectId(projectId)
 					.userId(null)
-					.date(dayOf(issue, today))
-					.durationMinutes((int) Math.min(remainder, Integer.MAX_VALUE))
+					.date(day)
+					.durationMinutes(minutes)
 					.activityType(LEGACY_ACTIVITY)
 					.description("")
 					.billable(false)
 					.tags(new ArrayList<>())
 					.source(WorkItem.Source.LEGACY)
 					.build());
-			created++;
-			minutes += remainder;
+			return true;
 		}
-		return new long[] { created, minutes };
+		catch (DuplicateKeyException alreadyThere) {
+			// Another instance booted at the same moment and got there first.
+			return false;
+		}
 	}
 
 	/** Σ durationMinutes per issue for the given issue ids, straight from Mongo. */

@@ -59,7 +59,9 @@ class WorkItemSchemaMigrationIntegrationTest {
 
 	@BeforeEach
 	void clear() {
-		for (String collection : List.of("issues", "work_items")) {
+		// The marker too: the runner writes it at boot, and every test here wants
+		// to watch a first run rather than the no-op that follows one.
+		for (String collection : List.of("issues", "work_items", WorkItemSchemaMigration.MARKERS)) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		nextNumber = 1;
@@ -122,6 +124,74 @@ class WorkItemSchemaMigrationIntegrationTest {
 		assertThat(second.defaultsBackfilled()).isZero();
 		assertThat(workItems.findAll().stream().map(WorkItem::getId).sorted().toList())
 				.isEqualTo(after);
+	}
+
+	/**
+	 * The second run is cheap as well as harmless: with the marker in place it
+	 * does not touch work_items or issues at all, which is what keeps a deploy
+	 * from re-summing the whole tracked corpus every time.
+	 */
+	@Test
+	void aSecondRunDoesNotEvenLook() {
+		Issue issue = issueWith("HIN-1", 120);
+		tracked(issue, 30);
+		migration.migrate();
+
+		assertThat(mongo.getCollection(WorkItemSchemaMigration.MARKERS)
+				.countDocuments(new Document("_id", WorkItemSchemaMigration.MARKER)))
+				.as("the run left a marker behind").isEqualTo(1);
+
+		// Something the second run would fix if it looked: a document with no
+		// source. It stays untouched, which is how we know it did not.
+		mongo.getCollection("work_items").insertOne(new Document("issueId", issue.getId())
+				.append("userId", "someone").append("durationMinutes", 5));
+
+		assertThat(migration.migrate().defaultsBackfilled()).isZero();
+		assertThat(mongo.getCollection("work_items")
+				.countDocuments(new Document("source", null))).isEqualTo(1);
+	}
+
+	/**
+	 * Two instances booting together both see the same remainder, and the marker
+	 * — written at the end — protects neither. The id does: the second insert is
+	 * a duplicate key, not a second entry, so the issue's hours cannot double.
+	 */
+	@Test
+	void twoRunsAtOnceCannotDoubleTheHours() {
+		Issue issue = issueWith("HIN-1", 480);
+
+		migration.migrate();
+		// Exactly what a racing instance does: it never saw the marker.
+		mongo.getCollection(WorkItemSchemaMigration.MARKERS).deleteMany(new Document());
+		WorkItemSchemaMigration.Result racing = migration.migrate();
+
+		assertThat(racing.legacyEntriesCreated()).isZero();
+		assertThat(workItems.findAll()).singleElement()
+				.satisfies(entry -> assertThat(entry.getDurationMinutes()).isEqualTo(480));
+	}
+
+	/**
+	 * A counter grown over years of #time bumps can hold far more than a day,
+	 * and a day is the most any entry may hold — one lump of two hundred hours
+	 * would be a record the API itself refuses to edit.
+	 */
+	@Test
+	void aRemainderLargerThanADayBecomesSeveralEntriesOfAtMostADay() {
+		issueWith("HIN-1", 3 * 24 * 60 + 30);
+
+		WorkItemSchemaMigration.Result result = migration.migrate();
+
+		assertThat(result.legacyEntriesCreated()).isEqualTo(4);
+		assertThat(result.legacyMinutes()).isEqualTo(3 * 24 * 60 + 30);
+		assertThat(workItems.findAll()).hasSize(4)
+				.allSatisfy(entry -> {
+					assertThat(entry.getDurationMinutes())
+							.isBetween(1, TimeTrackingService.MAX_MINUTES);
+					assertThat(entry.getSource()).isEqualTo(WorkItem.Source.LEGACY);
+					assertThat(entry.getUserId()).isNull();
+				});
+		assertThat(workItems.findAll().stream()
+				.mapToInt(WorkItem::getDurationMinutes).sum()).isEqualTo(3 * 24 * 60 + 30);
 	}
 
 	@Test
