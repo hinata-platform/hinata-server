@@ -229,6 +229,66 @@ class SmartCommitTimeIntegrationTest {
 		assertThat(spentMinutes()).isZero();
 	}
 
+	/**
+	 * The author line of a commit is text anyone with push access can write, so
+	 * it cannot be what decides where an entry may land. A push that reaches an
+	 * issue in a project it has nothing to do with writes nothing, even when the
+	 * name it credits belongs to a member of that other project.
+	 */
+	@Test
+	void aPushCannotBookTimeOntoAnIssueItCannotReach() {
+		User insider = user("insider", true);
+		Project other = projects.save(Project.builder().key("SEC").name("Security")
+				.leadId(insider.getId())
+				.leadIds(new ArrayList<>(List.of(insider.getId())))
+				.memberIds(new ArrayList<>(List.of(insider.getId())))
+				.git(Project.Git.builder().provider("github").owner("hinata").repo("secrets")
+						.connectedBy(insider.getId()).automation(Project.Automation.off())
+						.build())
+				.build());
+		Issue theirs = issues.save(Issue.builder().projectId(other.getId()).readableId("SEC-12")
+				.numberInProject(12).title("Rotate the keys").state("Open").spentMinutes(0)
+				.watcherIds(new ArrayList<>()).assigneeIds(new ArrayList<>())
+				.tags(new ArrayList<>()).dependsOnIds(new ArrayList<>()).build());
+
+		// The push is signed for the HIN repository; the connector is not in SEC.
+		push("SEC-12 #time 8h", insider.getEmail(), NOW);
+
+		assertThat(workItems.findAll()).as("no hours forged into a project the push cannot see")
+				.isEmpty();
+		assertThat(issues.findById(theirs.getId()).orElseThrow().getSpentMinutes()).isZero();
+	}
+
+	/**
+	 * Crediting somebody else has to leave a trace, because the credit itself is
+	 * unverifiable: whoever pushed chose the name.
+	 */
+	@Test
+	void bookingTimeOntoSomebodyElseIsAuditedUnderBothNames() {
+		push("HIN-42 #time 2h", author.getEmail(), NOW);
+
+		Document entry = mongo.getCollection("audit_log")
+				.find(new Document("action", "TIME_ENTRY_CREATED_FOR")).first();
+		assertThat(entry).as("a booking onto another account is findable afterwards").isNotNull();
+		assertThat(entry.getString("actorId")).as("who pushed").isEqualTo(connector.getId());
+		assertThat(entry.getString("targetId")).as("who was credited").isEqualTo(author.getId());
+		Document meta = entry.get("metadata", Document.class);
+		assertThat(meta.getString("issue")).isEqualTo("HIN-42");
+		assertThat(meta.getString("commit")).isEqualTo("abc1234");
+		assertThat(meta.getString("minutes")).isEqualTo("120");
+	}
+
+	/** Logging your own hours from your own push is the ordinary case, not an event. */
+	@Test
+	void bookingYourOwnTimeIsNotAudited() {
+		push("HIN-42 #time 2h", connector.getEmail(), NOW);
+
+		assertThat(workItems.findAll()).singleElement()
+				.satisfies(item -> assertThat(item.getUserId()).isEqualTo(connector.getId()));
+		assertThat(mongo.getCollection("audit_log")
+				.countDocuments(new Document("action", "TIME_ENTRY_CREATED_FOR"))).isZero();
+	}
+
 	/** Two commands in one message: the comment is the connector's, the time is the author's. */
 	@Test
 	void onlyTheTimeIsAttributedToTheAuthor() {

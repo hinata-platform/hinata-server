@@ -1,17 +1,17 @@
 package com.ahmadre.hinata.git;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
-import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.timetracking.TimeTrackingService;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserService;
-import com.ahmadre.hinata.user.UserZones;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,7 +62,7 @@ public class GitService {
 	// author's zone decides which day a commit timestamp falls on.
 	private final TimeTrackingService timeTracking;
 	private final UserService users;
-	private final SettingsService settings;
+	private final AuditService audit;
 	private final Clock clock;
 	private final SecureRandom random = new SecureRandom();
 
@@ -444,6 +444,12 @@ public class GitService {
 	 * behind the commit's author e-mail, and skipped with a warning when that
 	 * address belongs to no active member of the issue's project. The connector
 	 * is never credited with someone else's hours.
+	 *
+	 * <p>Being credited is not the same as being authorized. An author line is
+	 * free text in the commit, so it says who <em>should</em> get the hours, never
+	 * who may write them: {@code actor} still has to reach the issue, exactly as
+	 * a comment or a transition does, and a booking onto anyone else's account is
+	 * audited under both names.
 	 */
 	public void applySmartCommits(SmartCommit commit, User actor) {
 		for (SmartCommitParser.Command command : SmartCommitParser.parse(commit.message())) {
@@ -465,7 +471,7 @@ public class GitService {
 					// through the same converter as every other markdown source.
 					case COMMENT -> issues.addComment(issue.getId(),
 							richText.fromMarkdown(command.value()), actor);
-					case TIME -> logTime(commit, command, issue);
+					case TIME -> logTime(commit, command, issue, actor);
 					case TRANSITION -> {
 						String state = matchState(project, command.value());
 						if (state != null) {
@@ -483,14 +489,30 @@ public class GitService {
 
 	/**
 	 * {@code #time} as a work item of the commit author. Nothing is written when
-	 * the author cannot be resolved to an active account, or when that account
-	 * is not a member of the issue's project — the time is skipped and logged,
-	 * in the same voice as every other skipped command, rather than booked to
-	 * the wrong person.
+	 * the push cannot reach the issue, when the author cannot be resolved to an
+	 * active account, or when that account is not a member of the issue's
+	 * project — the time is skipped and logged, in the same voice as every other
+	 * skipped command, rather than booked to the wrong person.
+	 *
+	 * <p>Two identities meet here and they are checked differently on purpose.
+	 * {@code actor} is the push: it comes from a webhook signed with the
+	 * repository's secret, so it is the identity that has to pass the ACL, and
+	 * it passes the same one a {@code #comment} passes. The author e-mail is
+	 * plain text in the commit object — anyone who can push can write any name
+	 * into it — so it only decides <em>who gets the hours</em>, never whether
+	 * they may be written. When the two differ, the entry is audited under both,
+	 * because a working-time record credited to someone who did not create it is
+	 * exactly the thing that has to be findable afterwards.
 	 */
-	private void logTime(SmartCommit commit, SmartCommitParser.Command command, Issue issue) {
+	private void logTime(SmartCommit commit, SmartCommitParser.Command command, Issue issue,
+			User actor) {
 		int minutes = SmartCommitParser.minutes(command.value());
 		if (minutes <= 0) {
+			return;
+		}
+		if (!issues.canAccess(issue, actor)) {
+			log.warn("[git] smart-commit 'TIME' on {} skipped: the push cannot reach that issue",
+					command.issueKey());
 			return;
 		}
 		User author = users.findActiveByEmail(commit.authorEmail()).orElse(null);
@@ -504,7 +526,7 @@ public class GitService {
 					command.issueKey(), commit.authorEmail());
 			return;
 		}
-		ZoneId zone = UserZones.of(author, settings.get());
+		ZoneId zone = timeTracking.zoneOf(author);
 		LocalDate today = LocalDate.ofInstant(clock.instant(), zone);
 		LocalDate day = commit.committedAt() == null ? today
 				: LocalDate.ofInstant(commit.committedAt(), zone);
@@ -513,21 +535,34 @@ public class GitService {
 		if (day.isAfter(today)) {
 			day = today;
 		}
-		timeTracking.add(issue.getId(),
+		WorkItem entry = timeTracking.add(issue.getId(),
 				new TimeTrackingService.NewWorkItem(minutes, day, null,
 						timeDescription(commit), null, null, null, null),
 				WorkItem.Source.SMART_COMMIT, author);
+		if (!author.getId().equals(actor.getId())) {
+			audit.event(AuditAction.TIME_ENTRY_CREATED_FOR).actor(actor).target(author)
+					.meta("workItem", entry.getId())
+					.meta("issue", issue.getReadableId())
+					.meta("commit", shortSha(commit))
+					.meta("minutes", String.valueOf(minutes))
+					.meta("date", String.valueOf(day)).log();
+		}
 	}
 
 	/** "Smart commit &lt;sha7&gt;: &lt;first line&gt;", capped at {@link #TIME_DESCRIPTION_MAX}. */
 	static String timeDescription(SmartCommit commit) {
-		String sha = commit.sha() == null ? "" : commit.sha();
-		String sha7 = sha.length() > 7 ? sha.substring(0, 7) : sha;
+		String sha7 = shortSha(commit);
 		String message = commit.message() == null ? "" : commit.message();
 		int newline = message.indexOf('\n');
 		String firstLine = (newline >= 0 ? message.substring(0, newline) : message).trim();
 		String text = "Smart commit " + sha7 + ": " + firstLine;
 		return text.length() > TIME_DESCRIPTION_MAX ? text.substring(0, TIME_DESCRIPTION_MAX) : text;
+	}
+
+	/** The first seven characters of a commit's sha, or "" when it carries none. */
+	static String shortSha(SmartCommit commit) {
+		String sha = commit.sha() == null ? "" : commit.sha();
+		return sha.length() > 7 ? sha.substring(0, 7) : sha;
 	}
 
 	// ─────────────────────────── internals ───────────────────────────
