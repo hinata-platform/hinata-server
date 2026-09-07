@@ -1,5 +1,9 @@
 package com.ahmadre.hinata.config;
 
+import com.ahmadre.hinata.common.ApprovalPeriodConsistent;
+import com.ahmadre.hinata.common.TimePolicy;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -8,6 +12,8 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -68,6 +74,8 @@ public class HinataProperties {
 	private Gateway gateway = new Gateway();
 	private GitIntegration gitIntegration = new GitIntegration();
 	private Mcp mcp = new Mcp();
+	@Valid
+	private TimeTracking timeTracking = new TimeTracking();
 	private Notification notification = new Notification();
 
 	/** Tuning for the notification fan-out that is not a per-user preference. */
@@ -388,6 +396,155 @@ public class HinataProperties {
 		 */
 		@Min(1)
 		private int attachmentReadsPerMinute = 20;
+	}
+
+	/**
+	 * Time tracking: the environment defaults for the module switch and for every
+	 * policy behind it. An administrator overrides any of them at runtime through
+	 * {@code ServerSettings.TimeTracking}; the effective value is resolved by
+	 * {@code timetracking.TimeTrackingSettings} (DB override per field, else the
+	 * default here).
+	 *
+	 * <p>Every policy that could be used to watch a person rather than to record
+	 * work defaults to <em>off</em>. That is not caution for its own sake: under
+	 * § 87 Abs. 1 Nr. 6 BetrVG a technical facility suited to monitoring conduct
+	 * or performance needs the works council's agreement before it runs, so an
+	 * instance that has not had that conversation must come up with those
+	 * features silent. An operator turns them on deliberately, one at a time.
+	 *
+	 * <p>Nothing here is a hardcoded rhythm either. How often timesheets are
+	 * submitted is {@link ApprovalPeriod}, an operator's choice down to "a span
+	 * they pick themselves" — there is deliberately no constant anywhere in the
+	 * code that says a week or a month.
+	 */
+	@Getter
+	@Setter
+	public static class TimeTracking {
+
+		/**
+		 * Master switch for the extended module (timers, calendar, approvals,
+		 * availability, billing). Off by default: an instance that upgrades keeps
+		 * exactly the 1.x time tracking it had until someone chooses otherwise.
+		 */
+		private boolean advancedEnabled = false;
+
+		/** Which fields an entry must carry to be accepted. */
+		private RequiredFields requiredFields = new RequiredFields();
+
+		/**
+		 * Entries on or before this day can no longer be written. Null (the
+		 * default) means no lock; set it from
+		 * {@code HINATA_TIME_TRACKING_LOCK_BEFORE} as an ISO date.
+		 */
+		private LocalDate lockBefore;
+
+		/** How reported durations are folded onto an increment. */
+		@Valid
+		private Rounding rounding = new Rounding();
+
+		/** Only tags an administrator has defined may be used. */
+		private boolean limitTagAccess = false;
+
+		/** What {@code billable} is set to when an entry does not say. */
+		private boolean defaultBillable = false;
+
+		/** Rates, costs and invoices. Monitoring-capable via cost per person ⇒ off. */
+		private boolean billingEnabled = false;
+
+		/** ISO-4217 code the billing figures are expressed in. */
+		private String currency = "EUR";
+
+		/**
+		 * Whether a project lead sees the entries of the project's members with
+		 * the person attached. Off ⇒ leads see the project's totals, not who
+		 * booked them (R2).
+		 */
+		private boolean leadsSeeMemberEntries = false;
+
+		/** Timesheet submission and approval. Off by default (R2). */
+		private boolean approvalsEnabled = false;
+
+		/** How often a timesheet is submitted. Absent ⇒ monthly. */
+		@Valid
+		private ApprovalPeriod approvalPeriod = new ApprovalPeriod();
+
+		/** Workload reports (booked against capacity). Monitoring-capable ⇒ off. */
+		private boolean workloadReportsEnabled = false;
+
+		/** Budget and estimate alerts to leads. Off by default. */
+		private boolean alertsEnabled = false;
+
+		/** Personal target reminders — only ever to the person themselves. Off by default. */
+		private boolean targetRemindersEnabled = false;
+
+		/** German working-hours-act self-hints (own day over 10 h, short rest). Off by default. */
+		private boolean arbzgHintsEnabled = false;
+
+		/** How long entries and their free text are kept. */
+		@Valid
+		private Retention retention = new Retention();
+
+		/** The privacy notice shown before the module is first used. Blank ⇒ the built-in template. */
+		private String privacyNotice = "";
+
+		/** Subscribing to external calendars (ICS). Off by default. */
+		private boolean icsImportEnabled = false;
+
+		/** Which fields an entry must carry. All optional by default, as in 1.x. */
+		@Getter
+		@Setter
+		public static class RequiredFields {
+			private boolean project = false;
+			private boolean issue = false;
+			private boolean description = false;
+			private boolean tag = false;
+		}
+
+		/** Rounding of reported durations — a reporting parameter, never a rewrite of the entry. */
+		@Getter
+		@Setter
+		public static class Rounding {
+			private TimePolicy.Rounding mode = TimePolicy.Rounding.NONE;
+			/** Increment in minutes the mode folds onto (5, 10, 15, 30, 60). */
+			@Min(1)
+			@Max(60)
+			private int increment = 15;
+		}
+
+		/**
+		 * The submission rhythm. {@code weekStartsOn} matters for WEEKLY/BIWEEKLY,
+		 * {@code anchorDate} for BIWEEKLY/CUSTOM_DAYS, {@code days} for
+		 * CUSTOM_DAYS — {@code ApprovalPeriodConsistent} states which combination
+		 * is coherent, in one place, for both the defaults here and the stored
+		 * override.
+		 */
+		@Getter
+		@Setter
+		@ApprovalPeriodConsistent
+		public static class ApprovalPeriod implements ApprovalPeriodConsistent.Period {
+			private TimePolicy.ApprovalPeriod type = TimePolicy.ApprovalPeriod.MONTHLY;
+			private DayOfWeek weekStartsOn = DayOfWeek.MONDAY;
+			private LocalDate anchorDate;
+			@Min(1)
+			@Max(366)
+			private Integer days;
+		}
+
+		/**
+		 * Retention in months, counted from the entry's day. {@code 0} — the
+		 * default — keeps data indefinitely, which is what an instance without a
+		 * deletion concept should do rather than quietly destroying records.
+		 * Purging the description alone is the softer of the two: it drops the
+		 * free text a person wrote and keeps the hours.
+		 */
+		@Getter
+		@Setter
+		public static class Retention {
+			@Min(0)
+			private int descriptionPurgeMonths = 0;
+			@Min(0)
+			private int entryPurgeMonths = 0;
+		}
 	}
 
 	@Getter

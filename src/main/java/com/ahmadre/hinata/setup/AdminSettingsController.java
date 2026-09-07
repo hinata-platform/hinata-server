@@ -92,6 +92,7 @@ public class AdminSettingsController {
 		prefillGitIntegration(current);
 		prefillMcp(current);
 		prefillSecurity(current);
+		prefillTimeTracking(current);
 		return current;
 	}
 
@@ -145,6 +146,125 @@ public class AdminSettingsController {
 	}
 
 	/**
+	 * Pre-fill the time-tracking policies from the env defaults, so every switch
+	 * in the "Zeiterfassung" section shows the value currently in force rather
+	 * than an empty field that happens to mean "the default, whatever that is" —
+	 * the same plain env prefill as {@link #prefillMcp}, and the same result the
+	 * module's own resolver computes, because both are "the stored value when
+	 * there is one, the default otherwise", field by field.
+	 *
+	 * <p>Note what is <em>not</em> filled in: a lock date nobody configured stays
+	 * empty. Putting today's date there would freeze the instance the first time
+	 * an admin opened this page and pressed save.
+	 */
+	private void prefillTimeTracking(ServerSettings current) {
+		ServerSettings.TimeTracking block = current.getTimeTracking();
+		if (block == null) {
+			block = new ServerSettings.TimeTracking();
+			current.setTimeTracking(block);
+		}
+		HinataProperties.TimeTracking timeDefaults = properties.getTimeTracking();
+		if (block.getAdvancedEnabled() == null) {
+			block.setAdvancedEnabled(timeDefaults.isAdvancedEnabled());
+		}
+		if (block.getRequiredFields() == null) {
+			block.setRequiredFields(new ServerSettings.TimeTracking.RequiredFields());
+		}
+		ServerSettings.TimeTracking.RequiredFields required = block.getRequiredFields();
+		HinataProperties.TimeTracking.RequiredFields requiredDefaults = timeDefaults.getRequiredFields();
+		if (required.getProject() == null) {
+			required.setProject(requiredDefaults.isProject());
+		}
+		if (required.getIssue() == null) {
+			required.setIssue(requiredDefaults.isIssue());
+		}
+		if (required.getDescription() == null) {
+			required.setDescription(requiredDefaults.isDescription());
+		}
+		if (required.getTag() == null) {
+			required.setTag(requiredDefaults.isTag());
+		}
+		if (block.getLockBefore() == null) {
+			block.setLockBefore(timeDefaults.getLockBefore());
+		}
+		if (block.getRounding() == null) {
+			block.setRounding(new ServerSettings.TimeTracking.Rounding());
+		}
+		ServerSettings.TimeTracking.Rounding rounding = block.getRounding();
+		HinataProperties.TimeTracking.Rounding roundingDefaults = timeDefaults.getRounding();
+		if (rounding.getMode() == null) {
+			rounding.setMode(roundingDefaults.getMode());
+		}
+		if (rounding.getIncrement() == null) {
+			rounding.setIncrement(roundingDefaults.getIncrement());
+		}
+		if (block.getLimitTagAccess() == null) {
+			block.setLimitTagAccess(timeDefaults.isLimitTagAccess());
+		}
+		if (block.getDefaultBillable() == null) {
+			block.setDefaultBillable(timeDefaults.isDefaultBillable());
+		}
+		if (block.getBillingEnabled() == null) {
+			block.setBillingEnabled(timeDefaults.isBillingEnabled());
+		}
+		if (isBlank(block.getCurrency())) {
+			block.setCurrency(timeDefaults.getCurrency());
+		}
+		if (block.getLeadsSeeMemberEntries() == null) {
+			block.setLeadsSeeMemberEntries(timeDefaults.isLeadsSeeMemberEntries());
+		}
+		if (block.getApprovalsEnabled() == null) {
+			block.setApprovalsEnabled(timeDefaults.isApprovalsEnabled());
+		}
+		if (block.getApprovalPeriod() == null) {
+			block.setApprovalPeriod(new ServerSettings.TimeTracking.ApprovalPeriod());
+		}
+		ServerSettings.TimeTracking.ApprovalPeriod period = block.getApprovalPeriod();
+		HinataProperties.TimeTracking.ApprovalPeriod periodDefaults = timeDefaults.getApprovalPeriod();
+		if (period.getType() == null) {
+			period.setType(periodDefaults.getType());
+		}
+		if (period.getWeekStartsOn() == null) {
+			period.setWeekStartsOn(periodDefaults.getWeekStartsOn());
+		}
+		if (period.getAnchorDate() == null) {
+			period.setAnchorDate(periodDefaults.getAnchorDate());
+		}
+		if (period.getDays() == null) {
+			period.setDays(periodDefaults.getDays());
+		}
+		if (block.getWorkloadReportsEnabled() == null) {
+			block.setWorkloadReportsEnabled(timeDefaults.isWorkloadReportsEnabled());
+		}
+		if (block.getAlertsEnabled() == null) {
+			block.setAlertsEnabled(timeDefaults.isAlertsEnabled());
+		}
+		if (block.getTargetRemindersEnabled() == null) {
+			block.setTargetRemindersEnabled(timeDefaults.isTargetRemindersEnabled());
+		}
+		if (block.getArbzgHintsEnabled() == null) {
+			block.setArbzgHintsEnabled(timeDefaults.isArbzgHintsEnabled());
+		}
+		if (block.getRetention() == null) {
+			block.setRetention(new ServerSettings.TimeTracking.Retention());
+		}
+		ServerSettings.TimeTracking.Retention retention = block.getRetention();
+		HinataProperties.TimeTracking.Retention retentionDefaults = timeDefaults.getRetention();
+		if (retention.getDescriptionPurgeMonths() == null) {
+			retention.setDescriptionPurgeMonths(retentionDefaults.getDescriptionPurgeMonths());
+		}
+		if (retention.getEntryPurgeMonths() == null) {
+			retention.setEntryPurgeMonths(retentionDefaults.getEntryPurgeMonths());
+		}
+		if (isBlank(block.getPrivacyNotice())) {
+			block.setPrivacyNotice(timeDefaults.getPrivacyNotice());
+		}
+		if (block.getIcsImportEnabled() == null) {
+			block.setIcsImportEnabled(timeDefaults.isIcsImportEnabled());
+		}
+	}
+
+	/**
 	 * Pre-fill the Git integration non-secret fields from the env defaults (so the
 	 * form shows the currently-effective values) and surface the derived, read-only
 	 * status flags the admin UI uses to show whether a provider is live or emulated.
@@ -192,6 +312,14 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
+		// The PUT is a whole-document write, and the published 10.3.3 client keeps
+		// the settings as the raw map it read, so it hands unknown sections back
+		// untouched. A client that instead reserialized from a typed model would
+		// drop this one — and silently switch the module off for everyone. An
+		// omitted block therefore means "no opinion", not "erase what is stored".
+		if (updated.getTimeTracking() == null) {
+			updated.setTimeTracking(current.getTimeTracking());
+		}
 		// An upload the admin has just switched away from: the stored object would
 		// otherwise shadow the new URL in the /meta/logo proxy and linger as an
 		// orphan. Only relevant when there *was* an upload — testing the incoming

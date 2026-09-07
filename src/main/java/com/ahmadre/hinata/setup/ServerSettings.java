@@ -1,7 +1,11 @@
 package com.ahmadre.hinata.setup;
 
+import com.ahmadre.hinata.common.ApprovalPeriodConsistent;
+import com.ahmadre.hinata.common.TimePolicy;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
@@ -9,7 +13,9 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.annotation.Transient;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -52,6 +58,15 @@ public class ServerSettings {
 	private EmailIngest emailIngest = new EmailIngest();
 	private GitIntegration gitIntegration = new GitIntegration();
 	private Mcp mcp = new Mcp();
+	/**
+	 * Time-tracking policy overrides. Deliberately <em>not</em> initialised: an
+	 * admin client that does not know this block leaves it out of its whole-document
+	 * PUT, and {@link AdminSettingsController#update} can only tell "the caller
+	 * omitted it, keep what is stored" from "the caller cleared it" if the absent
+	 * case arrives as null.
+	 */
+	@Valid
+	private TimeTracking timeTracking;
 	private Audit audit = new Audit();
 
 	@LastModifiedDate
@@ -346,6 +361,136 @@ public class ServerSettings {
 		private Boolean enabled;
 		/** Max active Personal Access Tokens per user override; null ⇒ env default. */
 		private Integer maxPatsPerUser;
+	}
+
+	/**
+	 * Time-tracking policy overrides. Every field is a nullable wrapper: null
+	 * means "no opinion here — use the environment default", exactly the pattern
+	 * {@link App#localAuthEnabled} follows. That is what makes a
+	 * {@code server_settings} document written before this block existed fall
+	 * back to the configured defaults rather than to {@code false} for
+	 * everything, and it is what "Use the environment default" writes when an
+	 * admin clears a field.
+	 *
+	 * <p>The effective values are resolved by
+	 * {@code timetracking.TimeTrackingSettings}, which caches them; nothing reads
+	 * this block directly to decide anything.
+	 *
+	 * <p>The policies that could be turned on a person rather than on the work
+	 * default to off in the environment (§ 87 Abs. 1 Nr. 6 BetrVG — a facility
+	 * suited to monitoring conduct or performance is co-determined before it
+	 * runs), and the admin area says so next to each switch.
+	 */
+	@Data
+	public static class TimeTracking {
+
+		/** Master switch for the extended module; null ⇒ {@code hinata.time-tracking.advanced-enabled}. */
+		private Boolean advancedEnabled;
+
+		/** Which fields an entry must carry; null fields ⇒ env defaults. */
+		@Valid
+		private RequiredFields requiredFields;
+
+		/** Entries on or before this day are frozen; null ⇒ env default. */
+		private LocalDate lockBefore;
+
+		/** Rounding of reported durations; null ⇒ env default. */
+		@Valid
+		private Rounding rounding;
+
+		/** Only administrator-defined tags may be used; null ⇒ env default. */
+		private Boolean limitTagAccess;
+
+		/** What {@code billable} becomes when an entry does not say; null ⇒ env default. */
+		private Boolean defaultBillable;
+
+		/** Rates, costs and invoices; null ⇒ env default. */
+		private Boolean billingEnabled;
+
+		/** ISO-4217 code for billing figures; null/blank ⇒ env default. */
+		@Size(max = 3, message = "error.timeTracking.currencyInvalid")
+		private String currency;
+
+		/** Whether a lead sees member entries with the person attached; null ⇒ env default. */
+		private Boolean leadsSeeMemberEntries;
+
+		/** Timesheet submission and approval; null ⇒ env default. */
+		private Boolean approvalsEnabled;
+
+		/** The submission rhythm; null fields ⇒ env defaults, and nothing configured ⇒ monthly. */
+		@Valid
+		private ApprovalPeriod approvalPeriod;
+
+		/** Workload reports (booked against capacity); null ⇒ env default. */
+		private Boolean workloadReportsEnabled;
+
+		/** Budget and estimate alerts to leads; null ⇒ env default. */
+		private Boolean alertsEnabled;
+
+		/** Personal target reminders; null ⇒ env default. */
+		private Boolean targetRemindersEnabled;
+
+		/** Working-hours-act self-hints; null ⇒ env default. */
+		private Boolean arbzgHintsEnabled;
+
+		/** How long entries and their free text are kept; null ⇒ env default. */
+		@Valid
+		private Retention retention;
+
+		/**
+		 * The privacy notice shown before the module is first used (stage 8
+		 * displays it). Capped because it is free text an admin types once and
+		 * every client then downloads with the settings.
+		 */
+		@Size(max = 20000, message = "error.timeTracking.privacyNoticeTooLong")
+		private String privacyNotice;
+
+		/** Subscribing to external calendars; null ⇒ env default. */
+		private Boolean icsImportEnabled;
+
+		/** Per-field overrides for the required-field policy. */
+		@Data
+		public static class RequiredFields {
+			private Boolean project;
+			private Boolean issue;
+			private Boolean description;
+			private Boolean tag;
+		}
+
+		/** Rounding override — a reporting parameter, never a rewrite of the entry. */
+		@Data
+		public static class Rounding {
+			private TimePolicy.Rounding mode;
+			@Min(value = 1, message = "error.timeTracking.roundingIncrementInvalid")
+			@Max(value = 60, message = "error.timeTracking.roundingIncrementInvalid")
+			private Integer increment;
+		}
+
+		/**
+		 * The submission rhythm override. Validated as a whole: {@code days}
+		 * belongs to CUSTOM_DAYS and nothing else, and BIWEEKLY/CUSTOM_DAYS need
+		 * an anchor to count from. Absent altogether ⇒ the env default, which is
+		 * monthly out of the box.
+		 */
+		@Data
+		@ApprovalPeriodConsistent
+		public static class ApprovalPeriod implements ApprovalPeriodConsistent.Period {
+			private TimePolicy.ApprovalPeriod type;
+			private DayOfWeek weekStartsOn;
+			private LocalDate anchorDate;
+			@Min(value = 1, message = "error.timeTracking.approvalPeriodInvalid")
+			@Max(value = 366, message = "error.timeTracking.approvalPeriodInvalid")
+			private Integer days;
+		}
+
+		/** Retention in months from the entry's day; {@code 0} keeps data indefinitely. */
+		@Data
+		public static class Retention {
+			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
+			private Integer descriptionPurgeMonths;
+			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
+			private Integer entryPurgeMonths;
+		}
 	}
 
 	/**
