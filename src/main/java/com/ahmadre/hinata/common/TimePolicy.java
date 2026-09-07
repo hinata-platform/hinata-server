@@ -22,6 +22,15 @@ public final class TimePolicy {
 	private TimePolicy() {
 	}
 
+	/**
+	 * A hundred years, as the ceiling on a retention in months. Not a policy —
+	 * an upper bound that keeps the value inside what a date can express:
+	 * {@code LocalDate.minusMonths} of a few billion throws, and the purge job
+	 * that will read this runs at night with nobody watching. Both the
+	 * environment default and the stored override are held to it.
+	 */
+	public static final int RETENTION_MAX_MONTHS = 1200;
+
 	/** How often a timesheet is submitted for approval. */
 	public enum ApprovalPeriod {
 		/** Calendar weeks, starting on the configured {@code weekStartsOn}. */

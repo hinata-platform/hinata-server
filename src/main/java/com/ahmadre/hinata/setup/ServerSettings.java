@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
@@ -419,6 +420,11 @@ public class ServerSettings {
 		private Boolean billingEnabled;
 
 		/** ISO-4217 code for billing figures; null/blank ⇒ env default. */
+		// Length alone would accept "x", "12" and "<b>", while the message
+		// promises an ISO code — and the code travels into every money figure a
+		// later stage formats, including the spreadsheet exports. Blank is still
+		// allowed: it is how the field says "no opinion".
+		@Pattern(regexp = "^$|^[A-Z]{3}$", message = "error.timeTracking.currencyInvalid")
 		@Size(max = 3, message = "error.timeTracking.currencyInvalid")
 		private String currency;
 
@@ -531,8 +537,12 @@ public class ServerSettings {
 		@Data
 		public static class Retention {
 			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
+			@Max(value = TimePolicy.RETENTION_MAX_MONTHS,
+					message = "error.timeTracking.retentionInvalid")
 			private Integer descriptionPurgeMonths;
 			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
+			@Max(value = TimePolicy.RETENTION_MAX_MONTHS,
+					message = "error.timeTracking.retentionInvalid")
 			private Integer entryPurgeMonths;
 		}
 	}

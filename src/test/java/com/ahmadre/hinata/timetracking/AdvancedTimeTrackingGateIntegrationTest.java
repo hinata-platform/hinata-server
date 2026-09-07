@@ -384,6 +384,32 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a currency that is not an ISO code, and a retention nothing could count, are refused")
+	void incoherentPolicyValuesAreRefused() {
+		String token = login();
+
+		ObjectNode badCurrency = (ObjectNode) body(get("/api/v1/admin/settings", token, null));
+		((ObjectNode) badCurrency.path("timeTracking")).put("currency", "<b>");
+		HttpResponse<String> currencyResponse =
+				putJson("/api/v1/admin/settings", badCurrency.toString(), token);
+		assertThat(currencyResponse.statusCode()).isEqualTo(400);
+		assertThat(body(currencyResponse).path("fieldErrors").path("timeTracking.currency").asText())
+				.isEqualTo("error.timeTracking.currencyInvalid");
+
+		// Storable as an int, unusable as a date: LocalDate.minusMonths throws
+		// well before this, and the job that would read it runs unattended.
+		ObjectNode badRetention = (ObjectNode) body(get("/api/v1/admin/settings", token, null));
+		((ObjectNode) badRetention.path("timeTracking"))
+				.putObject("retention").put("entryPurgeMonths", 2_000_000_000);
+		HttpResponse<String> retentionResponse =
+				putJson("/api/v1/admin/settings", badRetention.toString(), token);
+		assertThat(retentionResponse.statusCode()).isEqualTo(400);
+		assertThat(body(retentionResponse).path("fieldErrors")
+				.path("timeTracking.retention.entryPurgeMonths").asText())
+				.isEqualTo("error.timeTracking.retentionInvalid");
+	}
+
+	@Test
 	@DisplayName("an approval period whose parameters do not fit is refused")
 	void anIncoherentApprovalPeriodIsRejected() {
 		String token = login();

@@ -6,6 +6,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
@@ -452,6 +453,7 @@ public class HinataProperties {
 		private boolean billingEnabled = false;
 
 		/** ISO-4217 code the billing figures are expressed in. */
+		@Pattern(regexp = "^[A-Z]{3}$")
 		private String currency = "EUR";
 
 		/**
@@ -485,6 +487,7 @@ public class HinataProperties {
 		private Retention retention = new Retention();
 
 		/** The privacy notice shown before the module is first used. Blank ⇒ the built-in template. */
+		@Size(max = 20000)
 		private String privacyNotice = "";
 
 		/** Subscribing to external calendars (ICS). Off by default. */
@@ -559,8 +562,10 @@ public class HinataProperties {
 		@Setter
 		public static class Retention {
 			@Min(0)
+			@Max(TimePolicy.RETENTION_MAX_MONTHS)
 			private int descriptionPurgeMonths = 0;
 			@Min(0)
+			@Max(TimePolicy.RETENTION_MAX_MONTHS)
 			private int entryPurgeMonths = 0;
 		}
 	}
