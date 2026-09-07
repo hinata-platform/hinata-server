@@ -21,6 +21,7 @@ public class UserController {
 
 	private final UserRepository users;
 	private final CurrentUser currentUser;
+	private final UserService userService;
 
 	/**
 	 * The user summary every people-chip in the app renders from — comment
@@ -97,17 +98,15 @@ public class UserController {
 
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
 			@Size(max = 120) String title, @Size(max = 120) String pronouns,
-			@Pattern(regexp = "de|en|zh|hi|es") String locale) {
+			@Pattern(regexp = com.ahmadre.hinata.config.LocaleConfig.LANGUAGE_PATTERN) String locale,
+			@Size(max = UserZones.MAX_LENGTH) String timezone) {
 	}
 
+	/** The older of the two profile routes; both patch through the same service. */
 	@PatchMapping("/api/v1/users/me")
 	public User updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
-		User user = currentUser.require();
-		if (request.displayName() != null) user.setDisplayName(request.displayName());
-		if (request.title() != null) user.setTitle(request.title());
-		if (request.pronouns() != null) user.setPronouns(Pronouns.sanitize(request.pronouns()));
-		if (request.locale() != null) user.setLocale(request.locale());
-		return users.save(user);
+		return userService.updateProfile(currentUser.require(), request.displayName(),
+				request.title(), request.pronouns(), request.locale(), request.timezone());
 	}
 
 	// Admin user management lives in com.ahmadre.hinata.admin.AdminUserController.

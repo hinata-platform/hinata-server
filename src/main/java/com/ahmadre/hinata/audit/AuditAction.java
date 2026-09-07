@@ -63,6 +63,16 @@ public enum AuditAction {
 	ISSUE_EXPORTED(DATA, INFO, true),
 	ISSUE_WATCHED(DATA, INFO, true),
 	ISSUE_UNWATCHED(DATA, INFO, true),
+	// A lead or admin changing or removing someone else's logged time. Editing
+	// one's own entries is not audited — it is the ordinary use of the feature.
+	TIME_ENTRY_UPDATED(DATA, NOTICE, true),
+	TIME_ENTRY_DELETED(DATA, NOTICE, true),
+	// Time booked onto somebody else's account: today only a smart commit does
+	// this, crediting the commit author while the push is made by whoever holds
+	// the repository. The author line of a commit is text anyone can write, so
+	// the one thing that makes a wrong attribution findable afterwards is this
+	// entry — actor is who pushed, target is who was credited.
+	TIME_ENTRY_CREATED_FOR(DATA, NOTICE, true),
 
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),

@@ -72,6 +72,13 @@ public class User {
 	@Builder.Default
 	private String locale = "en";
 
+	/**
+	 * IANA zone the user works in (e.g. {@code Europe/Berlin}), set by the app
+	 * from the device; null means the instance default. Resolved through
+	 * {@link UserZones}, never read directly.
+	 */
+	private String timezone;
+
 	@Builder.Default
 	private boolean active = true;
 

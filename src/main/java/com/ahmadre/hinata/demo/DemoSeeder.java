@@ -1136,6 +1136,8 @@ public class DemoSeeder {
 					.durationMinutes(minutesMonToFri[day])
 					.activityType(activity)
 					.description("Demo tracked work")
+					.source(WorkItem.Source.APP)
+					.billable(false)
 					.build());
 		}
 	}

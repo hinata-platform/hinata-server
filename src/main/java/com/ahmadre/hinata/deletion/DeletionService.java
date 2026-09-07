@@ -317,7 +317,7 @@ public class DeletionService {
 
 		switch (options.strategy()) {
 			case DELETE -> deleteIssues(projectIssues, pid, progress);
-			case MIGRATE -> migrateIssues(projectIssues, options.target(), progress);
+			case MIGRATE -> migrateIssues(projectIssues, pid, options.target(), progress);
 			case NONE -> { /* no issues to handle */ }
 		}
 
@@ -401,7 +401,8 @@ public class DeletionService {
 		}
 	}
 
-	private void migrateIssues(List<Issue> projectIssues, Project target, DeletionStream progress) {
+	private void migrateIssues(List<Issue> projectIssues, String pid, Project target,
+			DeletionStream progress) {
 		int total = projectIssues.size();
 		progress.progress("migratingIssues", 0, total);
 		Set<String> targetStates = new HashSet<>(target.workflowStateNames());
@@ -424,6 +425,11 @@ public class DeletionService {
 					new Update().set("projectId", target.getId()), WorkItem.class);
 			progress.progress("migratingIssues", ++done, total);
 		}
+		// Entries that belong to the project but to no issue any more (their
+		// issue was deleted earlier) would otherwise keep pointing at a project
+		// that is about to vanish. They move with the rest of the project's time.
+		mongo.updateMulti(new Query(Criteria.where("projectId").is(pid).and("issueId").is(null)),
+				new Update().set("projectId", target.getId()), WorkItem.class);
 	}
 
 	/** Deletes boards solely owned by the project; dereferences shared boards. */

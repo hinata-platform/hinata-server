@@ -64,18 +64,24 @@ public class MeService {
 
 	// --- Profile --------------------------------------------------------------
 
+	/**
+	 * Patching a profile lives in {@code user}, where the user does — this is
+	 * the account-self-service door to it.
+	 */
 	public User updateProfile(User user, String displayName, String title, String pronouns,
-			String locale) {
-		if (displayName != null) user.setDisplayName(displayName.trim());
-		if (title != null) user.setTitle(title.trim());
-		if (pronouns != null) user.setPronouns(com.ahmadre.hinata.user.Pronouns.sanitize(pronouns));
-		if (locale != null) user.setLocale(locale);
-		return users.save(user);
+			String locale, String timezone) {
+		return userService.updateProfile(user, displayName, title, pronouns, locale, timezone);
 	}
 
-	/** Locales we ship translations for; anything else is ignored on auto-sync. */
+	/**
+	 * Locales we ship translations for; anything else is ignored on auto-sync.
+	 * The list itself lives in {@link com.ahmadre.hinata.config.LocaleConfig},
+	 * which is also what the two request validators are built from — a tenth
+	 * language accepted by them and silently dropped here is exactly the bug
+	 * that list exists to prevent.
+	 */
 	private static final Set<String> SUPPORTED_LOCALES =
-			Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
+			Set.copyOf(com.ahmadre.hinata.config.LocaleConfig.supportedLanguages());
 
 	/**
 	 * Reconciles the stored {@link User#getLocale() locale} with the language the

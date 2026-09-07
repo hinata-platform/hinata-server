@@ -28,7 +28,7 @@ class UserControllerTest {
 		users = mock(UserRepository.class);
 		currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(User.builder().id("me").build());
-		controller = new UserController(users, currentUser);
+		controller = new UserController(users, currentUser, mock(UserService.class));
 	}
 
 	private User user(String id, boolean active) {

@@ -13,6 +13,7 @@ import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.project.WorkflowMapping;
+import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,9 +49,9 @@ import java.util.Set;
  * <p>Everything else that must follow the issue across the project boundary is
  * handled here as well: the project-scoped issue number and its denormalized
  * {@code readableId}, the mirrored {@code git_dev_info.issueKey}, sprint
- * membership, the parent link, and the label vocabulary. Comments, activity,
- * attachments, work items and issue links reference the issue by its (stable)
- * id and need no migration.
+ * membership, the parent link, the label vocabulary and the project the
+ * issue's work items are denormalized onto. Comments, activity, attachments
+ * and issue links reference the issue by its (stable) id and need no migration.
  *
  * <p>Structural rules, mirroring Jira but fixing its best-known trap:
  * <ul>
@@ -251,6 +252,7 @@ public class IssueMoveService {
 		Issue saved = save(issue);
 		issueService.mergeProjectLabels(target, saved.getTags());
 		reKeyDevInfo(previousReadableId, saved.getReadableId(), target.getId());
+		followWorkItems(saved.getId(), target.getId());
 		// A subscription is to an issue, but the access that allowed it was to the
 		// project the issue has just left. Whoever cannot see where it landed loses
 		// the subscription here — before the notice below fans out, so it never
@@ -524,6 +526,16 @@ public class IssueMoveService {
 		former.remove(normalized);
 		former.add(normalized);
 		while (former.size() > MAX_FORMER_IDS) former.remove(0);
+	}
+
+	/**
+	 * The project on an issue's work items is denormalized for the timesheet
+	 * and the reports; left behind, every hour ever logged on the issue would
+	 * keep counting towards the project it just left.
+	 */
+	private void followWorkItems(String issueId, String projectId) {
+		mongo.updateMulti(Query.query(Criteria.where("issueId").is(issueId)),
+				new Update().set("projectId", projectId), WorkItem.class);
 	}
 
 	/**
