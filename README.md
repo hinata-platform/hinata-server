@@ -149,6 +149,7 @@ the app's admin area; changes apply **without restart**.
 | `HINATA_SETUP_*` | Optional non-interactive first-run setup |
 | `HINATA_RATE_LIMIT_*` | Rate limiting &amp; brute-force thresholds (incl. `…_MCP`) |
 | `HINATA_MCP_ENABLED` | Master switch for the built-in MCP server — see [AI / MCP](#-ai--mcp-server) |
+| `HINATA_TIME_TRACKING_*` | Extended time tracking: the `advanced_time_tracking` master switch (off by default) and the policies behind it |
 | `HINATA_GATEWAY_BASE_URL` | Hinata Connect gateway for push + universal links (defaults to the shared gateway) |
 | `HINATA_GIT_*` | Git integration OAuth apps, public API base &amp; token-encryption secret — see [Git integration](#-git-integration) |
 
