@@ -2,12 +2,10 @@ package com.ahmadre.hinata.mailingest;
 
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.config.HinataProperties;
+import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.notification.MailService;
-import com.ahmadre.hinata.setup.ServerSettings;
-import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +14,6 @@ import org.springframework.web.util.HtmlUtils;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Sends a user-authored reply by e-mail to the original sender of an issue that
@@ -36,8 +33,7 @@ public class IssueEmailReplyService {
 	private final IngestConnectionRepository connections;
 	private final MailService mail;
 	private final StorageService storage;
-	private final SettingsService settings;
-	private final HinataProperties properties;
+	private final FeatureFlags featureFlags;
 
 	/**
 	 * Validates access + preconditions and sends the reply. {@code attachmentIds}
@@ -46,7 +42,7 @@ public class IssueEmailReplyService {
 	 */
 	public void reply(String issueId, User user, String subject, String body,
 			List<String> attachmentIds) {
-		if (!featureEnabled()) {
+		if (!featureFlags.enabled(FEATURE_FLAG)) {
 			throw ApiException.forbidden("errors.emailReply.disabled");
 		}
 		if (subject == null || subject.isBlank()) {
@@ -74,22 +70,6 @@ public class IssueEmailReplyService {
 			case NO_SMTP -> throw ApiException.conflict("errors.emailReply.noSmtp");
 			case SEND_FAILED -> throw ApiException.badRequest("errors.emailReply.sendFailed");
 		}
-	}
-
-	/**
-	 * Mirrors the effective-flags merge in {@code MetaController#meta()} and
-	 * {@code AdminSettingsController#get()}: env defaults first, admin DB override
-	 * wins per-key. Must NOT use "DB wins entirely once non-empty" — that would
-	 * make this gate disagree with what {@code /meta} told the app (which decides
-	 * whether to show the reply button), rejecting requests the UI just offered.
-	 */
-	private boolean featureEnabled() {
-		ServerSettings.App app = settings.get().getApp();
-		Map<String, Boolean> flags = new java.util.LinkedHashMap<>(properties.getApp().getFeatureFlags());
-		if (app.getFeatureFlags() != null) {
-			flags.putAll(app.getFeatureFlags());
-		}
-		return Boolean.TRUE.equals(flags.get(FEATURE_FLAG));
 	}
 
 	/** The ingest mailbox that received the original mail, so replies loop back in. */

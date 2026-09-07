@@ -3,6 +3,7 @@ package com.ahmadre.hinata.setup;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
 import jakarta.validation.Valid;
@@ -35,6 +36,7 @@ public class AdminSettingsController {
 
 	private final SettingsService settings;
 	private final HinataProperties properties;
+	private final FeatureFlags featureFlags;
 	private final GitIntegrationSettings gitConfig;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
@@ -71,15 +73,11 @@ public class AdminSettingsController {
 		if (isBlank(app.getLinuxStoreUrl())) {
 			app.setLinuxStoreUrl(defaults.getLinuxStoreUrl());
 		}
-		// Merge env defaults with any admin overrides (override wins per-key) so a
-		// newly shipped default flag (e.g. a fresh feature) surfaces in the editor
-		// even after admins have already toggled other, unrelated flags — matching
-		// the effective-flags merge in MetaController#meta().
-		java.util.Map<String, Boolean> mergedFlags = new java.util.LinkedHashMap<>(defaults.getFeatureFlags());
-		if (app.getFeatureFlags() != null) {
-			mergedFlags.putAll(app.getFeatureFlags());
-		}
-		app.setFeatureFlags(mergedFlags);
+		// The editable flag map: env defaults with the admin overrides on top, so a
+		// newly shipped default flag surfaces in the editor even after admins have
+		// toggled other, unrelated flags. Module flags (mcp, advanced_time_tracking)
+		// are deliberately absent — each has its own switch in its own section.
+		app.setFeatureFlags(featureFlags.configurable());
 		// Surface the effective auth toggles so the switches reflect the value
 		// currently in force (env default until an admin overrides it).
 		if (app.getLocalAuthEnabled() == null) {

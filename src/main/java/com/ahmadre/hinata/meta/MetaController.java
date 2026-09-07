@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.meta;
 
+import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.ServerSettings;
@@ -30,7 +31,7 @@ public class MetaController {
 	private final SettingsService settings;
 	private final com.ahmadre.hinata.auth.AuthPolicy authPolicy;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
-	private final com.ahmadre.hinata.mcp.McpSettings mcpSettings;
+	private final FeatureFlags featureFlags;
 	private final BrandLogoService brandLogo;
 
 	@Value("${hinata.version:1.0.0}")
@@ -58,17 +59,10 @@ public class MetaController {
 		ServerSettings.App app = current.getApp();
 		HinataProperties.App appDefaults = properties.getApp();
 		HinataProperties.Storage storage = properties.getStorage();
-		// Start from the env defaults, then let any admin DB override win per-key —
-		// NOT "DB wins entirely once non-empty", which would permanently hide any
-		// new default flag (e.g. a freshly shipped feature) the moment an admin
-		// has toggled anything else. Then surface the effective MCP toggle (admin
-		// DB override, else env default) as a flag the app uses to show/hide the
-		// Personal Access Token UI.
-		Map<String, Boolean> featureFlags = new java.util.LinkedHashMap<>(appDefaults.getFeatureFlags());
-		if (app.getFeatureFlags() != null) {
-			featureFlags.putAll(app.getFeatureFlags());
-		}
-		featureFlags.put("mcp", mcpSettings.enabled());
+		// Env defaults, admin override per key, module flags on top — the merge
+		// itself lives in FeatureFlags, because the gates that refuse a request
+		// have to answer exactly what this told the app.
+		Map<String, Boolean> flags = featureFlags.effective();
 		return new Meta(
 				serverVersion,
 				firstNonBlank(app.getMinVersion(), appDefaults.getMinVersion()),
@@ -81,7 +75,7 @@ public class MetaController {
 				firstNonBlank(app.getMacosStoreUrl(), appDefaults.getMacosStoreUrl()),
 				firstNonBlank(app.getWindowsStoreUrl(), appDefaults.getWindowsStoreUrl()),
 				firstNonBlank(app.getLinuxStoreUrl(), appDefaults.getLinuxStoreUrl()),
-				featureFlags,
+				flags,
 				authPolicy.localAuthEnabled(),
 				authPolicy.registrationEnabled(),
 				authPolicy.requireAdminApproval(),
