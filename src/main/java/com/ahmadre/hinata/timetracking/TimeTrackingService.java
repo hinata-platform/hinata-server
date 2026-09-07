@@ -112,8 +112,8 @@ public class TimeTrackingService {
 	/** An issue's entries, newest first, capped at {@link #LIST_CAP}. */
 	public List<WorkItem> list(String issueIdOrKey, User user) {
 		Issue issue = resolveIssue(issueIdOrKey, user);
-		return mongo.find(Query.query(Criteria.where("issueId").is(issue.getId()))
-				.with(WorkItemRepository.NEWEST_FIRST).limit(LIST_CAP), WorkItem.class);
+		return workItems.findByIssueId(issue.getId(),
+				PageRequest.of(0, LIST_CAP, WorkItemRepository.NEWEST_FIRST)).getContent();
 	}
 
 	/** One page of an issue's entries, newest first; the size is clamped to {@link #PAGE_MAX}. */

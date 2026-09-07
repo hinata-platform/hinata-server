@@ -3,6 +3,9 @@ package com.ahmadre.hinata.timetracking;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -24,9 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 @Tag(name = "Time Tracking")
 @RestController
@@ -82,15 +83,20 @@ public class TimeTrackingController {
 	}
 
 	/**
-	 * A partial edit: every field absent from the body is left alone. A class
-	 * with setters rather than a record, on purpose — Jackson only calls a
-	 * setter for a property that is present, which is how an absent
-	 * {@code startedAt} (keep) is told apart from an explicit null (clear).
-	 * A record cannot make that distinction.
+	 * A partial edit: a field the body does not mention is left alone.
+	 *
+	 * <p>Two ways of saying "make this empty" meet here, and the class is shaped
+	 * around the difference. For everything with an empty value of its own, that
+	 * value clears it — an empty description, an empty tag list. An instant has
+	 * no empty value, so clearing one has to be an explicit {@code null}, and
+	 * telling that apart from a field the body never mentioned is something a
+	 * record cannot do: Jackson calls a setter only for a property that is
+	 * present, so the two instants are hand-written setters that remember they
+	 * were called. The rest is Lombok, because the rest does not need to know.
 	 */
+	@Getter
+	@Setter
 	public static final class WorkItemPatchRequest {
-
-		private final Set<String> present = new HashSet<>();
 
 		@Min(1) @Max(TimeTrackingService.MAX_MINUTES)
 		private Integer durationMinutes;
@@ -99,92 +105,32 @@ public class TimeTrackingController {
 		private String activityType;
 		@Size(max = 2000)
 		private String description;
-		private Instant startedAt;
-		private Instant endedAt;
 		@Size(max = 20)
 		private List<@Size(max = 40) String> tags;
 		private Boolean billable;
 
-		public void setDurationMinutes(Integer durationMinutes) {
-			this.durationMinutes = durationMinutes;
-			present.add("durationMinutes");
-		}
-
-		public void setDate(LocalDate date) {
-			this.date = date;
-			present.add("date");
-		}
-
-		public void setActivityType(String activityType) {
-			this.activityType = activityType;
-			present.add("activityType");
-		}
-
-		public void setDescription(String description) {
-			this.description = description;
-			present.add("description");
-		}
+		@Setter(AccessLevel.NONE)
+		private Instant startedAt;
+		@Setter(AccessLevel.NONE)
+		private Instant endedAt;
+		@Getter(AccessLevel.NONE)
+		private boolean startedAtSet;
+		@Getter(AccessLevel.NONE)
+		private boolean endedAtSet;
 
 		public void setStartedAt(Instant startedAt) {
 			this.startedAt = startedAt;
-			present.add("startedAt");
+			this.startedAtSet = true;
 		}
 
 		public void setEndedAt(Instant endedAt) {
 			this.endedAt = endedAt;
-			present.add("endedAt");
-		}
-
-		public void setTags(List<String> tags) {
-			this.tags = tags;
-			present.add("tags");
-		}
-
-		public void setBillable(Boolean billable) {
-			this.billable = billable;
-			present.add("billable");
-		}
-
-		public Integer getDurationMinutes() {
-			return durationMinutes;
-		}
-
-		public LocalDate getDate() {
-			return date;
-		}
-
-		public String getActivityType() {
-			return activityType;
-		}
-
-		public String getDescription() {
-			return description;
-		}
-
-		public Instant getStartedAt() {
-			return startedAt;
-		}
-
-		public Instant getEndedAt() {
-			return endedAt;
-		}
-
-		public List<String> getTags() {
-			return tags;
-		}
-
-		public Boolean getBillable() {
-			return billable;
-		}
-
-		/** Whether the body named this property at all (with any value, null included). */
-		public boolean has(String property) {
-			return present.contains(property);
+			this.endedAtSet = true;
 		}
 
 		TimeTrackingService.WorkItemPatch toPatch() {
 			return new TimeTrackingService.WorkItemPatch(durationMinutes, date, activityType,
-					description, has("startedAt"), startedAt, has("endedAt"), endedAt, tags, billable);
+					description, startedAtSet, startedAt, endedAtSet, endedAt, tags, billable);
 		}
 	}
 

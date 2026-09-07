@@ -4,6 +4,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
@@ -110,8 +111,10 @@ class TimeTrackingRulesIntegrationTest {
 
 	@BeforeEach
 	void seed() {
+		// server_settings too: one test moves the instance zone, and the next
+		// must not inherit it.
 		for (String collection : List.of("issues", "projects", "teams", "users", "work_items",
-				"audit_log")) {
+				"audit_log", "server_settings")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		member = user("member", "UTC");
@@ -218,16 +221,27 @@ class TimeTrackingRulesIntegrationTest {
 		assertThat(add(onDay(null), farEast).getDate()).isEqualTo(TOMORROW_UTC);
 	}
 
-	/** Without a profile zone the instance's configured zone decides. */
+	/**
+	 * Without a profile zone the instance's configured zone decides.
+	 *
+	 * <p>The shipped default, Europe/Berlin, is useless for showing that: at
+	 * 12:00Z in September it is 14:00 the same day, so it agrees with UTC and
+	 * the assertion would hold just as well if the instance setting were never
+	 * read at all. The instance is therefore moved somewhere the two disagree —
+	 * where it is already tomorrow — and the test then fails if the chain stops
+	 * at the profile.
+	 */
 	@Test
 	void withoutAProfileZoneTheInstanceZoneDecides() {
 		User unset = user("unset", null);
+		ServerSettings settings = new ServerSettings();
+		settings.getGeneral().setTimezone("Pacific/Kiritimati");
+		mongo.save(settings);
 
-		// Europe/Berlin (the shipped default) is UTC+2 in September: 12:00Z is
-		// 14:00 the same day, so "today" agrees with UTC here …
-		assertThat(add(onDay(TODAY_UTC), unset).getDate()).isEqualTo(TODAY_UTC);
-		// … and tomorrow is still tomorrow.
-		assertBadRequest(TOMORROW_UTC, unset, "error.time.dateInFuture");
+		assertThat(add(onDay(TOMORROW_UTC), unset).getDate())
+				.as("UTC's tomorrow is the instance's today")
+				.isEqualTo(TOMORROW_UTC);
+		assertBadRequest(TOMORROW_UTC.plusDays(1), unset, "error.time.dateInFuture");
 	}
 
 	/** An edit is allowed to leave an old entry old: only a day being *set* is checked. */

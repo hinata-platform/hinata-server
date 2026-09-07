@@ -64,20 +64,38 @@ public class MeService {
 
 	// --- Profile --------------------------------------------------------------
 
+	/**
+	 * The one place a profile is patched — both {@code PATCH /api/v1/me} and
+	 * {@code PATCH /api/v1/users/me} come through here, because two hand-kept
+	 * copies of these five assignments had already drifted apart over whether a
+	 * display name is trimmed.
+	 *
+	 * <p>Every field absent from the request is left alone. The zone is
+	 * normalized first rather than in its turn: it is the only value that can be
+	 * refused, and refusing it after four other fields had already been written
+	 * onto the caller's live user would leave that object half-changed for the
+	 * rest of the request.
+	 */
 	public User updateProfile(User user, String displayName, String title, String pronouns,
 			String locale, String timezone) {
+		String zone = timezone == null ? null : com.ahmadre.hinata.user.UserZones.normalize(timezone);
 		if (displayName != null) user.setDisplayName(displayName.trim());
 		if (title != null) user.setTitle(title.trim());
 		if (pronouns != null) user.setPronouns(com.ahmadre.hinata.user.Pronouns.sanitize(pronouns));
 		if (locale != null) user.setLocale(locale);
-		// Validated before anything is saved: an unknown zone is a 400, blank clears.
-		if (timezone != null) user.setTimezone(com.ahmadre.hinata.user.UserZones.normalize(timezone));
+		if (timezone != null) user.setTimezone(zone);
 		return users.save(user);
 	}
 
-	/** Locales we ship translations for; anything else is ignored on auto-sync. */
+	/**
+	 * Locales we ship translations for; anything else is ignored on auto-sync.
+	 * The list itself lives in {@link com.ahmadre.hinata.config.LocaleConfig},
+	 * which is also what the two request validators are built from — a tenth
+	 * language accepted by them and silently dropped here is exactly the bug
+	 * that list exists to prevent.
+	 */
 	private static final Set<String> SUPPORTED_LOCALES =
-			Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
+			Set.copyOf(com.ahmadre.hinata.config.LocaleConfig.supportedLanguages());
 
 	/**
 	 * Reconciles the stored {@link User#getLocale() locale} with the language the

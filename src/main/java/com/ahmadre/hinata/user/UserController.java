@@ -21,6 +21,7 @@ public class UserController {
 
 	private final UserRepository users;
 	private final CurrentUser currentUser;
+	private final com.ahmadre.hinata.me.MeService me;
 
 	/**
 	 * The user summary every people-chip in the app renders from — comment
@@ -101,15 +102,11 @@ public class UserController {
 			@Size(max = UserZones.MAX_LENGTH) String timezone) {
 	}
 
+	/** The older of the two profile routes; both patch through the same service. */
 	@PatchMapping("/api/v1/users/me")
 	public User updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
-		User user = currentUser.require();
-		if (request.displayName() != null) user.setDisplayName(request.displayName());
-		if (request.title() != null) user.setTitle(request.title());
-		if (request.pronouns() != null) user.setPronouns(Pronouns.sanitize(request.pronouns()));
-		if (request.locale() != null) user.setLocale(request.locale());
-		if (request.timezone() != null) user.setTimezone(UserZones.normalize(request.timezone()));
-		return users.save(user);
+		return me.updateProfile(currentUser.require(), request.displayName(), request.title(),
+				request.pronouns(), request.locale(), request.timezone());
 	}
 
 	// Admin user management lives in com.ahmadre.hinata.admin.AdminUserController.
