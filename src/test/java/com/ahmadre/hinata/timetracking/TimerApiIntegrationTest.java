@@ -343,6 +343,29 @@ class TimerApiIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a parameter that will not convert is a 400, not a stack trace")
+	void aBadParameterIsARequestError() {
+		// Spring has its own 400 for these, but an @ExceptionHandler runs ahead of
+		// it and the catch-all matched everything — so `?page=abc` used to answer
+		// 500 and write a stack trace, from one cheap GET anyone signed in can
+		// repeat. The parameter's name comes back; its value never does.
+		String day = quietDay(220);
+		String range = "from=%s&to=%s".formatted(day, day);
+
+		HttpResponse<String> badInt = get("/api/v1/time/timesheet?" + range + "&page=abc");
+		assertThat(badInt.statusCode()).isEqualTo(400);
+		assertThat(body(badInt).path("fieldErrors").has("page")).isTrue();
+		assertThat(badInt.body()).doesNotContain("abc");
+
+		HttpResponse<String> badDate = get("/api/v1/time/calendar?from=notadate&to=" + day);
+		assertThat(badDate.statusCode()).isEqualTo(400);
+
+		HttpResponse<String> missing = get("/api/v1/time/calendar?to=" + day);
+		assertThat(missing.statusCode()).isEqualTo(400);
+		assertThat(body(missing).path("fieldErrors").has("from")).isTrue();
+	}
+
+	@Test
 	@DisplayName("an entry is edited and deleted through the module's own routes")
 	void editAndDelete() {
 		String day = todayOnTheServer();

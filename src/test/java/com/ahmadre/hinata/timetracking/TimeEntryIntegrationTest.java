@@ -476,12 +476,36 @@ class TimeEntryIntegrationTest {
 	@Test
 	@DisplayName("a year of +999999999 is a bad request, not a stack trace")
 	void anAbsurdWindowIsRefusedByCounting() {
-		// The guard counts the days between rather than offsetting one end, which
-		// would throw on a date near LocalDate.MAX before it could answer.
+		// Both mistakes at once — an impossible date *and* an impossible span —
+		// and the answer names the date, which is the one that could not have
+		// been meant. The width is still counted rather than offset, or the
+		// guard would throw on LocalDate.MAX before reaching either check.
 		assertStatus(() -> window(TODAY, LocalDate.MAX, owner), HttpStatus.BAD_REQUEST,
-				"error.time.rangeTooLong");
+				"error.time.rangeOutOfBounds");
 		assertStatus(() -> window(LocalDate.MIN, TODAY, owner), HttpStatus.BAD_REQUEST,
+				"error.time.rangeOutOfBounds");
+		// An ordinary date with an impossible span is the other message.
+		assertStatus(() -> window(TODAY.minusYears(2), TODAY, owner), HttpStatus.BAD_REQUEST,
 				"error.time.rangeTooLong");
+	}
+
+	@Test
+	@DisplayName("a narrow window at an absurd date is refused too")
+	void anAbsurdDateIsRefusedEvenInASmallWindow() {
+		// The width check cannot see this one: five days at year +999999999 is a
+		// perfectly ordinary window. It dies in the driver instead — Spring Data
+		// converts a LocalDate through Instant.toEpochMilli, which overflows above
+		// about year 292 million — and an unchecked conversion failure is a 500
+		// with a stack trace, from one cheap GET that anyone signed in can repeat.
+		assertStatus(() -> window(LocalDate.MAX.minusDays(5), LocalDate.MAX, owner),
+				HttpStatus.BAD_REQUEST, "error.time.rangeOutOfBounds");
+		assertStatus(() -> window(LocalDate.MIN, LocalDate.MIN.plusDays(5), owner),
+				HttpStatus.BAD_REQUEST, "error.time.rangeOutOfBounds");
+		// And the years either side of the bound behave as stated.
+		assertThat(window(LocalDate.of(1970, 1, 1), LocalDate.of(1970, 1, 5), owner).entries())
+				.isEmpty();
+		assertStatus(() -> window(LocalDate.of(1969, 12, 30), LocalDate.of(1969, 12, 31), owner),
+				HttpStatus.BAD_REQUEST, "error.time.rangeOutOfBounds");
 	}
 
 	@Test

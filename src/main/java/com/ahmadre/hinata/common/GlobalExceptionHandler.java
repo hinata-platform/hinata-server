@@ -112,6 +112,39 @@ public class GlobalExceptionHandler {
 				.body(ApiError.of(HttpStatus.BAD_REQUEST, t("error.malformedBody"), null));
 	}
 
+	/**
+	 * A query or path parameter that is missing, or that will not convert.
+	 *
+	 * <p>Spring has its own 400 for both of these, in
+	 * {@code DefaultHandlerExceptionResolver} — but an {@code @ExceptionHandler}
+	 * runs first, and the {@code Exception} catch-all below matches everything.
+	 * So without this method {@code ?page=abc}, {@code ?from=notadate} and a
+	 * missing required parameter all answered 500 with a stack trace on disk:
+	 * one cheap GET each, repeatable by anyone signed in, and enough of them to
+	 * make the error log useless for spotting a real incident.
+	 *
+	 * <p>Logged at debug, not error. It is a client's mistake, and there is
+	 * nothing here for an operator to act on.
+	 */
+	@ExceptionHandler({ org.springframework.beans.TypeMismatchException.class,
+			org.springframework.web.bind.MissingServletRequestParameterException.class })
+	public ResponseEntity<ApiError> handleBadParameter(Exception ex) {
+		log.debug("Bad request parameter", ex);
+		String name = switch (ex) {
+			case org.springframework.web.bind.MissingServletRequestParameterException missing ->
+				missing.getParameterName();
+			case org.springframework.web.method.annotation.MethodArgumentTypeMismatchException mismatch ->
+				mismatch.getName();
+			default -> null;
+		};
+		return ResponseEntity.badRequest()
+				.body(ApiError.of(HttpStatus.BAD_REQUEST, t("error.validationFailed"),
+						// The parameter's name, never the value: the value is the
+						// caller's, and echoing it back is how a reflected payload
+						// reaches somebody's log viewer.
+						name == null ? null : Map.of(name, t("error.badParameter"))));
+	}
+
 	@ExceptionHandler(MaxUploadSizeExceededException.class)
 	public ResponseEntity<ApiError> handleUploadSize(MaxUploadSizeExceededException ex) {
 		return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)

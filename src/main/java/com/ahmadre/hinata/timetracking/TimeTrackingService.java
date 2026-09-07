@@ -101,6 +101,16 @@ public class TimeTrackingService {
 	 * The window fills from its start, so what is missing is its tail.
 	 */
 	public static final int CALENDAR_CAP = 2_000;
+	/**
+	 * The years a window may name.
+	 *
+	 * <p>Not a business rule — a bound on what the storage layer can carry. A
+	 * date outside this is a request nobody makes and the driver cannot convert;
+	 * refusing it as a 400 is the difference between an answer and a stack trace.
+	 * Wide enough that no real timesheet is ever near either end.
+	 */
+	public static final int MIN_YEAR = 1970;
+	public static final int MAX_YEAR = 2200;
 
 	private static final String DEFAULT_ACTIVITY = "Development";
 
@@ -604,9 +614,22 @@ public class TimeTrackingService {
 		if (from.isAfter(to)) {
 			throw ApiException.badRequest("error.time.rangeNotAscending");
 		}
-		// Counted, never offset. `from.plusDays(31)` on a date near LocalDate.MAX
-		// throws before the guard can answer, and ISO_LOCAL_DATE binds a year of
-		// +999999999 without complaint.
+		// Two different things are bounded here, and only one of them is the
+		// window's width.
+		//
+		// The width is counted, never offset: `from.plusDays(31)` on a date near
+		// LocalDate.MAX throws before the guard could answer.
+		//
+		// The *values* need their own bound, because a narrow window at an absurd
+		// date passes the width check and then dies in the driver — Spring Data
+		// converts a LocalDate through `Date.from(...atStartOfDay().toInstant())`,
+		// and `Instant.toEpochMilli()` overflows above about year 292 million.
+		// That surfaces as an unchecked ConversionFailedException, which the
+		// global handler answers with a 500 and a stack trace on disk: one cheap
+		// GET each, repeatable by anyone signed in.
+		if (from.getYear() < MIN_YEAR || to.getYear() > MAX_YEAR) {
+			throw ApiException.badRequest("error.time.rangeOutOfBounds");
+		}
 		if (ChronoUnit.DAYS.between(from, to) >= MAX_WINDOW_DAYS) {
 			throw ApiException.badRequest("error.time.rangeTooLong");
 		}
@@ -830,6 +853,15 @@ public class TimeTrackingService {
 				throw ApiException.forbidden("error.accessDenied");
 			}
 		}
+		if (!requester.isAdmin() && effectiveUser == null) {
+			// Unreachable today — CurrentUser.require() cannot hand back a user
+			// without an id. It is here because the criteria below narrows only
+			// when it has a value, so the one query that decides who sees whose
+			// hours would otherwise fail *open*: a null id means no userId clause
+			// at all, which is the whole instance. This method went from one
+			// caller to two; the wrong default is not worth carrying.
+			throw ApiException.forbidden("error.accessDenied");
+		}
 		if (projectId != null && !projectReach.canSee(projectId, requester)) {
 			throw ApiException.forbidden("error.project.notMember");
 		}
@@ -926,7 +958,10 @@ public class TimeTrackingService {
 		List<TimesheetRow> rows = new ArrayList<>();
 		for (Document group : mongo.aggregate(Aggregation.newAggregation(stages), WorkItem.class,
 				Document.class)) {
-			rows.add(rowOf(group));
+			TimesheetRow row = rowOf(group);
+			if (row != null) {
+				rows.add(row);
+			}
 		}
 		return rows;
 	}
@@ -977,6 +1012,14 @@ public class TimeTrackingService {
 			}
 			int minutes = day.get("minutes") instanceof Number sum ? sum.intValue() : 0;
 			perDay.merge(LocalDate.parse(label), minutes, Integer::sum);
+		}
+		if (perDay.isEmpty()) {
+			// The array-shaped route drops such a group entirely, and the two must
+			// describe a week the same way — a row with no columns and a total of
+			// zero is a person who appears to have logged nothing, which is a
+			// different statement from not appearing. Unreachable while the match
+			// carries a date range, which excludes an entry without one.
+			return null;
 		}
 		return new TimesheetRow(key == null ? null : key.getString("userId"),
 				key == null ? null : key.getString("projectId"), perDay,
