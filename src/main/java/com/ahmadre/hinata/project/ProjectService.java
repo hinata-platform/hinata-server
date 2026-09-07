@@ -249,11 +249,21 @@ public class ProjectService {
 	/** Editing project settings is restricted to platform admins and project
 	 * leads — regular members can read but not reconfigure the project. */
 	public void assertLeadOrAdmin(Project project, User user) {
-		if (user.isAdmin()) return;
+		if (!isLeadOrAdmin(project, user)) {
+			throw ApiException.forbidden("error.project.notLead");
+		}
+	}
+
+	/**
+	 * The rule behind {@link #assertLeadOrAdmin} as a question, for callers that
+	 * fall back to a narrower permission rather than refusing outright — a work
+	 * item's owner may edit it whether or not they lead the project.
+	 */
+	public boolean isLeadOrAdmin(Project project, User user) {
+		if (user.isAdmin()) return true;
 		List<String> leads = project.getLeadIds();
-		if (leads != null && leads.contains(user.getId())) return;
-		if (user.getId().equals(project.getLeadId())) return; // legacy single lead
-		throw ApiException.forbidden("error.project.notLead");
+		if (leads != null && leads.contains(user.getId())) return true;
+		return user.getId().equals(project.getLeadId()); // legacy single lead
 	}
 
 	/**
