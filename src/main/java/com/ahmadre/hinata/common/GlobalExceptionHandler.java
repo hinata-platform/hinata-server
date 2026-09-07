@@ -125,8 +125,17 @@ public class GlobalExceptionHandler {
 	 *
 	 * <p>Logged at debug, not error. It is a client's mistake, and there is
 	 * nothing here for an operator to act on.
+	 *
+	 * <p>Narrow on purpose. The obvious spelling is the base
+	 * {@code TypeMismatchException}, and it is wrong: {@code
+	 * ConversionNotSupportedException} extends it and means the opposite — no
+	 * converter is registered, which is a server fault Spring's own resolver maps
+	 * to 500 deliberately. Catching the subtree would answer a misconfiguration
+	 * with "your parameter is bad", at debug level, where nobody would ever see
+	 * it.
 	 */
-	@ExceptionHandler({ org.springframework.beans.TypeMismatchException.class,
+	@ExceptionHandler({
+			org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
 			org.springframework.web.bind.MissingServletRequestParameterException.class })
 	public ResponseEntity<ApiError> handleBadParameter(Exception ex) {
 		log.debug("Bad request parameter", ex);
@@ -137,11 +146,10 @@ public class GlobalExceptionHandler {
 				mismatch.getName();
 			default -> null;
 		};
+		// The parameter's name, never the value: the value is the caller's, and
+		// echoing it back is how a reflected payload reaches a log viewer.
 		return ResponseEntity.badRequest()
 				.body(ApiError.of(HttpStatus.BAD_REQUEST, t("error.validationFailed"),
-						// The parameter's name, never the value: the value is the
-						// caller's, and echoing it back is how a reflected payload
-						// reaches somebody's log viewer.
 						name == null ? null : Map.of(name, t("error.badParameter"))));
 	}
 

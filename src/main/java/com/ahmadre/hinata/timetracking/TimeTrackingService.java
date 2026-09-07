@@ -531,6 +531,14 @@ public class TimeTrackingService {
 			// limit the caller did not hit is a message that sends them looking.
 			throw ApiException.badRequest("error.time.rangeNotAscending");
 		}
+		// Either end on its own is enough to reach the driver, so both are bounded
+		// separately — this route takes an open-ended range and often gets one.
+		if (from != null) {
+			assertStorable(from, from, "error.time.rangeOutOfBounds");
+		}
+		if (to != null) {
+			assertStorable(to, to, "error.time.rangeOutOfBounds");
+		}
 		Criteria criteria = Criteria.where("userId").is(user.getId());
 		if (from != null && to != null) {
 			criteria = criteria.and("date").gte(from).lte(to);
@@ -614,24 +622,39 @@ public class TimeTrackingService {
 		if (from.isAfter(to)) {
 			throw ApiException.badRequest("error.time.rangeNotAscending");
 		}
-		// Two different things are bounded here, and only one of them is the
-		// window's width.
-		//
+		assertStorable(from, to, "error.time.rangeOutOfBounds");
 		// The width is counted, never offset: `from.plusDays(31)` on a date near
 		// LocalDate.MAX throws before the guard could answer.
-		//
-		// The *values* need their own bound, because a narrow window at an absurd
-		// date passes the width check and then dies in the driver — Spring Data
-		// converts a LocalDate through `Date.from(...atStartOfDay().toInstant())`,
-		// and `Instant.toEpochMilli()` overflows above about year 292 million.
-		// That surfaces as an unchecked ConversionFailedException, which the
-		// global handler answers with a 500 and a stack trace on disk: one cheap
-		// GET each, repeatable by anyone signed in.
-		if (from.getYear() < MIN_YEAR || to.getYear() > MAX_YEAR) {
-			throw ApiException.badRequest("error.time.rangeOutOfBounds");
-		}
 		if (ChronoUnit.DAYS.between(from, to) >= MAX_WINDOW_DAYS) {
 			throw ApiException.badRequest("error.time.rangeTooLong");
+		}
+	}
+
+	/**
+	 * Refuses a date the storage layer cannot carry, under whichever key the
+	 * route already speaks.
+	 *
+	 * <p>A bound on the values, which is a different question from the width of
+	 * the window between them and is not answered by asking it. A five-day range
+	 * at year +999999999 is a perfectly ordinary span, passes every width check
+	 * there is, and then dies in the driver: Spring Data converts a LocalDate
+	 * through {@code Date.from(...atStartOfDay().toInstant())}, and
+	 * {@code Instant.toEpochMilli()} overflows above about year 292 million. That
+	 * surfaces as an unchecked {@code ConversionFailedException} — a 500 with a
+	 * stack trace on disk, from one cheap GET that anyone signed in can repeat.
+	 *
+	 * <p>Every route that puts a caller's date into a query needs it, not only
+	 * the two this module added: the 1.x timesheet is reachable on instances
+	 * where this module does not exist at all, which makes it the more exposed
+	 * of them. It keeps its own message key, because the published app shows
+	 * that sentence and its meaning is not ours to change underneath.
+	 *
+	 * <p>Called after the ascending check, so {@code from <= to} and bounding the
+	 * two ends bounds everything between them.
+	 */
+	private static void assertStorable(LocalDate from, LocalDate to, String messageKey) {
+		if (from.getYear() < MIN_YEAR || to.getYear() > MAX_YEAR) {
+			throw ApiException.badRequest(messageKey);
 		}
 	}
 
@@ -802,11 +825,13 @@ public class TimeTrackingService {
 			User requester) {
 		// Counted, not offset: a year of +999999999 binds fine through
 		// ISO_LOCAL_DATE, and `from.plusDays(...)` on a date near LocalDate.MAX
-		// throws before the guard can answer — one cheap GET for one 500 and one
-		// stack trace on disk, repeatable.
+		// throws before the guard can answer.
 		if (from.isAfter(to) || ChronoUnit.DAYS.between(from, to) > MAX_RANGE_DAYS) {
 			throw ApiException.badRequest("error.time.invalidRange");
 		}
+		// And the values, which the width does not bound — see assertStorable.
+		// This route's message key stays as it is: the published app shows it.
+		assertStorable(from, to, "error.time.invalidRange");
 		return rowsOf(timesheetCriteria(from, to, userId, projectId, requester));
 	}
 

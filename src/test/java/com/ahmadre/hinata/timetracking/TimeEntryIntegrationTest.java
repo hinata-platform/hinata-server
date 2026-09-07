@@ -509,6 +509,33 @@ class TimeEntryIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("every route that takes a date bounds it, including the frozen one")
+	void anAbsurdDateIsRefusedOnEveryRoute() {
+		// The 1.x timesheet is the more exposed of them: it is not behind the
+		// module's gate, so it answers on instances where none of the routes above
+		// exist at all. It keeps its own message — the published app shows that
+		// sentence — and gains the bound.
+		assertStatus(
+				() -> timeTracking.timesheet(LocalDate.MAX.minusDays(5), LocalDate.MAX, null, null,
+						owner),
+				HttpStatus.BAD_REQUEST, "error.time.invalidRange");
+
+		// The personal list takes an open-ended range, so each end is bounded on
+		// its own — one absurd end is enough to reach the driver.
+		assertStatus(() -> timeTracking.entries(
+				new TimeTrackingService.EntryFilter(LocalDate.MIN, null, null, null), 0, 50, owner),
+				HttpStatus.BAD_REQUEST, "error.time.rangeOutOfBounds");
+		assertStatus(() -> timeTracking.entries(
+				new TimeTrackingService.EntryFilter(null, LocalDate.MAX, null, null), 0, 50, owner),
+				HttpStatus.BAD_REQUEST, "error.time.rangeOutOfBounds");
+
+		// An ordinary open-ended range still answers.
+		assertThat(timeTracking.entries(
+				new TimeTrackingService.EntryFilter(TODAY.minusDays(7), null, null, null), 0, 50,
+				owner)).isEmpty();
+	}
+
+	@Test
 	@DisplayName("a window past the cap is cut and says so")
 	void anOverfullWindowIsTruncated() {
 		// Inserted straight into the collection: this is about what the read does
