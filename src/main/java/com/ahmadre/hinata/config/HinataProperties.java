@@ -532,10 +532,28 @@ public class HinataProperties {
 
 		/**
 		 * Retention in months, counted from the entry's day. {@code 0} — the
-		 * default — keeps data indefinitely, which is what an instance without a
-		 * deletion concept should do rather than quietly destroying records.
-		 * Purging the description alone is the softer of the two: it drops the
-		 * free text a person wrote and keeps the hours.
+		 * default for both — keeps data indefinitely, which is what an instance
+		 * without a deletion concept should do rather than quietly destroying
+		 * records.
+		 *
+		 * <p>The two are not the same rule, and the difference is the whole
+		 * point:
+		 *
+		 * <ul>
+		 * <li>{@code descriptionPurgeMonths} empties the free text on the entries
+		 * of <em>people whose account has been deleted</em>, and only those. The
+		 * hours stay, because they are the project's record of what the work
+		 * cost; the sentence somebody typed about their afternoon is the part
+		 * that still describes a person after they have gone (Art. 5 Abs. 1
+		 * lit. e DSGVO). Applying it to everyone would destroy the notes of
+		 * people who are still here and still relying on them.</li>
+		 * <li>{@code entryPurgeMonths} removes the entry itself, for everyone. An
+		 * operator keeping to § 16 Abs. 2 ArbZG / § 17 MiLoG sets 24 here.</li>
+		 * </ul>
+		 *
+		 * <p>Enforcement is stage 8's {@code TimeRetentionJob}; this stage stores
+		 * the operator's answer. Whoever writes that job: the admin area states
+		 * these two rules in nine languages, and they are the specification.
 		 */
 		@Getter
 		@Setter

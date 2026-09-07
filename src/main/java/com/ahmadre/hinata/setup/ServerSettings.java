@@ -483,7 +483,13 @@ public class ServerSettings {
 			private Integer days;
 		}
 
-		/** Retention in months from the entry's day; {@code 0} keeps data indefinitely. */
+		/**
+		 * Retention in months from the entry's day; {@code 0} keeps data
+		 * indefinitely. {@code descriptionPurgeMonths} empties the free text on a
+		 * <em>deleted</em> user's entries only; {@code entryPurgeMonths} removes
+		 * entries outright, for everyone. See
+		 * {@code HinataProperties.TimeTracking.Retention} for why they differ.
+		 */
 		@Data
 		public static class Retention {
 			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
