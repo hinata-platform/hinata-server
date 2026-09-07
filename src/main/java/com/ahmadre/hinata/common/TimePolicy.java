@@ -28,8 +28,12 @@ public final class TimePolicy {
 		WEEKLY,
 		/** Every second week, counted from an anchor date. */
 		BIWEEKLY,
+		/** Two spans per calendar month: the 1st to the 15th, the 16th to its end. */
+		SEMI_MONTHLY,
 		/** Calendar months. The default: the rhythm most operators already run. */
 		MONTHLY,
+		/** Calendar quarters, as an accounting period usually runs. */
+		QUARTERLY,
 		/** A fixed number of days, counted from an anchor date. */
 		CUSTOM_DAYS,
 		/** No fixed rhythm — a submitter picks the span. */

@@ -173,8 +173,9 @@ hinata:
     leads-see-member-entries: ${HINATA_TIME_TRACKING_LEADS_SEE_MEMBER_ENTRIES:false}
     approvals-enabled: ${HINATA_TIME_TRACKING_APPROVALS_ENABLED:false}
     approval-period:
-      # weekly | biweekly | monthly | custom_days | free. How often timesheets
-      # are submitted is the operator's decision; no rhythm is hardcoded.
+      # weekly | biweekly | semi_monthly | monthly | quarterly | custom_days |
+      # free. How often timesheets are submitted is the operator's decision;
+      # no rhythm is hardcoded.
       type: ${HINATA_TIME_TRACKING_APPROVAL_PERIOD:MONTHLY}
       week-starts-on: ${HINATA_TIME_TRACKING_APPROVAL_WEEK_STARTS_ON:MONDAY}
       # anchor-date (biweekly/custom_days) and days (custom_days) come from

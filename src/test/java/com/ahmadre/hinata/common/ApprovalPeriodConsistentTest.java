@@ -105,6 +105,19 @@ class ApprovalPeriodConsistentTest {
 	}
 
 	@Test
+	void theCalendarRhythmsNeedNothingCountedFrom() {
+		// Half a month and a quarter are read off the calendar, like a month: there
+		// is no anchor to count from and no day count to carry. An operator who
+		// picks one of them supplies nothing else, and is not asked to.
+		assertThat(violations(period(TimePolicy.ApprovalPeriod.SEMI_MONTHLY, null, null))).isEmpty();
+		assertThat(violations(period(TimePolicy.ApprovalPeriod.QUARTERLY, null, null))).isEmpty();
+		assertThat(violations(period(TimePolicy.ApprovalPeriod.QUARTERLY, null, 90)))
+				.singleElement()
+				.satisfies(violation ->
+						assertThat(violation.getPropertyPath()).hasToString("days"));
+	}
+
+	@Test
 	void theRuleReachesTheBlockThroughTheWholeSettingsDocument() {
 		// Jakarta Validation does not descend into a nested object unless the field
 		// says @Valid — the exact trap ServerSettings.general documents. Without it
