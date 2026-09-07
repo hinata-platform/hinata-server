@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.data.domain.Page;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 import org.testcontainers.containers.MongoDBContainer;
@@ -153,6 +154,15 @@ class TimeTrackingAccessIntegrationTest {
 				.isInstanceOf(ApiException.class)
 				.extracting(thrown -> ((ApiException) thrown).getStatus())
 				.isEqualTo(HttpStatus.FORBIDDEN);
+	}
+
+	/** Asserts a 400 and the message key with it: which limit was hit is the answer. */
+	private void assertBadRequest(ThrowingCallable call, String messageKey) {
+		assertThatThrownBy(call)
+				.isInstanceOf(ApiException.class)
+				.hasMessage(messageKey)
+				.extracting(thrown -> ((ApiException) thrown).getStatus())
+				.isEqualTo(HttpStatus.BAD_REQUEST);
 	}
 
 	// --- reading an issue's entries -------------------------------------------
@@ -381,6 +391,133 @@ class TimeTrackingAccessIntegrationTest {
 				.as("the admin logged nothing on this project").isEmpty();
 		assertThat(sheet(admin.getId(), foreign.getId(), admin)).singleElement()
 				.satisfies(row -> assertThat(row.totalMinutes()).isEqualTo(15));
+	}
+
+	// --- the timesheet, paged -----------------------------------------------------
+
+	private Page<TimeTrackingService.TimesheetRow> pagedSheet(String userId, String projectId,
+			User requester) {
+		return pagedSheet(userId, projectId, requester, 0, 50);
+	}
+
+	private Page<TimeTrackingService.TimesheetRow> pagedSheet(String userId, String projectId,
+			User requester, int page, int size) {
+		return timeTracking.timesheetPage(DAY.minusDays(3), DAY.plusDays(3), userId, projectId,
+				page, size, requester);
+	}
+
+	/**
+	 * The module's route is the frozen one's rules, paged — so every refusal
+	 * above is asserted again here rather than assumed. A second entry point into
+	 * the same data is exactly where a scope rule gets left behind.
+	 */
+	@Test
+	void thePagedSheetIsScopedTheSameWay() {
+		logged(member, 30);
+		logged(peer, 60);
+		timeTracking.add(foreignIssue.getId(), draft(15), WorkItem.Source.APP, outsider);
+
+		assertForbidden(() -> pagedSheet(member.getId(), null, peer));
+		assertForbidden(() -> pagedSheet(member.getId(), project.getId(), peer));
+		assertForbidden(() -> pagedSheet(null, foreign.getId(), member));
+
+		assertThat(pagedSheet(null, null, member).getContent()).singleElement()
+				.satisfies(row -> {
+					assertThat(row.userId()).isEqualTo(member.getId());
+					assertThat(row.totalMinutes()).isEqualTo(30);
+				});
+		assertThat(pagedSheet(null, null, admin).getTotalElements()).isEqualTo(3);
+		assertThat(pagedSheet(admin.getId(), project.getId(), admin).getContent())
+				.as("both filters still apply together").isEmpty();
+	}
+
+	@Test
+	void aRowCarriesItsDaysAndTheirSum() {
+		timeTracking.add(issue.getId(), new TimeTrackingService.NewWorkItem(30, DAY, "Development",
+				"work", null, null, null, null), WorkItem.Source.APP, member);
+		timeTracking.add(issue.getId(), new TimeTrackingService.NewWorkItem(45, DAY, "Development",
+				"more", null, null, null, null), WorkItem.Source.APP, member);
+		timeTracking.add(issue.getId(), new TimeTrackingService.NewWorkItem(20,
+				DAY.minusDays(1), "Development", "day before", null, null, null, null),
+				WorkItem.Source.APP, member);
+
+		assertThat(pagedSheet(null, null, member).getContent()).singleElement()
+				.satisfies(row -> {
+					assertThat(row.minutesPerDay())
+							.containsExactly(entry(DAY.minusDays(1), 20), entry(DAY, 75));
+					assertThat(row.totalMinutes()).isEqualTo(95);
+				});
+	}
+
+	/**
+	 * The array-shaped route puts a row that names no project last; a page whose
+	 * order differed would show the same week in two arrangements depending on a
+	 * flag. Mongo sorts a missing value <em>before</em> every string, so this is
+	 * a property of the pipeline, not of the data.
+	 */
+	@Test
+	void anUnfiledRowSortsLastAndKeepsItsNullProject() {
+		logged(member, 30);
+		// An entry filed nowhere at all — the module's own shape.
+		timeTracking.create(new TimeTrackingService.NewEntry(null, null, 45, DAY, "Development",
+				"unfiled", null, null, null, null), WorkItem.Source.APP, member);
+
+		List<TimeTrackingService.TimesheetRow> rows = pagedSheet(null, null, member).getContent();
+
+		assertThat(rows).extracting(TimeTrackingService.TimesheetRow::projectId)
+				.containsExactly(project.getId(), null);
+		assertThat(rows).extracting(TimeTrackingService.TimesheetRow::totalMinutes)
+				.containsExactly(30, 45);
+		// And the same order the frozen route hands back, so a reader switching
+		// between the two views sees one arrangement.
+		assertThat(sheet(null, null, member))
+				.extracting(TimeTrackingService.TimesheetRow::projectId)
+				.containsExactly(project.getId(), null);
+	}
+
+	@Test
+	void pagesAreCutInTheDatabaseAndDoNotOverlap() {
+		// Four rows: two people on two projects. The admin is the only caller who
+		// can see all of them, which is the case paging exists for.
+		projects.save(Project.builder().key("SEC").name("Second")
+				.leadId(lead.getId()).leadIds(new ArrayList<>(List.of(lead.getId())))
+				.memberIds(new ArrayList<>(List.of(member.getId(), peer.getId(), lead.getId())))
+				.build());
+		Issue second = issue(projects.findAll().stream()
+				.filter(p -> "SEC".equals(p.getKey())).findFirst().orElseThrow(), "SEC-1");
+		logged(member, 30);
+		logged(peer, 60);
+		timeTracking.add(second.getId(), draft(10), WorkItem.Source.APP, member);
+		timeTracking.add(second.getId(), draft(20), WorkItem.Source.APP, peer);
+
+		Page<TimeTrackingService.TimesheetRow> first = pagedSheet(null, null, admin, 0, 2);
+		Page<TimeTrackingService.TimesheetRow> next = pagedSheet(null, null, admin, 1, 2);
+
+		assertThat(first.getTotalElements()).isEqualTo(4);
+		assertThat(first.getContent()).hasSize(2);
+		assertThat(next.getContent()).hasSize(2);
+		// Every row exactly once across the two pages: without a total order a
+		// row moves between them and is shown twice or not at all.
+		assertThat(rowKeys(first)).doesNotContainAnyElementsOf(rowKeys(next));
+		assertThat(rowKeys(first)).containsExactlyElementsOf(
+				rowKeys(pagedSheet(null, null, admin, 0, 2)));
+	}
+
+	private static List<String> rowKeys(Page<TimeTrackingService.TimesheetRow> page) {
+		return page.getContent().stream().map(row -> row.userId() + "|" + row.projectId()).toList();
+	}
+
+	@Test
+	void thePagedSheetHasItsOwnWindowAndItsOwnTwoMessages() {
+		assertBadRequest(() -> timeTracking.timesheetPage(DAY, DAY.minusDays(1), null, null, 0, 50,
+				member), "error.time.rangeNotAscending");
+		assertBadRequest(() -> timeTracking.timesheetPage(DAY.minusDays(31), DAY, null, null, 0, 50,
+				member), "error.time.rangeTooLong");
+		// Thirty-one days inclusive is the window, and it answers.
+		assertThat(timeTracking.timesheetPage(DAY.minusDays(30), DAY, null, null, 0, 50, member))
+				.isEmpty();
+		// The frozen route keeps its quarter and its one message.
+		assertThat(timeTracking.timesheet(DAY.minusDays(60), DAY, null, null, member)).isEmpty();
 	}
 
 	// --- reports ------------------------------------------------------------------

@@ -62,6 +62,16 @@ import java.util.List;
 // the second key in all four indexes above, and a second key is not a prefix —
 // without this one that query has nothing to use and reads the collection.
 // userId and projectId follow because they are what the rows are grouped by.
+//
+// Not covering, deliberately, and worth knowing why: appending durationMinutes
+// would answer the timesheet aggregation from the index alone instead of
+// fetching every matched document to read one integer. It is a real win on an
+// unfiltered admin week — and it cannot be made here. `auto-index-creation` is
+// on, there is no index migration, and Spring Data throws
+// DataIntegrityViolationException when an index of this name already exists with
+// different keys: the two live instances would fail to start. It belongs with
+// HIN-93, where the reporting aggregations land and an index change can carry
+// the migration that drops the old one first.
 @CompoundIndex(name = "date_user_project", def = "{'date': 1, 'userId': 1, 'projectId': 1}")
 public class WorkItem {
 
