@@ -98,7 +98,8 @@ public class GitWebhookService {
 			Instant at = instant(c.path("timestamp").asText(null), now);
 			recordCommit(m, sha, message, at,
 					c.path("verification").path("verified").asBoolean(false));
-			applyCommitEffects(m, sha, message, actor);
+			applyCommitEffects(m, new GitService.SmartCommit(sha, message,
+					c.path("author").path("email").asText(null), at), actor);
 		}
 	}
 
@@ -200,9 +201,10 @@ public class GitWebhookService {
 		for (JsonNode c : payload.path("commits")) {
 			String message = c.path("message").asText("");
 			String sha = c.path("id").asText("");
-			recordCommit(m, sha, message,
-					instant(c.path("timestamp").asText(null), now), false);
-			applyCommitEffects(m, sha, message, actor);
+			Instant at = instant(c.path("timestamp").asText(null), now);
+			recordCommit(m, sha, message, at, false);
+			applyCommitEffects(m, new GitService.SmartCommit(sha, message,
+					c.path("author").path("email").asText(null), at), actor);
 		}
 	}
 
@@ -291,9 +293,11 @@ public class GitWebhookService {
 			for (JsonNode c : change.path("commits")) {
 				String message = c.path("message").asText("");
 				String sha = c.path("hash").asText("");
-				recordCommit(m, sha, message,
-						instant(c.path("date").asText(null), now), false);
-				applyCommitEffects(m, sha, message, actor);
+				Instant at = instant(c.path("date").asText(null), now);
+				recordCommit(m, sha, message, at, false);
+				// Bitbucket carries the author as one "Name <address>" string.
+				applyCommitEffects(m, new GitService.SmartCommit(sha, message,
+						emailFromRaw(c.path("author").path("raw").asText(null)), at), actor);
 			}
 		}
 	}
@@ -492,14 +496,14 @@ public class GitWebhookService {
 	 * linked separately via {@link #recordBranch}, so a commit never leaks onto
 	 * an issue merely because it sits on that issue's branch.
 	 */
-	private void applyCommitEffects(Matched m, String sha, String message, User actor) {
-		if (!ledger.firstSight(m.repo().getProvider(), slug(m.repo()), sha)) {
+	private void applyCommitEffects(Matched m, GitService.SmartCommit commit, User actor) {
+		if (!ledger.firstSight(m.repo().getProvider(), slug(m.repo()), commit.sha())) {
 			return; // already processed — idempotent
 		}
 		if (actor != null) {
-			gitService.applySmartCommits(message, actor);
+			gitService.applySmartCommits(commit, actor);
 		}
-		applyPushAutomation(m.project(), keysIn(message), PushRule.COMMIT, actor);
+		applyPushAutomation(m.project(), keysIn(commit.message()), PushRule.COMMIT, actor);
 	}
 
 	// ─────────────────────────── helpers ───────────────────────────
@@ -580,6 +584,21 @@ public class GitWebhookService {
 		}
 		int slash = fullName.lastIndexOf('/');
 		return new String[] { fullName.substring(0, slash), fullName.substring(slash + 1) };
+	}
+
+	/**
+	 * The address out of a git-style {@code "Name <address>"} author string, or
+	 * the string itself when it is a bare address; null when there is none.
+	 */
+	static String emailFromRaw(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		int open = raw.lastIndexOf('<');
+		int close = raw.lastIndexOf('>');
+		String candidate = open >= 0 && close > open ? raw.substring(open + 1, close) : raw;
+		candidate = candidate.trim();
+		return candidate.contains("@") ? candidate : null;
 	}
 
 	private static String stripRef(String ref) {

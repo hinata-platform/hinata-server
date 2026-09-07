@@ -6,7 +6,12 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.timetracking.TimeTrackingService;
+import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.User;
+import com.ahmadre.hinata.user.UserService;
+import com.ahmadre.hinata.user.UserZones;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,7 +20,10 @@ import org.springframework.stereotype.Service;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
@@ -50,6 +58,12 @@ public class GitService {
 	private final GitIntegrationSettings config;
 	private final GitOAuthClient api;
 	private final GitOAuthSessionRepository oauthSessions;
+	// #time logs a work item for the commit author, resolved by e-mail; the
+	// author's zone decides which day a commit timestamp falls on.
+	private final TimeTrackingService timeTracking;
+	private final UserService users;
+	private final SettingsService settings;
+	private final Clock clock;
 	private final SecureRandom random = new SecureRandom();
 
 	// ─────────────────────────── connection (per project) ───────────────────────────
@@ -406,14 +420,33 @@ public class GitService {
 
 	// ─────────────────────────── smart commits (§5) ───────────────────────────
 
+	/** Longest description a {@code #time} entry gets: the sha and the first line, cut. */
+	static final int TIME_DESCRIPTION_MAX = 200;
+
+	/**
+	 * One pushed commit as far as smart commits are concerned: what it says,
+	 * who wrote it and when. {@code authorEmail} and {@code committedAt} come
+	 * from the push payload (every provider carries both); either may be null
+	 * when the payload did not.
+	 */
+	public record SmartCommit(String sha, String message, String authorEmail, Instant committedAt) {
+	}
+
 	/**
 	 * Applies every smart-commit command found in a commit message, honouring the
 	 * per-project {@code smartCommits} toggle. This is the single real code path a
-	 * push webhook (or the demo seeder) drives — {@code #comment} adds a comment,
-	 * {@code #time} logs work, any other {@code #word} transitions the issue.
+	 * push webhook drives — {@code #comment} adds a comment, {@code #time} logs
+	 * work, any other {@code #word} transitions the issue.
+	 *
+	 * <p>{@code actor} — the user who connected the repository — is who comments
+	 * and transitions are attributed to. Logged time is <em>not</em>: a
+	 * {@code #time} is the commit author's work, so it is booked to the account
+	 * behind the commit's author e-mail, and skipped with a warning when that
+	 * address belongs to no active member of the issue's project. The connector
+	 * is never credited with someone else's hours.
 	 */
-	public void applySmartCommits(String message, User actor) {
-		for (SmartCommitParser.Command command : SmartCommitParser.parse(message)) {
+	public void applySmartCommits(SmartCommit commit, User actor) {
+		for (SmartCommitParser.Command command : SmartCommitParser.parse(commit.message())) {
 			Issue issue;
 			try {
 				issue = issues.get(command.issueKey());
@@ -432,13 +465,7 @@ public class GitService {
 					// through the same converter as every other markdown source.
 					case COMMENT -> issues.addComment(issue.getId(),
 							richText.fromMarkdown(command.value()), actor);
-					case TIME -> {
-						int minutes = SmartCommitParser.minutes(command.value());
-						if (minutes > 0) {
-							issues.update(issue.getId(),
-									i -> i.setSpentMinutes(i.getSpentMinutes() + minutes), actor);
-						}
-					}
+					case TIME -> logTime(commit, command, issue);
 					case TRANSITION -> {
 						String state = matchState(project, command.value());
 						if (state != null) {
@@ -452,6 +479,55 @@ public class GitService {
 						command.type(), command.issueKey(), e.getMessage());
 			}
 		}
+	}
+
+	/**
+	 * {@code #time} as a work item of the commit author. Nothing is written when
+	 * the author cannot be resolved to an active account, or when that account
+	 * is not a member of the issue's project — the time is skipped and logged,
+	 * in the same voice as every other skipped command, rather than booked to
+	 * the wrong person.
+	 */
+	private void logTime(SmartCommit commit, SmartCommitParser.Command command, Issue issue) {
+		int minutes = SmartCommitParser.minutes(command.value());
+		if (minutes <= 0) {
+			return;
+		}
+		User author = users.findActiveByEmail(commit.authorEmail()).orElse(null);
+		if (author == null) {
+			log.warn("[git] smart-commit 'TIME' on {} skipped: commit author {} matches no active account",
+					command.issueKey(), commit.authorEmail());
+			return;
+		}
+		if (!issues.canAccess(issue, author)) {
+			log.warn("[git] smart-commit 'TIME' on {} skipped: commit author {} is not a member of the project",
+					command.issueKey(), commit.authorEmail());
+			return;
+		}
+		ZoneId zone = UserZones.of(author, settings.get());
+		LocalDate today = LocalDate.ofInstant(clock.instant(), zone);
+		LocalDate day = commit.committedAt() == null ? today
+				: LocalDate.ofInstant(commit.committedAt(), zone);
+		// A commit timestamp is the author's clock, which may run a little ahead
+		// of ours; a day that has not begun here yet is booked to today.
+		if (day.isAfter(today)) {
+			day = today;
+		}
+		timeTracking.add(issue.getId(),
+				new TimeTrackingService.NewWorkItem(minutes, day, null,
+						timeDescription(commit), null, null, null, null),
+				WorkItem.Source.SMART_COMMIT, author);
+	}
+
+	/** "Smart commit &lt;sha7&gt;: &lt;first line&gt;", capped at {@link #TIME_DESCRIPTION_MAX}. */
+	static String timeDescription(SmartCommit commit) {
+		String sha = commit.sha() == null ? "" : commit.sha();
+		String sha7 = sha.length() > 7 ? sha.substring(0, 7) : sha;
+		String message = commit.message() == null ? "" : commit.message();
+		int newline = message.indexOf('\n');
+		String firstLine = (newline >= 0 ? message.substring(0, newline) : message).trim();
+		String text = "Smart commit " + sha7 + ": " + firstLine;
+		return text.length() > TIME_DESCRIPTION_MAX ? text.substring(0, TIME_DESCRIPTION_MAX) : text;
 	}
 
 	// ─────────────────────────── internals ───────────────────────────
