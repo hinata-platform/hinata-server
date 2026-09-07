@@ -72,14 +72,23 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	private static final String ADMIN_USER = "admin";
 	private static final String ADMIN_PASS = "hinata-demo-2026";
 
-	/** One handler per gated prefix, so "the gate opened" can be read as a 200. */
+	/**
+	 * A handler for each gated prefix that has no real one yet, so "the gate
+	 * opened" can be read as a 200 rather than as a different flavour of 404.
+	 *
+	 * <p>{@code /api/v1/me/timer} is deliberately absent: stage 3 put a real
+	 * controller there, and a probe mapping the same path would make the context
+	 * fail to start with an ambiguous mapping. That the gate still answers 404
+	 * for it while the module is off is now a stronger statement than it was —
+	 * the interceptor beats a handler that exists.
+	 */
 	@TestConfiguration
 	static class GatedProbe {
 
 		@RestController
 		static class Probe {
 
-			@GetMapping({ "/api/v1/time/probe", "/api/v1/me/timer", "/api/v1/availability/probe",
+			@GetMapping({ "/api/v1/time/probe", "/api/v1/availability/probe",
 					"/api/v1/billing/probe", "/api/v1/me/calendar-subscriptions" })
 			Map<String, String> probe() {
 				return Map.of("reached", "yes");
@@ -87,13 +96,24 @@ class AdvancedTimeTrackingGateIntegrationTest {
 		}
 	}
 
-	/** Every path the gate covers, one per prefix the epic reserves for the module. */
-	private static final List<String> GATED = List.of(
-			"/api/v1/time/probe",
-			"/api/v1/me/timer",
-			"/api/v1/availability/probe",
-			"/api/v1/billing/probe",
-			"/api/v1/me/calendar-subscriptions");
+	/**
+	 * Every path the gate covers, one per prefix the epic reserves for the
+	 * module, with what it answers once the gate opens.
+	 *
+	 * <p>Not all 200: {@code GET /api/v1/me/timer} is a real route now and says
+	 * 204 when nothing is running, which is the point of naming the expectation
+	 * rather than asserting "anything but 404" — a route that started answering
+	 * 500 would pass that.
+	 */
+	private record Gated(String path, int whenOn) {
+	}
+
+	private static final List<Gated> GATED = List.of(
+			new Gated("/api/v1/time/probe", 200),
+			new Gated("/api/v1/me/timer", 204),
+			new Gated("/api/v1/availability/probe", 200),
+			new Gated("/api/v1/billing/probe", 200),
+			new Gated("/api/v1/me/calendar-subscriptions", 200));
 
 	private final HttpClient http = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10)).build();
@@ -199,10 +219,10 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	void gatedPrefixesAreNotFoundWhileTheModuleIsOff() {
 		String token = login();
 
-		for (String path : GATED) {
-			HttpResponse<String> response = get(path, token, "en");
-			assertThat(response.statusCode()).as(path).isEqualTo(404);
-			assertThat(body(response).path("message").asText()).as(path)
+		for (Gated gated : GATED) {
+			HttpResponse<String> response = get(gated.path(), token, "en");
+			assertThat(response.statusCode()).as(gated.path()).isEqualTo(404);
+			assertThat(body(response).path("message").asText()).as(gated.path())
 					.isEqualTo("This feature is not enabled on this server");
 		}
 	}
@@ -262,8 +282,9 @@ class AdvancedTimeTrackingGateIntegrationTest {
 
 		assertThat(body(get("/api/v1/meta", null, null))
 				.path("featureFlags").path("advanced_time_tracking").asBoolean()).isTrue();
-		for (String path : GATED) {
-			assertThat(get(path, token, null).statusCode()).as(path).isEqualTo(200);
+		for (Gated gated : GATED) {
+			assertThat(get(gated.path(), token, null).statusCode())
+					.as(gated.path()).isEqualTo(gated.whenOn());
 		}
 
 		enableModule(false);

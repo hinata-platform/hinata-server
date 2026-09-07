@@ -367,6 +367,23 @@ public class NotificationService {
 		});
 	}
 
+	/**
+	 * Tells someone the server ended a timer that had been running for a day.
+	 *
+	 * <p>Deliberately says nothing else. R7 of the epic rules out anything that
+	 * reads as observing how a person works, and a message naming the project,
+	 * the hours or the time of day would be exactly that — on a push notification,
+	 * on a lock screen, in front of whoever is standing there. What happened is
+	 * that a clock was left running; that is all this says, and the entry itself
+	 * is one tap away for the person it belongs to.
+	 */
+	public void notifyTimerAutoStopped(User owner) {
+		if (owner == null || !owner.isActive()) return;
+		String title = words.of(owner, "notify.timerAutoStopped.title");
+		String body = words.of(owner, "notify.timerAutoStopped.body");
+		deliverGated(owner, Notification.Type.TIME_TIMER_AUTO_STOPPED, title, body, "/time");
+	}
+
 	private void deliverOne(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
@@ -861,6 +878,7 @@ public class NotificationService {
 			case ISSUE_DUE_SOON, SPRINT_STARTED, SPRINT_COMPLETED -> "sprint";
 			case TEAM_ADDED, PROJECT_ADDED -> "invites";
 			case DIGEST -> "digest";
+			case TIME_TIMER_AUTO_STOPPED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

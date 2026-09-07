@@ -9,6 +9,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -59,6 +60,7 @@ public class UserService {
 	private final UserRepository users;
 	private final PasswordEncoder passwordEncoder;
 	private final MongoTemplate mongo;
+	private final ApplicationEventPublisher events;
 	private final com.ahmadre.hinata.audit.AuditService audit;
 	private final com.ahmadre.hinata.notification.NotificationService notifications;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
@@ -119,7 +121,29 @@ public class UserService {
 		// the deleted user's id alongside field values that can name other users.
 		mongo.remove(new Query(Criteria.where("userId").is(id)), "issue_mail_digests");
 		users.delete(user);
+		// Announced rather than enumerated. Optional modules hold personal state
+		// of their own — a running timer, and later calendar subscriptions and
+		// working hours — and a list of collections here would be a list this
+		// class has to keep correct about features it must not know exist. The
+		// module clears its own and is responsible for not letting a failure of
+		// its cleanup undo an erasure that has already happened.
+		events.publishEvent(new UserDeletedEvent(id));
 		log.info("Deleted user {} ({}) and scrubbed dangling references", id, user.getUsername());
+	}
+
+	/**
+	 * A user account has been permanently removed.
+	 *
+	 * <p>Published after the account is gone, so a listener that fails cannot
+	 * leave an erasure half-done: what remains is a stray document somebody has
+	 * to sweep, not a live account the user asked to have deleted.
+	 *
+	 * <p>Listeners hold personal state keyed by {@code userId} and are expected to
+	 * delete it. Anything that is part of the project's record — logged hours,
+	 * authorship — stays under an id that no longer resolves, which is the
+	 * pseudonymisation convention {@link #delete} documents.
+	 */
+	public record UserDeletedEvent(String userId) {
 	}
 
 	public User createLocal(String email, String username, String displayName, String rawPassword,

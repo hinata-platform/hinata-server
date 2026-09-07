@@ -84,6 +84,39 @@ public class UserEvents {
 		}
 	}
 
+	/**
+	 * Sends a named event to every device of one user.
+	 *
+	 * <p>The stream was built for a single message — {@code logout} — and this is
+	 * what makes it a stream. A running timer is state two devices share, and
+	 * without a push the second one shows a stopped timer until somebody
+	 * refreshes it.
+	 *
+	 * <p>Best-effort, and the contract says so: the registry is per application
+	 * instance (like {@code AttachmentEvents}), a device that is briefly
+	 * disconnected receives nothing, and a broken subscriber is dropped rather
+	 * than retried. Anything that must survive a missed frame has to be
+	 * reconcilable by asking — which is why the client re-reads the timer on
+	 * reconnect and on resume instead of trusting the event to have arrived.
+	 *
+	 * @param name    the SSE event name the client switches on
+	 * @param payload serialized to JSON by the emitter's message converters
+	 */
+	public void publish(String userId, String name, Object payload) {
+		List<Subscriber> list = byUser.get(userId);
+		if (list == null) {
+			return;
+		}
+		for (Subscriber subscriber : list) {
+			try {
+				subscriber.emitter().send(SseEmitter.event().name(name).data(payload));
+			}
+			catch (Exception ex) {
+				remove(userId, subscriber);
+			}
+		}
+	}
+
 	/** Signs out the device on a single revoked session. */
 	public void revoked(String userId, String sessionId) {
 		if (sessionId == null) return;

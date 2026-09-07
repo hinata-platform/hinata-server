@@ -48,6 +48,14 @@ import java.util.List;
 // The self-scoped timesheet narrowed to one project: two equalities (userId,
 // projectId), then the date range. user_date alone would have to filter the
 // project out of every day the user ever logged.
+// The personal "Time" list: one user's entries newest first, in exactly the order
+// that list sorts by. user_date leads with the same equality but ascends and
+// carries neither tiebreaker, so Mongo could walk it backwards for the day and
+// would still have to sort every matching entry in memory to settle the rest —
+// a blocking sort over a career of entries to hand back twenty. Descending keys
+// here for readability only; an index is walkable in both directions.
+@CompoundIndex(name = "user_date_started",
+		def = "{'userId': 1, 'date': -1, 'startedAt': -1, '_id': -1}")
 @CompoundIndex(name = "user_project_date", def = "{'userId': 1, 'projectId': 1, 'date': 1}")
 // The admin timesheet and the cross-project time report ask for a window and
 // nothing else, so there is no equality to lead with and `date` has to. It is
