@@ -405,7 +405,7 @@ public class IssueService {
 				freeVoiceBlobs(child.getId());
 				comments.deleteByIssueId(child.getId());
 				activities.deleteByIssueId(child.getId());
-				workItems.deleteByIssueId(child.getId());
+				workItems.detachFromIssue(child.getId());
 				deleteLinksOf(child.getId());
 				issues.delete(child);
 			}
@@ -413,7 +413,9 @@ public class IssueService {
 		freeVoiceBlobs(issue.getId());
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
-		workItems.deleteByIssueId(issue.getId());
+		// Logged time outlives the issue: the hours were worked and the project
+		// keeps them, so the entries are detached from the issue, not deleted.
+		workItems.detachFromIssue(issue.getId());
 		deleteLinksOf(issue.getId());
 		issues.delete(issue);
 		audit.event(AuditAction.ISSUE_DELETED).actor(user)
@@ -592,7 +594,9 @@ public class IssueService {
 			PageSlice<IssueComment> comments,
 			List<IssueComment> pinnedComments,
 			PageSlice<IssueActivity> activity,
+			/** The newest {@link #DETAIL_WORK_ITEMS}; {@code workItemsTotal} says how many there are. */
 			List<WorkItem> workItems,
+			long workItemsTotal,
 			Hierarchy hierarchy,
 			List<Sprint> sprints,
 			List<UserController.DirectoryUser> users,
@@ -609,6 +613,9 @@ public class IssueService {
 		}
 	}
 
+	/** How many work items the detail carries; the rest is paged in on demand. */
+	public static final int DETAIL_WORK_ITEMS = 50;
+
 	public IssueDetail detail(String idOrReadableId, int commentSize, String commentSort,
 			int activitySize, User user) {
 		Issue issue = getForUser(idOrReadableId, user); // primary ACL assert
@@ -617,15 +624,16 @@ public class IssueService {
 		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort, user);
 		List<IssueComment> pinned = pinnedComments(id, user);
 		Page<IssueActivity> activityPage = activityOf(id, 0, activitySize, user);
-		List<WorkItem> items = workItems.findByIssueIdOrderByDateDesc(id);
+		Page<WorkItem> items = workItems.findByIssueId(id,
+				PageRequest.of(0, DETAIL_WORK_ITEMS, WorkItemRepository.NEWEST_FIRST));
 		Hierarchy hierarchy = hierarchyOf(id, user);
 		List<Sprint> sprintList = sprintsForProject(project.getId());
 		boolean canDelete = projects.canDeleteIssues(project, user);
 		List<UserController.DirectoryUser> dirUsers = referencedUsers(
 				issue, commentPage.getContent(), pinned, activityPage.getContent(), hierarchy);
 		return new IssueDetail(issue, project, IssueDetail.PageSlice.of(commentPage), pinned,
-				IssueDetail.PageSlice.of(activityPage), items, hierarchy, sprintList, dirUsers,
-				canDelete);
+				IssueDetail.PageSlice.of(activityPage), items.getContent(), items.getTotalElements(),
+				hierarchy, sprintList, dirUsers, canDelete);
 	}
 
 	/**
