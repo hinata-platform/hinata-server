@@ -17,6 +17,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.DateOperators;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -326,39 +327,61 @@ public class TimeTrackingService {
 		if (projectId != null && !projectReach.canSee(projectId, requester)) {
 			throw ApiException.forbidden("error.project.notMember");
 		}
-		List<WorkItem> items;
-		if (effectiveUser != null && projectId != null) {
-			items = workItems.findByUserIdAndProjectIdInDateRange(effectiveUser, projectId, from, to);
+		Criteria criteria = Criteria.where("date").gte(from).lte(to);
+		if (effectiveUser != null) {
+			criteria = criteria.and("userId").is(effectiveUser);
 		}
-		else if (effectiveUser != null) {
-			items = workItems.findByUserIdInDateRange(effectiveUser, from, to);
+		if (projectId != null) {
+			criteria = criteria.and("projectId").is(projectId);
 		}
-		else if (projectId != null) {
-			items = workItems.findByProjectIdInDateRange(projectId, from, to);
-		}
-		else {
-			items = workItems.findInDateRange(from, to);
-		}
+		return rowsOf(criteria);
+	}
+
+	/**
+	 * The matrix itself: Mongo sums the minutes, this assembles the rows.
+	 *
+	 * <p>Summing here rather than in Java is what keeps the endpoint usable at
+	 * the 92 days it allows. An unfiltered quarter in a two-hundred-person
+	 * instance matches on the order of eighty thousand entries and answers with
+	 * a few thousand rows; loading the entries to add them up meant carrying all
+	 * eighty thousand as objects to emit the same numbers. What comes back now
+	 * is one figure per person, project and day — the shape of the answer, not
+	 * the shape of the data behind it — and the JSON is unchanged, which the
+	 * published app depends on.
+	 *
+	 * <p>The day is grouped as a formatted string rather than the stored value,
+	 * so an entry whose date somehow carries a time of day still lands on its
+	 * own day instead of opening a second bucket. {@code $dateToString} reads
+	 * UTC by default, which is the zone {@code date} is written in.
+	 */
+	private List<TimesheetRow> rowsOf(Criteria criteria) {
+		Aggregation aggregation = Aggregation.newAggregation(
+				Aggregation.match(criteria),
+				Aggregation.project("userId", "projectId", "durationMinutes")
+						.and(DateOperators.dateOf("date").toString("%Y-%m-%d")).as("day"),
+				Aggregation.group("userId", "projectId", "day")
+						.sum("durationMinutes").as("minutes"));
 		// A record key rather than "userId|projectId": either side may be null
 		// (legacy entries carry no user, detached entries may carry no project)
 		// and a null must group with nulls, not with the literal text "null".
 		record RowKey(String userId, String projectId) {
 		}
-		Map<RowKey, List<WorkItem>> grouped = new LinkedHashMap<>();
-		for (WorkItem item : items) {
-			grouped.computeIfAbsent(new RowKey(item.getUserId(), item.getProjectId()),
-					key -> new ArrayList<>()).add(item);
+		Map<RowKey, Map<LocalDate, Integer>> rowsByKey = new LinkedHashMap<>();
+		for (Document group : mongo.aggregate(aggregation, WorkItem.class, Document.class)) {
+			Document key = group.get("_id", Document.class);
+			String day = key == null ? null : key.getString("day");
+			if (day == null) {
+				continue; // an entry with no date at all belongs to no column
+			}
+			int minutes = group.get("minutes") instanceof Number sum ? sum.intValue() : 0;
+			rowsByKey.computeIfAbsent(
+					new RowKey(key.getString("userId"), key.getString("projectId")),
+					unused -> new TreeMap<>())
+					.merge(LocalDate.parse(day), minutes, Integer::sum);
 		}
 		List<TimesheetRow> rows = new ArrayList<>();
-		grouped.forEach((key, group) -> {
-			Map<LocalDate, Integer> perDay = new TreeMap<>();
-			int total = 0;
-			for (WorkItem item : group) {
-				perDay.merge(item.getDate(), item.getDurationMinutes(), Integer::sum);
-				total += item.getDurationMinutes();
-			}
-			rows.add(new TimesheetRow(key.userId(), key.projectId(), perDay, total));
-		});
+		rowsByKey.forEach((key, perDay) -> rows.add(new TimesheetRow(key.userId(), key.projectId(),
+				perDay, perDay.values().stream().mapToInt(Integer::intValue).sum())));
 		rows.sort(Comparator.comparing(TimesheetRow::userId, Comparator.nullsLast(Comparator.naturalOrder()))
 				.thenComparing(TimesheetRow::projectId, Comparator.nullsLast(Comparator.naturalOrder())));
 		return rows;

@@ -205,6 +205,38 @@ class WorkItemLifecycleIntegrationTest {
 				.containsExactly(org.assertj.core.api.Assertions.entry(project.getId(), 30));
 	}
 
+	/**
+	 * The timesheet asks Mongo for the sums rather than adding entries up here,
+	 * and it buckets by the formatted day rather than the stored value. A
+	 * document whose date carries a time of day — which no write path produces,
+	 * but which a backfill or an import could leave behind — must therefore
+	 * still land in its own day's column instead of opening a second one.
+	 */
+	@Test
+	void aDateCarryingATimeOfDayStillCountsTowardsThatDay() {
+		log(30);
+		mongo.getCollection("work_items").insertOne(new org.bson.Document()
+				.append("issueId", issue.getId())
+				.append("projectId", project.getId())
+				.append("userId", member.getId())
+				.append("date", java.util.Date.from(
+						DAY.atTime(13, 45).toInstant(java.time.ZoneOffset.UTC)))
+				.append("durationMinutes", 20)
+				.append("activityType", "Development")
+				.append("billable", false)
+				.append("tags", List.of())
+				.append("source", "APP"));
+
+		List<TimeTrackingService.TimesheetRow> rows = timeTracking.timesheet(DAY.minusDays(2),
+				DAY.plusDays(2), member.getId(), null, member);
+
+		assertThat(rows).singleElement().satisfies(row -> {
+			assertThat(row.minutesPerDay()).containsExactly(
+					org.assertj.core.api.Assertions.entry(DAY, 50));
+			assertThat(row.totalMinutes()).isEqualTo(50);
+		});
+	}
+
 	// --- the issue detail ----------------------------------------------------------
 
 	@Test

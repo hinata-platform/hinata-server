@@ -45,6 +45,12 @@ import java.util.List;
 // projectId), then the date range. user_date alone would have to filter the
 // project out of every day the user ever logged.
 @CompoundIndex(name = "user_project_date", def = "{'userId': 1, 'projectId': 1, 'date': 1}")
+// The admin timesheet and the cross-project time report ask for a window and
+// nothing else, so there is no equality to lead with and `date` has to. It is
+// the second key in all four indexes above, and a second key is not a prefix —
+// without this one that query has nothing to use and reads the collection.
+// userId and projectId follow because they are what the rows are grouped by.
+@CompoundIndex(name = "date_user_project", def = "{'date': 1, 'userId': 1, 'projectId': 1}")
 public class WorkItem {
 
 	/** Where an entry came from. Absent on documents written before 2.0 — read as {@link #APP}. */
