@@ -448,6 +448,33 @@ public class ServerSettings {
 		/** Subscribing to external calendars; null ⇒ env default. */
 		private Boolean icsImportEnabled;
 
+		/**
+		 * What is actually in force right now — every field resolved, nothing
+		 * null except where null is itself the answer (no lock date, no anchor).
+		 *
+		 * <p>Read-only and never stored, the way {@code GitIntegration}'s
+		 * {@code githubConfigured} is: the admin area needs to <em>show</em> the
+		 * effective value, and the obvious way to do that — filling the stored
+		 * fields in before sending them — would be a trap. The client hands the
+		 * whole document back on save, so the first admin who opened this page
+		 * and pressed save would have written every environment default into the
+		 * database as an explicit override. The instance would then be deaf to
+		 * its own {@code HINATA_TIME_TRACKING_*} variables forever, and "use the
+		 * environment default" in the UI would be a button that undoes itself on
+		 * the next read.
+		 *
+		 * <p>That matters most for the one policy that has to be able to go back:
+		 * an operator who disables the module fleet-wide after a works-council
+		 * objection needs every instance to follow, including the ones an admin
+		 * once visited.
+		 *
+		 * <p>Filled by the module itself ({@code timetracking}), because it owns
+		 * the resolution; {@code setup} must not reach into it.
+		 */
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		private TimeTracking effective;
+
 		/** Per-field overrides for the required-field policy. */
 		@Data
 		public static class RequiredFields {

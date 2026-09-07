@@ -292,11 +292,24 @@ class AdvancedTimeTrackingGateIntegrationTest {
 		JsonNode fetched = body(get("/api/v1/admin/settings", token, null));
 		JsonNode block = fetched.path("timeTracking");
 
-		// Pre-filled with what is actually in force, not left blank.
-		assertThat(block.path("advancedEnabled").asBoolean(true)).isFalse();
-		assertThat(block.path("approvalPeriod").path("type").asText()).isEqualTo("MONTHLY");
-		assertThat(block.path("currency").asText()).isEqualTo("EUR");
-		assertThat(block.path("leadsSeeMemberEntries").asBoolean(true)).isFalse();
+		// What is in force is reported, in a block of its own.
+		JsonNode effective = block.path("effective");
+		assertThat(effective.path("advancedEnabled").asBoolean(true)).isFalse();
+		assertThat(effective.path("approvalPeriod").path("type").asText()).isEqualTo("MONTHLY");
+		assertThat(effective.path("currency").asText()).isEqualTo("EUR");
+		assertThat(effective.path("leadsSeeMemberEntries").asBoolean(true)).isFalse();
+
+		// And the editable fields stay empty. This is the half that matters: the
+		// client hands the whole document back on save, so anything filled in
+		// here would be written to Mongo as an explicit override and the
+		// instance would stop listening to its own HINATA_TIME_TRACKING_* vars.
+		assertThat(block.path("currency").isNull()).isTrue();
+		assertThat(block.path("leadsSeeMemberEntries").isNull()).isTrue();
+		// The nested groups are not created either: an empty group is not the same
+		// as an absent one to a Jackson record, and "no opinion" has to survive
+		// the round trip whole.
+		assertThat(block.path("approvalPeriod").isMissingNode()
+				|| block.path("approvalPeriod").isNull()).isTrue();
 
 		// What the published 10.3.3 client does: it holds the settings as the raw
 		// map it read and hands the whole thing back, unknown sections included.
@@ -307,6 +320,16 @@ class AdvancedTimeTrackingGateIntegrationTest {
 		assertThat(saved.statusCode()).isEqualTo(200);
 		assertThat(body(get("/api/v1/meta", null, null))
 				.path("featureFlags").path("advanced_time_tracking").asBoolean()).isTrue();
+
+		// The save changed one switch and adopted nothing else. An operator who
+		// later clears HINATA_TIME_TRACKING_CURRENCY still sees the new default,
+		// because this instance never claimed an opinion about it.
+		ServerSettings stored = settings.get();
+		assertThat(stored.getTimeTracking().getAdvancedEnabled()).isTrue();
+		assertThat(stored.getTimeTracking().getCurrency()).isNull();
+		assertThat(stored.getTimeTracking().getLeadsSeeMemberEntries()).isNull();
+		// And the read-only view is not what got written.
+		assertThat(stored.getTimeTracking().getEffective()).isNull();
 	}
 
 	@Test
@@ -332,7 +355,10 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	void anIncoherentApprovalPeriodIsRejected() {
 		String token = login();
 		ObjectNode document = (ObjectNode) body(get("/api/v1/admin/settings", token, null));
-		ObjectNode period = (ObjectNode) document.path("timeTracking").path("approvalPeriod");
+		// The admin area creates the group when an operator first sets a rhythm —
+		// the server sends none, because it stores no opinion of its own.
+		ObjectNode period = ((ObjectNode) document.path("timeTracking"))
+				.putObject("approvalPeriod");
 		period.put("type", "BIWEEKLY");
 		period.putNull("anchorDate");
 
