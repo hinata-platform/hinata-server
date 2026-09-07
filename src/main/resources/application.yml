@@ -143,6 +143,58 @@ hinata:
     access-token-ttl-seconds: ${HINATA_MCP_OAUTH_ACCESS_TTL_SECONDS:3600}
     auth-code-ttl-seconds: ${HINATA_MCP_OAUTH_AUTH_CODE_TTL_SECONDS:120}
     refresh-token-ttl-days: ${HINATA_MCP_OAUTH_REFRESH_TTL_DAYS:30}
+  time-tracking:
+    # Master switch for the extended time-tracking module (timers, calendar,
+    # approvals, availability, billing). Off by default: an instance that
+    # upgrades keeps exactly the time tracking it had until someone decides
+    # otherwise. Also published as the `advanced_time_tracking` client flag.
+    advanced-enabled: ${HINATA_TIME_TRACKING_ADVANCED_ENABLED:false}
+    # Which fields an entry must carry. All optional, as in 1.x.
+    required-fields:
+      project: ${HINATA_TIME_TRACKING_REQUIRE_PROJECT:false}
+      issue: ${HINATA_TIME_TRACKING_REQUIRE_ISSUE:false}
+      description: ${HINATA_TIME_TRACKING_REQUIRE_DESCRIPTION:false}
+      tag: ${HINATA_TIME_TRACKING_REQUIRE_TAG:false}
+    # Entries on or before this ISO day are frozen. No default: an instance
+    # that has not chosen a lock date must not have one. Set it through
+    # HINATA_TIME_TRACKING_LOCK_BEFORE (relaxed binding finds it without a
+    # placeholder here, which an empty one would have to bind to a LocalDate).
+    rounding:
+      # none | up | down | nearest — a reporting parameter, never a rewrite.
+      mode: ${HINATA_TIME_TRACKING_ROUNDING_MODE:NONE}
+      increment: ${HINATA_TIME_TRACKING_ROUNDING_INCREMENT:15}
+    limit-tag-access: ${HINATA_TIME_TRACKING_LIMIT_TAG_ACCESS:false}
+    default-billable: ${HINATA_TIME_TRACKING_DEFAULT_BILLABLE:false}
+    billing-enabled: ${HINATA_TIME_TRACKING_BILLING_ENABLED:false}
+    currency: ${HINATA_TIME_TRACKING_CURRENCY:EUR}
+    # Every policy below is capable of watching a person rather than recording
+    # work, so each one is off until an operator turns it on deliberately
+    # (§ 87 Abs. 1 Nr. 6 BetrVG — co-determined before it runs).
+    leads-see-member-entries: ${HINATA_TIME_TRACKING_LEADS_SEE_MEMBER_ENTRIES:false}
+    approvals-enabled: ${HINATA_TIME_TRACKING_APPROVALS_ENABLED:false}
+    approval-period:
+      # weekly | biweekly | semi_monthly | monthly | quarterly | custom_days |
+      # free. How often timesheets are submitted is the operator's decision;
+      # no rhythm is hardcoded.
+      type: ${HINATA_TIME_TRACKING_APPROVAL_PERIOD:MONTHLY}
+      week-starts-on: ${HINATA_TIME_TRACKING_APPROVAL_WEEK_STARTS_ON:MONDAY}
+      # anchor-date (biweekly/custom_days) and days (custom_days) come from
+      # HINATA_TIME_TRACKING_APPROVAL_ANCHOR_DATE / _APPROVAL_DAYS; both are
+      # unset for the monthly default and rejected when they do not fit the type.
+    workload-reports-enabled: ${HINATA_TIME_TRACKING_WORKLOAD_REPORTS_ENABLED:false}
+    alerts-enabled: ${HINATA_TIME_TRACKING_ALERTS_ENABLED:false}
+    target-reminders-enabled: ${HINATA_TIME_TRACKING_TARGET_REMINDERS_ENABLED:false}
+    arbzg-hints-enabled: ${HINATA_TIME_TRACKING_ARBZG_HINTS_ENABLED:false}
+    retention:
+      # Months from an entry's day; 0 keeps the data indefinitely, which is what
+      # an instance without a deletion concept should do. Two different rules:
+      # the first empties the free text on the entries of DELETED accounts only,
+      # the second removes entries outright, for everyone.
+      description-purge-months: ${HINATA_TIME_TRACKING_DESCRIPTION_PURGE_MONTHS:0}
+      entry-purge-months: ${HINATA_TIME_TRACKING_ENTRY_PURGE_MONTHS:0}
+    # Shown before the module is first used; blank uses the built-in template.
+    privacy-notice: ${HINATA_TIME_TRACKING_PRIVACY_NOTICE:}
+    ics-import-enabled: ${HINATA_TIME_TRACKING_ICS_IMPORT_ENABLED:false}
   cors:
     allowed-origins: ${HINATA_CORS_ALLOWED_ORIGINS:}
   security:

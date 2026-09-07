@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.mcp;
 
+import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
@@ -14,13 +15,30 @@ import org.springframework.stereotype.Component;
  * and the {@code /meta} app settings use. Every consumer (the {@code /mcp}
  * transport gate, the PAT UI feature flag and the admin status readout) reads
  * through here so there is a single source of truth.
+ *
+ * <p>It is also the {@link FeatureFlags.Module} behind the {@code mcp} client
+ * flag, so what {@code /meta} publishes and what the transport enforces are one
+ * value read one way.
  */
 @Component
 @RequiredArgsConstructor
-public class McpSettings {
+public class McpSettings implements FeatureFlags.Module {
+
+	/** The client-visible flag name; snake_case like every other platform flag. */
+	public static final String FLAG = "mcp";
 
 	private final SettingsService settings;
 	private final HinataProperties properties;
+
+	@Override
+	public String flagKey() {
+		return FLAG;
+	}
+
+	@Override
+	public boolean flagEnabled() {
+		return enabled();
+	}
 
 	/** Effective feature master switch (DB override, else env default). */
 	public boolean enabled() {

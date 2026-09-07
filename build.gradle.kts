@@ -42,6 +42,9 @@ val springdocScalarVersion = "3.0.3"
 // are NOT governed by the Spring Boot BOM, so its own BOM is imported below —
 // exactly the pattern already used for the Testcontainers BOM.
 val springAiVersion = "2.0.0"
+// ArchUnit: the module boundaries of the time-tracking / availability / billing
+// packages are a rule the compiler cannot state, so a test states it. Test-only.
+val archunitVersion = "1.4.1"
 // Inbound e-mail ingest: convert HTML mail bodies into clean Markdown (the format
 // Issue.description stores and the app renders). flexmark-html2md-converter brings
 // jsoup transitively (used to strip <style>/<script>/<head> before conversion).
@@ -157,6 +160,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-mongodb")
+    // Module encapsulation: see timetracking/ModuleBoundaryTest.
+    testImplementation("com.tngtech.archunit:archunit-junit5:$archunitVersion")
     testCompileOnly("org.projectlombok:lombok")
     testAnnotationProcessor("org.projectlombok:lombok")
 

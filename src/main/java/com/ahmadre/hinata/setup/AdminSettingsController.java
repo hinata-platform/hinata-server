@@ -3,6 +3,7 @@ package com.ahmadre.hinata.setup;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
 import jakarta.validation.Valid;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -35,6 +37,9 @@ public class AdminSettingsController {
 
 	private final SettingsService settings;
 	private final HinataProperties properties;
+	private final FeatureFlags featureFlags;
+	/** Modules adding their own derived, read-only values; see {@link SettingsPrefill}. */
+	private final List<SettingsPrefill> modulePrefills;
 	private final GitIntegrationSettings gitConfig;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
@@ -71,15 +76,11 @@ public class AdminSettingsController {
 		if (isBlank(app.getLinuxStoreUrl())) {
 			app.setLinuxStoreUrl(defaults.getLinuxStoreUrl());
 		}
-		// Merge env defaults with any admin overrides (override wins per-key) so a
-		// newly shipped default flag (e.g. a fresh feature) surfaces in the editor
-		// even after admins have already toggled other, unrelated flags — matching
-		// the effective-flags merge in MetaController#meta().
-		java.util.Map<String, Boolean> mergedFlags = new java.util.LinkedHashMap<>(defaults.getFeatureFlags());
-		if (app.getFeatureFlags() != null) {
-			mergedFlags.putAll(app.getFeatureFlags());
-		}
-		app.setFeatureFlags(mergedFlags);
+		// The editable flag map: env defaults with the admin overrides on top, so a
+		// newly shipped default flag surfaces in the editor even after admins have
+		// toggled other, unrelated flags. Module flags (mcp, advanced_time_tracking)
+		// are deliberately absent — each has its own switch in its own section.
+		app.setFeatureFlags(featureFlags.configurable());
 		// Surface the effective auth toggles so the switches reflect the value
 		// currently in force (env default until an admin overrides it).
 		if (app.getLocalAuthEnabled() == null) {
@@ -94,6 +95,11 @@ public class AdminSettingsController {
 		prefillGitIntegration(current);
 		prefillMcp(current);
 		prefillSecurity(current);
+		// The modules fill in what only they can resolve. Note the difference
+		// from the prefills above: those write into stored fields, so a save
+		// freezes them into the database. A module writes into a read-only view
+		// instead, and the operator's environment keeps deciding.
+		modulePrefills.forEach(prefill -> prefill.prefill(current));
 		return current;
 	}
 
@@ -194,6 +200,25 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
+		// The PUT is a whole-document write. The published 10.3.3 client keeps the
+		// settings as the raw map it read, so it hands sections it does not know
+		// back untouched — but a deployment script, a curl body or any client
+		// built from a typed model omits what it does not model. For these three
+		// blocks every field means "null ⇒ the environment decides", so an
+		// omission would not be stored as an omission: it would be resolved to the
+		// environment default and take effect. MCP would switch itself back on, an
+		// administrator's lockout and session limits would revert, and the module
+		// would leave. An omitted block therefore means "no opinion", not "erase
+		// what is stored".
+		if (updated.getTimeTracking() == null) {
+			updated.setTimeTracking(current.getTimeTracking());
+		}
+		if (updated.getMcp() == null) {
+			updated.setMcp(current.getMcp());
+		}
+		if (updated.getSecurity() == null) {
+			updated.setSecurity(current.getSecurity());
+		}
 		// An upload the admin has just switched away from: the stored object would
 		// otherwise shadow the new URL in the /meta/logo proxy and linger as an
 		// orphan. Only relevant when there *was* an upload — testing the incoming
@@ -207,8 +232,14 @@ public class AdminSettingsController {
 		// captured (the check reads the pre-save, still-enabled settings).
 		audit.event(AuditAction.SETTINGS_CHANGED)
 				.actor(currentUser.require())
-				.meta("auditEnabled", String.valueOf(updated.getAudit().isEnabled()))
+				// An explicit "audit": null in the body is a 500 otherwise, and the
+				// settings save it was recording never happens.
+				.meta("auditEnabled", String.valueOf(
+						updated.getAudit() != null && updated.getAudit().isEnabled()))
 				.log();
+		if (updated.getAudit() == null) {
+			updated.setAudit(current.getAudit());
+		}
 		ServerSettings saved = settings.save(updated);
 		// After the save: a failed write must not leave the settings pointing at an
 		// object that is already gone.
