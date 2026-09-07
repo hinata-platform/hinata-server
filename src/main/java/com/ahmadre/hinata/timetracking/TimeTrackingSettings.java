@@ -27,10 +27,11 @@ import java.time.LocalDate;
  * affordable for a transport gate consulted once per connection and not for a
  * resolver on the path of every request to the module.
  *
- * <p>Nothing here decides a rhythm. {@link #approvalPeriod()} answers what the
- * operator configured, down to "a span they pick themselves"; the arithmetic
- * that turns it into a date range is HIN-88's, and there is no constant in this
- * code that says a week or a month.
+ * <p>Nothing here decides a rhythm: {@link #approvalPeriod()} answers what the
+ * operator configured, down to "a span they pick themselves", and the arithmetic
+ * that turns it into a date range is HIN-88's. There is exactly one default —
+ * monthly, when nothing is configured anywhere — and it is stated below and in
+ * the environment property, and nowhere else.
  */
 @Component
 @RequiredArgsConstructor

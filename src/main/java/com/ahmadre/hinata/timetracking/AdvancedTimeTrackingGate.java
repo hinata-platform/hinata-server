@@ -14,13 +14,26 @@ import java.util.List;
  * The one place the extended time-tracking module is switched off for clients.
  *
  * <p>With the flag off the extended routes do not <em>exist</em>: the answer is
- * 404, not 403. A 403 would be an admission that the feature is here and the
- * caller is merely not allowed near it, which is both more information than a
- * disabled module should give and a worse experience — the app would show
- * "denied" where the honest answer is "not on this server". The body is the
- * ordinary error shape with its own code, {@code error.feature.disabled}, so the
- * app can tell it apart from a genuine 404 and re-read {@code /meta} instead of
- * showing a not-found page.
+ * 404, not 403. A 403 would be an admission that the caller is merely not
+ * allowed near a feature that is here, which is a worse experience — the app
+ * would show "denied" where the honest answer is "not on this server". The body
+ * is the ordinary error shape with its own code, {@code error.feature.disabled},
+ * so the app can tell it apart from a genuine 404 and re-read {@code /meta}
+ * instead of showing a not-found page.
+ *
+ * <p>This is not concealment, and should not be described as such:
+ * {@code /api/v1/meta} is public and publishes every feature flag by name, so
+ * anyone can read the module inventory of any instance without signing in. That
+ * is deliberate — the app needs the flags before there is a session — and it
+ * means the 404 buys clarity, not secrecy. The gate still runs behind
+ * authentication, so an anonymous caller gets 401 here and learns nothing extra.
+ *
+ * <p>It covers HTTP and only HTTP. The MCP tools, the smart-commit handler and
+ * the demo seeder reach {@code TimeTrackingService} directly and never pass a
+ * {@code DispatcherServlet} interceptor — {@code /mcp} has its own filter chain.
+ * Today that is harmless, because those callers only touch the ungated 1.x
+ * surface; the first extended MCP tool has to check
+ * {@link TimeTrackingSettings#advancedEnabled()} in the service it calls.
  *
  * <p>One interceptor over the prefixes rather than a check inside each
  * controller, and no {@code @ConditionalOnProperty} on the controllers either:

@@ -37,8 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * dashboard, the weekly summary, issue deletion and issue moves all read or
  * re-point those documents. They may name the shape; they may not reach for the
  * module's behaviour.</li>
- * <li><b>The named bridges.</b> Three classes exist to connect the outside to
- * the module and are listed one by one.</li>
+ * <li><b>The named bridges.</b> Two classes exist to connect the outside to the
+ * module and are listed one by one.</li>
  * <li><b>The wire contracts.</b> {@code AuditAction}, {@code Notification.Type}
  * and {@code pat/Scopes} carry time-tracking constants — {@code TIME_ENTRY_*},
  * {@code worklog:read} — because those names travel to clients and to the audit
@@ -78,9 +78,11 @@ class ModuleBoundaryTest {
 			// The MCP tools for logging and reading time.
 			ROOT + ".mcp.TimeTrackingTools",
 			// #time in a commit message, logged as the commit's author.
-			ROOT + ".git.GitService",
-			// The demo workspace writes entries directly.
-			ROOT + ".demo.DemoSeeder");
+			ROOT + ".git.GitService");
+	// DemoSeeder is deliberately not here. It names WorkItem and its repository,
+	// which the storage contract already allows, so exempting it would buy
+	// nothing today and cost the warning on the day it reaches for the service —
+	// which is the convenient thing for a seeder to do.
 
 	/**
 	 * The core types that name time-tracking concepts as constants. They are the

@@ -13,6 +13,7 @@ import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 
@@ -31,6 +32,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -112,10 +114,20 @@ class TimeTrackingWriteHookTest {
 		service.update("w-1", new TimeTrackingService.WorkItemPatch(45, null, null, null,
 				false, null, false, null, null, null), owner);
 
-		// Twice: once on the entry as it stands, once on the change. The second
-		// call is the one stages 6 and 7 need, because only it sees both days.
-		verify(service, times(2))
-				.assertWritable(any(WorkItem.class), any(WorkItem.class), eq(owner));
+		// The gate sees the entry as it stands and the entry as it will stand.
+		// Both, not either: from stage 6 a lock date or an approval covers the
+		// day an entry is moving off as much as the day it is moving to, and only
+		// a call carrying both can tell. Asserted as "the gate was told about the
+		// old state and about the new one" rather than as a call count, which
+		// would pass just as happily with the body replaced by return.
+		ArgumentCaptor<WorkItem> before = ArgumentCaptor.forClass(WorkItem.class);
+		ArgumentCaptor<WorkItem> after = ArgumentCaptor.forClass(WorkItem.class);
+		verify(service, atLeastOnce())
+				.assertWritable(before.capture(), after.capture(), eq(owner));
+		assertThat(before.getAllValues()).allSatisfy(entry ->
+				assertThat(entry.getDurationMinutes()).isEqualTo(60));
+		assertThat(after.getAllValues()).anySatisfy(entry ->
+				assertThat(entry.getDurationMinutes()).isEqualTo(45));
 	}
 
 	@Test

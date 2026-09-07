@@ -82,6 +82,13 @@ public class FeatureFlags {
 		if (app.getFeatureFlags() != null) {
 			flags.putAll(app.getFeatureFlags());
 		}
+		// A module key that somehow got stored as a free-form entry is removed
+		// rather than shown. It cannot decide anything — the module's resolver
+		// wins in effective() and in enabled() alike — so leaving it in would put
+		// a switch in the admin area that looks authoritative, flips nothing, and
+		// can never be got rid of. Stripping it here covers every client, which
+		// naming it in one client's list does not.
+		modules.forEach(module -> flags.remove(module.flagKey()));
 		return flags;
 	}
 

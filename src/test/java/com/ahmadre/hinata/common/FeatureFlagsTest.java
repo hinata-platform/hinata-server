@@ -87,14 +87,20 @@ class FeatureFlagsTest {
 	@Test
 	void theEditableMapNeverContainsAModuleFlag() {
 		envDefaults(Map.of("emailReply", true));
-		stored(Map.of());
+		// Not just absent from the defaults: an entry that is actually stored,
+		// because that is the one an admin would see as a switch. It flips
+		// nothing — the module wins everywhere — so offering it would be a
+		// control that lies and cannot be removed.
+		stored(Map.of("mcp", false, "advanced_time_tracking", true));
 
 		FeatureFlags featureFlags = flags(module("mcp", true),
 				module("advanced_time_tracking", true));
 
 		assertThat(featureFlags.configurable()).containsOnlyKeys("emailReply");
 		assertThat(featureFlags.effective())
-				.containsOnlyKeys("emailReply", "mcp", "advanced_time_tracking");
+				.containsOnlyKeys("emailReply", "mcp", "advanced_time_tracking")
+				.containsEntry("mcp", true)
+				.containsEntry("advanced_time_tracking", true);
 	}
 
 	@Test

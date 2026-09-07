@@ -384,6 +384,31 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a gated path with no controller behind it is still the module's 404")
+	void anUnmappedGatedPathIsRefusedByTheGateAndNotByTheRouter() {
+		String token = login();
+
+		// The shape production is actually in until stage 3 lands handlers: no
+		// controller is mapped here, and the interceptor runs anyway because
+		// Boot's catch-all resource mapping carries the same interceptors. If it
+		// ever stopped — an operator setting spring.web.resources.add-mappings to
+		// false is enough — this path would answer error.routeNotFound instead,
+		// the app would stop recognising "module off", and the /meta re-read that
+		// heals a stale flag would never fire. Nothing would look broken.
+		HttpResponse<String> response = get("/api/v1/billing/nothing-is-mapped-here", token, "en");
+
+		assertThat(response.statusCode()).isEqualTo(404);
+		assertThat(body(response).path("message").asText())
+				.isEqualTo("This feature is not enabled on this server");
+
+		// And an ordinary wrong URL is still an ordinary wrong URL, so the two
+		// remain distinguishable — which is the whole reason the gate has a code
+		// of its own.
+		assertThat(body(get("/api/v1/no-such-thing", token, "en")).path("message").asText())
+				.isEqualTo("Not found");
+	}
+
+	@Test
 	@DisplayName("a currency that is not an ISO code, and a retention nothing could count, are refused")
 	void incoherentPolicyValuesAreRefused() {
 		String token = login();

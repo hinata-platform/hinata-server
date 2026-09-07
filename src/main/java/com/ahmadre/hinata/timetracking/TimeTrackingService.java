@@ -258,6 +258,15 @@ public class TimeTrackingService {
 	 * three writes above call it, so a rule added here is a rule that holds
 	 * everywhere, and there is no second path to remember.
 	 *
+	 * <p>Every change <em>a person makes to an entry</em>, that is. The
+	 * collection has writers that never come through here, and stage 7 needs to
+	 * know which: {@code DeletionService} removes a project's entries outright,
+	 * {@code IssueMoveService} re-points {@code projectId}, and
+	 * {@code IssueService} detaches {@code issueId} when an issue goes. Those are
+	 * cascades of somebody else's decision, not edits, and they will walk over a
+	 * lock date and an approved timesheet unless that stage decides otherwise —
+	 * which is a decision, not an oversight, and belongs in that ticket.
+	 *
 	 * <p>Today it states what the service already stated: an entry is written by
 	 * the person it belongs to, or by a lead of its project or an administrator.
 	 * That is deliberately all it does — stage 6 hangs the lock date on it and
@@ -271,17 +280,16 @@ public class TimeTrackingService {
 	 * @param actor  who is making the change
 	 */
 	void assertWritable(WorkItem before, WorkItem after, User actor) {
-		if (before == null) {
-			// A new entry belongs to whoever is logging it. Nothing here builds one
-			// for somebody else, and this is where that stops being an accident of
-			// the call sites and becomes a rule.
-			if (after != null && after.getUserId() != null
-					&& !after.getUserId().equals(actor.getId())) {
-				throw ApiException.forbidden("error.time.editOwnOnly");
-			}
+		// The entry whose ownership decides: the one that exists. On a create
+		// that is the entry being written, and the rule is the same one — you
+		// write your own, or you are a lead of its project or an administrator.
+		// Stating it once means a future on-behalf-of create is judged by the
+		// rule rather than by whether its call site remembered to.
+		WorkItem subject = before != null ? before : after;
+		if (subject == null) {
 			return;
 		}
-		if (isOwner(before, actor) || canManageForeign(before, actor)) {
+		if (isOwner(subject, actor) || canManageForeign(subject, actor)) {
 			return;
 		}
 		throw ApiException.forbidden(
