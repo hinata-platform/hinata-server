@@ -24,6 +24,7 @@ import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -487,12 +488,16 @@ public class TimerService {
 	 * whose entry already exists — the next stop would hand back the previous
 	 * interval and silently throw away the one just worked.
 	 *
-	 * @param timerId which phase the caller means to end. Optional, and worth
-	 *        sending: it is the idempotency token. A request that timed out and
-	 *        is retried after the phase has already turned would otherwise skip a
+	 * @param timerId which phase the caller means to end — required, because it
+	 *        is the whole idempotency guarantee. A request that timed out and is
+	 *        retried after the phase has already turned would otherwise skip a
 	 *        second interval; named, it answers with the phase that is running.
 	 */
 	public RunningTimer advancePhase(String timerId, User user) {
+		// The controller enforces this; stated here so the service carries its own
+		// contract rather than borrowing one, and so a second caller — an MCP tool,
+		// say — meets a name rather than a null dereference.
+		Objects.requireNonNull(timerId, "timerId");
 		RunningTimer running = require(user);
 		// Before the idempotency branch: a stale id sent while a stopwatch is
 		// running is still a request to turn a phase on something that has none,
@@ -514,47 +519,48 @@ public class TimerService {
 		RunningTimer.Pomodoro config = timer.getPomodoro();
 		boolean wasBreak = timer.isBreak();
 		int done = timer.getCyclesDone();
-		if (wasBreak) {
-			timers.deleteById(timer.getId());
+		// Before anything is deleted. It reads only what the timer already
+		// carries, and doing it here keeps a database hiccup out of the window
+		// between "this timer is gone" and "the next one exists" — where it would
+		// leave the entry written, the run dead, and nothing published to say so.
+		TimeTrackingService.Placement placement = placementForNextPhase(timer, user);
+		if (!claimForPhaseChange(timer, user)) {
+			// Somebody ended this timer while the phase was turning — a stop, a
+			// discard, or the other device's phase change. Whatever is running now
+			// is the answer; inserting the next phase would put back a timer that
+			// its owner ended.
+			return current(user).orElseThrow(() -> ApiException.notFound("timer"));
 		}
-		else {
-			// An interval that has not lasted a minute has nothing to file, and
-			// filing it anyway would round it up to a minute nobody worked. So it
-			// is skipped rather than refused: refusing would be a 400 in the middle
-			// of somebody's rhythm for pressing a button a little early, and
-			// filing would make the phase route an entry factory — a caller in a
-			// loop writing a minute of "worked time" per request. The length
-			// bounds do not prevent that; they say how long an interval *may* be,
-			// never how short one ends up being.
+		// A break files nothing; the claim above is all that had to happen to it.
+		if (!wasBreak) {
+			// An interval that has not lasted a minute records nothing.
+			//
+			// Deliberately not the same answer {@code stop} gives, which floors at
+			// one minute: a stop is somebody saying "that was work, book it", and
+			// refusing it would leave them with a timer they cannot stop. Turning a
+			// phase is a marker in a rhythm, not a decision to book anything — and
+			// a marker pressed a moment early has nothing behind it. Rounding it up
+			// would write a minute nobody worked, once per request, which is what
+			// makes an unattended loop on this route a data problem rather than
+			// merely a noisy one.
 			//
 			// Nothing recorded, so nothing counted: the cycle it would have been
 			// does not advance towards the long break either.
 			if (Duration.between(timer.getStartedAt(), now).toMinutes() >= 1) {
-				// Files the interval and removes the timer, through the same path a
-				// manual stop takes — the write gate, the overlap bookkeeping and
-				// the duplicate-key idempotency all apply unchanged. The end is
-				// capped at the interval's length by targetEndOf, so a phase
-				// reported late is still worth exactly one work interval.
+				// Files the interval, through the same path a manual stop takes —
+				// the write gate, the overlap bookkeeping and the duplicate-key
+				// idempotency all apply unchanged. The end is capped at the
+				// interval's length by targetEndOf, so a phase reported late is
+				// still worth exactly one work interval.
 				//
 				// The `timer` event is suppressed: a stop announces "nothing is
 				// running", and a device that acted on that between here and the
 				// insert below would clear its bar and stop its ticker mid-turn.
 				// The one event this makes is the new phase.
-				Stopped filed = stop(timer,
-						new StopRequest(null, now, null, null, null, null, null, null), user, false);
-				if (filed.alreadyStopped()) {
-					// Somebody stopped this timer while the phase was turning — they
-					// pressed Stop and got their entry. Inserting the next phase now
-					// would put back a timer they ended.
-					return current(user).orElseThrow(() -> ApiException.notFound("timer"));
-				}
+				fileInterval(timer, now, user);
 				done++;
 			}
-			else {
-				timers.deleteById(timer.getId());
-			}
 		}
-		TimeTrackingService.Placement placement = placementForNextPhase(timer, user);
 		RunningTimer next = RunningTimer.builder()
 				.userId(user.getId())
 				.startedAt(now)
@@ -581,6 +587,73 @@ public class TimerService {
 			// collided with, so nothing is lost either way — and both callers are
 			// told about the same phase.
 			return current(user).orElseThrow(() -> ApiException.notFound("timer"));
+		}
+	}
+
+	/**
+	 * Takes this timer out of the collection, or answers false because somebody
+	 * else already did.
+	 *
+	 * <p>The interlock for a phase change. {@code deleteById} on a document that
+	 * is already gone is a silent no-op, so a phase change that raced a stop or a
+	 * discard used to insert the next phase anyway — putting a timer back behind
+	 * somebody who had just ended one, and answering their next start with 409
+	 * until they discarded it. The delete has to say whether it did anything.
+	 *
+	 * <p>Scoped by owner as well as by id, so the query does not depend on how
+	 * its caller found the document.
+	 */
+	private boolean claimForPhaseChange(RunningTimer timer, User user) {
+		return mongo.remove(
+				Query.query(Criteria.where("_id").is(timer.getId())
+						.and("userId").is(user.getId())),
+				RunningTimer.class).getDeletedCount() > 0;
+	}
+
+	/**
+	 * Writes the work interval this phase was, without touching the timer.
+	 *
+	 * <p>The timer is already gone by the time this runs — {@link
+	 * #claimForPhaseChange} removed it, and winning that is what earns the right
+	 * to file. So this is {@link #stop}'s second half only: build the entry, hand
+	 * it to the write gate, and reconcile the counter if somebody beat us to the
+	 * insert.
+	 */
+	private void fileInterval(RunningTimer timer, Instant now, User user) {
+		Instant end = now;
+		Instant target = targetEndOf(timer);
+		if (target != null && end.isAfter(target)) {
+			end = target;
+		}
+		Instant capped = timer.getStartedAt().plus(MAX_RUN);
+		if (end.isAfter(capped)) {
+			end = capped;
+		}
+		ZoneId zone = entries.zoneOf(user);
+		WorkItem item = WorkItem.builder()
+				.id(timer.getId())
+				.issueId(timer.getIssueId())
+				.projectId(timer.getProjectId())
+				.userId(user.getId())
+				.date(LocalDate.ofInstant(timer.getStartedAt(), zone))
+				.durationMinutes(minutesOf(timer.getStartedAt(), end))
+				.activityType(TimeTrackingService.activityOrDefault(timer.getActivityType()))
+				.description(timer.getDescription())
+				.startedAt(timer.getStartedAt())
+				.endedAt(end)
+				.createdAt(TimeTrackingService.stored(clock.instant()))
+				.billable(timer.isBillable())
+				.tags(TimeTrackingService.normalizeTags(timer.getTags()))
+				.source(WorkItem.Source.TIMER)
+				.build();
+		try {
+			entries.insertTimed(item, user);
+		}
+		catch (DuplicateKeyException alreadyFiled) {
+			// The entry is there — a retry, or the other device — and whether the
+			// counter was moved for it is another question. Same reconciliation
+			// `stop` does, for the same reason.
+			entries.reconcileSpentTime(item.getIssueId());
 		}
 	}
 
@@ -633,48 +706,55 @@ public class TimerService {
 	}
 
 	/**
-	 * A pomodoro configuration inside the bounds the preferences state, with the
-	 * defaults filled in for whatever the client left out.
+	 * A pomodoro configuration inside the bounds {@link TimePreferences} states,
+	 * with the owner's own lengths filled in for whatever the client left out.
 	 *
 	 * <p>Clamped rather than refused, and here rather than only in a request
 	 * validator: this is what the run counts by for as long as it lasts, and a
-	 * zero-minute work interval would turn the phase route into an entry factory.
+	 * zero-minute work interval is not a rhythm.
 	 */
 	private static RunningTimer.Pomodoro sanitized(RunningTimer.Pomodoro asked, User user) {
-		// The owner's own rhythm is what a missing number falls back to — they set
-		// it, and a client that omits the block means "the usual", not "twenty-five
-		// minutes". The class defaults stand in only for an account that never said.
-		TimePreferences bounds = user.getTimePreferences() == null
-				? TimePreferences.defaults()
-				: user.getTimePreferences().sanitized();
+		TimePreferences usual = usualOf(user);
 		if (asked == null) {
 			return RunningTimer.Pomodoro.builder()
-					.work(bounds.getPomodoroWork())
-					.shortBreak(bounds.getPomodoroShortBreak())
-					.longBreak(bounds.getPomodoroLongBreak())
-					.cycles(bounds.getPomodoroCycles())
+					.work(usual.getPomodoroWork())
+					.shortBreak(usual.getPomodoroShortBreak())
+					.longBreak(usual.getPomodoroLongBreak())
+					.cycles(usual.getPomodoroCycles())
 					.build();
 		}
 		return RunningTimer.Pomodoro.builder()
 				.work(clamp(asked.getWork(), TimePreferences.MIN_WORK, TimePreferences.MAX_WORK,
-						bounds.getPomodoroWork()))
+						usual.getPomodoroWork()))
 				.shortBreak(clamp(asked.getShortBreak(), TimePreferences.MIN_BREAK,
-						TimePreferences.MAX_BREAK, bounds.getPomodoroShortBreak()))
+						TimePreferences.MAX_BREAK, usual.getPomodoroShortBreak()))
 				.longBreak(clamp(asked.getLongBreak(), TimePreferences.MIN_LONG_BREAK,
-						TimePreferences.MAX_LONG_BREAK, bounds.getPomodoroLongBreak()))
+						TimePreferences.MAX_LONG_BREAK, usual.getPomodoroLongBreak()))
 				.cycles(clamp(asked.getCycles(), TimePreferences.MIN_CYCLES,
-						TimePreferences.MAX_CYCLES, bounds.getPomodoroCycles()))
+						TimePreferences.MAX_CYCLES, usual.getPomodoroCycles()))
 				.build();
 	}
 
 	/** The countdown's target, clamped; the owner's usual when a client names none. */
 	private static int plannedOrDefault(Integer asked, User user) {
-		int fallback = user.getTimePreferences() == null
-				? TimePreferences.defaults().getCountdownMinutes()
-				: user.getTimePreferences().sanitized().getCountdownMinutes();
-		return asked == null ? fallback
-				: clamp(asked, TimePreferences.MIN_COUNTDOWN, TimePreferences.MAX_COUNTDOWN,
-						fallback);
+		int usual = usualOf(user).getCountdownMinutes();
+		return asked == null ? usual
+				: clamp(asked, TimePreferences.MIN_COUNTDOWN, TimePreferences.MAX_COUNTDOWN, usual);
+	}
+
+	/**
+	 * This person's own lengths, repaired.
+	 *
+	 * <p>What a number a client leaves out falls back to. Their preference, not
+	 * the class default: somebody who set a fifty-minute interval and whose client
+	 * omits the block means "the usual", and answering twenty-five would be the
+	 * app deciding their rhythm for them. The class defaults stand in only for an
+	 * account that has never said.
+	 */
+	private static TimePreferences usualOf(User user) {
+		return user.getTimePreferences() == null
+				? TimePreferences.defaults()
+				: user.getTimePreferences().sanitized();
 	}
 
 	/**

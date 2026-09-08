@@ -107,8 +107,8 @@ public class MeController {
 
 	/**
 	 * The person's timer rhythm, whole. Absent leaves it alone; present replaces
-	 * it — there are six numbers, one panel edits them together, and a partial
-	 * update of "how long is a break" is not a thing anyone asks for.
+	 * it — one panel edits these together, and a partial update of "how long is a
+	 * break" is not a thing anyone asks for.
 	 *
 	 * <p>The bounds are stated twice on purpose: here, so a client learns which
 	 * of its numbers is wrong, and in {@link TimePreferences#sanitized()}, so a

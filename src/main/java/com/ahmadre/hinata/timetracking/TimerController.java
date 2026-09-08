@@ -47,6 +47,19 @@ public class TimerController {
 	// --- DTOs -----------------------------------------------------------------
 
 	/**
+	 * The limits every one of these records states, in one place.
+	 *
+	 * <p>Three records carry the same six fields — start, patch and stop — and an
+	 * annotation is a constant expression, so the only way to keep them in step
+	 * is to name the numbers. Raising the description limit on one route and
+	 * silently keeping the old one on the others is otherwise a one-line mistake.
+	 */
+	public static final int MAX_DESCRIPTION = 2000;
+	public static final int MAX_ACTIVITY = 60;
+	public static final int MAX_TAGS = 20;
+	public static final int MAX_TAG = 40;
+
+	/**
 	 * A running timer on the wire. It carries no elapsed time: the client counts
 	 * from {@code startedAt} against its own clock, so the number on screen keeps
 	 * moving between requests instead of freezing until the next one.
@@ -72,19 +85,6 @@ public class TimerController {
 	 * a field left out is cleared. See {@link TimerService#patch} for why a
 	 * single resource with five fields is treated that way.
 	 */
-	/**
-	 * The limits every one of these records states, in one place.
-	 *
-	 * <p>Three records carry the same six fields — start, patch and stop — and an
-	 * annotation is a constant expression, so the only way to keep them in step
-	 * is to name the numbers. Raising the description limit on one route and
-	 * silently keeping the old one on the others is otherwise a one-line mistake.
-	 */
-	public static final int MAX_DESCRIPTION = 2000;
-	public static final int MAX_ACTIVITY = 60;
-	public static final int MAX_TAGS = 20;
-	public static final int MAX_TAG = 40;
-
 	public record TimerRequest(
 			String projectId,
 			String issueId,

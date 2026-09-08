@@ -98,6 +98,38 @@ class TimerModeIntegrationTest {
 				List.of("focus"), true);
 	}
 
+	/** Runs {@code work} on {@code threads} at once, released from one latch. */
+	private void race(int threads, java.util.concurrent.Callable<Void> work) throws Exception {
+		java.util.concurrent.ExecutorService pool =
+				java.util.concurrent.Executors.newFixedThreadPool(threads);
+		java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+		List<java.util.concurrent.Future<Void>> results = new ArrayList<>();
+		try {
+			for (int i = 0; i < threads; i++) {
+				results.add(pool.submit(() -> {
+					go.await(5, java.util.concurrent.TimeUnit.SECONDS);
+					return work.call();
+				}));
+			}
+			go.countDown();
+			for (java.util.concurrent.Future<Void> result : results) {
+				result.get(30, java.util.concurrent.TimeUnit.SECONDS);
+			}
+		}
+		finally {
+			pool.shutdownNow();
+		}
+	}
+
+	/** The same, where each thread needs to know which one it is. */
+	private void race(int threads, java.util.function.IntSupplier index,
+			java.util.function.IntConsumer work) throws Exception {
+		race(threads, () -> {
+			work.accept(index.getAsInt());
+			return null;
+		});
+	}
+
 	private RunningTimer startPomodoro(int work, int shortBreak, int longBreak, int cycles) {
 		return timers.start(new TimerService.StartDraft(content(), RunningTimer.Mode.POMODORO, null,
 				RunningTimer.Pomodoro.builder().work(work).shortBreak(shortBreak)
@@ -321,6 +353,66 @@ class TimerModeIntegrationTest {
 		assertThat(timer.getPomodoro().getShortBreak()).isEqualTo(5);
 		assertThat(timer.getPomodoro().getLongBreak()).isEqualTo(15);
 		assertThat(timer.getPomodoro().getCycles()).isEqualTo(12);
+	}
+
+	@Test
+	@DisplayName("two devices turning the same phase produce one entry and one timer")
+	void twoDevicesTurningTheSamePhase() throws Exception {
+		RunningTimer work = startPomodoro(25, 5, 15, 4);
+		clock.advance(Duration.ofMinutes(25));
+
+		// Both read the same running timer and both pass the id check; only the
+		// delete can settle which of them is the one that turns the phase. The
+		// loser must not insert a second timer behind the winner, and must not
+		// file a second entry for the same interval.
+		race(4, () -> {
+			try {
+				timers.advancePhase(work.getId(), owner);
+			}
+			catch (ApiException expected) {
+				// 404 for a loser that arrives after the winner has finished — the
+				// honest answer, and not a failure of the test.
+			}
+			return null;
+		});
+
+		assertThat(timerRepository.count()).isEqualTo(1);
+		assertThat(workItems.count()).isEqualTo(1);
+		RunningTimer running = timers.current(owner).orElseThrow();
+		assertThat(running.getPhase()).isEqualTo(RunningTimer.Phase.BREAK);
+		assertThat(running.getCyclesDone()).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("a stop that wins the race is not undone by the phase change behind it")
+	void aStopThatWinsIsNotUndone() throws Exception {
+		RunningTimer work = startPomodoro(25, 5, 15, 4);
+		clock.advance(Duration.ofMinutes(25));
+
+		// One device presses Stop, another presses "take a break", on the same
+		// timer. Whoever wins, the person must not end up with a break timer
+		// running behind the Stop they pressed — and must not get two entries.
+		race(2, new java.util.concurrent.atomic.AtomicInteger()::getAndIncrement,
+				index -> {
+					try {
+						if (index == 0) {
+							timers.stop(new TimerService.StopRequest(null, null, null, null, null,
+									null, null, null), owner);
+						}
+						else {
+							timers.advancePhase(work.getId(), owner);
+						}
+					}
+					catch (ApiException expected) {
+						// Whichever lost says so; both answers are honest.
+					}
+				});
+
+		assertThat(workItems.count()).isEqualTo(1);
+		// Either a break is running (the phase change won) or nothing is (the stop
+		// won). What must never happen is a timer that outlives the stop *and* a
+		// second entry, which is what the unconditional delete used to allow.
+		assertThat(timerRepository.count()).isLessThanOrEqualTo(1);
 	}
 
 	// --- what was already running when this shipped -------------------------------
