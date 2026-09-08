@@ -4,6 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -71,12 +72,25 @@ public class TimerController {
 	 * a field left out is cleared. See {@link TimerService#patch} for why a
 	 * single resource with five fields is treated that way.
 	 */
+	/**
+	 * The limits every one of these records states, in one place.
+	 *
+	 * <p>Three records carry the same six fields — start, patch and stop — and an
+	 * annotation is a constant expression, so the only way to keep them in step
+	 * is to name the numbers. Raising the description limit on one route and
+	 * silently keeping the old one on the others is otherwise a one-line mistake.
+	 */
+	public static final int MAX_DESCRIPTION = 2000;
+	public static final int MAX_ACTIVITY = 60;
+	public static final int MAX_TAGS = 20;
+	public static final int MAX_TAG = 40;
+
 	public record TimerRequest(
 			String projectId,
 			String issueId,
-			@Size(max = 2000) String description,
-			@Size(max = 60) String activityType,
-			@Size(max = 20) List<@Size(max = 40) String> tags,
+			@Size(max = MAX_DESCRIPTION) String description,
+			@Size(max = MAX_ACTIVITY) String activityType,
+			@Size(max = MAX_TAGS) List<@Size(max = MAX_TAG) String> tags,
 			Boolean billable) {
 
 		TimerService.TimerDraft toDraft() {
@@ -101,9 +115,9 @@ public class TimerController {
 	public record StartRequest(
 			String projectId,
 			String issueId,
-			@Size(max = 2000) String description,
-			@Size(max = 60) String activityType,
-			@Size(max = 20) List<@Size(max = 40) String> tags,
+			@Size(max = MAX_DESCRIPTION) String description,
+			@Size(max = MAX_ACTIVITY) String activityType,
+			@Size(max = MAX_TAGS) List<@Size(max = MAX_TAG) String> tags,
 			Boolean billable,
 			RunningTimer.Mode mode,
 			Integer plannedMinutes,
@@ -139,9 +153,12 @@ public class TimerController {
 	 *
 	 * <p>{@code timerId} is the idempotency token, exactly as on {@code stop}: a
 	 * retried request that arrives after the phase has already turned answers with
-	 * the phase that is running instead of skipping the next one.
+	 * the phase that is running instead of skipping the next one. Required, unlike
+	 * on {@code stop} — there it is worth sending and here it is the whole
+	 * guarantee, and a caller that omitted it would advance whatever happened to
+	 * be running rather than the phase it meant.
 	 */
-	public record PhaseRequest(String timerId) {
+	public record PhaseRequest(@NotBlank String timerId) {
 	}
 
 	/**
@@ -167,9 +184,9 @@ public class TimerController {
 			Instant endedAt,
 			String projectId,
 			String issueId,
-			@Size(max = 2000) String description,
-			@Size(max = 60) String activityType,
-			@Size(max = 20) List<@Size(max = 40) String> tags,
+			@Size(max = MAX_DESCRIPTION) String description,
+			@Size(max = MAX_ACTIVITY) String activityType,
+			@Size(max = MAX_TAGS) List<@Size(max = MAX_TAG) String> tags,
 			Boolean billable) {
 
 		TimerService.StopRequest toRequest() {
@@ -205,9 +222,9 @@ public class TimerController {
 	 * {@code error.time.notPomodoro} for a timer that has no phases to turn.
 	 */
 	@PostMapping("/phase")
-	public TimerResponse phase(@RequestBody(required = false) @Valid PhaseRequest request) {
-		return TimerResponse.from(timers.advancePhase(
-				request == null ? null : request.timerId(), currentUser.require()));
+	public TimerResponse phase(@RequestBody @Valid PhaseRequest request) {
+		return TimerResponse.from(
+				timers.advancePhase(request.timerId(), currentUser.require()));
 	}
 
 	/**

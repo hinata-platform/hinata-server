@@ -1,7 +1,9 @@
 package com.ahmadre.hinata.timetracking;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -29,19 +31,20 @@ import java.util.List;
  * that is already there, and a duplicate key is the answer rather than a second
  * entry. See {@link TimerService#stop}.
  *
- * <p>{@code mode} and the countdown/pomodoro fields are stored from this stage
- * on but only written by stage 5 — they live on the server rather than in the
- * app so that a timer started on a phone reads the same on a desktop, which is
- * the whole reason a running timer is server state at all.
+ * <p>{@code mode} and the countdown/pomodoro fields live on the server rather
+ * than in the app so that a timer started on a phone reads the same on a
+ * desktop — which is the whole reason a running timer is server state at all.
+ * They were stored from stage 3 and written only as {@code STOPWATCH} until
+ * stage 5, so no stored value has ever changed meaning.
  */
 @Data
 @Builder(toBuilder = true)
 @Document("running_timers")
 public class RunningTimer {
 
-	/** How the timer counts. Stage 5 builds the UI; the field exists so the stored value never changes meaning. */
+	/** How the timer counts. */
 	public enum Mode {
-		/** Counts up from zero. The only mode this stage writes. */
+		/** Counts up from zero, towards nothing. */
 		STOPWATCH,
 		/** Counts down towards {@code plannedMinutes}. */
 		COUNTDOWN,
@@ -119,9 +122,16 @@ public class RunningTimer {
 	 * documents are what a run is made of: there is no session record beyond the
 	 * timer that is running right now, and a counter that reset on every phase
 	 * would make the long break unreachable.
+	 *
+	 * <p>An {@code Integer} and not an {@code int}, for the same reason
+	 * {@link #getTags()} exists. Spring Data instantiates this document through
+	 * its all-args constructor, and a field that is not in the stored document
+	 * arrives as null — which a primitive parameter rejects outright. A timer
+	 * that was already running when this version was deployed would then be
+	 * unreadable: not stoppable, not discardable, not sweepable, for as long as
+	 * it existed. See {@link #getCyclesDone()}.
 	 */
-	@Builder.Default
-	private int cyclesDone = 0;
+	private Integer cyclesDone;
 
 	/**
 	 * When an automatic stop was claimed for this timer, so that two application
@@ -134,6 +144,11 @@ public class RunningTimer {
 	/** Never null: a timer written before this field existed has no tags. */
 	public List<String> getTags() {
 		return tags == null ? List.of() : tags;
+	}
+
+	/** Never null: a timer written before this field existed has completed none. */
+	public int getCyclesDone() {
+		return cyclesDone == null ? 0 : cyclesDone;
 	}
 
 	/** Whether this timer is counting a break rather than work. */
@@ -151,22 +166,24 @@ public class RunningTimer {
 	 */
 	@Data
 	@Builder
-	@lombok.NoArgsConstructor
-	@lombok.AllArgsConstructor
+	@NoArgsConstructor
+	@AllArgsConstructor
 	public static class Pomodoro {
 		private int work;
 		private int shortBreak;
 		private int longBreak;
 		private int cycles;
 
-		/** Minutes of the break that follows work interval number {@code done}. */
-		public int breakAfter(int done) {
-			return cycles > 0 && done % cycles == 0 ? longBreak : shortBreak;
-		}
-
-		/** Which break follows work interval number {@code done}. */
+		/**
+		 * Which break follows work interval number {@code done}.
+		 *
+		 * <p>{@code done > 0} as well as the modulo: zero divides evenly by
+		 * everything, so without it a run whose first interval recorded nothing
+		 * would open with the long break — the reward for a set nobody has
+		 * worked yet.
+		 */
 		public Phase phaseAfter(int done) {
-			return cycles > 0 && done % cycles == 0 ? Phase.LONG_BREAK : Phase.BREAK;
+			return cycles > 0 && done > 0 && done % cycles == 0 ? Phase.LONG_BREAK : Phase.BREAK;
 		}
 	}
 }

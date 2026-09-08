@@ -425,8 +425,8 @@ class TimerApiIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("ending a work phase files one entry and answers with the break")
-	void advancingAPhaseFilesTheWork() {
+	@DisplayName("ending a phase answers with the next one, and an empty interval files nothing")
+	void advancingAPhaseAnswersWithTheNextOne() {
 		String timerId = body(post("/api/v1/me/timer/start", """
 				{"description":"deep work","mode":"POMODORO",
 				 "pomodoro":{"work":25,"shortBreak":5,"longBreak":15,"cycles":4}}
@@ -436,16 +436,21 @@ class TimerApiIntegrationTest {
 				"{\"timerId\":\"%s\"}".formatted(timerId)));
 
 		assertThat(next.path("phase").asText()).isEqualTo("BREAK");
-		assertThat(next.path("cyclesDone").asInt()).isEqualTo(1);
-		// A new document, because the old id now belongs to an entry.
+		// A new document, because the old id is the one an entry would be written
+		// under and a phase that kept it could not be stopped twice.
 		assertThat(next.path("id").asText()).isNotEqualTo(timerId);
+		// This test runs on the wall clock, so the interval that just ended lasted
+		// milliseconds: there is nothing to file, so nothing is filed and no cycle
+		// is counted. That one work interval of real length becomes exactly one
+		// entry is asserted next to the service, where the clock can be moved.
+		assertThat(next.path("cyclesDone").asInt()).isZero();
 		assertThat(body(get("/api/v1/time/entries?q=deep")).path("totalElements").asInt())
-				.isEqualTo(1);
+				.isZero();
 
-		// And the break itself records nothing: it is ended by discarding it.
+		// And the break records nothing either: it is ended by discarding it.
 		assertThat(post("/api/v1/me/timer/discard", null).statusCode()).isEqualTo(204);
 		assertThat(body(get("/api/v1/time/entries?q=deep")).path("totalElements").asInt())
-				.isEqualTo(1);
+				.isZero();
 	}
 
 	@Test

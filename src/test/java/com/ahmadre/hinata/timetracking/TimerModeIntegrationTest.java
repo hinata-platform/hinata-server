@@ -221,6 +221,46 @@ class TimerModeIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("an interval with nothing in it files nothing and counts nothing")
+	void anEmptyIntervalIsSkipped() {
+		RunningTimer work = startPomodoro(25, 5, 15, 4);
+		// Pressed a few seconds in. There is no minute to book, and rounding one
+		// up would be an entry for time nobody worked — which is also what makes
+		// the phase route an entry factory when it is called in a loop.
+		clock.advance(Duration.ofSeconds(20));
+
+		RunningTimer next = timers.advancePhase(work.getId(), owner);
+
+		assertThat(next.getPhase()).isEqualTo(RunningTimer.Phase.BREAK);
+		assertThat(workItems.count()).isZero();
+		// Nothing recorded, so nothing counted towards the long break either.
+		assertThat(next.getCyclesDone()).isZero();
+	}
+
+	@Test
+	@DisplayName("a run whose project is gone keeps going, unfiled")
+	void aRunOutlivesItsProject() {
+		RunningTimer work = startPomodoro(25, 5, 15, 4);
+		assertThat(work.getProjectId()).isEqualTo(project.getId());
+		clock.advance(Duration.ofMinutes(25));
+		// Access ends mid-run. Every phase change writes a new document with a new
+		// startedAt, so the sweep never ends this run — and without re-checking,
+		// it would keep writing into the project for as long as somebody kept
+		// pressing.
+		projects.deleteById(project.getId());
+
+		RunningTimer next = timers.advancePhase(work.getId(), owner);
+
+		// The rhythm continues — the work is still theirs — but it stops being
+		// filed somewhere they can no longer reach.
+		assertThat(next.getPhase()).isEqualTo(RunningTimer.Phase.BREAK);
+		assertThat(next.getProjectId()).isNull();
+		assertThat(next.getDescription()).isEqualTo("Deep work");
+		// And the interval that was worked while access still held is still filed.
+		assertThat(workItems.count()).isEqualTo(1);
+	}
+
+	@Test
 	@DisplayName("a repeated phase request does not skip the next interval")
 	void advancingTheSamePhaseTwiceIsIdempotent() {
 		RunningTimer work = startPomodoro(25, 5, 15, 4);
@@ -281,6 +321,36 @@ class TimerModeIntegrationTest {
 		assertThat(timer.getPomodoro().getShortBreak()).isEqualTo(5);
 		assertThat(timer.getPomodoro().getLongBreak()).isEqualTo(15);
 		assertThat(timer.getPomodoro().getCycles()).isEqualTo(12);
+	}
+
+	// --- what was already running when this shipped -------------------------------
+
+	@Test
+	@DisplayName("a timer written before this stage is still readable, and still stoppable")
+	void aTimerFromBeforeThisStageStillReads() {
+		// Exactly what the collection holds for somebody who had a stopwatch
+		// running when the new version was deployed: no mode, no phase, and no
+		// cyclesDone. A primitive int field would reject the missing one outright
+		// and the document would be unreadable — the timer not stoppable, not
+		// discardable, not sweepable, for as long as it existed.
+		mongo.getCollection("running_timers").insertOne(new Document()
+				.append("_id", new org.bson.types.ObjectId())
+				.append("userId", owner.getId())
+				.append("startedAt", java.util.Date.from(TestClock.START))
+				.append("description", "started before the upgrade")
+				.append("tags", List.of())
+				.append("billable", false));
+
+		RunningTimer running = timers.current(owner).orElseThrow();
+		assertThat(running.getCyclesDone()).isZero();
+		assertThat(running.getMode()).isNull();
+		assertThat(running.isBreak()).isFalse();
+
+		clock.advance(Duration.ofMinutes(30));
+		WorkItem entry = timers.stop(
+				new TimerService.StopRequest(null, null, null, null, null, null, null, null), owner)
+				.entry();
+		assertThat(entry.getDurationMinutes()).isEqualTo(30);
 	}
 
 	// --- the ceiling -----------------------------------------------------------
