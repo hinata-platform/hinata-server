@@ -79,7 +79,13 @@ class TimerApiIntegrationTest {
 
 	@BeforeEach
 	void signIn() {
+		// The entries as well as the timer. A test that asks "how many of my
+		// entries does this one overlap" reads every entry the account has, so
+		// leaving the previous test's behind makes the answer depend on the order
+		// the methods happen to run in — and the build cache then hides the whole
+		// thing by replaying a green result for an unchanged input.
 		mongo.getCollection("running_timers").deleteMany(new org.bson.Document());
+		mongo.getCollection("work_items").deleteMany(new org.bson.Document());
 		token = login();
 	}
 
@@ -395,6 +401,169 @@ class TimerApiIntegrationTest {
 		assertThat(response.statusCode()).isEqualTo(201);
 		assertThat(body(response).path("description").asText()).isEqualTo("again");
 		assertThat(body(get("/api/v1/me/timer")).path("description").asText()).isEqualTo("again");
+	}
+
+	// --- how a timer counts ------------------------------------------------------
+
+	@Test
+	@DisplayName("a pomodoro starts in its work phase and answers with the lengths it counts by")
+	void pomodoroStartsInWork() {
+		HttpResponse<String> response = post("/api/v1/me/timer/start", """
+				{"description":"deep work","mode":"POMODORO",
+				 "pomodoro":{"work":25,"shortBreak":5,"longBreak":15,"cycles":4}}
+				""");
+
+		assertThat(response.statusCode()).isEqualTo(201);
+		JsonNode timer = body(response);
+		assertThat(timer.path("mode").asText()).isEqualTo("POMODORO");
+		assertThat(timer.path("phase").asText()).isEqualTo("WORK");
+		assertThat(timer.path("cyclesDone").asInt()).isZero();
+		assertThat(timer.path("pomodoro").path("work").asInt()).isEqualTo(25);
+		// The phase clock is on the wire too: a second device shows the same
+		// countdown only if it knows when this half started.
+		assertThat(timer.path("phaseStartedAt").isMissingNode()).isFalse();
+	}
+
+	@Test
+	@DisplayName("ending a work phase files one entry and answers with the break")
+	void advancingAPhaseFilesTheWork() {
+		String timerId = body(post("/api/v1/me/timer/start", """
+				{"description":"deep work","mode":"POMODORO",
+				 "pomodoro":{"work":25,"shortBreak":5,"longBreak":15,"cycles":4}}
+				""")).path("id").asText();
+
+		JsonNode next = body(post("/api/v1/me/timer/phase",
+				"{\"timerId\":\"%s\"}".formatted(timerId)));
+
+		assertThat(next.path("phase").asText()).isEqualTo("BREAK");
+		assertThat(next.path("cyclesDone").asInt()).isEqualTo(1);
+		// A new document, because the old id now belongs to an entry.
+		assertThat(next.path("id").asText()).isNotEqualTo(timerId);
+		assertThat(body(get("/api/v1/time/entries?q=deep")).path("totalElements").asInt())
+				.isEqualTo(1);
+
+		// And the break itself records nothing: it is ended by discarding it.
+		assertThat(post("/api/v1/me/timer/discard", null).statusCode()).isEqualTo(204);
+		assertThat(body(get("/api/v1/time/entries?q=deep")).path("totalElements").asInt())
+				.isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("a break cannot be stopped into an entry, and says which rule it broke")
+	void stoppingABreakIsRefused() {
+		String timerId = body(post("/api/v1/me/timer/start", """
+				{"description":"deep work","mode":"POMODORO",
+				 "pomodoro":{"work":25,"shortBreak":5,"longBreak":15,"cycles":4}}
+				""")).path("id").asText();
+		post("/api/v1/me/timer/phase", "{\"timerId\":\"%s\"}".formatted(timerId));
+
+		HttpResponse<String> response = post("/api/v1/me/timer/stop", null);
+
+		assertThat(response.statusCode()).isEqualTo(400);
+		assertThat(response.body()).contains("break");
+	}
+
+	@Test
+	@DisplayName("a stopwatch has no phase to advance")
+	void advancingAStopwatchIsRefused() {
+		post("/api/v1/me/timer/start", "{\"description\":\"plain\"}");
+
+		HttpResponse<String> response = post("/api/v1/me/timer/phase", null);
+
+		assertThat(response.statusCode()).isEqualTo(400);
+	}
+
+	@Test
+	@DisplayName("a countdown carries its target; a stopwatch is not given one")
+	void countdownCarriesItsTarget() {
+		JsonNode countdown = body(post("/api/v1/me/timer/start",
+				"{\"mode\":\"COUNTDOWN\",\"plannedMinutes\":45}"));
+		assertThat(countdown.path("mode").asText()).isEqualTo("COUNTDOWN");
+		assertThat(countdown.path("plannedMinutes").asInt()).isEqualTo(45);
+		post("/api/v1/me/timer/discard", null);
+
+		JsonNode stopwatch = body(post("/api/v1/me/timer/start",
+				"{\"mode\":\"STOPWATCH\",\"plannedMinutes\":45}"));
+		assertThat(stopwatch.path("plannedMinutes").isNull()).isTrue();
+	}
+
+	@Test
+	@DisplayName("renaming a running pomodoro leaves it a pomodoro")
+	void patchDoesNotResetTheMode() {
+		post("/api/v1/me/timer/start", """
+				{"description":"deep work","mode":"POMODORO",
+				 "pomodoro":{"work":25,"shortBreak":5,"longBreak":15,"cycles":4}}
+				""");
+
+		// The patch body is the timer's whole *editable* state and names no mode.
+		// If the mode lived there, every rename would clear it.
+		JsonNode patched = body(patch("/api/v1/me/timer",
+				"{\"description\":\"renamed\",\"tags\":[],\"billable\":false}"));
+
+		assertThat(patched.path("description").asText()).isEqualTo("renamed");
+		assertThat(patched.path("mode").asText()).isEqualTo("POMODORO");
+		assertThat(patched.path("phase").asText()).isEqualTo("WORK");
+		assertThat(patched.path("pomodoro").path("work").asInt()).isEqualTo(25);
+	}
+
+	// --- the person's own rhythm --------------------------------------------------
+
+	/**
+	 * The stored preferences back to their defaults.
+	 *
+	 * <p>They live on the account, not in a collection the fixture clears, so a
+	 * test that asserts a default has to put it there first — otherwise it passes
+	 * or fails on which of these methods happened to run before it.
+	 */
+	private void resetTimePreferences() {
+		patch("/api/v1/me", """
+				{"timePreferences":{"pomodoroWork":25,"pomodoroShortBreak":5,
+				 "pomodoroLongBreak":15,"pomodoroCycles":4,"countdownMinutes":25,"sound":true}}
+				""");
+	}
+
+	@Test
+	@DisplayName("timer preferences are the account's own, and survive a re-read")
+	void timePreferencesRoundTrip() {
+		resetTimePreferences();
+
+		JsonNode saved = body(patch("/api/v1/me", """
+				{"timePreferences":{"pomodoroWork":50,"pomodoroShortBreak":10,"sound":false}}
+				"""));
+
+		assertThat(saved.path("timePreferences").path("pomodoroWork").asInt()).isEqualTo(50);
+		assertThat(saved.path("timePreferences").path("pomodoroShortBreak").asInt()).isEqualTo(10);
+		assertThat(saved.path("timePreferences").path("sound").asBoolean()).isFalse();
+		// Merged, not replaced: a panel that edits two numbers must not blank the
+		// four it did not mention.
+		assertThat(saved.path("timePreferences").path("pomodoroLongBreak").asInt()).isEqualTo(15);
+		assertThat(body(get("/api/v1/me")).path("timePreferences").path("pomodoroWork").asInt())
+				.isEqualTo(50);
+	}
+
+	@Test
+	@DisplayName("a profile patch that mentions no preferences leaves them alone")
+	void profilePatchKeepsThePreferences() {
+		resetTimePreferences();
+		patch("/api/v1/me", "{\"timePreferences\":{\"pomodoroWork\":50}}");
+
+		JsonNode after = body(patch("/api/v1/me", "{\"title\":\"Lead\"}"));
+
+		assertThat(after.path("title").asText()).isEqualTo("Lead");
+		assertThat(after.path("timePreferences").path("pomodoroWork").asInt()).isEqualTo(50);
+	}
+
+	@Test
+	@DisplayName("a length outside its bounds is refused, not stored")
+	void outOfBoundsPreferenceIsRefused() {
+		resetTimePreferences();
+
+		HttpResponse<String> response =
+				patch("/api/v1/me", "{\"timePreferences\":{\"pomodoroWork\":0}}");
+
+		assertThat(response.statusCode()).isEqualTo(400);
+		assertThat(body(get("/api/v1/me")).path("timePreferences").path("pomodoroWork").asInt())
+				.isEqualTo(25);
 	}
 
 	// --- the live event ----------------------------------------------------------

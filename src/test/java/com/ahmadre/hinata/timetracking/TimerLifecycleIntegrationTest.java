@@ -17,12 +17,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 import org.testcontainers.containers.MongoDBContainer;
@@ -30,11 +27,9 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -70,7 +65,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 		"management.health.mail.enabled=false",
 		"hinata.time-tracking.advanced-enabled=true"
 })
-@Import(TimerLifecycleIntegrationTest.MovableClock.class)
+@Import(TestClock.Config.class)
 @Testcontainers(disabledWithoutDocker = true)
 class TimerLifecycleIntegrationTest {
 
@@ -78,48 +73,7 @@ class TimerLifecycleIntegrationTest {
 	@ServiceConnection
 	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
 
-	static final Instant START = Instant.parse("2026-09-07T08:00:00Z");
-
-	/**
-	 * A clock the tests move. Not {@code Clock.fixed}: the point of half of this
-	 * file is what happens as time passes, and sleeping through 24 hours is not a
-	 * test anyone runs.
-	 */
-	static class Movable extends Clock {
-		private Instant now = START;
-
-		void set(Instant instant) {
-			this.now = instant;
-		}
-
-		void advance(Duration by) {
-			this.now = this.now.plus(by);
-		}
-
-		@Override
-		public ZoneOffset getZone() {
-			return ZoneOffset.UTC;
-		}
-
-		@Override
-		public Clock withZone(java.time.ZoneId zone) {
-			return this;
-		}
-
-		@Override
-		public Instant instant() {
-			return now;
-		}
-	}
-
-	@TestConfiguration
-	static class MovableClock {
-		@Bean
-		@Primary
-		Movable testClock() {
-			return new Movable();
-		}
-	}
+	static final Instant START = TestClock.START;
 
 	@Autowired
 	private MongoTemplate mongo;
@@ -142,7 +96,7 @@ class TimerLifecycleIntegrationTest {
 	@Autowired
 	private ApplicationEventPublisher events;
 	@Autowired
-	private Movable clock;
+	private TestClock clock;
 
 	private User owner;
 	private User peer;
@@ -187,7 +141,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a timer starts, runs, and becomes exactly one entry")
 	void startThenStopProducesOneEntry() {
-		RunningTimer started = timers.start(draft(), owner);
+		RunningTimer started = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		assertThat(started.getStartedAt()).isEqualTo(START);
 		assertThat(timers.current(owner)).isPresent();
 		// A running timer is not an entry, so nothing has been booked yet — the
@@ -228,7 +182,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a timer started with nothing at all still stops into an entry")
 	void anEmptyTimerIsValid() {
-		timers.start(new TimerService.TimerDraft(null, null, null, null, null, null), owner);
+		timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(null, null, null, null, null, null)), owner);
 		clock.advance(Duration.ofMinutes(25));
 
 		WorkItem entry = timers.stop(plainStop(), owner).entry();
@@ -244,7 +198,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("the details may arrive on the way out")
 	void stopCanFileTheEntry() {
-		timers.start(new TimerService.TimerDraft(null, null, null, null, null, null), owner);
+		timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(null, null, null, null, null, null)), owner);
 		clock.advance(Duration.ofMinutes(45));
 
 		WorkItem entry = timers.stop(new TimerService.StopRequest(null, null, project.getId(),
@@ -262,7 +216,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a timer stopped within the same minute files one minute rather than failing")
 	void aVeryShortTimerStillStops() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofSeconds(40));
 
 		WorkItem entry = timers.stop(plainStop(), owner).entry();
@@ -286,7 +240,7 @@ class TimerLifecycleIntegrationTest {
 		// server stored" by an amount nothing notices until something compares
 		// them.
 		clock.set(Instant.parse("2026-09-07T08:00:00.123456Z"));
-		RunningTimer started = timers.start(draft(), owner);
+		RunningTimer started = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 
 		assertThat(started.getStartedAt())
 				.isEqualTo(timerRepository.findById(started.getId()).orElseThrow().getStartedAt());
@@ -303,7 +257,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("discarding records nothing at all")
 	void discardLeavesNoTrace() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(30));
 
 		timers.discard(owner);
@@ -329,7 +283,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a running timer can be renamed and re-filed")
 	void patchWhileRunning() {
-		timers.start(new TimerService.TimerDraft(null, null, "typo", null, null, null), owner);
+		timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(null, null, "typo", null, null, null)), owner);
 
 		RunningTimer patched = timers.patch(new TimerService.TimerDraft(project.getId(),
 				issue.getId(), "the real thing", "Testing", List.of("a", "a", " b "), true), owner);
@@ -345,7 +299,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a patch is the timer's whole editable state: what it omits is cleared")
 	void patchReplacesRatherThanMerges() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 
 		RunningTimer cleared = timers.patch(
 				new TimerService.TimerDraft(null, null, null, null, null, null), owner);
@@ -370,9 +324,9 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a second start is a 409, not a second timer")
 	void oneTimerPerPerson() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 
-		assertThatThrownBy(() -> timers.start(draft(), owner))
+		assertThatThrownBy(() -> timers.start(TimerService.StartDraft.stopwatch(draft()), owner))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.timerAlreadyRunning")
 				.extracting(thrown -> ((ApiException) thrown).getStatus())
@@ -388,7 +342,7 @@ class TimerLifecycleIntegrationTest {
 
 		race(8, () -> {
 			try {
-				timers.start(draft(), owner);
+				timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 				started.incrementAndGet();
 			}
 			catch (ApiException conflict) {
@@ -408,10 +362,10 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("each person has their own timer")
 	void timersAreNotShared() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 
-		RunningTimer theirs = timers.start(new TimerService.TimerDraft(null, null, "peer work",
-				null, null, null), peer);
+		RunningTimer theirs = timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(null, null, "peer work",
+				null, null, null)), peer);
 
 		assertThat(theirs.getId()).isNotEqualTo(timers.current(owner).orElseThrow().getId());
 		assertThat(timers.current(peer).orElseThrow().getDescription()).isEqualTo("peer work");
@@ -423,7 +377,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("stopping twice files one entry and answers the same both times")
 	void stoppingTwiceIsIdempotent() {
-		RunningTimer started = timers.start(draft(), owner);
+		RunningTimer started = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(60));
 		TimerService.Stopped first = timers.stop(plainStop(), owner);
 
@@ -440,7 +394,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("eight simultaneous stops file one entry, and the hours are counted once")
 	void concurrentStopsFileOneEntry() throws Exception {
-		RunningTimer started = timers.start(draft(), owner);
+		RunningTimer started = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(60));
 		AtomicInteger answered = new AtomicInteger();
 		AtomicInteger missed = new AtomicInteger();
@@ -478,7 +432,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a patch that loses the race to a stop does not bring the timer back")
 	void patchCannotResurrectAStoppedTimer() {
-		RunningTimer started = timers.start(draft(), owner);
+		RunningTimer started = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(5));
 		// The shape of the race: the patch read the timer, the stop then filed it
 		// and deleted it, and the patch writes afterwards. `save` on an entity
@@ -502,13 +456,13 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a stop names its own timer, so a late retry cannot end a new one")
 	void aRetriedStopDoesNotEndTheNextTimer() {
-		RunningTimer first = timers.start(draft(), owner);
+		RunningTimer first = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(20));
 		timers.stop(new TimerService.StopRequest(first.getId(), null, null, null, null, null, null,
 				null), owner);
 		// The person got no answer, started a fresh timer, and only then did the
 		// original request arrive.
-		RunningTimer second = timers.start(draft(), owner);
+		RunningTimer second = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(3));
 
 		TimerService.Stopped late = timers.stop(new TimerService.StopRequest(first.getId(), null,
@@ -524,10 +478,10 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a stop naming somebody else's entry is a 404, not an oracle")
 	void aStopCannotProbeForeignEntries() {
-		timers.start(new TimerService.TimerDraft(null, null, "theirs", null, null, null), peer);
+		timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(null, null, "theirs", null, null, null)), peer);
 		clock.advance(Duration.ofMinutes(10));
 		WorkItem theirs = timers.stop(plainStop(), peer).entry();
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 
 		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(theirs.getId(), null,
 				null, null, null, null, null, null), owner))
@@ -542,7 +496,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a timer survives losing access to the project it was started on")
 	void aTimerIsStillStoppableAfterAccessGoesAway() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(30));
 		// Removed from the project while the clock ran — or the project deleted,
 		// or the issue. Re-authorising the stored placement at stop time made
@@ -563,7 +517,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("and renaming it still works, because the placement did not move")
 	void aPatchThatDoesNotMoveTheTimerNeedsNoAccess() {
-		RunningTimer running = timers.start(draft(), owner);
+		RunningTimer running = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		project.setMemberIds(new ArrayList<>());
 		project.setLeadIds(new ArrayList<>());
 		project.setLeadId(null);
@@ -581,7 +535,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("the counter repair corrects a stale value and writes nothing when it is right")
 	void reconcileRepairsOnlyWhatIsWrong() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(45));
 		timers.stop(plainStop(), owner);
 		Issue booked = issueRepository.findById(issue.getId()).orElseThrow();
@@ -603,7 +557,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("the repair leaves a counter alone that moved under it")
 	void reconcileStandsDownWhenSomebodyElseWrote() throws Exception {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(45));
 		timers.stop(plainStop(), owner);
 		Issue booked = issueRepository.findById(issue.getId()).orElseThrow();
@@ -635,7 +589,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a timer that has run for a day is stopped by the sweep, and its owner is told")
 	void theSweepStopsAnExpiredTimer() {
-		RunningTimer started = timers.start(draft(), owner);
+		RunningTimer started = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofHours(25));
 
 		assertThat(timers.stopExpired()).isEqualTo(1);
@@ -660,7 +614,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a timer under the ceiling is left alone")
 	void theSweepIgnoresARunningTimer() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofHours(23));
 
 		assertThat(timers.stopExpired()).isZero();
@@ -673,7 +627,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("two instances sweeping at once file one entry and send one message")
 	void theClaimKeepsTheSweepSingle() throws Exception {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofHours(25));
 		AtomicInteger totalStopped = new AtomicInteger();
 
@@ -693,7 +647,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a later sweep retries a timer whose stop failed")
 	void aStaleClaimIsRetaken() {
-		RunningTimer started = timers.start(draft(), owner);
+		RunningTimer started = timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofHours(25));
 		// The shape a half-finished sweep leaves behind: claimed, never stopped.
 		RunningTimer stuck = timerRepository.findById(started.getId()).orElseThrow();
@@ -714,7 +668,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a timer whose owner is gone is removed rather than swept forever")
 	void anOrphanedTimerIsDropped() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		users.deleteById(owner.getId());
 		clock.advance(Duration.ofHours(25));
 
@@ -727,7 +681,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("a stop that arrives after the ceiling is truncated, not refused")
 	void aLateStopIsCapped() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofHours(30));
 
 		WorkItem entry = timers.stop(plainStop(), owner).entry();
@@ -743,7 +697,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("continuing an entry starts a timer carrying its fields")
 	void continueCopiesTheEntry() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(30));
 		WorkItem entry = timers.stop(plainStop(), owner).entry();
 		clock.advance(Duration.ofMinutes(5));
@@ -764,7 +718,7 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("continuing somebody else's entry is refused")
 	void continueIsOwnOnly() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(30));
 		WorkItem entry = timers.stop(plainStop(), owner).entry();
 
@@ -781,10 +735,10 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("continuing while a timer runs is a 409")
 	void continueRespectsTheOneTimerRule() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(30));
 		WorkItem entry = timers.stop(plainStop(), owner).entry();
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 
 		assertThatThrownBy(() -> timers.continueFrom(entry.getId(), owner))
 				.isInstanceOf(ApiException.class)
@@ -801,8 +755,8 @@ class TimerLifecycleIntegrationTest {
 				.memberIds(new ArrayList<>(List.of(peer.getId()))).build());
 		User outsider = user("outsider");
 
-		assertThatThrownBy(() -> timers.start(new TimerService.TimerDraft(theirs.getId(), null,
-				null, null, null, null), outsider))
+		assertThatThrownBy(() -> timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(theirs.getId(), null,
+				null, null, null, null)), outsider))
 				.isInstanceOf(ApiException.class)
 				.extracting(thrown -> ((ApiException) thrown).getStatus())
 				.isEqualTo(HttpStatus.FORBIDDEN);
@@ -814,10 +768,10 @@ class TimerLifecycleIntegrationTest {
 	@Test
 	@DisplayName("deleting an account removes its timer and keeps its entries")
 	void erasureDropsTheTimerAndKeepsTheHours() {
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 		clock.advance(Duration.ofMinutes(30));
 		timers.stop(plainStop(), owner);
-		timers.start(draft(), owner);
+		timers.start(TimerService.StartDraft.stopwatch(draft()), owner);
 
 		events.publishEvent(new UserService.UserDeletedEvent(owner.getId()));
 

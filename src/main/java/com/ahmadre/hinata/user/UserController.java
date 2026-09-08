@@ -102,11 +102,19 @@ public class UserController {
 			@Size(max = UserZones.MAX_LENGTH) String timezone) {
 	}
 
-	/** The older of the two profile routes; both patch through the same service. */
+	/**
+	 * The older of the two profile routes; both patch through the same service.
+	 *
+	 * <p>It does not carry the timer preferences and is not going to. This route
+	 * predates {@code /me} and exists for clients that still call it; a settings
+	 * panel that edits pomodoro lengths is new code, and new code uses the newer
+	 * route. Null here says "leave them alone", which is what an old client
+	 * means.
+	 */
 	@PatchMapping("/api/v1/users/me")
 	public User updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
 		return userService.updateProfile(currentUser.require(), request.displayName(),
-				request.title(), request.pronouns(), request.locale(), request.timezone());
+				request.title(), request.pronouns(), request.locale(), request.timezone(), null);
 	}
 
 	// Admin user management lives in com.ahmadre.hinata.admin.AdminUserController.

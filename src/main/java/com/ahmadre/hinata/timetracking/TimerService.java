@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.me.UserEvents;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.user.User;
@@ -88,6 +89,25 @@ public class TimerService {
 	}
 
 	/**
+	 * A timer draft plus how it is to count.
+	 *
+	 * <p>Its own record rather than three more fields on {@link TimerDraft},
+	 * because {@code TimerDraft} is also what {@link #patch} receives — and there
+	 * the contract is "a field you leave out is cleared". A rename that silently
+	 * turned a pomodoro back into a stopwatch is exactly the bug that shape
+	 * would produce, and no amount of care at the call sites would stop it
+	 * coming back. How a timer counts is decided when it starts.
+	 */
+	public record StartDraft(TimerDraft content, RunningTimer.Mode mode, Integer plannedMinutes,
+			RunningTimer.Pomodoro pomodoro) {
+
+		/** An ordinary stopwatch — what every caller before stage 5 asks for. */
+		public static StartDraft stopwatch(TimerDraft content) {
+			return new StartDraft(content, RunningTimer.Mode.STOPWATCH, null, null);
+		}
+	}
+
+	/**
 	 * How a timer is stopped: optionally at a different instant than now, and
 	 * optionally with the details filled in on the way out — which is how a timer
 	 * is meant to be used. Start it, do the work, say afterwards what it was.
@@ -110,19 +130,35 @@ public class TimerService {
 	 * which of them wins. The pre-check exists so the ordinary case answers
 	 * without an exception, not as the guard.
 	 */
-	public RunningTimer start(TimerDraft draft, User user) {
+	public RunningTimer start(StartDraft start, User user) {
+		TimerDraft draft = start.content();
 		TimeTrackingService.Placement placement =
 				entries.resolvePlacement(draft.projectId(), draft.issueId(), user);
+		RunningTimer.Mode mode = start.mode() == null ? RunningTimer.Mode.STOPWATCH : start.mode();
+		RunningTimer.Pomodoro pomodoro =
+				mode == RunningTimer.Mode.POMODORO ? sanitized(start.pomodoro()) : null;
+		Instant startedAt = TimeTrackingService.stored(clock.instant());
 		RunningTimer timer = RunningTimer.builder()
 				.userId(user.getId())
-				.startedAt(TimeTrackingService.stored(clock.instant()))
+				.startedAt(startedAt)
 				.projectId(placement.projectId())
 				.issueId(placement.issueId())
 				.description(draft.description())
 				.activityType(activityOrNull(draft.activityType()))
 				.tags(TimeTrackingService.normalizeTags(draft.tags()))
 				.billable(Boolean.TRUE.equals(draft.billable()))
-				.mode(RunningTimer.Mode.STOPWATCH)
+				.mode(mode)
+				// Only where it means something. A stopwatch with a target it does
+				// not count towards would read back as a countdown to anything that
+				// checks the field rather than the mode.
+				.plannedMinutes(mode == RunningTimer.Mode.COUNTDOWN
+						? plannedOrDefault(start.plannedMinutes())
+						: null)
+				.pomodoro(pomodoro)
+				// A pomodoro begins in its work half, and the phase clock begins
+				// with it. Neither of the other two modes has phases at all.
+				.phase(mode == RunningTimer.Mode.POMODORO ? RunningTimer.Phase.WORK : null)
+				.phaseStartedAt(mode == RunningTimer.Mode.POMODORO ? startedAt : null)
 				.build();
 		try {
 			RunningTimer saved = timers.insert(timer);
@@ -287,6 +323,14 @@ public class TimerService {
 	}
 
 	private Stopped stop(RunningTimer timer, StopRequest request, User user) {
+		if (timer.isBreak()) {
+			// A break is not worked time and never becomes an entry — that is the
+			// whole reason the phases are on the server and not a client's idea of
+			// a rhythm. There is a route for ending one without recording it, and
+			// the app uses it; reaching here means a client asked for something the
+			// module does not do, so it is told so rather than quietly obeyed.
+			throw ApiException.badRequest("error.time.breakNotRecorded");
+		}
 		Instant end = TimeTrackingService.stored(
 				request.endedAt() != null ? request.endedAt() : clock.instant());
 		if (!end.isAfter(timer.getStartedAt())) {
@@ -299,6 +343,17 @@ public class TimerService {
 		Instant capped = timer.getStartedAt().plus(MAX_RUN);
 		if (end.isAfter(capped)) {
 			end = capped;
+		}
+		// And a timer that was counting towards a target stops at that target,
+		// whenever the news of it arrives. This is what "the server verifies the
+		// end" means: the client says a countdown ran out, and the length of the
+		// entry is decided here against this clock rather than taken on trust —
+		// a client whose clock is fast, or that reports ten minutes late because
+		// the phone was asleep, still files the twenty-five minutes that were
+		// asked for. Stopping early is untouched; only the overrun is cut.
+		Instant target = targetEndOf(timer);
+		if (target != null && end.isAfter(target)) {
+			end = target;
 		}
 		TimeTrackingService.Placement placement = placementFor(request, timer, user);
 		ZoneId zone = entries.zoneOf(user);
@@ -398,8 +453,157 @@ public class TimerService {
 			// your day. The entry stays theirs; there is nothing to continue.
 			throw ApiException.forbidden("error.time.continueOwnOnly");
 		}
-		return start(new TimerDraft(item.getProjectId(), item.getIssueId(), item.getDescription(),
-				item.getActivityType(), item.getTags(), item.isBillable()), user);
+		// A stopwatch, whatever the entry came from. "Continue this" is about the
+		// description and where it is filed; carrying a pomodoro rhythm across
+		// from an entry filed last Tuesday would be inventing an intention.
+		return start(StartDraft.stopwatch(
+				new TimerDraft(item.getProjectId(), item.getIssueId(), item.getDescription(),
+						item.getActivityType(), item.getTags(), item.isBillable())), user);
+	}
+
+	// --- pomodoro -------------------------------------------------------------
+
+	/**
+	 * Ends the current pomodoro phase and begins the next one.
+	 *
+	 * <p>A work phase becomes an entry and is followed by a break; a break records
+	 * nothing and is followed by work. That asymmetry is the honest one: booked
+	 * time is worked time, so a report of somebody's day never contains their
+	 * pauses, and nothing here observes whether a break was taken or how long it
+	 * really lasted — only that the person asked for the next phase.
+	 *
+	 * <p>Every phase is a <em>new timer document</em>. It has to be: an entry is
+	 * written under its timer's id so that a repeated stop collides instead of
+	 * duplicating, and a document that survived a phase change would carry an id
+	 * whose entry already exists — the next stop would hand back the previous
+	 * interval and silently throw away the one just worked.
+	 *
+	 * @param timerId which phase the caller means to end. Optional, and worth
+	 *        sending: it is the idempotency token. A request that timed out and
+	 *        is retried after the phase has already turned would otherwise skip a
+	 *        second interval; named, it answers with the phase that is running.
+	 */
+	public RunningTimer advancePhase(String timerId, User user) {
+		RunningTimer running = require(user);
+		if (timerId != null && !timerId.equals(running.getId())) {
+			// Not the phase this caller meant — it has already turned, here or on
+			// another device. What is running now is the answer, and it is the same
+			// answer the winning request got.
+			return running;
+		}
+		if (running.getMode() != RunningTimer.Mode.POMODORO || running.getPomodoro() == null) {
+			throw ApiException.badRequest("error.time.notPomodoro");
+		}
+		return advance(running, user);
+	}
+
+	private RunningTimer advance(RunningTimer timer, User user) {
+		Instant now = TimeTrackingService.stored(clock.instant());
+		RunningTimer.Pomodoro config = timer.getPomodoro();
+		boolean wasBreak = timer.isBreak();
+		int done = timer.getCyclesDone();
+		if (wasBreak) {
+			timers.deleteById(timer.getId());
+		}
+		else {
+			// Files the interval and removes the timer, through the same path a
+			// manual stop takes — the write gate, the overlap bookkeeping and the
+			// duplicate-key idempotency all apply unchanged. The end is capped at
+			// the interval's length by targetEndOf, so a phase reported late is
+			// still worth exactly one work interval.
+			stop(timer, new StopRequest(null, now, null, null, null, null, null, null), user);
+			done++;
+		}
+		RunningTimer next = RunningTimer.builder()
+				.userId(user.getId())
+				.startedAt(now)
+				// The placement is carried, not re-authorised — for the same reason
+				// `placementFor` does not re-check the timer's own: losing access to
+				// a project mid-run must not make the rhythm impossible to continue.
+				.projectId(timer.getProjectId())
+				.issueId(timer.getIssueId())
+				.description(timer.getDescription())
+				.activityType(timer.getActivityType())
+				.tags(timer.getTags())
+				.billable(timer.isBillable())
+				.mode(RunningTimer.Mode.POMODORO)
+				.pomodoro(config)
+				.phase(wasBreak ? RunningTimer.Phase.WORK : config.phaseAfter(done))
+				.phaseStartedAt(now)
+				.cyclesDone(done)
+				.build();
+		try {
+			RunningTimer saved = timers.insert(next);
+			publish(user.getId(), saved);
+			return saved;
+		}
+		catch (DuplicateKeyException raced) {
+			// Two devices turned the same phase. The other one's timer is running;
+			// this call's entry either collided with its entry or was the one it
+			// collided with, so nothing is lost either way — and both callers are
+			// told about the same phase.
+			return current(user).orElseThrow(() -> ApiException.notFound("timer"));
+		}
+	}
+
+	/**
+	 * When a timer that counts towards something reaches it, or null when it
+	 * counts towards nothing.
+	 *
+	 * <p>A stopwatch has no target by definition. A break has none either: it is
+	 * never filed, so there is nothing for a cap to be the length of.
+	 */
+	private static Instant targetEndOf(RunningTimer timer) {
+		if (timer.getMode() == RunningTimer.Mode.COUNTDOWN && timer.getPlannedMinutes() != null) {
+			return timer.getStartedAt().plus(Duration.ofMinutes(timer.getPlannedMinutes()));
+		}
+		if (timer.getMode() == RunningTimer.Mode.POMODORO && timer.getPomodoro() != null
+				&& !timer.isBreak()) {
+			return timer.getStartedAt().plus(Duration.ofMinutes(timer.getPomodoro().getWork()));
+		}
+		return null;
+	}
+
+	/**
+	 * A pomodoro configuration inside the bounds the preferences state, with the
+	 * defaults filled in for whatever the client left out.
+	 *
+	 * <p>Clamped rather than refused, and here rather than only in a request
+	 * validator: this is what the run counts by for as long as it lasts, and a
+	 * zero-minute work interval would turn the phase route into an entry factory.
+	 */
+	private static RunningTimer.Pomodoro sanitized(RunningTimer.Pomodoro asked) {
+		TimePreferences bounds = TimePreferences.defaults();
+		if (asked == null) {
+			return RunningTimer.Pomodoro.builder()
+					.work(bounds.getPomodoroWork())
+					.shortBreak(bounds.getPomodoroShortBreak())
+					.longBreak(bounds.getPomodoroLongBreak())
+					.cycles(bounds.getPomodoroCycles())
+					.build();
+		}
+		return RunningTimer.Pomodoro.builder()
+				.work(clamp(asked.getWork(), TimePreferences.MIN_WORK, TimePreferences.MAX_WORK,
+						bounds.getPomodoroWork()))
+				.shortBreak(clamp(asked.getShortBreak(), TimePreferences.MIN_BREAK,
+						TimePreferences.MAX_BREAK, bounds.getPomodoroShortBreak()))
+				.longBreak(clamp(asked.getLongBreak(), TimePreferences.MIN_LONG_BREAK,
+						TimePreferences.MAX_LONG_BREAK, bounds.getPomodoroLongBreak()))
+				.cycles(clamp(asked.getCycles(), TimePreferences.MIN_CYCLES,
+						TimePreferences.MAX_CYCLES, bounds.getPomodoroCycles()))
+				.build();
+	}
+
+	/** The countdown's target, clamped; the default when a client names none. */
+	private static int plannedOrDefault(Integer asked) {
+		return asked == null
+				? TimePreferences.defaults().getCountdownMinutes()
+				: clamp(asked, TimePreferences.MIN_COUNTDOWN, TimePreferences.MAX_COUNTDOWN,
+						TimePreferences.defaults().getCountdownMinutes());
+	}
+
+	private static int clamp(int value, int min, int max, int fallback) {
+		return value <= 0 ? fallback : Math.clamp(value, min, max);
 	}
 
 	// --- the ceiling ----------------------------------------------------------
@@ -463,6 +667,14 @@ public class TimerService {
 			timers.deleteById(timer.getId());
 			return false;
 		}
+		if (timer.isBreak()) {
+			// A break a day old is a pomodoro run whose owner walked away. There is
+			// nothing to file — a break never becomes an entry — and so nothing to
+			// tell them about either: a notification saying their timer was stopped
+			// would send them looking for a record that was never going to exist.
+			timers.deleteById(timer.getId());
+			return false;
+		}
 		Stopped result = stop(timer, new StopRequest(null, timer.getStartedAt().plus(MAX_RUN),
 				null, null, null, null, null, null), owner);
 		if (result.alreadyStopped()) {
@@ -489,6 +701,22 @@ public class TimerService {
 				RunningTimer.class);
 	}
 
+	/** What the {@code timer} event says about a timer that is running. */
+	private static Map<String, Object> phaseOf(RunningTimer timer) {
+		Map<String, Object> payload = new java.util.LinkedHashMap<>();
+		payload.put("running", true);
+		payload.put("timerId", timer.getId());
+		payload.put("mode", timer.getMode() == null ? RunningTimer.Mode.STOPWATCH.name()
+				: timer.getMode().name());
+		// Absent rather than null for the two modes that have no phases — a key
+		// that is only ever null says nothing a missing key does not.
+		if (timer.getPhase() != null) {
+			payload.put("phase", timer.getPhase().name());
+			payload.put("cyclesDone", timer.getCyclesDone());
+		}
+		return payload;
+	}
+
 	private RunningTimer require(User user) {
 		return current(user).orElseThrow(() -> ApiException.notFound("timer"));
 	}
@@ -506,7 +734,12 @@ public class TimerService {
 	private void publish(String userId, RunningTimer timer) {
 		try {
 			userEvents.publish(userId, EVENT, timer == null ? Map.of("running", false)
-					: Map.of("running", true, "timerId", timer.getId()));
+					// The mode and the phase ride along so a second device can show
+					// "on a break" the instant it happens rather than after its own
+					// GET comes back. They are a hint, not the truth: the client
+					// re-reads the timer either way, which is what keeps a dropped
+					// event from being a wrong screen.
+					: phaseOf(timer));
 		}
 		catch (RuntimeException ex) {
 			log.debug("[time] could not publish timer event for {}: {}", userId, ex.toString());

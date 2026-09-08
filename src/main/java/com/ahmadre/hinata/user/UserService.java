@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.user;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.me.TimePreferences;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -39,13 +40,14 @@ public class UserService {
 	 * of the request.
 	 */
 	public User updateProfile(User user, String displayName, String title, String pronouns,
-			String locale, String timezone) {
+			String locale, String timezone, TimePreferences timePreferences) {
 		String zone = timezone == null ? null : UserZones.normalize(timezone);
 		if (displayName != null) user.setDisplayName(displayName.trim());
 		if (title != null) user.setTitle(title.trim());
 		if (pronouns != null) user.setPronouns(Pronouns.sanitize(pronouns));
 		if (locale != null) user.setLocale(locale);
 		if (timezone != null) user.setTimezone(zone);
+		if (timePreferences != null) user.setTimePreferences(timePreferences);
 		return users.save(user);
 	}
 

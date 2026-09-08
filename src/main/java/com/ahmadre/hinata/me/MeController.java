@@ -8,6 +8,8 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -53,13 +55,19 @@ public class MeController {
 			boolean emailVerified, String pendingEmail, String title, String pronouns, String locale,
 			String origin, List<String> roles, boolean active, String avatarUrl, Instant createdAt,
 			Instant passwordChangedAt, TwoFactorDto twoFactor,
-			NotificationPreferences notificationPreferences, String timezone) {
+			NotificationPreferences notificationPreferences, String timezone,
+			TimePreferences timePreferences) {
 
 		static MeResponse from(User u) {
 			NotificationPreferences prefs = u.getNotificationPreferences();
 			// Fill in any events added since the account's prefs were last saved (e.g.
 			// "ingest"), so the client always sees each event with its proper default.
 			prefs = (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
+			// Null on every account written before the field existed, and zeroes on
+			// one written by a client that skipped a value — either way the reader
+			// gets a working rhythm rather than a pomodoro of no minutes.
+			TimePreferences time = u.getTimePreferences();
+			time = (time == null ? TimePreferences.defaults() : time).sanitized();
 			return new MeResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
 					u.isEmailVerified(), u.getPendingEmail(), u.getTitle(), u.getPronouns(),
 					u.getLocale(), u.getOrigin().name(),
@@ -67,7 +75,7 @@ public class MeController {
 					u.getAvatarUrl(), u.getCreatedAt(), u.getPasswordChangedAt(),
 					new TwoFactorDto(u.isTotpEnabled(), "TOTP", u.recoveryCodesRemaining(),
 							u.getTotpEnabledAt()),
-					prefs, u.getTimezone());
+					prefs, u.getTimezone(), time);
 		}
 	}
 
@@ -93,7 +101,42 @@ public class MeController {
 	public record UpdateProfileRequest(@Size(max = 120) String displayName,
 			@Size(max = 120) String title, @Size(max = 120) String pronouns,
 			@Pattern(regexp = com.ahmadre.hinata.config.LocaleConfig.LANGUAGE_PATTERN) String locale,
-			@Size(max = com.ahmadre.hinata.user.UserZones.MAX_LENGTH) String timezone) {
+			@Size(max = com.ahmadre.hinata.user.UserZones.MAX_LENGTH) String timezone,
+			@Valid TimePreferencesRequest timePreferences) {
+	}
+
+	/**
+	 * The person's timer rhythm, whole. Absent leaves it alone; present replaces
+	 * it — there are six numbers, one panel edits them together, and a partial
+	 * update of "how long is a break" is not a thing anyone asks for.
+	 *
+	 * <p>The bounds are stated twice on purpose: here, so a client learns which
+	 * of its numbers is wrong, and in {@link TimePreferences#sanitized()}, so a
+	 * document that predates a bound still reads back usable. Neither is
+	 * redundant — a validator cannot repair what is already stored, and a clamp
+	 * cannot tell a client it sent nonsense.
+	 */
+	public record TimePreferencesRequest(
+			@Min(TimePreferences.MIN_WORK) @Max(TimePreferences.MAX_WORK) Integer pomodoroWork,
+			@Min(TimePreferences.MIN_BREAK) @Max(TimePreferences.MAX_BREAK) Integer pomodoroShortBreak,
+			@Min(TimePreferences.MIN_LONG_BREAK) @Max(TimePreferences.MAX_LONG_BREAK)
+			Integer pomodoroLongBreak,
+			@Min(TimePreferences.MIN_CYCLES) @Max(TimePreferences.MAX_CYCLES) Integer pomodoroCycles,
+			@Min(TimePreferences.MIN_COUNTDOWN) @Max(TimePreferences.MAX_COUNTDOWN)
+			Integer countdownMinutes,
+			Boolean sound) {
+
+		/** Merged onto {@code current}, so a field this request omits keeps its value. */
+		TimePreferences merge(TimePreferences current) {
+			TimePreferences base = current == null ? TimePreferences.defaults() : current;
+			return new TimePreferences(
+					pomodoroWork != null ? pomodoroWork : base.getPomodoroWork(),
+					pomodoroShortBreak != null ? pomodoroShortBreak : base.getPomodoroShortBreak(),
+					pomodoroLongBreak != null ? pomodoroLongBreak : base.getPomodoroLongBreak(),
+					pomodoroCycles != null ? pomodoroCycles : base.getPomodoroCycles(),
+					countdownMinutes != null ? countdownMinutes : base.getCountdownMinutes(),
+					sound != null ? sound : base.isSound()).sanitized();
+		}
 	}
 
 	public record EmailChangeRequest(@NotBlank @Email String newEmail) {
@@ -125,8 +168,11 @@ public class MeController {
 	@Operation(summary = "Update my profile (display name, title, pronouns, locale, time zone)")
 	@PatchMapping
 	public MeResponse updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
-		User saved = me.updateProfile(currentUser.require(), request.displayName(), request.title(),
-				request.pronouns(), request.locale(), request.timezone());
+		User user = currentUser.require();
+		TimePreferencesRequest time = request.timePreferences();
+		User saved = me.updateProfile(user, request.displayName(), request.title(),
+				request.pronouns(), request.locale(), request.timezone(),
+				time == null ? null : time.merge(user.getTimePreferences()));
 		return MeResponse.from(saved);
 	}
 

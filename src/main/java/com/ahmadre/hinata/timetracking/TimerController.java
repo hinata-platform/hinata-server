@@ -53,13 +53,14 @@ public class TimerController {
 	public record TimerResponse(String id, Instant startedAt, String projectId, String issueId,
 			String description, String activityType, List<String> tags, boolean billable,
 			RunningTimer.Mode mode, Integer plannedMinutes, RunningTimer.Phase phase,
-			Instant phaseStartedAt) {
+			Instant phaseStartedAt, RunningTimer.Pomodoro pomodoro, int cyclesDone) {
 
 		public static TimerResponse from(RunningTimer timer) {
 			return new TimerResponse(timer.getId(), timer.getStartedAt(), timer.getProjectId(),
 					timer.getIssueId(), timer.getDescription(), timer.getActivityType(),
 					timer.getTags(), timer.isBillable(), timer.getMode(), timer.getPlannedMinutes(),
-					timer.getPhase(), timer.getPhaseStartedAt());
+					timer.getPhase(), timer.getPhaseStartedAt(), timer.getPomodoro(),
+					timer.getCyclesDone());
 		}
 	}
 
@@ -82,6 +83,65 @@ public class TimerController {
 			return new TimerService.TimerDraft(projectId, issueId, description, activityType, tags,
 					billable);
 		}
+	}
+
+	/**
+	 * Starting one: everything {@link TimerRequest} says, plus how it is to count.
+	 *
+	 * <p>The mode lives here and not on {@code PATCH} deliberately. A patch
+	 * replaces the timer's whole editable state, so a mode field there would be
+	 * cleared by every rename — a pomodoro would turn back into a stopwatch the
+	 * first time somebody typed a description. How a timer counts is settled when
+	 * it starts; what it is called is not.
+	 *
+	 * <p>Every number is optional and every one is clamped rather than refused:
+	 * these come from a preferences panel, and the nearest usable length beats a
+	 * 400 in the middle of somebody deciding to start working.
+	 */
+	public record StartRequest(
+			String projectId,
+			String issueId,
+			@Size(max = 2000) String description,
+			@Size(max = 60) String activityType,
+			@Size(max = 20) List<@Size(max = 40) String> tags,
+			Boolean billable,
+			RunningTimer.Mode mode,
+			Integer plannedMinutes,
+			PomodoroRequest pomodoro) {
+
+		TimerService.StartDraft toDraft() {
+			return new TimerService.StartDraft(
+					new TimerService.TimerDraft(projectId, issueId, description, activityType, tags,
+							billable),
+					mode, plannedMinutes, pomodoro == null ? null : pomodoro.toConfig());
+		}
+	}
+
+	/** The lengths one pomodoro run counts by. */
+	public record PomodoroRequest(Integer work, Integer shortBreak, Integer longBreak,
+			Integer cycles) {
+
+		RunningTimer.Pomodoro toConfig() {
+			// Zero for an absent value, which is what the service reads as "not
+			// given" — the alternative is four more Integer fields carried through
+			// a document that has no use for the distinction.
+			return RunningTimer.Pomodoro.builder()
+					.work(work == null ? 0 : work)
+					.shortBreak(shortBreak == null ? 0 : shortBreak)
+					.longBreak(longBreak == null ? 0 : longBreak)
+					.cycles(cycles == null ? 0 : cycles)
+					.build();
+		}
+	}
+
+	/**
+	 * Ending one pomodoro phase and beginning the next.
+	 *
+	 * <p>{@code timerId} is the idempotency token, exactly as on {@code stop}: a
+	 * retried request that arrives after the phase has already turned answers with
+	 * the phase that is running instead of skipping the next one.
+	 */
+	public record PhaseRequest(String timerId) {
 	}
 
 	/**
@@ -131,10 +191,23 @@ public class TimerController {
 	/** Starts one; 409 {@code error.time.timerAlreadyRunning} if one is already going. */
 	@PostMapping("/start")
 	@ResponseStatus(HttpStatus.CREATED)
-	public TimerResponse start(@RequestBody(required = false) @Valid TimerRequest request) {
-		TimerRequest body = request != null ? request
-				: new TimerRequest(null, null, null, null, null, null);
+	public TimerResponse start(@RequestBody(required = false) @Valid StartRequest request) {
+		StartRequest body = request != null ? request
+				: new StartRequest(null, null, null, null, null, null, null, null, null);
 		return TimerResponse.from(timers.start(body.toDraft(), currentUser.require()));
+	}
+
+	/**
+	 * Ends the running pomodoro phase and answers with the one that follows.
+	 *
+	 * <p>A work phase becomes an entry on the way; a break becomes nothing, which
+	 * is the point — booked time is worked time. 400
+	 * {@code error.time.notPomodoro} for a timer that has no phases to turn.
+	 */
+	@PostMapping("/phase")
+	public TimerResponse phase(@RequestBody(required = false) @Valid PhaseRequest request) {
+		return TimerResponse.from(timers.advancePhase(
+				request == null ? null : request.timerId(), currentUser.require()));
 	}
 
 	/**

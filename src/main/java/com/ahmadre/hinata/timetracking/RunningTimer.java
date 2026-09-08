@@ -100,8 +100,28 @@ public class RunningTimer {
 
 	private Phase phase;
 
-	/** When the current {@link #phase} began — the phase clock, not the timer's. */
+	/**
+	 * When the current {@link #phase} began — the phase clock, not the timer's.
+	 *
+	 * <p>The two coincide today, because every phase change writes a new timer
+	 * document (see {@link TimerService#advancePhase}). It is kept as its own
+	 * field rather than collapsed into {@link #startedAt} because the two mean
+	 * different things and only one of them may ever be adjusted: a phase is a
+	 * position in a rhythm, a start is a record of when work began.
+	 */
 	private Instant phaseStartedAt;
+
+	/**
+	 * Work intervals completed in this pomodoro run, which is what decides when
+	 * the long break falls.
+	 *
+	 * <p>It rides along from one phase's timer document to the next, because the
+	 * documents are what a run is made of: there is no session record beyond the
+	 * timer that is running right now, and a counter that reset on every phase
+	 * would make the long break unreachable.
+	 */
+	@Builder.Default
+	private int cyclesDone = 0;
 
 	/**
 	 * When an automatic stop was claimed for this timer, so that two application
@@ -116,12 +136,37 @@ public class RunningTimer {
 		return tags == null ? List.of() : tags;
 	}
 
+	/** Whether this timer is counting a break rather than work. */
+	public boolean isBreak() {
+		return phase == Phase.BREAK || phase == Phase.LONG_BREAK;
+	}
+
+	/**
+	 * The lengths one pomodoro run counts by, copied onto the timer at start.
+	 *
+	 * <p>A copy rather than a reference to the owner's {@link
+	 * com.ahmadre.hinata.me.TimePreferences}: changing your preferred break
+	 * length must not silently rewrite the run you are in the middle of, and a
+	 * run that outlives a preference change still has to know what it agreed to.
+	 */
 	@Data
 	@Builder
+	@lombok.NoArgsConstructor
+	@lombok.AllArgsConstructor
 	public static class Pomodoro {
 		private int work;
 		private int shortBreak;
 		private int longBreak;
 		private int cycles;
+
+		/** Minutes of the break that follows work interval number {@code done}. */
+		public int breakAfter(int done) {
+			return cycles > 0 && done % cycles == 0 ? longBreak : shortBreak;
+		}
+
+		/** Which break follows work interval number {@code done}. */
+		public Phase phaseAfter(int done) {
+			return cycles > 0 && done % cycles == 0 ? Phase.LONG_BREAK : Phase.BREAK;
+		}
 	}
 }
