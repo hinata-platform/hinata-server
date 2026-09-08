@@ -33,7 +33,7 @@ class ProfileLocaleValidationTest {
 	void everySupportedLanguageIsAcceptedByBothProfileRequests() {
 		for (String language : LocaleConfig.supportedLanguages()) {
 			assertThat(validator.validate(new MeController.UpdateProfileRequest(null, null, null,
-					language, null))).as("/me accepts %s", language).isEmpty();
+					language, null, null))).as("/me accepts %s", language).isEmpty();
 			assertThat(validator.validate(new UserController.UpdateProfileRequest(null, null, null,
 					language, null))).as("/users/me accepts %s", language).isEmpty();
 		}
@@ -42,7 +42,7 @@ class ProfileLocaleValidationTest {
 	@Test
 	void anUnknownLanguageIsRejectedByBoth() {
 		Set<ConstraintViolation<MeController.UpdateProfileRequest>> me = validator.validate(
-				new MeController.UpdateProfileRequest(null, null, null, "xx", null));
+				new MeController.UpdateProfileRequest(null, null, null, "xx", null, null));
 		Set<ConstraintViolation<UserController.UpdateProfileRequest>> users = validator.validate(
 				new UserController.UpdateProfileRequest(null, null, null, "xx", null));
 
@@ -55,8 +55,8 @@ class ProfileLocaleValidationTest {
 		String tooLong = "x".repeat(UserZones.MAX_LENGTH + 1);
 
 		assertThat(validator.validate(new MeController.UpdateProfileRequest(null, null, null, null,
-				tooLong))).extracting(v -> v.getPropertyPath().toString()).containsExactly("timezone");
+				tooLong, null))).extracting(v -> v.getPropertyPath().toString()).containsExactly("timezone");
 		assertThat(validator.validate(new MeController.UpdateProfileRequest(null, null, null, null,
-				"Europe/Berlin"))).isEmpty();
+				"Europe/Berlin", null))).isEmpty();
 	}
 }

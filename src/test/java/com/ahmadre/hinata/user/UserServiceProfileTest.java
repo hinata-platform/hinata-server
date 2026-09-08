@@ -49,7 +49,7 @@ class UserServiceProfileTest {
 	void updateProfile_trimsAndSavesPronouns() {
 		User user = User.builder().id("u-1").build();
 
-		User saved = userService.updateProfile(user, null, null, "  she/her  ", null, null);
+		User saved = userService.updateProfile(user, null, null, "  she/her  ", null, null, null);
 
 		assertThat(saved.getPronouns()).isEqualTo("she/her");
 	}
@@ -58,7 +58,7 @@ class UserServiceProfileTest {
 	void updateProfile_storesAKnownTimezone() {
 		User user = User.builder().id("u-1").build();
 
-		User saved = userService.updateProfile(user, null, null, null, null, " Europe/Berlin ");
+		User saved = userService.updateProfile(user, null, null, null, null, " Europe/Berlin ", null);
 
 		assertThat(saved.getTimezone()).isEqualTo("Europe/Berlin");
 	}
@@ -67,7 +67,7 @@ class UserServiceProfileTest {
 	void updateProfile_rejectsAnUnknownTimezoneBeforeSavingAnything() {
 		User user = User.builder().id("u-1").timezone("Europe/Berlin").build();
 
-		assertThatThrownBy(() -> userService.updateProfile(user, "New Name", null, null, null, "Mars/Olympus"))
+		assertThatThrownBy(() -> userService.updateProfile(user, "New Name", null, null, null, "Mars/Olympus", null))
 				.isInstanceOf(ApiException.class)
 				.satisfies(thrown -> {
 					assertThat(((ApiException) thrown).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -81,16 +81,16 @@ class UserServiceProfileTest {
 	void updateProfile_blankClearsTheTimezoneAndAbsentKeepsIt() {
 		User user = User.builder().id("u-1").timezone("Europe/Berlin").build();
 
-		assertThat(userService.updateProfile(user, null, null, null, null, null).getTimezone())
+		assertThat(userService.updateProfile(user, null, null, null, null, null, null).getTimezone())
 				.isEqualTo("Europe/Berlin");
-		assertThat(userService.updateProfile(user, null, null, null, null, "  ").getTimezone()).isNull();
+		assertThat(userService.updateProfile(user, null, null, null, null, "  ", null).getTimezone()).isNull();
 	}
 
 	@Test
 	void updateProfile_leavesPronounsUntouchedWhenOmitted() {
 		User user = User.builder().id("u-1").pronouns("they/them").build();
 
-		User saved = userService.updateProfile(user, "New Name", null, null, null, null);
+		User saved = userService.updateProfile(user, "New Name", null, null, null, null, null);
 
 		assertThat(saved.getPronouns()).isEqualTo("they/them");
 	}

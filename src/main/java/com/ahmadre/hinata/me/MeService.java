@@ -69,8 +69,9 @@ public class MeService {
 	 * the account-self-service door to it.
 	 */
 	public User updateProfile(User user, String displayName, String title, String pronouns,
-			String locale, String timezone) {
-		return userService.updateProfile(user, displayName, title, pronouns, locale, timezone);
+			String locale, String timezone, TimePreferences timePreferences) {
+		return userService.updateProfile(user, displayName, title, pronouns, locale, timezone,
+				timePreferences);
 	}
 
 	/**

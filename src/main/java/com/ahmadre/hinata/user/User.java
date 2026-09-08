@@ -12,6 +12,7 @@ import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import com.ahmadre.hinata.me.NotificationPreferences;
+import com.ahmadre.hinata.me.TimePreferences;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -168,6 +169,16 @@ public class User {
 
 	@Builder.Default
 	private NotificationPreferences notificationPreferences = NotificationPreferences.defaults();
+
+	// --- Time-tracking preferences (pomodoro lengths, countdown, sound) ------
+
+	/**
+	 * How this person's timer counts. Null on every account created before the
+	 * field existed, which is why nothing reads it directly — see
+	 * {@link TimePreferences#sanitized()} and {@code MeService}.
+	 */
+	@Builder.Default
+	private TimePreferences timePreferences = TimePreferences.defaults();
 
 	public boolean isAdmin() {
 		return roles != null && roles.contains(Role.ADMIN);

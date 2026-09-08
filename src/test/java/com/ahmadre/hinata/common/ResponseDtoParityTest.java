@@ -122,10 +122,14 @@ class ResponseDtoParityTest {
 	 * The timer DTO exposes what a client renders and nothing else.
 	 *
 	 * <p>Not strict equality, unlike the work item: {@code autoStopClaimedAt} is
-	 * the sweep's bookkeeping and {@code pomodoro} is stage 5's, and neither
-	 * belongs on the wire today. The assertion is therefore in two halves — every
-	 * field that is exposed carries its entity value, and the two that are not
-	 * exposed stay off.
+	 * the sweep's own bookkeeping and does not belong on the wire. The assertion
+	 * is therefore in two halves — every field that is exposed carries its entity
+	 * value, and the ones that are not exposed stay off.
+	 *
+	 * <p>{@code pomodoro} and {@code cyclesDone} were among the second group
+	 * until stage 5 and are now in the first, deliberately: a second device
+	 * cannot draw the same phase without knowing the lengths the run counts by
+	 * or how far through the set it is. Nothing else moved across.
 	 */
 	@Test
 	void timerResponse_exposesWhatAClientRendersAndNoMore() {
@@ -133,7 +137,12 @@ class ResponseDtoParityTest {
 				.id("t1").userId("u1").startedAt(Instant.parse("2026-09-07T08:00:00Z"))
 				.projectId("p1").issueId("i1").description("Pairing").activityType("Development")
 				.tags(new ArrayList<>(List.of("focus"))).billable(true)
-				.mode(RunningTimer.Mode.STOPWATCH).plannedMinutes(null)
+				.mode(RunningTimer.Mode.POMODORO).plannedMinutes(null)
+				.pomodoro(RunningTimer.Pomodoro.builder()
+						.work(25).shortBreak(5).longBreak(15).cycles(4).build())
+				.phase(RunningTimer.Phase.WORK)
+				.phaseStartedAt(Instant.parse("2026-09-07T08:00:00Z"))
+				.cyclesDone(2)
 				.autoStopClaimedAt(Instant.parse("2026-09-08T09:00:00Z"))
 				.build();
 
@@ -143,10 +152,15 @@ class ResponseDtoParityTest {
 		dtoJson.properties().forEach(field -> assertThat(field.getValue())
 				.as("field %s", field.getKey())
 				.isEqualTo(entityJson.get(field.getKey())));
+		// The phase is on the wire whole: the lengths, which half, since when,
+		// and how many are done. A client that had to guess any of them would
+		// draw a different countdown from the one the server is keeping.
+		assertThat(dtoJson.get("pomodoro").get("work").asInt()).isEqualTo(25);
+		assertThat(dtoJson.get("phase").asText()).isEqualTo("WORK");
+		assertThat(dtoJson.get("cyclesDone").asInt()).isEqualTo(2);
 		// The sweep's claim is server bookkeeping; publishing it would tell a
 		// client something about the scheduler and nothing about their timer.
 		assertThat(dtoJson.has("autoStopClaimedAt")).isFalse();
-		assertThat(dtoJson.has("pomodoro")).isFalse();
 		// The owner is who is asking; repeating it back is noise.
 		assertThat(dtoJson.has("userId")).isFalse();
 		// No elapsed time on the wire: the client counts from startedAt, so the
