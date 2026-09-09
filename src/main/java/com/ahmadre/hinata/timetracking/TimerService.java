@@ -326,11 +326,13 @@ public class TimerService {
 	 * {@code discard} away. It is a request to answer, not a clock to be stuck
 	 * with.
 	 *
-	 * <p>Only a stop somebody asked for is refused. The sweep that ends a timer
-	 * at its ceiling has nobody to ask and must file what it found, and a
-	 * pomodoro's phase turnover never comes through here at all — it files
-	 * through {@code fileInterval}, which is exempt for the same reason. See
-	 * {@link StopOrigin}.
+	 * <p>Only a stop somebody asked for is refused, which is what
+	 * {@link StopOrigin} is for: the sweep that ends a timer at its ceiling has
+	 * nobody to ask and files what it found. A pomodoro's phase turnover does
+	 * not come through here at all — it files through {@code fileInterval},
+	 * which checks the same rule but answers a refusal differently, because
+	 * there the timer is already gone and refusing would wedge a set that is
+	 * still running.
 	 */
 	public Stopped stop(StopRequest request, User user) {
 		RunningTimer running = current(user).orElse(null);
@@ -494,14 +496,10 @@ public class TimerService {
 				// written through save() has one.
 				.createdAt(TimeTrackingService.stored(clock.instant()))
 				.billable(request.billable() != null ? request.billable() : timer.isBillable())
-				// The request's own tags through the catalogue, the timer's as they
-				// stand. The timer's were resolved when it started, and re-resolving
-				// them is the one thing that could make a timer unstoppable: a tag
-				// deleted from the catalogue mid-run would refuse every stop, with
-				// the clock still going.
-				.tags(request.tags() != null
-						? entries.resolveTags(request.tags(), user)
-						: TimeTrackingService.normalizeTags(timer.getTags()))
+				// Tidied, not yet resolved: the catalogue is touched below, once
+				// this stop is going to succeed.
+				.tags(TimeTrackingService.normalizeTags(
+						request.tags() != null ? request.tags() : timer.getTags()))
 				.source(WorkItem.Source.TIMER)
 				.build();
 		if (origin == StopOrigin.BY_HAND) {
@@ -517,7 +515,22 @@ public class TimerService {
 			entries.assertRequiredFields(
 					new TimeTrackingService.EntryContent(item.getProjectId(), item.getIssueId(),
 							item.getDescription(), item.getTags()),
-					true);
+					TimeTrackingService.PlacementRule.ENFORCED);
+		}
+		if (request.tags() != null) {
+			// The request's own tags through the catalogue — and only now, after
+			// every reason to refuse has been checked, the order a create and a
+			// patch both keep: resolving first coins a word for a request that is
+			// about to answer 400, and leaves a tag document and a configuration
+			// audit record behind for ever.
+			//
+			// The timer's own tags do not come back through here. They were
+			// resolved when it started, and re-resolving them is the one thing
+			// that could make a timer unstoppable: a tag deleted from the
+			// catalogue mid-run would refuse every stop, with the clock still
+			// going. Emptiness is all the rule above asks of them, and
+			// normalising cannot change that.
+			item.setTags(entries.resolveTags(request.tags(), user));
 		}
 		boolean alreadyStopped = false;
 		WorkItem saved;
@@ -744,6 +757,16 @@ public class TimerService {
 	 * to file. So this is {@link #stop}'s second half only: build the entry, hand
 	 * it to the write gate, and reconcile the counter if somebody beat us to the
 	 * insert.
+	 *
+	 * <p>Two things can stop it filing, and neither stops the phase: a frozen
+	 * day, and an interval that does not meet the operator's required fields.
+	 * Both are refusals that arrive too late to be useful — the claim has
+	 * already removed the timer, so throwing would end a pomodoro run
+	 * mid-rhythm, and the person who set it going twenty-five minutes ago is not
+	 * sitting in front of a form. The phase turns, the interval is not written,
+	 * and the log says which of the two it was. The alternative is filing an
+	 * entry that breaks the operator's rule every time a phase turns over, which
+	 * is how a policy stops meaning anything.
 	 */
 	private void fileInterval(RunningTimer timer, Instant now, User user) {
 		ZoneId zone = entries.zoneOf(user);
@@ -781,6 +804,21 @@ public class TimerService {
 				.tags(TimeTrackingService.normalizeTags(timer.getTags()))
 				.source(WorkItem.Source.TIMER)
 				.build();
+		try {
+			entries.assertRequiredFields(
+					new TimeTrackingService.EntryContent(item.getProjectId(), item.getIssueId(),
+							item.getDescription(), item.getTags()),
+					TimeTrackingService.PlacementRule.ENFORCED);
+		}
+		catch (ApiException incomplete) {
+			// Said the same way the frozen day is said, and for the same reason.
+			// A pomodoro carries whatever the bar was given before it started; if
+			// that is not enough for this instance, the phases still turn and the
+			// intervals are simply not written down.
+			log.warn("[time] pomodoro interval of user {} on {} not filed: {}", user.getId(), day,
+					incomplete.getMessage());
+			return;
+		}
 		try {
 			entries.insertTimed(item, user);
 		}

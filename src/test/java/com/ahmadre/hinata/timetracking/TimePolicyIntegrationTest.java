@@ -491,6 +491,53 @@ class TimePolicyIntegrationTest {
 	}
 
 	@Test
+	void aRefusedStopLeavesNothingInTheCatalogue() {
+		// The catalogue is touched after every reason to refuse, on this path as
+		// on a create. Resolved first, a stop that is about to answer 400 would
+		// coin a word anyway — and since the refusal deliberately leaves the
+		// timer running, the same request can be repeated for ever, one new
+		// entry in the org's reporting vocabulary each time.
+		require(false, false, true, false);
+		timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
+
+		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(null,
+				NOW.plusSeconds(3600), null, null, null, null, List.of("brand new word"), null),
+				member))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.time.required.description");
+
+		assertThat(tags.count()).isZero();
+		assertThat(mongo.getCollection("running_timers").countDocuments()).isEqualTo(1);
+	}
+
+	@Test
+	void aPomodoroPhaseFilesNothingItIsNotAllowedToFile() {
+		// The other way an entry is born, and the one the first attempt at this
+		// missed: a phase turnover files through fileInterval, not through stop,
+		// so a rule enforced only at the stop left POST /me/timer/phase writing
+		// an entry that breaks every requirement, once a minute, for as long as
+		// somebody cared to ask.
+		//
+		// Refusing the phase itself is not the answer — the claim has already
+		// removed the timer and the person is not sitting in front of a form. So
+		// the rhythm continues and the interval is simply not written.
+		require(true, false, true, false);
+		RunningTimer started = timers.start(new TimerService.StartDraft(
+				new TimerService.TimerDraft(null, null, null, null, List.of(), false),
+				RunningTimer.Mode.POMODORO, null, null), member);
+		mongo.getCollection("running_timers").updateMany(new Document(), new Document("$set",
+				new Document("startedAt", Date.from(NOW.minus(Duration.ofMinutes(25))))));
+
+		RunningTimer next = timers.advancePhase(started.getId(), member);
+
+		assertThat(next.getPhase())
+				.as("the rhythm turns; only the writing down is refused")
+				.isEqualTo(RunningTimer.Phase.BREAK);
+		assertThat(workItems.count()).isZero();
+	}
+
+	@Test
 	void theSweepFilesWhatItFoundRatherThanArguingWithNobody() {
 		// The one stop that may not refuse. A timer past its ceiling is ended by
 		// the hourly sweep, and there is no one at the other end to answer for a

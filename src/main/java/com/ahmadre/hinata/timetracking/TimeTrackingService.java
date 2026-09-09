@@ -284,7 +284,7 @@ public class TimeTrackingService {
 		item.setUpdatedAt(clock.instant());
 		item.setUpdatedBy(user.getId());
 		assertWritable(before, item, user);
-		assertRequiredFields(contentOf(item), false);
+		assertRequiredFields(contentOf(item), PlacementRule.SKIPPED);
 		if (patch.tags() != null) {
 			// Same order as a create, for the same reason: nothing reaches the
 			// catalogue on behalf of a request that is refused.
@@ -447,6 +447,32 @@ public class TimeTrackingService {
 			List<String> tags) {
 	}
 
+	/**
+	 * Whether the required-field rule may hold a caller to the project and the
+	 * issue, or only to what that caller is able to change.
+	 *
+	 * <p>Named rather than a boolean, because the answer is not obvious at the
+	 * call site and getting it backwards is silent in both directions.
+	 */
+	public enum PlacementRule {
+		/**
+		 * The request settles where the entry sits — a create, and a timer stop.
+		 * The whole rule applies.
+		 */
+		ENFORCED,
+		/**
+		 * The request cannot touch the placement. {@link WorkItemPatch} carries
+		 * neither a project nor an issue, so holding a patch to them refuses a
+		 * request that had no way to satisfy them: an entry that predates the
+		 * rule would answer 400 on every edit for ever, and its owner's only
+		 * remedy would be to delete their own record of worked time. The
+		 * description and the tags are still checked, because a patch changes
+		 * both. The client's copy of this rule draws the same line, and the two
+		 * have to agree or the app offers a save the server refuses.
+		 */
+		SKIPPED
+	}
+
 	private static EntryContent contentOf(WorkItem item) {
 		return new EntryContent(item.getProjectId(), item.getIssueId(), item.getDescription(),
 				item.getTags());
@@ -476,19 +502,9 @@ public class TimeTrackingService {
 	 * other, because the issue supplies it — so the two are checked as one rule
 	 * and the message names the field the person can actually fill in.
 	 *
-	 * @param placement whether this caller is in a position to settle where the
-	 *        entry sits. False for {@link #update}, whose {@link WorkItemPatch}
-	 *        carries neither a project nor an issue: enforcing them there refuses
-	 *        a request that could not have supplied them, so an entry that
-	 *        predates the rule — or that arrived without a project by some other
-	 *        route — would answer 400 on every edit for ever, and its owner's
-	 *        only remedy would be to delete their own record of worked time. The
-	 *        description and the tags are checked either way, because a patch can
-	 *        change both. The client's copy of this rule takes the same flag for
-	 *        the same reason; the two have to agree, or the app offers a save the
-	 *        server refuses.
+	 * @param placement whether this caller can settle where the entry sits
 	 */
-	public void assertRequiredFields(EntryContent content, boolean placement) {
+	public void assertRequiredFields(EntryContent content, PlacementRule placement) {
 		if (!policy.advancedEnabled()) {
 			// The policies belong to the module. With it switched off, the 1.x
 			// routes the published app talks to must behave exactly as they did
@@ -496,7 +512,7 @@ public class TimeTrackingService {
 			return;
 		}
 		TimeTrackingSettings.RequiredFields required = policy.requiredFields();
-		if (placement) {
+		if (placement == PlacementRule.ENFORCED) {
 			if (required.issue() && content.issueId() == null) {
 				throw ApiException.badRequest("error.time.required.issue");
 			}
@@ -693,7 +709,7 @@ public class TimeTrackingService {
 				.source(source == null ? WorkItem.Source.APP : source)
 				.build();
 		assertWritable(null, item, user);
-		assertRequiredFields(contentOf(item), true);
+		assertRequiredFields(contentOf(item), PlacementRule.ENFORCED);
 		// The catalogue last, after every reason to refuse has been checked.
 		// Resolving first would coin a word for a request that is about to answer
 		// 403 — a tag document and a configuration audit record per refused
