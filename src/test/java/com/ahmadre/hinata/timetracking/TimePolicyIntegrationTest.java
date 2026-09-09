@@ -383,17 +383,58 @@ class TimePolicyIntegrationTest {
 	}
 
 	@Test
-	void aTimerIsRefusedAtTheStartRatherThanAtTheStop() {
-		// The whole point of checking at the start: a required field discovered at
-		// the stop is a refusal an hour late, on an interval that has already been
-		// worked and can then never be filed.
-		require(true, false, false, false);
+	void aTimerStartsWithNothingEvenWhereEverythingIsRequired() {
+		// This used to refuse, and it made the stopwatch unstartable: there is no
+		// field on the start path to type a description into, so an instance that
+		// required one had a button that could only ever say no. A running timer
+		// is not an entry — the entry is born at the stop, and that is where the
+		// client asks for what is missing.
+		require(true, true, true, true);
 
-		assertThatThrownBy(() -> timers.start(TimerService.StartDraft.stopwatch(
-				new TimerService.TimerDraft(null, null, "worked", null, List.of(), false)), member))
-				.isInstanceOf(ApiException.class)
-				.hasMessage("error.time.required.project");
-		assertThat(mongo.getCollection("running_timers").countDocuments()).isZero();
+		RunningTimer running = timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
+
+		assertThat(running.getProjectId()).isNull();
+		assertThat(running.getDescription()).isNull();
+		assertThat(mongo.getCollection("running_timers").countDocuments()).isEqualTo(1);
+	}
+
+	@Test
+	void aRunningTimerCanBeFiledMidRunWithoutSatisfyingTheRestOfThePolicy() {
+		// Two required fields, one of them filled from the bar's placement row.
+		// Checked here, the patch would refuse because the *other* one is still
+		// empty — leaving no way to fill in the first, which is the only field
+		// this screen has.
+		require(true, false, true, false);
+		timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
+
+		RunningTimer filed = timers.patch(
+				new TimerService.TimerDraft(project.getId(), null, null, null, List.of(), false),
+				member);
+
+		assertThat(filed.getProjectId()).isEqualTo(project.getId());
+		assertThat(filed.getDescription()).isNull();
+	}
+
+	@Test
+	void andTheStopCarriesWhatTheComposerCollected() {
+		// The other half of moving the rule: the app opens the composer when the
+		// policy asks for more than the timer holds, and its answers ride along on
+		// the stop request. The stop itself never refuses — see TimerService#stop
+		// for why a pomodoro turning over is what settles that.
+		tagCatalog.create("Meeting", null, admin);
+		require(true, false, true, true);
+		timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
+
+		TimerService.Stopped stopped = timers.stop(new TimerService.StopRequest(null,
+				NOW.plusSeconds(3600), project.getId(), null, "worked", null, List.of("meeting"),
+				null), member);
+
+		assertThat(stopped.entry().getProjectId()).isEqualTo(project.getId());
+		assertThat(stopped.entry().getDescription()).isEqualTo("worked");
+		assertThat(stopped.entry().getTags()).containsExactly("Meeting");
 	}
 
 	@Test

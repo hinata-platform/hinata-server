@@ -142,19 +142,25 @@ public class TimerService {
 		RunningTimer.Mode mode = start.mode() == null ? RunningTimer.Mode.STOPWATCH : start.mode();
 		RunningTimer.Pomodoro pomodoro =
 				mode == RunningTimer.Mode.POMODORO ? sanitized(start.pomodoro(), user) : null;
-		// What the entry will have to carry, asked for now rather than when the
-		// timer stops. A required field that is only checked at the end is a
-		// refusal that arrives an hour late, with the interval already run and
-		// the composer long closed — and, worse, a timer that cannot be filed at
-		// all. Here it is a sentence next to the field.
+		// Deliberately *not* {@link TimeTrackingService#assertRequiredFields}.
+		//
+		// A running timer is not an entry. Nothing is filed yet, and the request
+		// that starts one has no composer behind it: the button is pressed by
+		// somebody who has just begun and does not yet know which issue this will
+		// turn out to be. Checked here, an operator who requires a description
+		// makes the timer unstartable — there is no field on the start path to
+		// put one in — and a stopwatch that has to be described before it may
+		// begin is not a stopwatch.
+		//
+		// The rule belongs where the entry is born, which is the stop: the client
+		// asks for what is missing then, in the composer, and sends it with the
+		// stop request (which carries every one of these fields). See
+		// {@link #stop} for why the stop itself still may not refuse.
 		List<String> tags = TimeTrackingService.normalizeTags(draft.tags());
-		entries.assertRequiredFields(new TimeTrackingService.EntryContent(
-				placement.projectId(), placement.issueId(), draft.description(), tags));
-		// The pre-check the comment above promises, and it earns its keep twice
-		// over now: it answers the ordinary "already running" without an
-		// exception, and it stops a refused start from coining a tag. The unique
-		// index below is still the guard — two devices reconnecting at the same
-		// moment both find nothing here.
+		// The "already running" pre-check: it answers the ordinary case without
+		// an exception, and it stops a refused start from coining a tag. The
+		// unique index below is still the guard — two devices reconnecting at the
+		// same moment both find nothing here.
 		if (current(user).isPresent()) {
 			throw ApiException.conflict("error.time.timerAlreadyRunning");
 		}
@@ -227,13 +233,17 @@ public class TimerService {
 		TimeTrackingService.Placement placement = asked.equals(unchanged)
 				? unchanged
 				: entries.resolvePlacement(draft.projectId(), draft.issueId(), user);
-		List<String> tags = TimeTrackingService.normalizeTags(draft.tags());
-		// The same check the start made, because a patch is how a required field
-		// would otherwise be emptied again five minutes later — and, as there,
-		// the catalogue is touched only once the request is going to succeed.
-		entries.assertRequiredFields(new TimeTrackingService.EntryContent(
-				placement.projectId(), placement.issueId(), draft.description(), tags));
-		tags = entries.resolveTags(tags, user);
+		// No required-field check, for the same reason the start has none: this
+		// edits a timer, not an entry. Filing one in a project mid-run must not
+		// depend on whether a description has been typed yet — that would make
+		// the bar's placement row refuse a change it is showing as available, and
+		// leave the person no way to fill in the first of two required fields
+		// because the second is still empty.
+		//
+		// The catalogue is still touched only once the request is going to
+		// succeed: a patch that answers 403 must not coin a word.
+		List<String> tags = entries.resolveTags(
+				TimeTrackingService.normalizeTags(draft.tags()), user);
 		timer.setProjectId(placement.projectId());
 		timer.setIssueId(placement.issueId());
 		timer.setDescription(draft.description());
@@ -299,6 +309,26 @@ public class TimerService {
 	 * only ordering that matters is that the entry exists before the timer stops
 	 * existing; a crash in between leaves a timer whose entry is already written,
 	 * and the next stop cleans it up.
+	 *
+	 * <p><b>No required-field check here either</b>, though this is where the
+	 * entry is born and the rule would otherwise belong. Two reasons, and both
+	 * are about not stranding a clock that is already running.
+	 *
+	 * <p>A pomodoro files its work interval through this method every time a
+	 * phase turns over — see {@code advancePhase} — and nobody is watching. A
+	 * refusal there does not ask for a description; it wedges the rhythm at the
+	 * first boundary, with the timer still counting and no way forward but to
+	 * throw the set away. And a stop that is refused for a plain stopwatch is a
+	 * clock that keeps running while the person presses a button that will never
+	 * work, which is exactly the failure mode the start check used to be
+	 * justified by.
+	 *
+	 * <p>So the client asks. It knows the policy, it knows what the timer
+	 * carries, and it opens the composer when the two do not add up — the stop
+	 * request takes every required field, so what comes back from that composer
+	 * arrives here complete. An entry filed by a client that does not bother is
+	 * the price; the alternative is a timer that cannot be stopped, which is
+	 * worse for the person and no better for the operator.
 	 */
 	public Stopped stop(StopRequest request, User user) {
 		RunningTimer running = current(user).orElse(null);
