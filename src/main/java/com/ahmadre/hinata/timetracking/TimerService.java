@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.me.UserEvents;
@@ -82,6 +84,7 @@ public class TimerService {
 	private final UserRepository users;
 	private final UserEvents userEvents;
 	private final NotificationService notifications;
+	private final AuditService audit;
 	private final MongoTemplate mongo;
 	private final Clock clock;
 
@@ -139,6 +142,25 @@ public class TimerService {
 		RunningTimer.Mode mode = start.mode() == null ? RunningTimer.Mode.STOPWATCH : start.mode();
 		RunningTimer.Pomodoro pomodoro =
 				mode == RunningTimer.Mode.POMODORO ? sanitized(start.pomodoro(), user) : null;
+		// What the entry will have to carry, asked for now rather than when the
+		// timer stops. A required field that is only checked at the end is a
+		// refusal that arrives an hour late, with the interval already run and
+		// the composer long closed — and, worse, a timer that cannot be filed at
+		// all. Here it is a sentence next to the field.
+		List<String> tags = TimeTrackingService.normalizeTags(draft.tags());
+		entries.assertRequiredFields(new TimeTrackingService.EntryContent(
+				placement.projectId(), placement.issueId(), draft.description(), tags));
+		// The pre-check the comment above promises, and it earns its keep twice
+		// over now: it answers the ordinary "already running" without an
+		// exception, and it stops a refused start from coining a tag. The unique
+		// index below is still the guard — two devices reconnecting at the same
+		// moment both find nothing here.
+		if (current(user).isPresent()) {
+			throw ApiException.conflict("error.time.timerAlreadyRunning");
+		}
+		// The catalogue last, after every reason to refuse: a start that answers
+		// 409 or 400 must not leave a word behind in it.
+		tags = entries.resolveTags(tags, user);
 		Instant startedAt = TimeTrackingService.stored(clock.instant());
 		RunningTimer timer = RunningTimer.builder()
 				.userId(user.getId())
@@ -147,7 +169,7 @@ public class TimerService {
 				.issueId(placement.issueId())
 				.description(draft.description())
 				.activityType(activityOrNull(draft.activityType()))
-				.tags(TimeTrackingService.normalizeTags(draft.tags()))
+				.tags(tags)
 				.billable(Boolean.TRUE.equals(draft.billable()))
 				.mode(mode)
 				// Only where it means something. A stopwatch with a target it does
@@ -165,6 +187,7 @@ public class TimerService {
 		try {
 			RunningTimer saved = timers.insert(timer);
 			publish(user.getId(), saved);
+			auditTimer(AuditAction.TIME_TIMER_STARTED, saved, user);
 			return saved;
 		}
 		catch (DuplicateKeyException alreadyRunning) {
@@ -204,11 +227,18 @@ public class TimerService {
 		TimeTrackingService.Placement placement = asked.equals(unchanged)
 				? unchanged
 				: entries.resolvePlacement(draft.projectId(), draft.issueId(), user);
+		List<String> tags = TimeTrackingService.normalizeTags(draft.tags());
+		// The same check the start made, because a patch is how a required field
+		// would otherwise be emptied again five minutes later — and, as there,
+		// the catalogue is touched only once the request is going to succeed.
+		entries.assertRequiredFields(new TimeTrackingService.EntryContent(
+				placement.projectId(), placement.issueId(), draft.description(), tags));
+		tags = entries.resolveTags(tags, user);
 		timer.setProjectId(placement.projectId());
 		timer.setIssueId(placement.issueId());
 		timer.setDescription(draft.description());
 		timer.setActivityType(activityOrNull(draft.activityType()));
-		timer.setTags(TimeTrackingService.normalizeTags(draft.tags()));
+		timer.setTags(tags);
 		timer.setBillable(Boolean.TRUE.equals(draft.billable()));
 		// A conditional update, not a save. `save` on an entity that carries an id
 		// is an upsert, so a patch that races a stop would write the timer back
@@ -365,6 +395,21 @@ public class TimerService {
 		}
 		TimeTrackingService.Placement placement = placementFor(request, timer, user);
 		ZoneId zone = entries.zoneOf(user);
+		LocalDate day = LocalDate.ofInstant(timer.getStartedAt(), zone);
+		if (entries.isLocked(day)) {
+			// The interval belongs to a day the operator froze, so there is nowhere
+			// to file it — and leaving the timer running would be worse than losing
+			// it: every stop from now on would answer 403 while the clock kept
+			// going, and the only way out would be to discard it anyway. So the
+			// timer goes and the person is told why, in the same breath. Reachable
+			// only where the lock date reaches today, since a timer cannot outlive
+			// its start by more than a day.
+			timers.deleteById(timer.getId());
+			if (announce) {
+				publish(user.getId(), null);
+			}
+			throw ApiException.forbidden("error.time.lockedTimer");
+		}
 		WorkItem item = WorkItem.builder()
 				// The timer's id, so a second stop collides instead of duplicating.
 				.id(timer.getId())
@@ -374,7 +419,7 @@ public class TimerService {
 				// The day it started, in the user's zone. A timer that runs past
 				// midnight stays one entry on the day the work began — splitting it
 				// would invent a boundary the person never drew.
-				.date(LocalDate.ofInstant(timer.getStartedAt(), zone))
+				.date(day)
 				.durationMinutes(minutesOf(timer.getStartedAt(), end))
 				.activityType(TimeTrackingService.activityOrDefault(
 						request.activityType() != null ? request.activityType()
@@ -391,8 +436,14 @@ public class TimerService {
 				// written through save() has one.
 				.createdAt(TimeTrackingService.stored(clock.instant()))
 				.billable(request.billable() != null ? request.billable() : timer.isBillable())
-				.tags(TimeTrackingService.normalizeTags(
-						request.tags() != null ? request.tags() : timer.getTags()))
+				// The request's own tags through the catalogue, the timer's as they
+				// stand. The timer's were resolved when it started, and re-resolving
+				// them is the one thing that could make a timer unstoppable: a tag
+				// deleted from the catalogue mid-run would refuse every stop, with
+				// the clock still going.
+				.tags(request.tags() != null
+						? entries.resolveTags(request.tags(), user)
+						: TimeTrackingService.normalizeTags(timer.getTags()))
 				.source(WorkItem.Source.TIMER)
 				.build();
 		boolean alreadyStopped = false;
@@ -418,6 +469,9 @@ public class TimerService {
 		timers.deleteById(timer.getId());
 		if (announce) {
 			publish(user.getId(), null);
+		}
+		if (!alreadyStopped) {
+			auditTimer(AuditAction.TIME_TIMER_STOPPED, timer, user);
 		}
 		return new Stopped(saved, alreadyStopped);
 	}
@@ -452,6 +506,7 @@ public class TimerService {
 		RunningTimer timer = require(user);
 		timers.deleteById(timer.getId());
 		publish(user.getId(), null);
+		auditTimer(AuditAction.TIME_TIMER_DISCARDED, timer, user);
 	}
 
 	/** Starts a timer carrying an existing entry's description and placement. */
@@ -620,6 +675,16 @@ public class TimerService {
 	 * insert.
 	 */
 	private void fileInterval(RunningTimer timer, Instant now, User user) {
+		ZoneId zone = entries.zoneOf(user);
+		LocalDate day = LocalDate.ofInstant(timer.getStartedAt(), zone);
+		if (entries.isLocked(day)) {
+			// The claim above already removed the timer, so throwing here would
+			// end the run mid-rhythm over a day nothing may be written to anyway.
+			// The phase turns, the interval is not filed, and the log says so.
+			log.warn("[time] pomodoro interval of user {} on {} not filed: the day is frozen",
+					user.getId(), day);
+			return;
+		}
 		Instant end = now;
 		Instant target = targetEndOf(timer);
 		if (target != null && end.isAfter(target)) {
@@ -629,13 +694,12 @@ public class TimerService {
 		if (end.isAfter(capped)) {
 			end = capped;
 		}
-		ZoneId zone = entries.zoneOf(user);
 		WorkItem item = WorkItem.builder()
 				.id(timer.getId())
 				.issueId(timer.getIssueId())
 				.projectId(timer.getProjectId())
 				.userId(user.getId())
-				.date(LocalDate.ofInstant(timer.getStartedAt(), zone))
+				.date(day)
 				.durationMinutes(minutesOf(timer.getStartedAt(), end))
 				.activityType(TimeTrackingService.activityOrDefault(timer.getActivityType()))
 				.description(timer.getDescription())
@@ -839,6 +903,16 @@ public class TimerService {
 			timers.deleteById(timer.getId());
 			return false;
 		}
+		if (entries.isLocked(LocalDate.ofInstant(timer.getStartedAt(), entries.zoneOf(owner)))) {
+			// Nothing can be written to that day any more, and a timer the sweep
+			// cannot file is a timer the sweep would try again every hour for ever.
+			// Removed, and said out loud in the log rather than counted as stopped.
+			timers.deleteById(timer.getId());
+			publish(owner.getId(), null);
+			log.warn("[time] auto-stop of timer {} discarded: its day is frozen by the lock date",
+					timer.getId());
+			return false;
+		}
 		Stopped result = stop(timer, new StopRequest(null, timer.getStartedAt().plus(MAX_RUN),
 				null, null, null, null, null, null), owner, true);
 		if (result.alreadyStopped()) {
@@ -879,6 +953,39 @@ public class TimerService {
 			payload.put("cyclesDone", timer.getCyclesDone());
 		}
 		return payload;
+	}
+
+	/**
+	 * Records that somebody started, stopped or threw away their own timer.
+	 *
+	 * <p>Off unless an operator switched the event on — see
+	 * {@link AuditAction#TIME_TIMER_STARTED}. A complete log of when each person
+	 * began and ended their working intervals is exactly the kind of record
+	 * § 87 Abs. 1 Nr. 6 BetrVG is about, so it is never a default; the check is
+	 * made before the lookup so an instance that has not asked for it pays
+	 * nothing per timer.
+	 *
+	 * <p>Nothing here says <em>how</em> the timer was operated. A tap in the app,
+	 * a keyboard shortcut, a notification action from stage 18's OS surfaces —
+	 * all indistinguishable in the record, deliberately, because a field naming
+	 * the device would turn this into a location trail.
+	 */
+	private void auditTimer(AuditAction action, RunningTimer timer, User user) {
+		if (!audit.isEnabled(action)) {
+			return;
+		}
+		audit.event(action).actor(user).target(user)
+				// The same id under both keys. A stopped timer files its entry
+				// under the timer's own id, and the entry's history reads
+				// `metadata.workItem` — without this the most common way an entry
+				// comes into existence would be missing from the one screen the
+				// person it belongs to can open (Art. 15).
+				.meta("timer", timer.getId())
+				.meta("workItem", timer.getId())
+				.meta("mode", String.valueOf(timer.getMode()))
+				.meta("project", timer.getProjectId())
+				.meta("issue", timer.getIssueId())
+				.log();
 	}
 
 	private RunningTimer require(User user) {

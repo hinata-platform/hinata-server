@@ -71,9 +71,22 @@ class TimeTrackingWriteHookTest {
 	void setUp() {
 		SettingsService settings = mock(SettingsService.class);
 		when(settings.get()).thenReturn(new ServerSettings());
+		TimeTrackingSettings policy = mock(TimeTrackingSettings.class);
+		// The policies this stage added, in the state a fresh instance has them:
+		// nothing required, nothing frozen. The rules themselves are exercised
+		// against a real database in TimePolicyIntegrationTest; here they
+		// have to be out of the way, or every assertion about the gate would be an
+		// assertion about the defaults.
+		when(policy.requiredFields()).thenReturn(
+				new TimeTrackingSettings.RequiredFields(false, false, false, false));
+		when(policy.lockBefore()).thenReturn(null);
+		TimeTagService tagCatalog = mock(TimeTagService.class);
+		when(tagCatalog.resolve(any(), any()))
+				.thenAnswer(invocation -> TimeTrackingService.normalizeTags(
+						invocation.getArgument(0)));
 		service = spy(new TimeTrackingService(workItems, issues, projects,
 				mock(ProjectReach.class), users, mongo, mock(AuditService.class), settings,
-				mock(TimeTrackingSettings.class), CLOCK));
+				policy, tagCatalog, CLOCK));
 		when(workItems.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 	}
 

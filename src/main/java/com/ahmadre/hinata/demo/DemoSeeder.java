@@ -1120,10 +1120,13 @@ public class DemoSeeder {
 		// the empty states of the "Time" list — a screenshot of that page with
 		// only round durations in it proves nothing about the page.
 		timed(admin, hin, "Keyboard shortcut opens the command palette",
-				"Pairing on the shortcut registry", "Development", 1, 9, 30, 75);
+				"Pairing on the shortcut registry", "Development", 1, 9, 30, 75,
+				List.of("Pairing"));
 		timed(admin, hin, "Saved board filters per user",
-				"Reviewing the filter serialisation", "Development", 1, 14, 0, 45);
-		unfiled(admin, "Team retro", "Meeting", 1, 16, 0, 60);
+				"Reviewing the filter serialisation", "Development", 1, 14, 0, 45,
+				List.of("Review"));
+		unfiled(admin, "Team retro", "Meeting", 1, 16, 0, 60, List.of("Meeting"));
+		timeTags();
 
 		syncSpent();
 		log.info("[demo] seeded {} work items", workItems.count());
@@ -1139,25 +1142,53 @@ public class DemoSeeder {
 	 * time of day — which is the same trade the {@code track} rows above make.
 	 */
 	private void timed(User user, Project p, String title, String description, String activity,
-			int daysAgo, int hour, int minute, int minutes) {
+			int daysAgo, int hour, int minute, int minutes, List<String> tags) {
 		Issue issue = findIssue(p, title);
 		if (issue == null) {
 			return;
 		}
 		saveTimed(user, p.getId(), issue.getId(), description, activity, daysAgo, hour, minute,
-				minutes, WorkItem.Source.TIMER);
+				minutes, WorkItem.Source.TIMER, tags);
 	}
 
 	/** An entry belonging to no project — visible to its owner and to admins, nobody else. */
 	private void unfiled(User user, String description, String activity, int daysAgo, int hour,
-			int minute, int minutes) {
+			int minute, int minutes, List<String> tags) {
 		saveTimed(user, null, null, description, activity, daysAgo, hour, minute, minutes,
-				WorkItem.Source.APP);
+				WorkItem.Source.APP, tags);
+	}
+
+	/**
+	 * The catalogue behind the words the entries above carry.
+	 *
+	 * <p>Written as documents rather than through the module's own repository,
+	 * and that is the point: {@code time_tags} is a stored shape, and the seeder
+	 * naming the module's classes to fill it would be the first step towards it
+	 * calling the module's service — which is exactly what the boundary rule in
+	 * {@code ModuleBoundaryTest} exists to catch. Three rows, so the picker and
+	 * the admin list have something honest in a screenshot.
+	 *
+	 * <p>{@code normalized} carries the unique index: two names differing only in
+	 * case are one tag, and the seeder has to spell that the same way the module
+	 * does.
+	 */
+	private void timeTags() {
+		if (mongo.getCollection("time_tags").countDocuments() > 0) {
+			return;
+		}
+		int hue = 0;
+		for (String name : List.of("Pairing", "Review", "Meeting")) {
+			mongo.getCollection("time_tags").insertOne(new org.bson.Document()
+					.append("name", name)
+					.append("normalized", name.toLowerCase(java.util.Locale.ROOT))
+					.append("hue", Project.labelHueAt(hue++))
+					.append("createdAt", java.util.Date.from(Instant.now())));
+		}
 	}
 
 	private void saveTimed(User user, String projectId, String issueId, String description,
 			String activity, int daysAgo, int hour, int minute, int minutes,
-			WorkItem.Source source) {
+			WorkItem.Source source, List<String> tags) {
 		LocalDate day = LocalDate.now(ZoneOffset.UTC).minusDays(daysAgo);
 		Instant start = day.atTime(hour, minute).toInstant(ZoneOffset.UTC);
 		workItems.save(WorkItem.builder()
@@ -1170,6 +1201,7 @@ public class DemoSeeder {
 				.description(description)
 				.startedAt(start)
 				.endedAt(start.plus(Duration.ofMinutes(minutes)))
+				.tags(new ArrayList<>(tags))
 				.source(source)
 				.billable(false)
 				.build());

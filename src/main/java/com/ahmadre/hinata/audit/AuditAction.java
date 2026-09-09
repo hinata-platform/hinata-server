@@ -73,6 +73,30 @@ public enum AuditAction {
 	// the one thing that makes a wrong attribution findable afterwards is this
 	// entry — actor is who pushed, target is who was credited.
 	TIME_ENTRY_CREATED_FOR(DATA, NOTICE, true),
+	// The four below record ordinary use of the module by the person it belongs
+	// to: filing an entry, and starting, stopping or discarding one's own timer.
+	// They are off by default and that is the whole point. A complete record of
+	// when somebody started and stopped working is objectively suitable for
+	// monitoring their behaviour (§ 87 Abs. 1 Nr. 6 BetrVG), so switching it on
+	// is a decision the works parties make, not a default a deployment inherits.
+	// The names exist regardless, because a name is a wire contract and adding it
+	// later would date every record written before it.
+	TIME_ENTRY_CREATED(DATA, INFO, false),
+	TIME_TIMER_STARTED(DATA, INFO, false),
+	TIME_TIMER_STOPPED(DATA, INFO, false),
+	TIME_TIMER_DISCARDED(DATA, INFO, false),
+
+	// --- Time-tracking configuration (policies, tags, per-project settings) ---
+	// An operator changing what the module demands or freezes. On by default:
+	// these are decisions *about* people rather than records of them, and a lock
+	// date that moved without a trace is the one change nobody can reconstruct
+	// afterwards.
+	TIME_POLICY_CHANGED(CONFIGURATION, WARNING, true),
+	TIME_LOCK_CHANGED(CONFIGURATION, WARNING, true),
+	TIME_TAG_CREATED(CONFIGURATION, INFO, true),
+	TIME_TAG_UPDATED(CONFIGURATION, NOTICE, true),
+	TIME_TAG_DELETED(CONFIGURATION, NOTICE, true),
+	TIME_PROJECT_SETTINGS_CHANGED(CONFIGURATION, NOTICE, true),
 
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),

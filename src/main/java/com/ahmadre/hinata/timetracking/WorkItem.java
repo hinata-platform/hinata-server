@@ -73,6 +73,12 @@ import java.util.List;
 // HIN-93, where the reporting aggregations land and an index change can carry
 // the migration that drops the old one first.
 @CompoundIndex(name = "date_user_project", def = "{'date': 1, 'userId': 1, 'projectId': 1}")
+// The tag catalogue's three questions: how many entries carry this word, which
+// ones a rename has to rewrite, and which of those are on a day the operator
+// froze. Multikey on `tags`, then the date range — ESR, the same shape the
+// indexes above take. Without it a rename would read the whole collection to
+// find three entries, and the admin list would read it once per row.
+@CompoundIndex(name = "tags_date", def = "{'tags': 1, 'date': 1}")
 public class WorkItem {
 
 	/**

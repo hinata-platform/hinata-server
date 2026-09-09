@@ -73,7 +73,7 @@ public class TimeTrackingController {
 			@Size(max = 2000) String description,
 			Instant startedAt,
 			Instant endedAt,
-			@Size(max = 20) List<@Size(max = 40) String> tags,
+			@Size(max = 20) List<@Size(max = TimeTag.MAX_NAME) String> tags,
 			Boolean billable) {
 
 		TimeTrackingService.NewWorkItem toDraft() {
@@ -106,7 +106,7 @@ public class TimeTrackingController {
 		@Size(max = 2000)
 		private String description;
 		@Size(max = 20)
-		private List<@Size(max = 40) String> tags;
+		private List<@Size(max = TimeTag.MAX_NAME) String> tags;
 		private Boolean billable;
 
 		@Setter(AccessLevel.NONE)

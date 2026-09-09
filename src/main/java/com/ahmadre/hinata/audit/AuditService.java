@@ -7,6 +7,7 @@ import com.ahmadre.hinata.user.User;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -40,14 +41,51 @@ public class AuditService {
 	private final SettingsService settings;
 	private final ClientIpResolver clientIpResolver;
 
+	/**
+	 * The audit block as last read, so asking whether an event is captured is a
+	 * volatile read rather than a query.
+	 *
+	 * <p>It used to be a {@code findById} on {@code server_settings} per call —
+	 * acceptable while the call sites were logins and administrative acts, and
+	 * not acceptable now that the time module asks the question on the path of
+	 * every entry written, twice (once to decide whether to gather the metadata,
+	 * once inside {@link Entry#log()}). Same shape as {@code SecurityPolicy} and
+	 * {@code TimeTrackingSettings}, which cache the same document the same way
+	 * and for the same reason.
+	 *
+	 * <p>The event is in-process, so a second application instance keeps its own
+	 * copy until it sees its own save — the trade those two already make. What is
+	 * at stake here is a toggle an operator changes rarely, not an authorisation.
+	 */
+	private volatile ServerSettings.Audit cached;
+
+	@EventListener
+	void onSettingsChanged(SettingsService.SettingsChangedEvent event) {
+		cached = orDefault(event.settings().getAudit());
+	}
+
 	/** Whether the given action is currently captured (master switch + toggle). */
 	public boolean isEnabled(AuditAction action) {
-		ServerSettings.Audit cfg = settings.get().getAudit();
-		if (cfg == null || !cfg.isEnabled()) {
+		ServerSettings.Audit cfg = cached;
+		if (cfg == null) {
+			cfg = orDefault(settings.get().getAudit());
+			cached = cfg;
+		}
+		if (!cfg.isEnabled()) {
 			return false;
 		}
 		Boolean override = cfg.getEvents() == null ? null : cfg.getEvents().get(action.name());
 		return override != null ? override : action.defaultEnabled();
+	}
+
+	/**
+	 * An instance with no stored audit block records everything an action's
+	 * default says — which is what {@code ServerSettings.Audit}'s own field
+	 * defaults mean. Never null once loaded, so the absence costs one read rather
+	 * than one per call.
+	 */
+	private static ServerSettings.Audit orDefault(ServerSettings.Audit stored) {
+		return stored != null ? stored : new ServerSettings.Audit();
 	}
 
 	/** Opens a fluent builder for {@code action}. Nothing is written until {@link Entry#log()}. */

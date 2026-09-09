@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TimeRanges;
@@ -35,9 +36,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -151,6 +154,7 @@ public class TimeTrackingService {
 	private final AuditService audit;
 	private final SettingsService settings;
 	private final TimeTrackingSettings policy;
+	private final TimeTagService tagCatalog;
 	private final Clock clock;
 
 	// --- shapes ------------------------------------------------------------
@@ -280,6 +284,12 @@ public class TimeTrackingService {
 		item.setUpdatedAt(clock.instant());
 		item.setUpdatedBy(user.getId());
 		assertWritable(before, item, user);
+		assertRequiredFields(contentOf(item));
+		if (patch.tags() != null) {
+			// Same order as a create, for the same reason: nothing reaches the
+			// catalogue on behalf of a request that is refused.
+			item.setTags(resolveTags(patch.tags(), user));
+		}
 		WorkItem saved = workItems.save(item);
 		shiftSpentTime(saved.getIssueId(),
 				saved.getDurationMinutes() - before.getDurationMinutes());
@@ -335,19 +345,26 @@ public class TimeTrackingService {
 	 * lock date and an approved timesheet unless that stage decides otherwise —
 	 * which is a decision, not an oversight, and belongs in that ticket.
 	 *
-	 * <p>Today it states what the service already stated: an entry is written by
-	 * the person it belongs to, or by a lead of its project or an administrator.
-	 * That is deliberately all it does — stage 6 hangs the lock date on it and
-	 * stage 7 the approvals, and both of those need to see the entry on <em>both
-	 * sides</em> of the change, which is what {@code before} and {@code after}
-	 * are for. An edit that moves an entry off a locked day is as much a write to
-	 * that day as one that moves an entry onto it.
+	 * <p>It states two rules. An entry is written by the person it belongs to, or
+	 * by a lead of its project or an administrator; and no write touches a day the
+	 * operator has frozen. Both need to see the entry on <em>both sides</em> of
+	 * the change, which is what {@code before} and {@code after} are for: an edit
+	 * that moves an entry off a locked day is as much a write to that day as one
+	 * that moves an entry onto it. What an entry has to <em>carry</em> is a
+	 * different question and a different method — see
+	 * {@link #assertRequiredFields}.
 	 *
 	 * @param before the entry as stored, or null when one is being created
 	 * @param after  the entry as it will be stored, or null when one is being deleted
 	 * @param actor  who is making the change
 	 */
 	void assertWritable(WorkItem before, WorkItem after, User actor) {
+		assertMine(before, after, actor);
+		assertUnlocked(before, after);
+	}
+
+	/** You write your own entries; a lead of the project or an administrator may too. */
+	private void assertMine(WorkItem before, WorkItem after, User actor) {
 		// The entry whose ownership decides: the one that exists. On a create
 		// that is the entry being written, and the rule is the same one — you
 		// write your own, or you are a lead of its project or an administrator.
@@ -362,6 +379,138 @@ public class TimeTrackingService {
 		}
 		throw ApiException.forbidden(
 				after == null ? "error.time.deleteOwnOnly" : "error.time.editOwnOnly");
+	}
+
+	/**
+	 * Refuses a write that touches a frozen day.
+	 *
+	 * <p>Both sides, which is the whole reason the gate is handed two entries: an
+	 * edit that moves an entry <em>off</em> a locked day changes that day's total
+	 * as surely as one that moves it on, and a lock that only guarded the
+	 * destination would be a lock anyone could walk out of.
+	 *
+	 * <p>It holds for administrators too. A freeze that does not bind the most
+	 * powerful account on the instance is not a freeze — it is a suggestion, and
+	 * the payroll period it was supposed to protect is exactly what an
+	 * administrator is most likely to be asked to change. Lifting the date is the
+	 * way, and that is a single audited act ({@code TIME_LOCK_CHANGED}) instead
+	 * of an untraceable edit.
+	 *
+	 * <p>Entries with no project are covered like every other, or the lock would
+	 * have a door in it: file the hours unfiled and the frozen week is editable
+	 * again.
+	 */
+	private void assertUnlocked(WorkItem before, WorkItem after) {
+		LocalDate lock = lockBefore();
+		if (lock == null) {
+			return;
+		}
+		if (isBefore(before, lock) || isBefore(after, lock)) {
+			// A java.util.Date rather than the LocalDate: MessageFormat formats a
+			// Date for the reader's locale and calls toString() on anything else,
+			// so the German sentence would otherwise carry an ISO string. The
+			// messages spell the placeholder {0,date,medium}, because a bare {0}
+			// formats date *and* time and midnight is not part of this rule --
+			// "before 9/9/26, 12:00 AM" reads as if the 9th were half locked.
+			throw ApiException.forbidden("error.time.locked",
+					Date.from(lock.atStartOfDay(ZoneOffset.UTC).toInstant()));
+		}
+	}
+
+	private static boolean isBefore(WorkItem item, LocalDate lock) {
+		return item != null && item.getDate() != null && item.getDate().isBefore(lock);
+	}
+
+	/** Whether a day is frozen by the operator's lock date. */
+	public boolean isLocked(LocalDate date) {
+		LocalDate lock = lockBefore();
+		return lock != null && date != null && date.isBefore(lock);
+	}
+
+	/**
+	 * The freeze in force, or null.
+	 *
+	 * <p>Null while the module is off, whatever the settings hold: a deployment
+	 * that set {@code HINATA_TIME_TRACKING_LOCK_BEFORE} and never switched the
+	 * module on must not start refusing writes from the frozen published app,
+	 * which reaches the 1.x routes through the same service.
+	 */
+	public LocalDate lockBefore() {
+		return policy.advancedEnabled() ? policy.lockBefore() : null;
+	}
+
+	/**
+	 * What an entry has to carry, as the placement and the text of one — a
+	 * stored entry, or a timer that is about to become one.
+	 */
+	public record EntryContent(String projectId, String issueId, String description,
+			List<String> tags) {
+	}
+
+	private static EntryContent contentOf(WorkItem item) {
+		return new EntryContent(item.getProjectId(), item.getIssueId(), item.getDescription(),
+				item.getTags());
+	}
+
+	/**
+	 * The operator's required fields, checked against the entry that is about to
+	 * be stored.
+	 *
+	 * <p>Separate from {@link #assertWritable} on purpose, and the separation is
+	 * load-bearing. {@code update} asks the gate twice — once on the entry as it
+	 * stands, to say "this is not yours" before walking somebody through
+	 * validating a change that was never theirs to make. If the required fields
+	 * rode along on that first call, they would be judged against the
+	 * <em>unchanged</em> entry: an operator switching on "every entry needs a
+	 * tag" would make every entry filed before that moment permanently
+	 * uneditable, including by the one patch that would add the missing tag.
+	 * Ownership and the freeze are about the right to write; these are about
+	 * what is written.
+	 *
+	 * <p>Public because the timer asks it too: a policy that demanded a project
+	 * and then let a project-less timer run for an hour before refusing to file
+	 * it would be enforced at the worst possible moment. Asked at the start, it
+	 * is a sentence in the composer where the field is.
+	 *
+	 * <p>An issue implies a project — an entry cannot carry one without the
+	 * other, because the issue supplies it — so the two are checked as one rule
+	 * and the message names the field the person can actually fill in.
+	 */
+	public void assertRequiredFields(EntryContent content) {
+		if (!policy.advancedEnabled()) {
+			// The policies belong to the module. With it switched off, the 1.x
+			// routes the published app talks to must behave exactly as they did
+			// before it was ever switched on.
+			return;
+		}
+		TimeTrackingSettings.RequiredFields required = policy.requiredFields();
+		if (required.issue() && content.issueId() == null) {
+			throw ApiException.badRequest("error.time.required.issue");
+		}
+		if ((required.project() || required.issue()) && content.projectId() == null) {
+			throw ApiException.badRequest("error.time.required.project");
+		}
+		if (required.description()
+				&& (content.description() == null || content.description().isBlank())) {
+			throw ApiException.badRequest("error.time.required.description");
+		}
+		if (required.tag() && (content.tags() == null || content.tags().isEmpty())) {
+			throw ApiException.badRequest("error.time.required.tag");
+		}
+	}
+
+	/**
+	 * The tags an entry will be stored with, canonicalised against the catalogue.
+	 *
+	 * <p>Public because the timer carries tags too and has to canonicalise them
+	 * at the same moment its other fields are checked — a tag that is only
+	 * settled when the timer stops is a tag whose refusal arrives an hour late.
+	 */
+	public List<String> resolveTags(List<String> tags, User actor) {
+		// With the module off there is no catalogue: the 1.x routes stay exactly
+		// what they were, and switching the module off leaves nothing behind in
+		// a collection it owns.
+		return policy.advancedEnabled() ? tagCatalog.resolve(tags, actor) : normalizeTags(tags);
 	}
 
 	/** Whether {@code user} may edit or delete an entry that is not their own: admin or project lead. */
@@ -381,6 +530,21 @@ public class TimeTrackingService {
 		return item.getUserId() != null && item.getUserId().equals(user.getId());
 	}
 
+	/**
+	 * The same record for a change somebody made to their <em>own</em> entry.
+	 *
+	 * <p>Off unless an operator switched the event on, which is the point:
+	 * ordinary use of the module by the person it belongs to is not something a
+	 * deployment starts recording by inheriting a default. See
+	 * {@link AuditAction#TIME_ENTRY_CREATED}. The check is cheap and made here so
+	 * the write path does not pay for a lookup nobody asked for.
+	 */
+	private void auditOwnEntry(AuditAction action, WorkItem item, User actor) {
+		if (audit.isEnabled(action)) {
+			audit(action, item, actor);
+		}
+	}
+
 	private void audit(AuditAction action, WorkItem item, User actor) {
 		User owner = item.getUserId() == null ? null : users.findById(item.getUserId()).orElse(null);
 		AuditService.Entry entry = audit.event(action).actor(actor)
@@ -397,6 +561,57 @@ public class TimeTrackingService {
 			entry.target(item.getUserId(), item.getUserId());
 		}
 		entry.log();
+	}
+
+	/**
+	 * What has been recorded about one entry, newest first.
+	 *
+	 * <p>Art. 15 read as a screen: the person whose working time this is can see
+	 * who changed it and what they changed, without asking an administrator to
+	 * read the audit log to them. That is also the answer to the objection the
+	 * audit trail invites — a record of changes to somebody's entries that only
+	 * their employer can read is a covert one, and this stage adds the trail and
+	 * the window onto it in the same move (R3/R6).
+	 *
+	 * <p>What it holds is <em>other people's</em> edits. {@code update} and
+	 * {@code delete} record only when {@code !own} (and {@code TIME_ENTRY_CREATED}
+	 * is off by default), so somebody correcting their own entry writes nothing —
+	 * logging a person's own corrections is the surveillance § 87 Abs. 1 Nr. 6
+	 * asks about, and it is not what this window is for. The empty state says so
+	 * in as many words, because a reader who has just edited their own entry and
+	 * is told "nobody changed this" would reasonably conclude the trail is broken.
+	 *
+	 * <p>Read by the owner, always; by an administrator, always; by a lead of the
+	 * entry's project only while {@code leadsSeeMemberEntries} is on — the same
+	 * rule that decides whether a lead may see the entry itself, because a
+	 * history of an entry is the entry seen through time.
+	 *
+	 * <p>Queried on {@code metadata.workItem} rather than on {@code targetId}: an
+	 * audit record's target is the person it is about, which is what makes the
+	 * admin log say whose time was edited and what lets it show their pronouns
+	 * live. The entry is named in the metadata, and a partial index on that key
+	 * makes this a lookup rather than a scan.
+	 */
+	public Page<AuditLog> history(String workItemId, int page, int size, User user) {
+		WorkItem item = workItems.findById(workItemId)
+				.orElseThrow(() -> ApiException.notFound("workItem"));
+		if (!isOwner(item, user) && !user.isAdmin()
+				&& !(policy.leadsSeeMemberEntries() && canManageForeign(item, user))) {
+			// Not found, not forbidden. A route that answers 404 for an id that
+			// does not exist and 403 for one that does is an oracle: somebody who
+			// may read nothing here could still learn which entries exist. The
+			// edit and delete routes make the other trade deliberately — their
+			// message tells the owner why their own entry refused them — but a
+			// history nobody may read has nothing to explain.
+			throw ApiException.notFound("workItem");
+		}
+		Pageable pageable = PageRequest.of(Math.clamp(page, 0, PAGE_INDEX_MAX),
+				Math.clamp(size, 1, PAGE_MAX),
+				Sort.by(Sort.Order.desc("timestamp"), Sort.Order.desc("_id")));
+		Query query = Query.query(Criteria.where("metadata.workItem").is(item.getId()));
+		List<AuditLog> rows = mongo.find(query.with(pageable), AuditLog.class);
+		return PageableExecutionUtils.getPage(rows, pageable,
+				() -> mongo.count(Query.of(query).limit(-1).skip(-1), AuditLog.class));
 	}
 
 	// --- entries that stand on their own ---------------------------------------
@@ -464,8 +679,18 @@ public class TimeTrackingService {
 				.source(source == null ? WorkItem.Source.APP : source)
 				.build();
 		assertWritable(null, item, user);
+		assertRequiredFields(contentOf(item));
+		// The catalogue last, after every reason to refuse has been checked.
+		// Resolving first would coin a word for a request that is about to answer
+		// 403 — a tag document and a configuration audit record per refused
+		// attempt, which anyone signed in could repeat. Against the catalogue and
+		// not merely trimmed, because a tag typed here has to end up the same word
+		// a report groups by, and with `limitTagAccess` on an unknown one is
+		// refused rather than silently dropped off the saved entry.
+		item.setTags(resolveTags(draft.tags(), user));
 		WorkItem saved = workItems.save(item);
 		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
+		auditOwnEntry(AuditAction.TIME_ENTRY_CREATED, saved, user);
 		return saved;
 	}
 
@@ -503,6 +728,14 @@ public class TimeTrackingService {
 	 * once the insert has actually happened.
 	 */
 	public WorkItem insertTimed(WorkItem item, User user) {
+		// The gate, and deliberately not {@link #assertRequiredFields}. The work
+		// has already happened by the time this runs, and there is nobody at the
+		// keyboard to add the missing tag: refusing here would not produce a
+		// better entry, it would produce a timer that cannot be stopped — the
+		// same trap {@code TimerService.placementFor} avoids, arrived at from the
+		// other side. The required fields are asked where they can still be
+		// supplied: when the timer is started or renamed, and on every entry that
+		// is typed.
 		assertWritable(null, item, user);
 		WorkItem saved = workItems.insert(item);
 		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
