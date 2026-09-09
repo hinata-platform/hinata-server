@@ -154,8 +154,8 @@ public class TimerService {
 		//
 		// The rule belongs where the entry is born, which is the stop: the client
 		// asks for what is missing then, in the composer, and sends it with the
-		// stop request (which carries every one of these fields). See
-		// {@link #stop} for why the stop itself still may not refuse.
+		// stop request, which carries every one of these fields. See
+		// {@link #stop}, which is where it is enforced.
 		List<String> tags = TimeTrackingService.normalizeTags(draft.tags());
 		// The "already running" pre-check: it answers the ordinary case without
 		// an exception, and it stops a refused start from coining a tag. The
@@ -310,25 +310,27 @@ public class TimerService {
 	 * existing; a crash in between leaves a timer whose entry is already written,
 	 * and the next stop cleans it up.
 	 *
-	 * <p><b>No required-field check here either</b>, though this is where the
-	 * entry is born and the rule would otherwise belong. Two reasons, and both
-	 * are about not stranding a clock that is already running.
+	 * <p><b>This is where the required fields are checked</b>, because this is
+	 * where the entry is born. The start and the patch deliberately do not — see
+	 * {@link #start} — so if the rule did not hold here it would not hold
+	 * anywhere: {@link TimeTrackingService#insertTimed} is exempt by design, and
+	 * two calls with no body at all would file an entry that breaks every one of
+	 * the operator's requirements.
 	 *
-	 * <p>A pomodoro files its work interval through this method every time a
-	 * phase turns over — see {@code advancePhase} — and nobody is watching. A
-	 * refusal there does not ask for a description; it wedges the rhythm at the
-	 * first boundary, with the timer still counting and no way forward but to
-	 * throw the set away. And a stop that is refused for a plain stopwatch is a
-	 * clock that keeps running while the person presses a button that will never
-	 * work, which is exactly the failure mode the start check used to be
-	 * justified by.
+	 * <p>A refusal costs nothing, and that is what makes it safe to refuse. The
+	 * check runs after the entry has been assembled and before anything is
+	 * written, so a stop that is turned away leaves the timer exactly as it was:
+	 * still running, still holding its minutes. The client reads the same policy,
+	 * opens the composer for what is missing, and sends the stop again with the
+	 * fields filled in — and somebody who would rather not is one
+	 * {@code discard} away. It is a request to answer, not a clock to be stuck
+	 * with.
 	 *
-	 * <p>So the client asks. It knows the policy, it knows what the timer
-	 * carries, and it opens the composer when the two do not add up — the stop
-	 * request takes every required field, so what comes back from that composer
-	 * arrives here complete. An entry filed by a client that does not bother is
-	 * the price; the alternative is a timer that cannot be stopped, which is
-	 * worse for the person and no better for the operator.
+	 * <p>Only a stop somebody asked for is refused. The sweep that ends a timer
+	 * at its ceiling has nobody to ask and must file what it found, and a
+	 * pomodoro's phase turnover never comes through here at all — it files
+	 * through {@code fileInterval}, which is exempt for the same reason. See
+	 * {@link StopOrigin}.
 	 */
 	public Stopped stop(StopRequest request, User user) {
 		RunningTimer running = current(user).orElse(null);
@@ -355,7 +357,7 @@ public class TimerService {
 		if (running == null) {
 			throw ApiException.notFound("timer");
 		}
-		return stop(running, request, user, true);
+		return stop(running, request, user, StopOrigin.BY_HAND);
 	}
 
 	/**
@@ -385,12 +387,40 @@ public class TimerService {
 	}
 
 	/**
-	 * @param announce whether to publish "nothing is running". False when this
-	 *        stop is one half of a phase change, which publishes the phase it
-	 *        arrives at instead — a device told the timer had stopped would clear
-	 *        its bar and stop its ticker for the instant between the two.
+	 * Who asked for the stop, which decides whether the operator's required
+	 * fields may turn it down.
+	 *
+	 * <p>The distinction is whether there is anybody to ask. A refusal is only
+	 * useful to somebody who can answer it.
 	 */
-	private Stopped stop(RunningTimer timer, StopRequest request, User user, boolean announce) {
+	private enum StopOrigin {
+		/**
+		 * Somebody pressed the button. A missing required field is a question
+		 * for them, and the timer keeps running until they have answered it.
+		 */
+		BY_HAND,
+		/**
+		 * The sweep, ending a timer that ran past its ceiling. There is nobody
+		 * at the other end: refusing would leave a timer the sweep retries every
+		 * hour for ever, and the work it found would never be filed at all. It
+		 * files what it has, incomplete or not.
+		 */
+		UNATTENDED
+	}
+
+	/**
+	 * Both stops, less what the caller decides.
+	 *
+	 * <p>Publishing "nothing is running" is unconditional. It used to be a flag,
+	 * for a phase change that would have published the phase it arrived at
+	 * instead — but a phase change files through {@code fileInterval} and has
+	 * not come through here for some time, so the flag was a parameter both
+	 * callers passed the same value to and a comment describing a caller that
+	 * does not exist.
+	 *
+	 * @param origin whether the required fields may refuse this stop
+	 */
+	private Stopped stop(RunningTimer timer, StopRequest request, User user, StopOrigin origin) {
 		if (timer.isBreak()) {
 			// A break is not worked time and never becomes an entry — that is the
 			// whole reason the phases are on the server and not a client's idea of
@@ -435,9 +465,7 @@ public class TimerService {
 			// only where the lock date reaches today, since a timer cannot outlive
 			// its start by more than a day.
 			timers.deleteById(timer.getId());
-			if (announce) {
-				publish(user.getId(), null);
-			}
+			publish(user.getId(), null);
 			throw ApiException.forbidden("error.time.lockedTimer");
 		}
 		WorkItem item = WorkItem.builder()
@@ -476,6 +504,21 @@ public class TimerService {
 						: TimeTrackingService.normalizeTags(timer.getTags()))
 				.source(WorkItem.Source.TIMER)
 				.build();
+		if (origin == StopOrigin.BY_HAND) {
+			// Against the assembled entry rather than against the request, so what
+			// is judged is what would be written: a description the timer has
+			// carried since it started satisfies the rule as surely as one typed
+			// into the composer a moment ago.
+			//
+			// Nothing has been written at this point — the lock check above is the
+			// only branch that touches anything, and it throws — so the timer is
+			// still running when this refuses, which is the whole reason it is
+			// safe to refuse at all.
+			entries.assertRequiredFields(
+					new TimeTrackingService.EntryContent(item.getProjectId(), item.getIssueId(),
+							item.getDescription(), item.getTags()),
+					true);
+		}
 		boolean alreadyStopped = false;
 		WorkItem saved;
 		try {
@@ -497,9 +540,7 @@ public class TimerService {
 			entries.reconcileSpentTime(saved.getIssueId());
 		}
 		timers.deleteById(timer.getId());
-		if (announce) {
-			publish(user.getId(), null);
-		}
+		publish(user.getId(), null);
 		if (!alreadyStopped) {
 			auditTimer(AuditAction.TIME_TIMER_STOPPED, timer, user);
 		}
@@ -944,7 +985,7 @@ public class TimerService {
 			return false;
 		}
 		Stopped result = stop(timer, new StopRequest(null, timer.getStartedAt().plus(MAX_RUN),
-				null, null, null, null, null, null), owner, true);
+				null, null, null, null, null, null), owner, StopOrigin.UNATTENDED);
 		if (result.alreadyStopped()) {
 			return false;
 		}

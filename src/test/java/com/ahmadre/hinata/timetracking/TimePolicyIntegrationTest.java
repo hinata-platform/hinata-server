@@ -33,10 +33,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Set;
 
@@ -421,8 +423,8 @@ class TimePolicyIntegrationTest {
 	void andTheStopCarriesWhatTheComposerCollected() {
 		// The other half of moving the rule: the app opens the composer when the
 		// policy asks for more than the timer holds, and its answers ride along on
-		// the stop request. The stop itself never refuses — see TimerService#stop
-		// for why a pomodoro turning over is what settles that.
+		// the stop request. Arriving complete, it is filed without a murmur — the
+		// check below is the same one that would have refused it empty.
 		tagCatalog.create("Meeting", null, admin);
 		require(true, false, true, true);
 		timers.start(TimerService.StartDraft.stopwatch(
@@ -438,20 +440,104 @@ class TimePolicyIntegrationTest {
 	}
 
 	@Test
-	void aRunningTimerStillFilesAfterThePolicyTightens() {
+	void aStopThatCannotBeFiledLeavesTheTimerRunning() {
+		// The rule has to hold here or it holds nowhere: the start and the patch
+		// do not check, and insertTimed is exempt by design, so a stop that filed
+		// whatever it was handed would let two empty requests write an entry that
+		// breaks every requirement the operator set.
+		//
+		// Refusing costs nothing, and that is the point. The clock is untouched —
+		// the minutes are still there to be filed once the composer has collected
+		// what is missing.
+		require(true, false, true, false);
+		timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
+
+		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(null,
+				NOW.plusSeconds(3600), null, null, null, null, null, null), member))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.time.required.project");
+
+		assertThat(mongo.getCollection("running_timers").countDocuments())
+				.as("the timer is still running, so nothing that was worked is lost")
+				.isEqualTo(1);
+		assertThat(workItems.count()).isZero();
+
+		// And the second attempt, with the composer's answers, files the whole
+		// interval — including the minutes spent answering.
+		TimerService.Stopped stopped = timers.stop(new TimerService.StopRequest(null,
+				NOW.plusSeconds(3600), project.getId(), null, "worked", null, null, null), member);
+
+		assertThat(stopped.entry().getDurationMinutes()).isEqualTo(60);
+		assertThat(stopped.entry().getProjectId()).isEqualTo(project.getId());
+		assertThat(mongo.getCollection("running_timers").countDocuments()).isZero();
+	}
+
+	@Test
+	void aTimerStartedBeforeTheRuleIsHeldToItAtTheStopAsWell() {
 		// Started when nothing was required, stopped after an administrator turned
-		// a field on. The interval was worked; refusing it here would lose it and
-		// strand the timer, so the policy applies to what people type, not to what
-		// the clock already measured.
+		// a field on. The policy is about what is written, not about when the
+		// clock began, so this is refused too — and again without losing the
+		// interval, which is what makes that acceptable.
 		timers.start(TimerService.StartDraft.stopwatch(
 				new TimerService.TimerDraft(null, null, "worked", null, List.of(), false)), member);
 		require(true, true, true, true);
 
-		TimerService.Stopped stopped = timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(3600), null, null, null, null, null, null), member);
+		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(null,
+				NOW.plusSeconds(3600), null, null, null, null, null, null), member))
+				.isInstanceOf(ApiException.class);
 
-		assertThat(stopped.entry().getDurationMinutes()).isEqualTo(60);
-		assertThat(stopped.entry().getProjectId()).isNull();
+		assertThat(mongo.getCollection("running_timers").countDocuments()).isEqualTo(1);
+	}
+
+	@Test
+	void theSweepFilesWhatItFoundRatherThanArguingWithNobody() {
+		// The one stop that may not refuse. A timer past its ceiling is ended by
+		// the hourly sweep, and there is no one at the other end to answer for a
+		// missing description: a refusal there would leave a timer the sweep
+		// retries every hour for ever, and a day of measured work that is never
+		// written down at all.
+		require(true, true, true, true);
+		timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
+		// Aged in place: this suite's clock is frozen, so the ceiling is reached
+		// by moving the timer back rather than by moving the clock forward.
+		mongo.getCollection("running_timers").updateMany(new Document(), new Document("$set",
+				new Document("startedAt", Date.from(NOW.minus(Duration.ofHours(25))))));
+
+		assertThat(timers.stopExpired()).isEqualTo(1);
+
+		assertThat(workItems.count()).isEqualTo(1);
+		assertThat(workItems.findAll().getFirst().getProjectId()).isNull();
+		assertThat(mongo.getCollection("running_timers").countDocuments()).isZero();
+	}
+
+	@Test
+	void anEntryWithoutAProjectCanStillBeEditedWhereOneIsRequired() {
+		// A patch carries neither a project nor an issue, so holding it to those
+		// two can only ever refuse a request that had no way to satisfy them. An
+		// entry that predates the rule would answer 400 on every edit for ever,
+		// and its owner's only way out would be to delete their own record of
+		// worked time. The description and the tags are still checked, because a
+		// patch can change both.
+		WorkItem before = file(entry(null, null, "worked", List.of()), member);
+		require(true, false, true, false);
+
+		WorkItem edited = timeTracking.update(before.getId(),
+				new TimeTrackingService.WorkItemPatch(null, null, null, "worked on it", false,
+						null, false, null, null, null),
+				member);
+
+		assertThat(edited.getDescription()).isEqualTo("worked on it");
+		assertThat(edited.getProjectId()).isNull();
+
+		// The half a patch can satisfy is still enforced.
+		assertThatThrownBy(() -> timeTracking.update(before.getId(),
+				new TimeTrackingService.WorkItemPatch(null, null, null, "   ", false, null, false,
+						null, null, null),
+				member))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.time.required.description");
 	}
 
 	// --- the lock date ----------------------------------------------------------------

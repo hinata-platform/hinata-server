@@ -284,7 +284,7 @@ public class TimeTrackingService {
 		item.setUpdatedAt(clock.instant());
 		item.setUpdatedBy(user.getId());
 		assertWritable(before, item, user);
-		assertRequiredFields(contentOf(item));
+		assertRequiredFields(contentOf(item), false);
 		if (patch.tags() != null) {
 			// Same order as a create, for the same reason: nothing reaches the
 			// catalogue on behalf of a request that is refused.
@@ -475,8 +475,20 @@ public class TimeTrackingService {
 	 * <p>An issue implies a project — an entry cannot carry one without the
 	 * other, because the issue supplies it — so the two are checked as one rule
 	 * and the message names the field the person can actually fill in.
+	 *
+	 * @param placement whether this caller is in a position to settle where the
+	 *        entry sits. False for {@link #update}, whose {@link WorkItemPatch}
+	 *        carries neither a project nor an issue: enforcing them there refuses
+	 *        a request that could not have supplied them, so an entry that
+	 *        predates the rule — or that arrived without a project by some other
+	 *        route — would answer 400 on every edit for ever, and its owner's
+	 *        only remedy would be to delete their own record of worked time. The
+	 *        description and the tags are checked either way, because a patch can
+	 *        change both. The client's copy of this rule takes the same flag for
+	 *        the same reason; the two have to agree, or the app offers a save the
+	 *        server refuses.
 	 */
-	public void assertRequiredFields(EntryContent content) {
+	public void assertRequiredFields(EntryContent content, boolean placement) {
 		if (!policy.advancedEnabled()) {
 			// The policies belong to the module. With it switched off, the 1.x
 			// routes the published app talks to must behave exactly as they did
@@ -484,11 +496,13 @@ public class TimeTrackingService {
 			return;
 		}
 		TimeTrackingSettings.RequiredFields required = policy.requiredFields();
-		if (required.issue() && content.issueId() == null) {
-			throw ApiException.badRequest("error.time.required.issue");
-		}
-		if ((required.project() || required.issue()) && content.projectId() == null) {
-			throw ApiException.badRequest("error.time.required.project");
+		if (placement) {
+			if (required.issue() && content.issueId() == null) {
+				throw ApiException.badRequest("error.time.required.issue");
+			}
+			if ((required.project() || required.issue()) && content.projectId() == null) {
+				throw ApiException.badRequest("error.time.required.project");
+			}
 		}
 		if (required.description()
 				&& (content.description() == null || content.description().isBlank())) {
@@ -679,7 +693,7 @@ public class TimeTrackingService {
 				.source(source == null ? WorkItem.Source.APP : source)
 				.build();
 		assertWritable(null, item, user);
-		assertRequiredFields(contentOf(item));
+		assertRequiredFields(contentOf(item), true);
 		// The catalogue last, after every reason to refuse has been checked.
 		// Resolving first would coin a word for a request that is about to answer
 		// 403 — a tag document and a configuration audit record per refused
