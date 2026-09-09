@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,7 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * The extended module's own entries: a person's list of what they worked on,
@@ -80,7 +85,7 @@ public class TimeEntryController {
 			@Size(max = 2000) String description,
 			Instant startedAt,
 			Instant endedAt,
-			@Size(max = 20) List<@Size(max = 40) String> tags,
+			@Size(max = 20) List<@Size(max = TimeTag.MAX_NAME) String> tags,
 			Boolean billable) {
 
 		TimeTrackingService.NewEntry toDraft() {
@@ -111,6 +116,39 @@ public class TimeEntryController {
 					window.entries().stream()
 							.map(TimeTrackingController.WorkItemResponse::from).toList(),
 					window.truncated());
+		}
+	}
+
+	/**
+	 * One recorded change to an entry.
+	 *
+	 * <p>{@code actorLabel} is the snapshot the record was written with, so it
+	 * keeps naming who acted after that account is renamed or deleted — the same
+	 * rule the admin feed follows.
+	 */
+	public record HistoryEntryResponse(String id, Instant timestamp, String action,
+			String actorId, String actorLabel, Map<String, String> metadata) {
+
+		/**
+		 * The metadata keys this screen may carry.
+		 *
+		 * <p>An allow-list, on the server, because this is where the boundary is.
+		 * The audit metadata is a free-form map that six call sites write into and
+		 * a seventh will; without this, the next one to add a key would be
+		 * deciding — without knowing it — what a colleague with the
+		 * {@code leadsSeeMemberEntries} policy may read about somebody's entry.
+		 */
+		private static final Set<String> VISIBLE = Set.of("minutes", "date", "project", "issue");
+
+		static HistoryEntryResponse from(AuditLog log) {
+			Map<String, String> meta = log.getMetadata() == null ? Map.of()
+					: log.getMetadata().entrySet().stream()
+							.filter(entry -> VISIBLE.contains(entry.getKey()))
+							.collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+									(first, second) -> first, LinkedHashMap::new));
+			return new HistoryEntryResponse(log.getId(), log.getTimestamp(),
+					log.getAction() == null ? null : log.getAction().name(),
+					log.getActorId(), log.getActorLabel(), meta);
 		}
 	}
 
@@ -173,6 +211,24 @@ public class TimeEntryController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String id) {
 		timeTracking.delete(id, currentUser.require());
+	}
+
+	/**
+	 * What has been recorded about this entry, newest first.
+	 *
+	 * <p>Deliberately narrower than the admin audit feed it reads from: the
+	 * action, when, who, and the fields that moved. No client address and no
+	 * user-agent — those are in the record for a security investigation an
+	 * administrator runs, and putting them on a screen every colleague can open
+	 * would turn a transparency feature into a way of finding out where somebody
+	 * was working from.
+	 */
+	@GetMapping("/entries/{id}/history")
+	public Page<HistoryEntryResponse> history(@PathVariable String id,
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "50") int size) {
+		return timeTracking.history(id, page, size, currentUser.require())
+				.map(HistoryEntryResponse::from);
 	}
 
 	/** Starts a timer carrying this entry's description and placement. */

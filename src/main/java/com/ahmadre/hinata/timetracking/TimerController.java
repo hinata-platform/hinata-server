@@ -57,7 +57,8 @@ public class TimerController {
 	public static final int MAX_DESCRIPTION = 2000;
 	public static final int MAX_ACTIVITY = 60;
 	public static final int MAX_TAGS = 20;
-	public static final int MAX_TAG = 40;
+	// How long one tag may be is the catalogue's answer, not this controller's:
+	// TimeTag.MAX_NAME. Naming it twice is the mistake this block exists against.
 
 	/**
 	 * A running timer on the wire. It carries no elapsed time: the client counts
@@ -90,7 +91,7 @@ public class TimerController {
 			String issueId,
 			@Size(max = MAX_DESCRIPTION) String description,
 			@Size(max = MAX_ACTIVITY) String activityType,
-			@Size(max = MAX_TAGS) List<@Size(max = MAX_TAG) String> tags,
+			@Size(max = MAX_TAGS) List<@Size(max = TimeTag.MAX_NAME) String> tags,
 			Boolean billable) {
 
 		TimerService.TimerDraft toDraft() {
@@ -117,7 +118,7 @@ public class TimerController {
 			String issueId,
 			@Size(max = MAX_DESCRIPTION) String description,
 			@Size(max = MAX_ACTIVITY) String activityType,
-			@Size(max = MAX_TAGS) List<@Size(max = MAX_TAG) String> tags,
+			@Size(max = MAX_TAGS) List<@Size(max = TimeTag.MAX_NAME) String> tags,
 			Boolean billable,
 			RunningTimer.Mode mode,
 			Integer plannedMinutes,
@@ -186,7 +187,7 @@ public class TimerController {
 			String issueId,
 			@Size(max = MAX_DESCRIPTION) String description,
 			@Size(max = MAX_ACTIVITY) String activityType,
-			@Size(max = MAX_TAGS) List<@Size(max = MAX_TAG) String> tags,
+			@Size(max = MAX_TAGS) List<@Size(max = TimeTag.MAX_NAME) String> tags,
 			Boolean billable) {
 
 		TimerService.StopRequest toRequest() {

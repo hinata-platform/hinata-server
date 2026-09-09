@@ -6,8 +6,10 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
+import com.ahmadre.hinata.user.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -29,6 +31,7 @@ import java.util.Map;
  * Admin area: read and update runtime server settings (SSO, e-mail ingest,
  * push). Secured by the /api/v1/admin/** ADMIN rule in SecurityConfig.
  */
+@Slf4j
 @Tag(name = "Admin")
 @RestController
 @RequestMapping("/api/v1/admin/settings")
@@ -40,6 +43,8 @@ public class AdminSettingsController {
 	private final FeatureFlags featureFlags;
 	/** Modules adding their own derived, read-only values; see {@link SettingsPrefill}. */
 	private final List<SettingsPrefill> modulePrefills;
+	/** Modules describing what an admin changed about them; see {@link SettingsAudit}. */
+	private final List<SettingsAudit> moduleAudits;
 	private final GitIntegrationSettings gitConfig;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
@@ -230,13 +235,28 @@ public class AdminSettingsController {
 						|| !OrganizationLogoService.isInternal(updated.getGeneral().getLogoUrl()));
 		// Recorded before the save so that disabling audit logging itself is still
 		// captured (the check reads the pre-save, still-enabled settings).
+		User actor = currentUser.require();
 		audit.event(AuditAction.SETTINGS_CHANGED)
-				.actor(currentUser.require())
+				.actor(actor)
 				// An explicit "audit": null in the body is a 500 otherwise, and the
 				// settings save it was recording never happens.
 				.meta("auditEnabled", String.valueOf(
 						updated.getAudit() != null && updated.getAudit().isEnabled()))
 				.log();
+		// The modules' own word on what moved, recorded here for the same reason
+		// and at the same moment: a description of a change that is only written
+		// once the change has succeeded cannot describe the change that switched
+		// the recording off. A module that fails to describe its own settings
+		// never fails the save.
+		for (SettingsAudit moduleAudit : moduleAudits) {
+			try {
+				moduleAudit.record(current, updated, actor);
+			}
+			catch (RuntimeException ex) {
+				log.warn("Settings audit hook {} failed: {}",
+						moduleAudit.getClass().getSimpleName(), ex.toString());
+			}
+		}
 		if (updated.getAudit() == null) {
 			updated.setAudit(current.getAudit());
 		}

@@ -22,6 +22,7 @@ import com.ahmadre.hinata.team.TeamActivityRepository;
 import com.ahmadre.hinata.team.TeamAvatarService;
 import com.ahmadre.hinata.team.TeamMembership;
 import com.ahmadre.hinata.team.TeamRepository;
+import com.ahmadre.hinata.timetracking.ProjectTimeSettings;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
@@ -324,6 +325,12 @@ public class DeletionService {
 		int boardsDeleted = cleanBoards(pid, progress);
 		int teamsDetached = detachTeams(pid, progress);
 		long articles = deleteArticles(pid, progress);
+
+		// The project's time settings — a budget, an approval rhythm — are reachable
+		// only through the project that just went. Named here rather than left to
+		// a listener so the cascade is one story in one place, and so a project
+		// deleted while the module is switched off is still cleaned up.
+		mongo.remove(byProjectId(pid), ProjectTimeSettings.class);
 
 		progress.step("deletingProject");
 		projects.deleteById(pid);

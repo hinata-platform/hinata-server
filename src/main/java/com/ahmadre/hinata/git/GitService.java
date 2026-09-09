@@ -535,10 +535,24 @@ public class GitService {
 		if (day.isAfter(today)) {
 			day = today;
 		}
-		WorkItem entry = timeTracking.add(issue.getId(),
-				new TimeTrackingService.NewWorkItem(minutes, day, null,
-						timeDescription(commit), null, null, null, null),
-				WorkItem.Source.SMART_COMMIT, author);
+		WorkItem entry;
+		try {
+			entry = timeTracking.add(issue.getId(),
+					new TimeTrackingService.NewWorkItem(minutes, day, null,
+							timeDescription(commit), null, null, null, null),
+					WorkItem.Source.SMART_COMMIT, author);
+		}
+		catch (ApiException refused) {
+			// The module's policies hold on this path too — a required tag, a
+			// frozen day — and that is the point: a rule that a push could walk
+			// around would not be a rule. But a refused command is a skipped
+			// command, like the three above it: one entry that cannot be written
+			// must not fail the whole webhook and lose the comments and
+			// transitions in the same commit.
+			log.warn("[git] smart-commit 'TIME' on {} skipped: {}",
+					command.issueKey(), refused.getMessage());
+			return;
+		}
 		if (!author.getId().equals(actor.getId())) {
 			audit.event(AuditAction.TIME_ENTRY_CREATED_FOR).actor(actor).target(author)
 					.meta("workItem", entry.getId())

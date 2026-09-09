@@ -60,7 +60,12 @@ public class AdvancedTimeTrackingGate implements HandlerInterceptor {
 			"/api/v1/me/timer", "/api/v1/me/timer/**",
 			"/api/v1/availability", "/api/v1/availability/**",
 			"/api/v1/billing", "/api/v1/billing/**",
-			"/api/v1/me/calendar-subscriptions", "/api/v1/me/calendar-subscriptions/**");
+			"/api/v1/me/calendar-subscriptions", "/api/v1/me/calendar-subscriptions/**",
+			// A project's time settings hang off a core resource rather than under
+			// /api/v1/time, so the prefix rule above does not reach them. Named
+			// separately: a budget and an approval rhythm are the module's, and
+			// with it off they must be as absent as everything else it owns.
+			"/api/v1/projects/*/time-settings");
 
 	/** What a client sees for every gated path while the module is off. */
 	public static final String DISABLED_KEY = "error.feature.disabled";
