@@ -201,6 +201,12 @@ class TimesheetApprovalIntegrationTest {
 		settings.save(current);
 	}
 
+	private void leadsSeeMemberEntries(boolean visible) {
+		ServerSettings.TimeTracking updated = block();
+		updated.setLeadsSeeMemberEntries(visible);
+		store(updated);
+	}
+
 	private void rhythm(TimePolicy.ApprovalPeriod type, DayOfWeek weekStart) {
 		ServerSettings.TimeTracking updated = block();
 		ServerSettings.TimeTracking.ApprovalPeriod period =
@@ -679,6 +685,35 @@ class TimesheetApprovalIntegrationTest {
 	}
 
 	@Test
+	void aLeadReadsTheEntriesOnlyWhileTheVisibilityPolicySaysSo() {
+		entry(member, project, LAST_MONTH_START, 60);
+		TimesheetApproval submitted = submitLastMonth(member).getFirst();
+
+		// Off is the default, and it is a promise to the person whose hours these
+		// are: a lead sees project sums, never who booked what. Reading a period
+		// entry by entry *is* reading the entries — the description is the field
+		// the policy is about — so the approval route may not be the way around it.
+		leadsSeeMemberEntries(false);
+		assertThatThrownBy(() -> approvals.entriesOf(submitted.getId(), 0, 20, lead))
+				.isInstanceOf(ApiException.class)
+				.extracting(thrown -> ((ApiException) thrown).getStatus())
+				.isEqualTo(HttpStatus.FORBIDDEN);
+
+		// Deciding is untouched. An operator who leaves the switch off gets an
+		// approver who signs off on a total rather than on a list, which is their
+		// configuration to make; what they do not get is a quiet exception to it.
+		assertThat(approvals.decide(submitted.getId(), TimesheetApproval.Status.APPROVED, null,
+				lead).getStatus()).isEqualTo(TimesheetApproval.Status.APPROVED);
+
+		// The two people the policy never spoke about.
+		assertThat(approvals.entriesOf(submitted.getId(), 0, 20, member)).hasSize(1);
+		assertThat(approvals.entriesOf(submitted.getId(), 0, 20, admin)).hasSize(1);
+
+		leadsSeeMemberEntries(true);
+		assertThat(approvals.entriesOf(submitted.getId(), 0, 20, lead)).hasSize(1);
+	}
+
+	@Test
 	void anOrdinaryMemberOfTheProjectStillCannotDecide() {
 		entry(lead, project, LAST_MONTH_START, 60);
 		TimesheetApproval submitted = submitLastMonth(lead).getFirst();
@@ -708,6 +743,33 @@ class TimesheetApprovalIntegrationTest {
 		// And "mine" is about the reader's own time, never about the inbox.
 		assertThat(approvals.mine(null, 0, 25, lead).getContent()).isEmpty();
 		assertThat(approvals.mine(null, 0, 25, member).getTotalElements()).isEqualTo(2);
+	}
+
+	@Test
+	void aRowWrittenByHandCarriesItsVersionOrTheFirstDecisionOnItFails() {
+		// The optimistic lock is only free because this collection is introduced
+		// with it. Anything that writes one of these documents by hand — the demo
+		// seeder does — has to write the field too: Spring Data reads a null version
+		// as "this entity is new" and tries an insert, which collides with the row's
+		// own id and answers 500. Found live, on the seeded data.
+		mongo.getCollection("timesheet_approvals").insertOne(new Document()
+				.append("version", 0L)
+				.append("userId", member.getId())
+				.append("projectId", project.getId())
+				.append("periodStart", java.util.Date.from(
+						LAST_MONTH_START.atStartOfDay().toInstant(java.time.ZoneOffset.UTC)))
+				.append("periodEnd", java.util.Date.from(
+						LAST_MONTH_END.atStartOfDay().toInstant(java.time.ZoneOffset.UTC)))
+				.append("periodType", "MONTHLY")
+				.append("status", "SUBMITTED")
+				.append("totalMinutes", 480));
+		TimesheetApproval handWritten = approvalRepository.findAll().getFirst();
+
+		assertThat(approvals.decide(handWritten.getId(), TimesheetApproval.Status.APPROVED,
+				null, lead).getStatus()).isEqualTo(TimesheetApproval.Status.APPROVED);
+		assertThat(approvalRepository.count())
+				.as("decided, not duplicated")
+				.isEqualTo(1);
 	}
 
 	@Test

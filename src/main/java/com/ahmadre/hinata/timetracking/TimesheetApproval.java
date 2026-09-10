@@ -160,6 +160,13 @@ public class TimesheetApproval {
 	 * transition's event is gone from {@link #history}. A record with a hole in it
 	 * is the one thing this collection may not be. With a version the loser gets an
 	 * {@code OptimisticLockingFailureException}, which the service answers as a 409.
+	 *
+	 * <p>No migration goes with it, and that is only true because this collection is
+	 * introduced by the same change: every row it will ever hold is written with a
+	 * version. A version added to an <em>existing</em> collection is a different
+	 * matter — Spring Data reads a null version as "this entity is new" and tries an
+	 * insert, which collides with the row's own id. Anything that writes one of these
+	 * documents by hand has to write the field too; {@code DemoSeeder} does.
 	 */
 	@Version
 	private Long version;

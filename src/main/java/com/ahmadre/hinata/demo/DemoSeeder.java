@@ -1230,6 +1230,11 @@ public class DemoSeeder {
 				.append("to", "SUBMITTED");
 		List<org.bson.Document> history = new ArrayList<>(List.of(event));
 		org.bson.Document document = new org.bson.Document()
+				// The optimistic lock, written by hand because this is a raw document.
+				// Without it Spring Data reads the row back with a null version, decides
+				// it is a *new* entity, and the first decision on it answers 500 with a
+				// duplicate-key error on its own id.
+				.append("version", 0L)
 				.append("userId", user.getId())
 				.append("projectId", project.getId())
 				.append("periodStart", java.util.Date.from(
