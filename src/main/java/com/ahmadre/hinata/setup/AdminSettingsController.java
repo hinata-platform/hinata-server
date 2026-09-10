@@ -111,6 +111,31 @@ public class AdminSettingsController {
 	}
 
 	/**
+	 * The reopened spans are not editable through this route, whatever the body says.
+	 *
+	 * <p>They are the one thing in the settings document that is an <em>event</em>
+	 * rather than a setting: each carries who opened it, when, and why, and each is
+	 * recorded as {@code TIME_LOCK_EXCEPTION_ADDED}/{@code _REMOVED} by the route
+	 * that mints it. A whole-document PUT could otherwise author one with a
+	 * hand-written author and timestamp, or delete one, and leave nothing behind but
+	 * a generic {@code SETTINGS_CHANGED} — a reopened payroll month attributed to a
+	 * colleague, with no span and no reason in the log. An audit trail a client can
+	 * write is not an audit trail.
+	 *
+	 * <p>So the stored list is carried forward unconditionally. This is the same
+	 * move {@link #keepSecretsIfBlank} makes for write-only secrets, and for the
+	 * same reason: some fields leave the server and must not come back.
+	 */
+	private static void keepLockExceptions(ServerSettings updated, ServerSettings current) {
+		ServerSettings.TimeTracking incoming = updated.getTimeTracking();
+		if (incoming == null) {
+			return;
+		}
+		ServerSettings.TimeTracking stored = current.getTimeTracking();
+		incoming.setLockExceptions(stored == null ? null : stored.getLockExceptions());
+	}
+
+	/**
 	 * Pre-fill the security policy from the effective values so the admin form shows
 	 * the values currently in force (env default until an admin overrides them). The
 	 * source of truth is {@link com.ahmadre.hinata.auth.SecurityPolicy}, so a blank
@@ -207,6 +232,7 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
+		keepLockExceptions(updated, current);
 		// The PUT is a whole-document write. The published 10.3.3 client keeps the
 		// settings as the raw map it read, so it hands sections it does not know
 		// back untouched — but a deployment script, a curl body or any client

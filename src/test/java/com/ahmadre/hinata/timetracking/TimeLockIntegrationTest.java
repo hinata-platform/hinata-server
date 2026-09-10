@@ -114,6 +114,8 @@ class TimeLockIntegrationTest {
 	private ProjectRepository projects;
 	@Autowired
 	private UserRepository users;
+	@Autowired
+	private com.ahmadre.hinata.setup.AdminSettingsController adminSettings;
 	@MockitoBean
 	private CurrentUser currentUser;
 
@@ -345,6 +347,46 @@ class TimeLockIntegrationTest {
 		assertThatThrownBy(() -> guard.check(settings.get(), proposed))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.lockExceptionNoteRequired");
+	}
+
+	@Test
+	void theSettingsPutCannotAuthorRemoveOrBackdateAnException() {
+		// The one thing in the settings block that is an *event* rather than a
+		// setting. A whole-document PUT could otherwise mint one with a hand-written
+		// author and timestamp, or delete one, and leave nothing behind but a generic
+		// SETTINGS_CHANGED — a reopened payroll month attributed to a colleague, with
+		// no span and no reason in the log.
+		lockBefore(TODAY);
+		TimeLockExceptionController.LockExceptionRequest request =
+				new TimeLockExceptionController.LockExceptionRequest();
+		request.setFrom(YESTERDAY);
+		request.setTo(YESTERDAY);
+		request.setNote("the real one");
+		String realId = asAdmin(() -> lockExceptions.add(request)).getFirst().id();
+
+		ServerSettings.TimeTracking.LockException forged =
+				new ServerSettings.TimeTracking.LockException();
+		forged.setId("11111111-1111-1111-1111-111111111111");
+		forged.setFrom(TODAY.minusDays(5));
+		forged.setTo(TODAY.minusDays(2));
+		forged.setNote("Routine");
+		forged.setBy(member.getId());
+		forged.setAt(NOW.minusSeconds(60 * 60 * 24 * 200));
+		ServerSettings proposed = withLockBefore(TODAY);
+		proposed.getTimeTracking().setLockExceptions(List.of(forged));
+
+		as(admin, () -> adminSettings.update(proposed));
+
+		// Neither authored nor removed: the stored list is what stands.
+		assertThat(policy.lockExceptions()).singleElement().satisfies(stored -> {
+			assertThat(stored.getId()).isEqualTo(realId);
+			assertThat(stored.getNote()).isEqualTo("the real one");
+			assertThat(stored.getBy()).isEqualTo(admin.getId());
+			assertThat(stored.getAt()).isEqualTo(NOW);
+		});
+		assertThat(locks.reopenedByException(TODAY.minusDays(3)))
+				.as("the forged span never opened")
+				.isFalse();
 	}
 
 	@Test

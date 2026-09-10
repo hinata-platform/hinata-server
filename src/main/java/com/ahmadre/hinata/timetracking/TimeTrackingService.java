@@ -43,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.regex.Pattern;
 
@@ -242,13 +243,14 @@ public class TimeTrackingService {
 		boolean own = isOwner(item, user);
 		// The entry as it stands, kept whole, because the patch is applied in place.
 		WorkItem before = item.toBuilder().build();
-		// The gate twice, and deliberately. First on the entry as it stands, so
-		// someone with no business touching it is told exactly that instead of
-		// being walked through validation of a change that was never theirs to
-		// make. Then, below, on the change itself — from stage 6 a lock date or an
-		// approval covers the day an entry is moving off as much as the day it is
-		// moving to, and only the second call can see both.
-		assertWritable(before, before, user);
+		// Ownership first, on the entry as it stands, so someone with no business
+		// touching it is told exactly that instead of being walked through
+		// validation of a change that was never theirs to make. Only ownership —
+		// the freeze is asked once, below, on the whole change: it covers the day an
+		// entry is moving off as much as the day it is moving to, and asking it here
+		// as well would resolve the same day twice against the database on every
+		// single edit.
+		assertMine(before, before, user);
 		if (patch.startedAtSet()) {
 			item.setStartedAt(patch.startedAt());
 		}
@@ -363,7 +365,7 @@ public class TimeTrackingService {
 	}
 
 	/** You write your own entries; a lead of the project or an administrator may too. */
-	private void assertMine(WorkItem before, WorkItem after, User actor) {
+	void assertMine(WorkItem before, WorkItem after, User actor) {
 		// The entry whose ownership decides: the one that exists. On a create
 		// that is the entry being written, and the rule is the same one — you
 		// write your own, or you are a lead of its project or an administrator.
@@ -401,33 +403,6 @@ public class TimeTrackingService {
 	 */
 	private void assertUnlocked(WorkItem before, WorkItem after) {
 		locks.assertWritable(before, after);
-	}
-
-	/**
-	 * Whether a day is frozen for this person and project — by the lock date, or
-	 * by a timesheet they have already handed in.
-	 *
-	 * <p>Both questions, because a caller that only asked the cheap one would
-	 * write into an approved period and find out from the gate a moment later,
-	 * which for the timer is a moment too late. Null for either of the first two
-	 * arguments asks only about the lock date, which is the honest answer for an
-	 * entry that has no project: those are never submitted.
-	 */
-	public boolean isLocked(String userId, String projectId, LocalDate date) {
-		return locks.lockStateFor(userId, projectId, date) != null;
-	}
-
-	/**
-	 * The instance-wide freeze in force, or null.
-	 *
-	 * <p>Null while the module is off, whatever the settings hold: a deployment
-	 * that set {@code HINATA_TIME_TRACKING_LOCK_BEFORE} and never switched the
-	 * module on must not start refusing writes from the frozen published app,
-	 * which reaches the 1.x routes through the same service. A project may close
-	 * its own books earlier — {@link TimeLocks#lockBefore(String)} answers that.
-	 */
-	public LocalDate lockBefore() {
-		return locks.lockBefore(null);
 	}
 
 	/**
@@ -876,7 +851,7 @@ public class TimeTrackingService {
 	 *
 	 * @param projectId narrow to one project, or null for every one of them
 	 */
-	public Map<LocalDate, Map<String, Integer>> minutesPerProjectAndDay(String userId,
+	public NavigableMap<LocalDate, Map<String, Integer>> minutesPerProjectAndDay(String userId,
 			LocalDate from, LocalDate to, String projectId) {
 		assertStorable(from, to, "error.time.invalidRange");
 		Criteria criteria = Criteria.where("userId").is(userId).and("date").gte(from).lte(to);
@@ -892,7 +867,7 @@ public class TimeTrackingService {
 				Aggregation.project("projectId", "durationMinutes")
 						.and(DateOperators.dateOf("date").toString("%Y-%m-%d")).as("day"),
 				Aggregation.group("day", "projectId").sum("durationMinutes").as("minutes"));
-		Map<LocalDate, Map<String, Integer>> perDay = new TreeMap<>();
+		NavigableMap<LocalDate, Map<String, Integer>> perDay = new TreeMap<>();
 		for (Document group : mongo.aggregate(aggregation, WorkItem.class, Document.class)) {
 			Document key = group.get("_id", Document.class);
 			String day = key == null ? null : key.getString("day");

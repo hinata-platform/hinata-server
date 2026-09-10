@@ -52,9 +52,13 @@ public interface TimesheetApprovalRepository extends MongoRepository<TimesheetAp
 	Page<TimesheetApproval> findByProjectIdInAndStatus(Collection<String> projectIds,
 			TimesheetApproval.Status status, Pageable pageable);
 
-	/** Cascades: a deleted project's submissions go with it, as do a deleted account's. */
-	long deleteByProjectId(String projectId);
-
+	/**
+	 * A deleted account's submissions go with it — see {@code TimeTrackingErasure}.
+	 *
+	 * <p>A deleted <em>project</em>'s go too, but through {@code DeletionService},
+	 * which removes them beside every other collection the cascade touches; that is
+	 * one story in one place, and it runs whether or not the module is switched on.
+	 */
 	long deleteByUserId(String userId);
 
 	/**

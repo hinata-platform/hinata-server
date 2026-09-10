@@ -118,6 +118,8 @@ class TimesheetApprovalIntegrationTest {
 	private UserRepository users;
 	@Autowired
 	private NotificationRepository notifications;
+	@Autowired
+	private TimeTrackingMoveGuard moveGuard;
 
 	private User member;
 	private User lead;
@@ -326,8 +328,12 @@ class TimesheetApprovalIntegrationTest {
 		assertThatThrownBy(() -> submitLastMonth(member))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.periodNotOnGrid");
-		// Its quarter is.
-		assertThat(approvals.submit(LocalDate.of(2026, 7, 1), LocalDate.of(2026, 9, 30), null,
+		// Its quarter is — the one that has *ended*. The quarter August sits in is
+		// still running on this suite's clock, and a period that has not ended
+		// cannot be handed in: freezing it would stop the person recording the
+		// working time they have yet to do.
+		entry(member, project, LocalDate.of(2026, 5, 12), 90);
+		assertThat(approvals.submit(LocalDate.of(2026, 4, 1), LocalDate.of(2026, 6, 30), null,
 				member)).hasSize(1);
 	}
 
@@ -389,6 +395,24 @@ class TimesheetApprovalIntegrationTest {
 				null, member))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.periodNotOnGrid");
+	}
+
+	@Test
+	void aPeriodThatHasNotEndedCannotBeHandedIn() {
+		// The same rule the lock date is held to, and for the same reason: an
+		// approved span is immutable, so submitting the rest of this month would
+		// stop this person recording the working time they are about to perform
+		// (§ 16 Abs. 2 ArbZG, EuGH C-55/18). One freeze may not be exempt from a
+		// rule the other keeps.
+		entry(member, project, TODAY.withDayOfMonth(1), 60);
+
+		assertThatThrownBy(() -> approvals.submit(TODAY.withDayOfMonth(1),
+				TODAY.withDayOfMonth(TODAY.lengthOfMonth()), null, member))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.time.periodNotEnded");
+		// The month that has ended is fine.
+		entry(member, project, LAST_MONTH_START, 60);
+		assertThat(submitLastMonth(member)).hasSize(1);
 	}
 
 	@Test
@@ -736,6 +760,56 @@ class TimesheetApprovalIntegrationTest {
 		assertThatThrownBy(() -> approvals.reopen(reopened.getId(), "again", lead))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.approvalNotApproved");
+	}
+
+	@Test
+	void aRefusedSubmissionOfSeveralProjectsLeavesNoneOfThemFrozen() {
+		// Validation and writing are two loops, and this is why. Without the split,
+		// a person with hours in two projects whose rhythms disagree submits the
+		// month: the first is written, audited and frozen, the second throws 400, and
+		// the answer says nothing happened — while a month they can no longer edit
+		// sits there with nobody asked to decide it.
+		projectSettings.save(ProjectTimeSettings.builder()
+				.projectId(otherProject.getId())
+				.approvalPeriod(ProjectTimeSettings.ApprovalPeriod.builder()
+						.type(TimePolicy.ApprovalPeriod.QUARTERLY).build())
+				.build());
+		entry(member, project, LAST_MONTH_START, 60);
+		entry(member, otherProject, LAST_MONTH_START, 30);
+
+		assertThatThrownBy(() -> submitLastMonth(member))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.time.periodNotOnGrid");
+
+		assertThat(approvalRepository.count())
+				.as("a refused submission writes nothing at all")
+				.isZero();
+	}
+
+	@Test
+	void anIssueWhoseHoursAreFrozenDoesNotMove() {
+		// Moving an issue re-points projectId on every entry attached to it, in one
+		// bulk update that never passes the write gate — so without a veto any member
+		// of both projects could walk somebody's approved hours out of the period
+		// that was signed off, edit them, and walk them back.
+		WorkItem attached = entry(member, project, LAST_MONTH_START, 60);
+		mongo.save(attached.toBuilder().issueId(issue.getId()).build());
+		submitLastMonth(member);
+
+		assertThatThrownBy(() -> moveGuard.check(issue.getId(), project.getId(),
+				otherProject.getId()))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.time.approvalLocked");
+	}
+
+	@Test
+	void andMovesasSoonAsThePeriodIsOpenAgain() {
+		WorkItem attached = entry(member, project, LAST_MONTH_START, 60);
+		mongo.save(attached.toBuilder().issueId(issue.getId()).build());
+		TimesheetApproval submitted = submitLastMonth(member).getFirst();
+		approvals.withdraw(submitted.getId(), member);
+
+		moveGuard.check(issue.getId(), project.getId(), otherProject.getId());
 	}
 
 	// --- the vocabulary the refusal travels in -----------------------------------------------

@@ -89,8 +89,10 @@ class IssueMoveServiceTest {
 		when(issues.save(any(Issue.class))).thenAnswer(i -> i.getArgument(0));
 		when(sprints.findById(anyString())).thenReturn(Optional.empty());
 
+		// No move guards: whether an issue's *hours* may follow it is the time module's
+		// question, and it has its own suite. This file is about the issue.
 		service = new IssueMoveService(issues, activities, issueService, projects, boards,
-				sprints, audit, mongo, notifications, watcherCleanup);
+				sprints, audit, mongo, notifications, watcherCleanup, List.of());
 	}
 
 	private static Project project(String id, String key, List<String> states, List<Integer> hues,

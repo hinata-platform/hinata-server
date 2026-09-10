@@ -21,6 +21,8 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -28,6 +30,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Client for Hinata Connect, the single central service that the published
@@ -430,26 +433,22 @@ public class GatewayService {
 	}
 
 	/** Send one push to a device token via the gateway. */
-	public PushResult push(String token, String title, String body, String link) {
-		return push(token, title, body, link, java.util.Map.of());
-	}
-
 	/**
-	 * As above, with extra entries in the notification's {@code data} payload.
+	 * Forwards one notification to the gateway, which relays it to FCM or WNS.
 	 *
-	 * <p>The gateway forwards {@code data} to FCM/WNS verbatim and bounds its size,
-	 * so extra keys are additive: a gateway that has never heard of one passes it
-	 * through, and a client that has never heard of one ignores it. {@code link}
-	 * wins on a collision, because the route is the one entry every client already
-	 * depends on.
+	 * <p>{@code extra} rides in the notification's {@code data} payload beside the
+	 * link. The gateway forwards {@code data} verbatim and bounds its size, so extra
+	 * keys are additive: a gateway that has never heard of one passes it through,
+	 * and a client that has never heard of one ignores it. {@code link} wins on a
+	 * collision, because the route is the one entry every client already depends on.
 	 */
 	public PushResult push(String token, String title, String body, String link,
-			java.util.Map<String, String> extra) {
+			Map<String, String> extra) {
 		if (!props.getGateway().isEnabled()) return PushResult.DISABLED;
 		if (!registered()) return PushResult.DISABLED;
 		ConnectEnrollment e = enrollment;
 		try {
-			java.util.Map<String, String> payload = new java.util.LinkedHashMap<>();
+			Map<String, String> payload = new LinkedHashMap<>();
 			if (extra != null) {
 				extra.forEach((k, v) -> {
 					if (k != null && !k.isBlank() && v != null) payload.put(k, v);
@@ -458,7 +457,7 @@ public class GatewayService {
 			if (link != null && !link.isBlank()) payload.put("link", link);
 			String data = payload.isEmpty() ? "" : ",\"data\":{" + payload.entrySet().stream()
 					.map(entry -> jstr(entry.getKey()) + ":" + jstr(entry.getValue()))
-					.collect(java.util.stream.Collectors.joining(",")) + "}";
+					.collect(Collectors.joining(",")) + "}";
 			String json = "{\"token\":" + jstr(token) + ",\"title\":" + jstr(title)
 					+ ",\"body\":" + jstr(body) + data + "}";
 			HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(gw() + "/push/send"))

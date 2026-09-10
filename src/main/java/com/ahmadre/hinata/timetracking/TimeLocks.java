@@ -48,6 +48,12 @@ public class TimeLocks {
 	private final TimesheetApprovalRepository approvals;
 
 	/**
+	 * Whether any project has its own lock date; null until asked. See
+	 * {@link #anyProjectHasALockDate()}.
+	 */
+	private volatile Boolean anyProjectLock;
+
+	/**
 	 * Why one day cannot be written, in the shape the refusal travels in.
 	 *
 	 * <p>{@code holder} and {@code remedy} are derived from the reason and not
@@ -148,9 +154,11 @@ public class TimeLocks {
 			return null;
 		}
 		LocalDate instance = policy.lockBefore();
-		LocalDate project = projectId == null ? null : projectSettings.findByProjectId(projectId)
-				.map(ProjectTimeSettings::getLockBefore)
-				.orElse(null);
+		LocalDate project = projectId == null || !anyProjectHasALockDate()
+				? null
+				: projectSettings.findByProjectId(projectId)
+						.map(ProjectTimeSettings::getLockBefore)
+						.orElse(null);
 		if (instance == null) {
 			return project;
 		}
@@ -158,6 +166,43 @@ public class TimeLocks {
 			return instance;
 		}
 		return project.isAfter(instance) ? project : instance;
+	}
+
+	/**
+	 * Whether any project anywhere has closed its own books.
+	 *
+	 * <p>This is on the path of <em>every write to a time entry</em>, and without it
+	 * each one pays an indexed read to learn that a project which has never been
+	 * configured has no lock date — on an instance where nothing is configured at
+	 * all, which is every instance until somebody sets one. Before HIN-88 the whole
+	 * question was a volatile field read and an early return; this keeps it that
+	 * way for the common case.
+	 *
+	 * <p>Cached rather than counted per call, and invalidated by the same event the
+	 * settings cache uses plus a per-project save. The direction of the cache is the
+	 * safe one: it is only ever consulted to skip a read that would have answered
+	 * null, and a stale <em>false</em> is corrected the moment a project's settings
+	 * are written, because that is the only way the answer can become true.
+	 */
+	private boolean anyProjectHasALockDate() {
+		Boolean known = anyProjectLock;
+		if (known == null) {
+			known = projectSettings.existsByLockBeforeNotNull();
+			anyProjectLock = known;
+		}
+		return known;
+	}
+
+	/**
+	 * Forgets {@link #anyProjectHasALockDate}.
+	 *
+	 * <p>Called when a project's time settings are written. Package-visible and
+	 * called directly rather than through an event, because the write and the
+	 * invalidation are the same decision and a listener would make the ordering a
+	 * question.
+	 */
+	void forgetProjectLocks() {
+		anyProjectLock = null;
 	}
 
 	/** The spans an administrator has reopened inside the freeze. Never null. */
@@ -253,9 +298,9 @@ public class TimeLocks {
 		if (!policy.advancedEnabled()) {
 			return;
 		}
-		// Deduplicated because `update` asks the gate twice and its first call
-		// passes the same entry on both sides: without this, one edit would run
-		// the same two indexed reads four times.
+		// Deduplicated because an edit that leaves the day and the project alone
+		// hands the same tuple in twice, and each resolution is up to two indexed
+		// reads.
 		Set<List<Object>> seen = new LinkedHashSet<>();
 		for (WorkItem item : sides(before, after)) {
 			List<Object> tuple = List.of(String.valueOf(item.getUserId()),

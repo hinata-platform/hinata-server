@@ -43,7 +43,18 @@ public class PushService {
 	 * does not have to be guessed from the shape of a path. Kept to a handful of
 	 * short values: the gateway bounds the map, and anything personal here would be
 	 * readable on a lock screen.
+	 *
+	 * <p><b>Both</b> overloads carry {@code @Async}, and both have to.
+	 * {@code @EnableAsync} advises annotated methods through a proxy, so an
+	 * annotation on the delegate above does nothing for the overload it calls —
+	 * when {@code NotificationService} started calling this one directly, every push
+	 * in the product silently became a blocking HTTP round trip per device token on
+	 * the request thread. Annotating only this one would have the mirror-image bug:
+	 * the delegate's call to it is a self-invocation, which never passes the proxy.
+	 * With both annotated, an outside call to either lands on a pool thread and the
+	 * self-invocation simply continues on it.
 	 */
+	@Async
 	public void sendToUser(String userId, String title, String body, String link,
 			Map<String, String> extra) {
 		if (userId == null) return;
