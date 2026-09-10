@@ -221,6 +221,7 @@ public class DemoSeeder {
 		// ModuleBoundaryTest). An emptied collection needs no shape.
 		mongo.getCollection("work_items").deleteMany(new org.bson.Document());
 		mongo.getCollection("running_timers").deleteMany(new org.bson.Document());
+		mongo.getCollection("timesheet_approvals").deleteMany(new org.bson.Document());
 		mongo.dropCollection(GitDevInfo.class);
 		mongo.dropCollection(IssueLink.class);
 		mongo.dropCollection(Issue.class);
@@ -1127,6 +1128,7 @@ public class DemoSeeder {
 				List.of("Review"));
 		unfiled(admin, "Team retro", "Meeting", 1, 16, 0, 60, List.of("Meeting"));
 		timeTags();
+		timesheetApprovals(hin, mob, admin, lena);
 
 		syncSpent();
 		log.info("[demo] seeded {} work items", workItems.count());
@@ -1184,6 +1186,74 @@ public class DemoSeeder {
 					.append("hue", Project.labelHueAt(hue++))
 					.append("createdAt", java.util.Date.from(Instant.now())));
 		}
+	}
+
+	/**
+	 * Three timesheet submissions: two waiting, one signed off.
+	 *
+	 * <p>All of them cover <em>past</em> months, and that is the whole design of
+	 * this method rather than an accident of the dates. A submitted period is
+	 * immutable — that is what submitting means — so seeding one over the week the
+	 * rest of the demo data lives in would hand every screenshot a read-only
+	 * timesheet and a calendar that refuses to be typed into. Past months hold no
+	 * seeded entries, so the rows show what the inbox and the status chips look
+	 * like while the current period stays open and demonstrable.
+	 *
+	 * <p>{@code totalMinutes} is a plausible figure rather than a sum of entries,
+	 * for the same reason: there are no entries in those months to add up. It is a
+	 * snapshot field on the document and is never what a report counts.
+	 *
+	 * <p>Written as raw documents, like {@link #timeTags()} and for the same
+	 * reason: these belong to the extended module, and the seeder is not allowed to
+	 * reach into it (see {@code ModuleBoundaryTest}).
+	 */
+	private void timesheetApprovals(Project hin, Project mob, User admin, User lena) {
+		if (mongo.getCollection("timesheet_approvals").countDocuments() > 0) {
+			return;
+		}
+		LocalDate lastMonth = LocalDate.now(ZoneOffset.UTC).withDayOfMonth(1).minusMonths(1);
+		LocalDate monthBefore = lastMonth.minusMonths(1);
+		approval(lena, hin, lastMonth, "SUBMITTED", 7_320, null, null);
+		approval(lena, mob, lastMonth, "SUBMITTED", 1_980, null, null);
+		approval(admin, hin, monthBefore, "APPROVED", 8_160, lena.getId(),
+				"Matches the sprint report.");
+	}
+
+	/** One timesheet submission for a whole calendar month. */
+	private void approval(User user, Project project, LocalDate monthStart, String status,
+			int minutes, String decidedBy, String note) {
+		LocalDate monthEnd = monthStart.withDayOfMonth(monthStart.lengthOfMonth());
+		Instant submittedAt = monthEnd.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+		org.bson.Document event = new org.bson.Document()
+				.append("at", java.util.Date.from(submittedAt))
+				.append("by", user.getId())
+				.append("to", "SUBMITTED");
+		List<org.bson.Document> history = new ArrayList<>(List.of(event));
+		org.bson.Document document = new org.bson.Document()
+				.append("userId", user.getId())
+				.append("projectId", project.getId())
+				.append("periodStart", java.util.Date.from(
+						monthStart.atStartOfDay().toInstant(ZoneOffset.UTC)))
+				.append("periodEnd", java.util.Date.from(
+						monthEnd.atStartOfDay().toInstant(ZoneOffset.UTC)))
+				.append("periodType", "MONTHLY")
+				.append("status", status)
+				.append("totalMinutes", minutes)
+				.append("submittedAt", java.util.Date.from(submittedAt))
+				.append("createdAt", java.util.Date.from(submittedAt));
+		if (decidedBy != null) {
+			Instant decidedAt = submittedAt.plus(Duration.ofHours(20));
+			document.append("decidedBy", decidedBy)
+					.append("decidedAt", java.util.Date.from(decidedAt))
+					.append("note", note);
+			history.add(new org.bson.Document()
+					.append("at", java.util.Date.from(decidedAt))
+					.append("by", decidedBy)
+					.append("from", "SUBMITTED")
+					.append("to", status)
+					.append("note", note));
+		}
+		mongo.getCollection("timesheet_approvals").insertOne(document.append("history", history));
 	}
 
 	private void saveTimed(User user, String projectId, String issueId, String description,

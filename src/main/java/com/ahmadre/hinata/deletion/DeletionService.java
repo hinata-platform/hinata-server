@@ -23,6 +23,7 @@ import com.ahmadre.hinata.team.TeamAvatarService;
 import com.ahmadre.hinata.team.TeamMembership;
 import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.timetracking.ProjectTimeSettings;
+import com.ahmadre.hinata.timetracking.TimesheetApproval;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
@@ -331,6 +332,12 @@ public class DeletionService {
 		// a listener so the cascade is one story in one place, and so a project
 		// deleted while the module is switched off is still cleaned up.
 		mongo.remove(byProjectId(pid), ProjectTimeSettings.class);
+		// Its timesheet submissions, for the same reason and with one of its own:
+		// a submission freezes the entries it covers, and a row whose project no
+		// longer exists would freeze them against a lead nobody can reach. The
+		// entries themselves survive or go with the issue strategy above; this only
+		// removes the statement that they had been handed in.
+		mongo.remove(byProjectId(pid), TimesheetApproval.class);
 
 		progress.step("deletingProject");
 		projects.deleteById(pid);

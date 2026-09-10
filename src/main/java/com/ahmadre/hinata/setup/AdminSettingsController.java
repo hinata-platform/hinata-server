@@ -45,6 +45,8 @@ public class AdminSettingsController {
 	private final List<SettingsPrefill> modulePrefills;
 	/** Modules describing what an admin changed about them; see {@link SettingsAudit}. */
 	private final List<SettingsAudit> moduleAudits;
+	/** Modules refusing a save that would break their own rules; see {@link SettingsGuard}. */
+	private final List<SettingsGuard> moduleGuards;
 	private final GitIntegrationSettings gitConfig;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
@@ -233,6 +235,12 @@ public class AdminSettingsController {
 		boolean droppingUpload = OrganizationLogoService.isInternal(current.getGeneral().getLogoUrl())
 				&& (updated.getGeneral() == null
 						|| !OrganizationLogoService.isInternal(updated.getGeneral().getLogoUrl()));
+		// Before the audit record and before the write, so a refusal leaves no
+		// trace of a change that did not happen. A module guard throws on purpose
+		// — unlike the audit hooks below, which must never fail a save.
+		for (SettingsGuard guard : moduleGuards) {
+			guard.check(current, updated);
+		}
 		// Recorded before the save so that disabling audit logging itself is still
 		// captured (the check reads the pre-save, still-enabled settings).
 		User actor = currentUser.require();

@@ -36,11 +36,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -155,6 +153,7 @@ public class TimeTrackingService {
 	private final SettingsService settings;
 	private final TimeTrackingSettings policy;
 	private final TimeTagService tagCatalog;
+	private final TimeLocks locks;
 	private final Clock clock;
 
 	// --- shapes ------------------------------------------------------------
@@ -401,42 +400,34 @@ public class TimeTrackingService {
 	 * again.
 	 */
 	private void assertUnlocked(WorkItem before, WorkItem after) {
-		LocalDate lock = lockBefore();
-		if (lock == null) {
-			return;
-		}
-		if (isBefore(before, lock) || isBefore(after, lock)) {
-			// A java.util.Date rather than the LocalDate: MessageFormat formats a
-			// Date for the reader's locale and calls toString() on anything else,
-			// so the German sentence would otherwise carry an ISO string. The
-			// messages spell the placeholder {0,date,medium}, because a bare {0}
-			// formats date *and* time and midnight is not part of this rule --
-			// "before 9/9/26, 12:00 AM" reads as if the 9th were half locked.
-			throw ApiException.forbidden("error.time.locked",
-					Date.from(lock.atStartOfDay(ZoneOffset.UTC).toInstant()));
-		}
-	}
-
-	private static boolean isBefore(WorkItem item, LocalDate lock) {
-		return item != null && item.getDate() != null && item.getDate().isBefore(lock);
-	}
-
-	/** Whether a day is frozen by the operator's lock date. */
-	public boolean isLocked(LocalDate date) {
-		LocalDate lock = lockBefore();
-		return lock != null && date != null && date.isBefore(lock);
+		locks.assertWritable(before, after);
 	}
 
 	/**
-	 * The freeze in force, or null.
+	 * Whether a day is frozen for this person and project — by the lock date, or
+	 * by a timesheet they have already handed in.
+	 *
+	 * <p>Both questions, because a caller that only asked the cheap one would
+	 * write into an approved period and find out from the gate a moment later,
+	 * which for the timer is a moment too late. Null for either of the first two
+	 * arguments asks only about the lock date, which is the honest answer for an
+	 * entry that has no project: those are never submitted.
+	 */
+	public boolean isLocked(String userId, String projectId, LocalDate date) {
+		return locks.lockStateFor(userId, projectId, date) != null;
+	}
+
+	/**
+	 * The instance-wide freeze in force, or null.
 	 *
 	 * <p>Null while the module is off, whatever the settings hold: a deployment
 	 * that set {@code HINATA_TIME_TRACKING_LOCK_BEFORE} and never switched the
 	 * module on must not start refusing writes from the frozen published app,
-	 * which reaches the 1.x routes through the same service.
+	 * which reaches the 1.x routes through the same service. A project may close
+	 * its own books earlier — {@link TimeLocks#lockBefore(String)} answers that.
 	 */
 	public LocalDate lockBefore() {
-		return policy.advancedEnabled() ? policy.lockBefore() : null;
+		return locks.lockBefore(null);
 	}
 
 	/**
@@ -837,6 +828,122 @@ public class TimeTrackingService {
 		// first page that came back short.
 		return PageableExecutionUtils.getPage(content, pageable,
 				() -> mongo.count(Query.query(matched), WorkItem.class));
+	}
+
+	/**
+	 * What one person booked per project inside a span.
+	 *
+	 * <p>Summed in the database, for the same reason the timesheet is: a quarter of
+	 * one person's entries is a few hundred documents to carry across just to add up
+	 * a handful of figures, and this is asked on every open of the timesheet and
+	 * again on every submission.
+	 *
+	 * <p>The {@code null} key is the hours with no project. It is deliberately
+	 * present — a submission must not quietly include them, and the answer that
+	 * leaves them out is indistinguishable from an answer where they do not exist.
+	 * Callers drop the key; the decision is theirs to make visibly.
+	 *
+	 * @param projectId narrow to one project, or null for every one of them
+	 */
+	public Map<String, Integer> minutesPerProject(String userId, LocalDate from, LocalDate to,
+			String projectId) {
+		Map<String, Integer> perProject = new LinkedHashMap<>();
+		minutesPerProjectAndDay(userId, from, to, projectId).forEach(
+				(day, byProject) -> byProject
+						.forEach((project, minutes) -> perProject.merge(project, minutes,
+								Integer::sum)));
+		return perProject;
+	}
+
+	/**
+	 * What one person booked per day and project inside a span.
+	 *
+	 * <p>Per day as well as per project, because one window can hold several
+	 * submission periods and each needs its <em>own</em> figure. Summing the whole
+	 * window once and showing it against every period in it would give three
+	 * months the same number — a wrong answer wearing the shape of a right one,
+	 * and exactly what an approver would compare against a payslip.
+	 *
+	 * <p>Grouped in the database, for the same reason the timesheet is: a quarter
+	 * of one person's entries is a few hundred documents to carry across just to
+	 * add up a handful of figures, and this is asked on every open of the timesheet
+	 * and again on every submission.
+	 *
+	 * <p>The {@code null} project key is the hours with no project. Deliberately
+	 * present — a submission must not quietly include them, and an answer that
+	 * left them out is indistinguishable from one where they do not exist. Callers
+	 * drop the key; the decision is theirs to make visibly.
+	 *
+	 * @param projectId narrow to one project, or null for every one of them
+	 */
+	public Map<LocalDate, Map<String, Integer>> minutesPerProjectAndDay(String userId,
+			LocalDate from, LocalDate to, String projectId) {
+		assertStorable(from, to, "error.time.invalidRange");
+		Criteria criteria = Criteria.where("userId").is(userId).and("date").gte(from).lte(to);
+		if (projectId != null) {
+			criteria = criteria.and("projectId").is(projectId);
+		}
+		Aggregation aggregation = Aggregation.newAggregation(
+				Aggregation.match(criteria),
+				// The day as a formatted string rather than the stored value, so an
+				// entry whose date somehow carries a time of day still lands on its
+				// own day instead of opening a second bucket. $dateToString reads UTC
+				// by default, which is the zone `date` is written in.
+				Aggregation.project("projectId", "durationMinutes")
+						.and(DateOperators.dateOf("date").toString("%Y-%m-%d")).as("day"),
+				Aggregation.group("day", "projectId").sum("durationMinutes").as("minutes"));
+		Map<LocalDate, Map<String, Integer>> perDay = new TreeMap<>();
+		for (Document group : mongo.aggregate(aggregation, WorkItem.class, Document.class)) {
+			Document key = group.get("_id", Document.class);
+			String day = key == null ? null : key.getString("day");
+			if (day == null) {
+				continue; // an entry with no date at all belongs to no period
+			}
+			int minutes = group.get("minutes") instanceof Number sum ? sum.intValue() : 0;
+			perDay.computeIfAbsent(LocalDate.parse(day), unused -> new LinkedHashMap<>())
+					.merge(key.getString("projectId"), minutes, Integer::sum);
+		}
+		return perDay;
+	}
+
+	/**
+	 * The entries one submission covers, newest first.
+	 *
+	 * <p>No access check here, and that is on purpose: this is reached only through
+	 * {@code TimesheetApprovalService.entriesOf}, which has already decided that
+	 * the caller is the owner or somebody who may decide the submission. Putting a
+	 * second rule here would be a second rule to keep in step with the first, and
+	 * the one that matters is the one on the submission.
+	 */
+	public Page<WorkItem> entriesOfPeriod(String userId, String projectId, LocalDate from,
+			LocalDate to, int page, int size) {
+		assertStorable(from, to, "error.time.invalidRange");
+		Criteria criteria = Criteria.where("userId").is(userId)
+				.and("projectId").is(projectId)
+				.and("date").gte(from).lte(to);
+		Pageable pageable = PageRequest.of(Math.clamp(page, 0, PAGE_INDEX_MAX),
+				Math.clamp(size, 1, PAGE_MAX), ENTRIES_NEWEST_FIRST);
+		List<WorkItem> content = mongo.find(Query.query(criteria).with(pageable), WorkItem.class);
+		return PageableExecutionUtils.getPage(content, pageable,
+				() -> mongo.count(Query.query(criteria), WorkItem.class));
+	}
+
+	/**
+	 * One of the caller's own entries, or a 404.
+	 *
+	 * <p>404 and not 403 for somebody else's, because the caller is asking about an
+	 * id: confirming that it exists but belongs to a colleague is an answer an id
+	 * space can be walked with. A lead is not admitted either — this is the hook for
+	 * the things a person does about <em>their own</em> record, and the correction
+	 * request of HIN-88 is the first of them.
+	 */
+	public WorkItem requireOwn(String workItemId, User user) {
+		WorkItem item = workItems.findById(workItemId)
+				.orElseThrow(() -> ApiException.notFound("workItem"));
+		if (item.getUserId() == null || !item.getUserId().equals(user.getId())) {
+			throw ApiException.notFound("workItem");
+		}
+		return item;
 	}
 
 	/**

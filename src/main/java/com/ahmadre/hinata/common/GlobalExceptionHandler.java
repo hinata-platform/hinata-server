@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.common;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -37,11 +38,24 @@ public class GlobalExceptionHandler {
 		this.messages = messages;
 	}
 
+	/**
+	 * {@code details} carries machine-readable facts for the handful of refusals a
+	 * client has to act on rather than print — see {@link ApiException#getDetails()}.
+	 * Omitted when empty, which is every other error: a client that has never
+	 * heard of the field sees exactly the shape it saw before.
+	 */
 	public record ApiError(int status, String error, String message, Instant timestamp,
-			Map<String, String> fieldErrors) {
+			Map<String, String> fieldErrors,
+			@JsonInclude(JsonInclude.Include.NON_EMPTY) Map<String, String> details) {
 
 		static ApiError of(HttpStatus status, String message, Map<String, String> fieldErrors) {
-			return new ApiError(status.value(), status.getReasonPhrase(), message, Instant.now(), fieldErrors);
+			return of(status, message, fieldErrors, Map.of());
+		}
+
+		static ApiError of(HttpStatus status, String message, Map<String, String> fieldErrors,
+				Map<String, String> details) {
+			return new ApiError(status.value(), status.getReasonPhrase(), message, Instant.now(),
+					fieldErrors, details);
 		}
 	}
 
@@ -88,7 +102,8 @@ public class GlobalExceptionHandler {
 			HttpServletResponse response) {
 		if (!allowJsonError(request, response)) return null;
 		String message = t(ex.getMessageKey(), ex.getArgs());
-		return ResponseEntity.status(ex.getStatus()).body(ApiError.of(ex.getStatus(), message, null));
+		return ResponseEntity.status(ex.getStatus())
+				.body(ApiError.of(ex.getStatus(), message, null, ex.getDetails()));
 	}
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)

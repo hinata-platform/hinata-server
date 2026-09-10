@@ -81,16 +81,18 @@ public class ProjectTimeSettingsController {
 	 */
 	public record ProjectTimeSettingsResponse(String projectId, Integer budgetMinutes,
 			Boolean defaultBillable, Boolean approvalRequired, ApprovalPeriodDto approvalPeriod,
-			AlertThresholdsDto alertThresholds, java.time.Instant updatedAt, String updatedBy) {
+			LocalDate lockBefore, AlertThresholdsDto alertThresholds,
+			java.time.Instant updatedAt, String updatedBy) {
 
 		static ProjectTimeSettingsResponse of(String projectId, ProjectTimeSettings settings) {
 			if (settings == null) {
 				return new ProjectTimeSettingsResponse(projectId, null, null, null, null, null,
-						null, null);
+						null, null, null);
 			}
 			return new ProjectTimeSettingsResponse(projectId, settings.getBudgetMinutes(),
 					settings.getDefaultBillable(), settings.getApprovalRequired(),
 					ApprovalPeriodDto.from(settings.getApprovalPeriod()),
+					settings.getLockBefore(),
 					AlertThresholdsDto.from(settings.getAlertThresholds()),
 					settings.getUpdatedAt(), settings.getUpdatedBy());
 		}
@@ -131,6 +133,17 @@ public class ProjectTimeSettingsController {
 		private Boolean approvalRequired;
 		@Valid
 		private ApprovalPeriodRequest approvalPeriod;
+		/**
+		 * A freeze for this project alone; null ⇒ the instance lock date.
+		 *
+		 * <p>Never in the future, for the reason the instance-wide one is not:
+		 * a freeze that reaches into the present blocks the recording of working
+		 * time that is happening now (§ 16 Abs. 2 ArbZG, EuGH C-55/18). And it only
+		 * ever closes <em>more</em> than the instance — {@code TimeLocks} takes the
+		 * later of the two — because a project lead must not be able to reopen the
+		 * month an administrator archived.
+		 */
+		private LocalDate lockBefore;
 		@Valid
 		private AlertThresholdsRequest alertThresholds;
 	}
@@ -154,6 +167,15 @@ public class ProjectTimeSettingsController {
 		User user = currentUser.require();
 		Project project = projects.get(projectId);
 		projects.assertLeadOrAdmin(project, user);
+		// Against the injected clock rather than a @PastOrPresent, for two reasons:
+		// the annotation reads the JVM's default zone and default clock, and it
+		// would reach the client as a field error under the generic "validation
+		// failed" sentence. This is a rule whose consequence has to be said in
+		// words — see TimeTrackingSettingsGuard.
+		if (request.getLockBefore() != null
+				&& request.getLockBefore().isAfter(LocalDate.now(clock))) {
+			throw ApiException.badRequest("error.time.lockDateInFuture");
+		}
 		ProjectTimeSettings before = store.findByProjectId(project.getId()).orElse(null);
 		ProjectTimeSettings settings = before != null ? before
 				: ProjectTimeSettings.builder().projectId(project.getId()).build();
@@ -161,6 +183,7 @@ public class ProjectTimeSettingsController {
 		settings.setDefaultBillable(request.getDefaultBillable());
 		settings.setApprovalRequired(request.getApprovalRequired());
 		settings.setApprovalPeriod(periodOf(request.getApprovalPeriod()));
+		settings.setLockBefore(request.getLockBefore());
 		settings.setAlertThresholds(thresholdsOf(request.getAlertThresholds()));
 		settings.setUpdatedAt(clock.instant());
 		settings.setUpdatedBy(user.getId());
@@ -177,6 +200,8 @@ public class ProjectTimeSettingsController {
 				.meta("approvalPeriod", change(
 						before == null ? null : periodOf(before.getApprovalPeriod()),
 						periodOf(saved.getApprovalPeriod())))
+				.meta("lockBefore", change(
+						before == null ? null : before.getLockBefore(), saved.getLockBefore()))
 				.meta("alertThresholds", change(
 						before == null ? null : thresholdsOf(before.getAlertThresholds()),
 						thresholdsOf(saved.getAlertThresholds())))

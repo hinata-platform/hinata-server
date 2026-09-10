@@ -36,10 +36,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * storage contract of the {@code work_items} collection — the reports, the
  * dashboard, the weekly summary, issue deletion and issue moves all read or
  * re-point those documents. They may name the shape; they may not reach for the
- * module's behaviour. {@code ProjectTimeSettings} joins them for one reason
- * only: deleting a project has to take its row with it, and a cascade that
- * left a collection behind because the module was switched off would be a
- * leak with no owner.</li>
+ * module's behaviour. {@code ProjectTimeSettings} and
+ * {@code TimesheetApproval} join them for one reason only: deleting a project
+ * has to take their rows with it, and a cascade that left a collection behind
+ * because the module was switched off would be a leak with no owner. A
+ * timesheet submission has a second reason of its own — it <em>freezes</em> the
+ * entries it covers, so a row whose project is gone would freeze them against
+ * a lead nobody can reach.</li>
  * <li><b>The named bridges.</b> Two classes exist to connect the outside to the
  * module and are listed one by one.</li>
  * <li><b>The wire contracts.</b> {@code AuditAction}, {@code Notification.Type}
@@ -70,7 +73,7 @@ class ModuleBoundaryTest {
 	 */
 	private static final Set<String> STORAGE_CONTRACT =
 			Set.of(TIME + ".WorkItem", TIME + ".WorkItemRepository",
-					TIME + ".ProjectTimeSettings");
+					TIME + ".ProjectTimeSettings", TIME + ".TimesheetApproval");
 
 	/**
 	 * The classes that are allowed to reach into the module, each for a stated

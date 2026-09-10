@@ -6,8 +6,11 @@ import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -26,7 +29,17 @@ class TimeTrackingSettingsTest {
 
 	private final HinataProperties properties = new HinataProperties();
 	private final SettingsService settings = mock(SettingsService.class);
-	private final TimeTrackingSettings policy = new TimeTrackingSettings(settings, properties);
+	/**
+	 * A fixed clock, because {@code lockBefore()} clamps to today. The date is the
+	 * day the clamp was written and sits far enough past every stored date below
+	 * that none of them is affected by it; the clamp itself is exercised in
+	 * {@code TimeLockIntegrationTest}.
+	 */
+	private static final Clock CLOCK =
+			Clock.fixed(Instant.parse("2026-09-10T09:00:00Z"), ZoneOffset.UTC);
+
+	private final TimeTrackingSettings policy =
+			new TimeTrackingSettings(settings, properties, CLOCK);
 
 	private HinataProperties.TimeTracking env() {
 		return properties.getTimeTracking();

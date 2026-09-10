@@ -64,6 +64,17 @@ public class ProjectTimeSettings {
 	 */
 	private ApprovalPeriod approvalPeriod;
 
+	/**
+	 * A freeze just for this project; null ⇒ the instance lock date.
+	 *
+	 * <p>Projects close at different times — one customer is invoiced and done
+	 * while another runs on — and approvals already run per project, so the freeze
+	 * that goes with them does too. Resolution is "the later of the two": a
+	 * project override never <em>unfreezes</em> a day the instance closed, because
+	 * a lead must not be able to reopen the month an administrator archived.
+	 */
+	private LocalDate lockBefore;
+
 	/** When a lead is warned that the project is running out of budget (stage 11). */
 	private AlertThresholds alertThresholds;
 

@@ -433,9 +433,16 @@ public class HinataProperties {
 		private RequiredFields requiredFields = new RequiredFields();
 
 		/**
-		 * Entries on or before this day can no longer be written. Null (the
-		 * default) means no lock; set it from
+		 * Entries <em>before</em> this day can no longer be written — the day
+		 * itself stays open. Null (the default) means no lock; set it from
 		 * {@code HINATA_TIME_TRACKING_LOCK_BEFORE} as an ISO date.
+		 *
+		 * <p>A date in the future is refused when an administrator saves one
+		 * ({@code error.time.lockDateInFuture}) and clamped to today when it
+		 * arrives from here, because a deployment variable has nobody to tell:
+		 * a freeze that reaches into tomorrow would stop the recording of
+		 * working time that is being performed right now, which is the one thing
+		 * § 16 Abs. 2 ArbZG requires the system to be able to do.
 		 */
 		private LocalDate lockBefore;
 
@@ -515,11 +522,16 @@ public class HinataProperties {
 		}
 
 		/**
-		 * The submission rhythm. {@code weekStartsOn} matters for WEEKLY/BIWEEKLY,
-		 * {@code anchorDate} for BIWEEKLY/CUSTOM_DAYS, {@code days} for
-		 * CUSTOM_DAYS — {@code ApprovalPeriodConsistent} states which combination
-		 * is coherent, in one place, for both the defaults here and the stored
-		 * override.
+		 * The submission rhythm. {@code weekStartsOn} belongs to WEEKLY,
+		 * {@code anchorDate} to BIWEEKLY/CUSTOM_DAYS, {@code days} to CUSTOM_DAYS —
+		 * {@code ApprovalPeriodConsistent} states which combination is coherent, in
+		 * one place, for both the defaults here and the stored override.
+		 *
+		 * <p>A counted rhythm begins exactly on its {@code anchorDate} and is not
+		 * snapped to {@code weekStartsOn}: picking the day a biweekly run starts is
+		 * the more specific of the two statements, and moving it to the nearest
+		 * Monday behind the operator's back would shift every period they preview.
+		 * {@code ApprovalPeriods} is where that is computed and said.
 		 */
 		@Getter
 		@Setter
@@ -529,7 +541,7 @@ public class HinataProperties {
 			private DayOfWeek weekStartsOn = DayOfWeek.MONDAY;
 			private LocalDate anchorDate;
 			@Min(1)
-			@Max(366)
+			@Max(TimePolicy.PERIOD_MAX_DAYS)
 			private Integer days;
 		}
 

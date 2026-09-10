@@ -18,6 +18,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -175,7 +176,7 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 		// The e-mail is sent without a CTA, the push without a deep link.
 		verify(mail).sendNotification(eq("ext@example.org"), anyString(), anyString(), anyString(),
 				isNull(), anyString(), anyString(), anyString(), any());
-		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), isNull());
+		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), isNull(), anyMap());
 	}
 
 	@Test
@@ -189,7 +190,7 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
 		verify(notifications).save(saved.capture());
 		assertThat(saved.getValue().getLink()).isEqualTo("/issues/MOB-9");
-		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), eq("/issues/MOB-9"));
+		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), eq("/issues/MOB-9"), anyMap());
 	}
 
 	// --- description mentions -------------------------------------------------

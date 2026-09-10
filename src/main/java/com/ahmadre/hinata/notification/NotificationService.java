@@ -384,6 +384,73 @@ public class NotificationService {
 		deliverGated(owner, Notification.Type.TIME_TIMER_AUTO_STOPPED, title, body, "/time");
 	}
 
+	/** Which way a submission went, for the one notification that reports it. */
+	public enum TimesheetEvent {
+		APPROVED(Notification.Type.TIMESHEET_APPROVED, "approved"),
+		REJECTED(Notification.Type.TIMESHEET_REJECTED, "rejected"),
+		REOPENED(Notification.Type.TIMESHEET_REOPENED, "reopened");
+
+		private final Notification.Type type;
+		private final String key;
+
+		TimesheetEvent(Notification.Type type, String key) {
+			this.type = type;
+			this.key = key;
+		}
+	}
+
+	/**
+	 * Tells a project's approvers that somebody has handed a period in.
+	 *
+	 * <p>Names the person and nothing else. Not the hours, not the project, not the
+	 * span — R7, and a push notification is read by whoever is holding the phone.
+	 * The submitter is never in {@code recipients}; the caller removes them, because
+	 * it is the caller that knows who acted.
+	 */
+	public void notifyTimesheetSubmitted(Set<String> recipients, String submitter, String link) {
+		if (recipients == null || recipients.isEmpty()) return;
+		deliver(recipients, Notification.Type.TIMESHEET_SUBMITTED,
+				locale -> words.in(locale, "notify.timesheetSubmitted.title"),
+				locale -> words.in(locale, "notify.timesheetSubmitted.body", submitter),
+				locale -> words.in(locale, "notify.timesheet.push"),
+				link, null, Routing.of(Notification.Type.TIMESHEET_SUBMITTED));
+	}
+
+	/**
+	 * Tells somebody what became of the period they handed in.
+	 *
+	 * <p>{@code period} is the span in ISO and is rendered as a date range — never
+	 * as a week number, and never with the word "week" in it: how often timesheets
+	 * are submitted is the operator's decision, and a sentence that assumed a
+	 * rhythm would be wrong on most instances. A rejection or a reopen carries its
+	 * reason in-app and in the mail; the push says only that a decision exists.
+	 */
+	public void notifyTimesheetDecided(User owner, TimesheetEvent event, String period,
+			String link) {
+		if (owner == null || !owner.isActive()) return;
+		String title = words.of(owner, "notify.timesheet." + event.key + ".title");
+		String body = words.of(owner, "notify.timesheet." + event.key + ".body", period);
+		deliverGated(owner, event.type, title, body,
+				words.of(owner, "notify.timesheet.push"), link);
+	}
+
+	/**
+	 * Tells whoever can lift a freeze that somebody has asked them to.
+	 *
+	 * <p>The request itself changes nothing — that is the point of it — so this is
+	 * the whole of its effect, and it has to reach somebody or the right it serves
+	 * (Art. 16 DSGVO) would be a button with no recipient.
+	 */
+	public void notifyTimeCorrectionRequested(Set<String> recipients, String requester,
+			String link) {
+		if (recipients == null || recipients.isEmpty()) return;
+		deliver(recipients, Notification.Type.TIME_CORRECTION_REQUESTED,
+				locale -> words.in(locale, "notify.timeCorrection.title"),
+				locale -> words.in(locale, "notify.timeCorrection.body", requester),
+				locale -> words.in(locale, "notify.timesheet.push"),
+				link, null, Routing.of(Notification.Type.TIME_CORRECTION_REQUESTED));
+	}
+
 	private void deliverOne(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
@@ -401,6 +468,16 @@ public class NotificationService {
 	 * user can toggle (invites, digest); locked events (security) always deliver.
 	 */
 	private void deliverGated(User user, Notification.Type type, String title, String body, String link) {
+		deliverGated(user, type, title, body, body, link);
+	}
+
+	/**
+	 * As above, with a push body of its own — see the two-body
+	 * {@link #deliver(Set, Notification.Type, L10n, L10n, L10n, String, String, Routing)}
+	 * for why a lock screen gets told less than an inbox.
+	 */
+	private void deliverGated(User user, Notification.Type type, String title, String body,
+			String pushBody, String link) {
 		if (user == null || !user.isActive()) return;
 		String eventId = eventId(type);
 		notifications.save(Notification.builder()
@@ -411,7 +488,7 @@ public class NotificationService {
 					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		}
 		if (prefs.deliversPush(eventId)) {
-			push.sendToUser(user.getId(), title, body, link);
+			push.sendToUser(user.getId(), title, pushBody, link, Map.of("type", type.name()));
 		}
 	}
 
@@ -715,6 +792,22 @@ public class NotificationService {
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link, String linkProjectId, Routing routing) {
+		deliver(userIds, type, title, body, body, link, linkProjectId, routing);
+	}
+
+	/**
+	 * As above, with a push body of its own.
+	 *
+	 * <p>One notification, two audiences for its text. The bell and the e-mail are
+	 * read by the person who opened them; a push notification is read by whoever
+	 * is standing in front of the phone, on a lock screen, without being asked. R7
+	 * of the epic rules out putting somebody's working time there, so the time
+	 * notifications say that something is waiting and leave what it is to the app.
+	 * Passing the same lambda twice is what every other caller does, and means the
+	 * split costs nothing where it is not wanted.
+	 */
+	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
+			L10n pushBody, String link, String linkProjectId, Routing routing) {
 		// Who may follow the link, asked once for the whole set. The per-recipient
 		// question costs a project read and, for anyone who is not a direct member,
 		// a team query — so on a busy issue it re-asks the very thing the bulk
@@ -730,6 +823,7 @@ public class NotificationService {
 		// re-entered on the SAME map throws.
 		Map<Locale, String> titles = new HashMap<>();
 		Map<Locale, String> bodies = new HashMap<>();
+		Map<Locale, String> pushBodies = new HashMap<>();
 		for (String userId : userIds) {
 			if (userId == null) continue;
 			users.findById(userId).filter(User::isActive).ifPresent(user -> {
@@ -752,7 +846,9 @@ public class NotificationService {
 							routing.changeLines().apply(locale));
 				}
 				if (prefs.deliversPush(eventId)) {
-					push.sendToUser(user.getId(), t, b, userLink);
+					push.sendToUser(user.getId(), t,
+							pushBodies.computeIfAbsent(locale, pushBody::of), userLink,
+							Map.of("type", type.name()));
 				}
 			});
 		}
@@ -878,7 +974,8 @@ public class NotificationService {
 			case ISSUE_DUE_SOON, SPRINT_STARTED, SPRINT_COMPLETED -> "sprint";
 			case TEAM_ADDED, PROJECT_ADDED -> "invites";
 			case DIGEST -> "digest";
-			case TIME_TIMER_AUTO_STOPPED -> "time";
+			case TIME_TIMER_AUTO_STOPPED, TIMESHEET_SUBMITTED, TIMESHEET_APPROVED,
+					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

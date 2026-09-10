@@ -7,6 +7,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -19,6 +21,7 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -404,8 +407,28 @@ public class ServerSettings {
 		@Valid
 		private RequiredFields requiredFields;
 
-		/** Entries on or before this day are frozen; null ⇒ env default. */
+		/** Entries <em>before</em> this day are frozen — the day itself stays open; null ⇒ env default. */
 		private LocalDate lockBefore;
+
+		/**
+		 * Spans reopened inside the freeze, each with a reason and an actor.
+		 *
+		 * <p>The lock date is an archiving tool: "the books up to here are closed".
+		 * Without this the only way back was to clear the date altogether, which
+		 * reopens <em>everything</em> after it for one correction — and a freeze
+		 * with no proportionate way out collides with Art. 16 DSGVO, because
+		 * working time is personal data and inaccurate personal data has to be
+		 * correctable without undue delay.
+		 *
+		 * <p>No environment default, unlike every other field in this block, and
+		 * that is deliberate rather than an omission: an exception records who
+		 * opened it and when, and a variable in a deployment file cannot answer
+		 * either question. It is created through
+		 * {@code POST /api/v1/time/lock-exceptions} and audited.
+		 */
+		@Valid
+		@Size(max = TimePolicy.LOCK_EXCEPTIONS_MAX, message = "error.time.lockExceptionsTooMany")
+		private List<LockException> lockExceptions;
 
 		/** Rounding of reported durations; null ⇒ env default. */
 		@Valid
@@ -497,6 +520,41 @@ public class ServerSettings {
 		@JsonInclude(JsonInclude.Include.NON_NULL)
 		private TimeTracking effective;
 
+		/**
+		 * One reopened span inside the freeze.
+		 *
+		 * <p>{@code note} is not optional, and is the reason the whole feature is
+		 * defensible: an exception without a stated purpose is indistinguishable
+		 * from somebody quietly editing a closed month. {@code by} and {@code at}
+		 * are stamped by the server, never read from the request — a client that
+		 * could name the author of an audit trail entry is not an audit trail.
+		 */
+		@Data
+		public static class LockException {
+
+			/** Stable id so one exception can be removed without matching on dates. */
+			private String id;
+
+			/** First day reopened, inclusive. */
+			@NotNull(message = "error.time.lockExceptionInvalid")
+			private LocalDate from;
+
+			/** Last day reopened, inclusive. */
+			@NotNull(message = "error.time.lockExceptionInvalid")
+			private LocalDate to;
+
+			/** Why this span was opened. Required, and kept in the audit record. */
+			@NotBlank(message = "error.time.lockExceptionNoteRequired")
+			@Size(max = TimePolicy.LOCK_NOTE_MAX, message = "error.time.noteTooLong")
+			private String note;
+
+			/** Who opened it — an administrator's user id, stamped by the server. */
+			private String by;
+
+			/** When it was opened, stamped by the server. */
+			private Instant at;
+		}
+
 		/** Per-field overrides for the required-field policy. */
 		@Data
 		public static class RequiredFields {
@@ -527,8 +585,11 @@ public class ServerSettings {
 			private TimePolicy.ApprovalPeriod type;
 			private DayOfWeek weekStartsOn;
 			private LocalDate anchorDate;
+			// 92 rather than a year: a submission covers at most 92 days (the
+			// longest calendar quarter), so a rhythm longer than that would cut
+			// periods nobody could ever hand in.
 			@Min(value = 1, message = "error.timeTracking.approvalPeriodInvalid")
-			@Max(value = 366, message = "error.timeTracking.approvalPeriodInvalid")
+			@Max(value = TimePolicy.PERIOD_MAX_DAYS, message = "error.timeTracking.approvalPeriodInvalid")
 			private Integer days;
 		}
 

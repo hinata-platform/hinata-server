@@ -9,6 +9,14 @@ import org.springframework.stereotype.Component;
 /**
  * What the module deletes when an account is deleted, and what it keeps.
  *
+ * <p>Deleted: the running timer, and the person's timesheet submissions. A
+ * submission is a statement <em>about</em> somebody — "this person handed in this
+ * span, and I accepted it" — and once the account is gone there is nobody it can
+ * be a statement about, nobody to reopen it for, and nobody to ask for a
+ * correction. Leaving it behind would freeze the surviving entries against an
+ * approver who has no one to answer to. The audit records of the decisions remain,
+ * because those are records of what administrators and leads did.
+ *
  * <p>Deleted: the running timer. It is live personal state about what somebody
  * is doing right now, it belongs to nobody once the account is gone, and it
  * would otherwise sit in {@code running_timers} forever holding a name for an id
@@ -31,6 +39,7 @@ import org.springframework.stereotype.Component;
 public class TimeTrackingErasure {
 
 	private final RunningTimerRepository timers;
+	private final TimesheetApprovalRepository approvals;
 
 	@EventListener
 	public void onUserDeleted(UserService.UserDeletedEvent event) {
@@ -39,12 +48,17 @@ public class TimeTrackingErasure {
 			if (removed > 0) {
 				log.info("[time] removed running timer of deleted user {}", event.userId());
 			}
+			long submissions = approvals.deleteByUserId(event.userId());
+			if (submissions > 0) {
+				log.info("[time] removed {} timesheet submission(s) of deleted user {}",
+						submissions, event.userId());
+			}
 		}
 		catch (RuntimeException ex) {
 			// The account is already gone. Failing here would turn a completed
 			// erasure into a failed request and tell the user their deletion did
 			// not happen, which is both alarming and untrue.
-			log.warn("[time] could not remove running timer of deleted user {}: {}",
+			log.warn("[time] could not clean up time state of deleted user {}: {}",
 					event.userId(), ex.toString());
 		}
 	}
