@@ -409,9 +409,29 @@ public class TimesheetApprovalService {
 		return approval;
 	}
 
-	/** The entries a submission covers, paged — the approver's actual reading material. */
+	/**
+	 * The entries a submission covers, paged — the approver's actual reading material.
+	 *
+	 * <p>Behind {@code leadsSeeMemberEntries} for everybody but the owner and an
+	 * administrator, which is the same rule
+	 * {@link TimeTrackingService#history(String, int, int, User)} follows and for
+	 * the same reason: a period seen entry by entry <em>is</em> the entries. That
+	 * switch is a promise to the people whose hours these are — off, a lead sees
+	 * project sums and never who booked what — and a second feature that quietly
+	 * voids it would make the promise worthless. The admin panel says the two
+	 * belong together; until an operator turns visibility on, this route is the
+	 * half that must not go ahead alone.
+	 *
+	 * <p>Deciding is untouched. An approver can still approve or send back a period
+	 * they may not read line by line — that is the operator's configuration, not
+	 * this route's judgement — and the refusal names the policy so the app can say
+	 * which switch would answer it.
+	 */
 	public Page<WorkItem> entriesOf(String id, int page, int size, User user) {
 		TimesheetApproval approval = get(id, user);
+		if (!isOwner(approval, user) && !user.isAdmin() && !policy.leadsSeeMemberEntries()) {
+			throw ApiException.forbidden("error.time.entriesHidden");
+		}
 		return entries.entriesOfPeriod(approval.getUserId(), approval.getProjectId(),
 				approval.getPeriodStart(), approval.getPeriodEnd(), page, size);
 	}
