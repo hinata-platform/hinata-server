@@ -9,8 +9,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * The effective time-tracking policy: an administrator's stored override wins
@@ -45,6 +47,7 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 
 	private final SettingsService settings;
 	private final HinataProperties properties;
+	private final Clock clock;
 
 	/**
 	 * The stored overrides. Never holds null once loaded — an instance with no
@@ -93,10 +96,39 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 				bool(override.getTag(), fallback.isTag()));
 	}
 
-	/** The day up to and including which entries are frozen, or null for no lock. */
+	/**
+	 * The day <em>before</em> which entries are frozen — the day itself stays open —
+	 * or null for no lock.
+	 *
+	 * <p>Clamped to today. A date in the future is refused when an administrator
+	 * saves one ({@code TimeTrackingSettingsGuard}), but one that arrives from the
+	 * environment has nobody to refuse it to: a server that would not start, or one
+	 * that silently stopped accepting today's hours, are both worse answers than
+	 * freezing one day fewer than the variable asked for. The reason is the same in
+	 * both directions — a freeze that reaches into the present blocks the recording
+	 * of working time that § 16 Abs. 2 ArbZG requires to be recordable.
+	 */
 	public LocalDate lockBefore() {
 		LocalDate override = db().getLockBefore();
-		return override != null ? override : env().getLockBefore();
+		LocalDate configured = override != null ? override : env().getLockBefore();
+		if (configured == null) {
+			return null;
+		}
+		LocalDate today = LocalDate.now(clock);
+		return configured.isAfter(today) ? today : configured;
+	}
+
+	/**
+	 * The spans an administrator has reopened inside the freeze. Never null.
+	 *
+	 * <p>The one policy with no environment fallback, and deliberately so: an
+	 * exception records who opened it and when, and a deployment variable can
+	 * answer neither. It is created through the API and audited, so the stored
+	 * block is the only place it can come from.
+	 */
+	public List<ServerSettings.TimeTracking.LockException> lockExceptions() {
+		List<ServerSettings.TimeTracking.LockException> stored = db().getLockExceptions();
+		return stored == null ? List.of() : stored;
 	}
 
 	/** How reported durations are folded onto an increment. */

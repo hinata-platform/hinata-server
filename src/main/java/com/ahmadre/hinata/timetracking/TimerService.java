@@ -3,6 +3,7 @@ package com.ahmadre.hinata.timetracking;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.me.UserEvents;
 import com.ahmadre.hinata.notification.NotificationService;
@@ -64,6 +65,16 @@ public class TimerService {
 	public static final Duration MAX_RUN = Duration.ofHours(24);
 
 	/**
+	 * How far ahead of the server's clock a client-reported end may sit.
+	 *
+	 * <p>Not a tolerance for convenience — the difference between a device whose
+	 * clock is a little out and a client that has been asked to book a day of work
+	 * for a minute of it. Two minutes covers every unsynchronised phone; nothing
+	 * legitimate needs more, because an end in the <em>past</em> is never refused.
+	 */
+	public static final Duration MAX_CLOCK_SKEW = Duration.ofMinutes(2);
+
+	/**
 	 * How long an automatic-stop claim holds before another sweep may retake it.
 	 *
 	 * <p>Shorter than the hourly sweep on purpose. At exactly one interval the
@@ -81,6 +92,7 @@ public class TimerService {
 	private final RunningTimerRepository timers;
 	private final WorkItemRepository workItems;
 	private final TimeTrackingService entries;
+	private final TimeLocks locks;
 	private final UserRepository users;
 	private final UserEvents userEvents;
 	private final NotificationService notifications;
@@ -436,6 +448,20 @@ public class TimerService {
 		if (!end.isAfter(timer.getStartedAt())) {
 			throw ApiException.badRequest("error.time.invalidDuration");
 		}
+		// The end comes from the client, and until now it was only capped from
+		// above — so a one-second timer could be stopped with endedAt a day later
+		// and book 1440 minutes of work that never happened. Self-reported time
+		// under a lead's eye, but HIN-88 makes an approved period immutable, so an
+		// inflated duration is exactly what should not be able to get in there.
+		//
+		// A skew limit rather than a clamp to now: a stop genuinely reported late —
+		// the connection dropped, the phone slept — is a legitimate end in the past
+		// and must stay untouched, while a clamp would silently rewrite it. Two
+		// minutes is generous for an unsynchronised device clock and far too little
+		// to inflate anything.
+		if (end.isAfter(clock.instant().plus(MAX_CLOCK_SKEW))) {
+			throw ApiException.badRequest("error.time.endInFuture");
+		}
 		// A stop that arrives late for a timer that ran past its ceiling is
 		// truncated rather than refused: the person pressing stop must not be the
 		// one who pays for having forgotten. Beyond the ceiling the sweep would
@@ -458,17 +484,28 @@ public class TimerService {
 		TimeTrackingService.Placement placement = placementFor(request, timer, user);
 		ZoneId zone = entries.zoneOf(user);
 		LocalDate day = LocalDate.ofInstant(timer.getStartedAt(), zone);
-		if (entries.isLocked(day)) {
-			// The interval belongs to a day the operator froze, so there is nowhere
-			// to file it — and leaving the timer running would be worse than losing
-			// it: every stop from now on would answer 403 while the clock kept
-			// going, and the only way out would be to discard it anyway. So the
-			// timer goes and the person is told why, in the same breath. Reachable
-			// only where the lock date reaches today, since a timer cannot outlive
-			// its start by more than a day.
+		TimeLocks.LockState frozen =
+				locks.lockStateFor(user.getId(), placement.projectId(), day);
+		if (frozen != null && frozen.reason() == TimePolicy.LockReason.APPROVAL
+				&& origin == StopOrigin.BY_HAND) {
+			// An approved period is frozen for *this project*, and that is a
+			// refusal the person can act on: file it somewhere else, or ask an
+			// approver to reopen. So the timer is left exactly as it is and the
+			// answer names both ways out — the same shape as a missing required
+			// field, and for the same reason. Nothing has been written yet.
+			throw frozen.refusal();
+		}
+		if (frozen != null) {
+			// The lock date, or an unattended sweep that has nobody to ask. There
+			// is nowhere to file the interval, and leaving the timer running would
+			// be worse than losing it: every stop from now on would answer 403
+			// while the clock kept going, and the only way out would be to discard
+			// it anyway. So the timer goes and the person is told why, in the same
+			// breath. By the lock date this is reachable only where the freeze
+			// reaches today, since a timer cannot outlive its start by a day.
 			timers.deleteById(timer.getId());
 			publish(user.getId(), null);
-			throw ApiException.forbidden("error.time.lockedTimer");
+			throw ApiException.forbidden("error.time.lockedTimer", frozen.details());
 		}
 		WorkItem item = WorkItem.builder()
 				// The timer's id, so a second stop collides instead of duplicating.
@@ -771,12 +808,15 @@ public class TimerService {
 	private void fileInterval(RunningTimer timer, Instant now, User user) {
 		ZoneId zone = entries.zoneOf(user);
 		LocalDate day = LocalDate.ofInstant(timer.getStartedAt(), zone);
-		if (entries.isLocked(day)) {
+		TimeLocks.LockState frozen =
+				locks.lockStateFor(user.getId(), timer.getProjectId(), day);
+		if (frozen != null) {
 			// The claim above already removed the timer, so throwing here would
 			// end the run mid-rhythm over a day nothing may be written to anyway.
-			// The phase turns, the interval is not filed, and the log says so.
-			log.warn("[time] pomodoro interval of user {} on {} not filed: the day is frozen",
-					user.getId(), day);
+			// The phase turns, the interval is not filed, and the log says which
+			// of the reasons it was.
+			log.warn("[time] pomodoro interval of user {} on {} not filed: frozen by {}",
+					user.getId(), day, frozen.reason());
 			return;
 		}
 		Instant end = now;
@@ -1012,14 +1052,17 @@ public class TimerService {
 			timers.deleteById(timer.getId());
 			return false;
 		}
-		if (entries.isLocked(LocalDate.ofInstant(timer.getStartedAt(), entries.zoneOf(owner)))) {
-			// Nothing can be written to that day any more, and a timer the sweep
+		TimeLocks.LockState frozen = locks.lockStateFor(owner.getId(), timer.getProjectId(),
+				LocalDate.ofInstant(timer.getStartedAt(), entries.zoneOf(owner)));
+		if (frozen != null) {
+			// Nothing can be written to that day any more — the books are closed,
+			// or the owner has already handed the period in — and a timer the sweep
 			// cannot file is a timer the sweep would try again every hour for ever.
 			// Removed, and said out loud in the log rather than counted as stopped.
 			timers.deleteById(timer.getId());
 			publish(owner.getId(), null);
-			log.warn("[time] auto-stop of timer {} discarded: its day is frozen by the lock date",
-					timer.getId());
+			log.warn("[time] auto-stop of timer {} discarded: its day is frozen by {}",
+					timer.getId(), frozen.reason());
 			return false;
 		}
 		Stopped result = stop(timer, new StopRequest(null, timer.getStartedAt().plus(MAX_RUN),

@@ -22,6 +22,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -136,7 +137,7 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 		service.notifyUpdated(issue(List.of("u-gone"), List.of(), null), STATE_CHANGE, user("u-actor"));
 
 		verify(notifications, never()).save(any());
-		verify(push, never()).sendToUser(anyString(), anyString(), anyString(), any());
+		verify(push, never()).sendToUser(anyString(), anyString(), anyString(), any(), anyMap());
 	}
 
 	/** A team grant is access, so it is enough to keep hearing about the issue. */
@@ -271,8 +272,8 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 		service.notifyUpdated(issue(List.of("u-watch"), List.of("u-assignee"), null),
 				STATE_CHANGE, user("u-actor"));
 
-		verify(push).sendToUser(eq("u-watch"), anyString(), anyString(), eq("/issues/HIN-42"));
-		verify(push).sendToUser(eq("u-assignee"), anyString(), anyString(), eq("/issues/HIN-42"));
+		verify(push).sendToUser(eq("u-watch"), anyString(), anyString(), eq("/issues/HIN-42"), anyMap());
+		verify(push).sendToUser(eq("u-assignee"), anyString(), anyString(), eq("/issues/HIN-42"), anyMap());
 	}
 
 	@Test
@@ -287,7 +288,7 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 				user("u-actor"));
 
 		verify(digests, never()).queue(any(), any(), anyList());
-		verify(push, never()).sendToUser(anyString(), anyString(), anyString(), any());
+		verify(push, never()).sendToUser(anyString(), anyString(), anyString(), any(), anyMap());
 		// The bell entry is always recorded — that is not a channel the user gates.
 		assertThat(saved()).extracting(Notification::getUserId).containsExactly("u-watch");
 	}

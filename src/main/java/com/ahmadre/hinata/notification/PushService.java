@@ -7,6 +7,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Sends push to a user's registered devices via Hinata Connect (the central
@@ -30,10 +31,26 @@ public class PushService {
 	 */
 	@Async
 	public void sendToUser(String userId, String title, String body, String link) {
+		sendToUser(userId, title, body, link, Map.of());
+	}
+
+	/**
+	 * As above, with extra key/values in the notification's data payload.
+	 *
+	 * <p>{@code link} is the route the tap follows and has been there from the
+	 * start; {@code extra} is what a client needs in order to decide <em>how</em> to
+	 * present the thing before the tap — a {@code type}, above all, so a category
+	 * does not have to be guessed from the shape of a path. Kept to a handful of
+	 * short values: the gateway bounds the map, and anything personal here would be
+	 * readable on a lock screen.
+	 */
+	public void sendToUser(String userId, String title, String body, String link,
+			Map<String, String> extra) {
 		if (userId == null) return;
 		List<DeviceToken> tokens = devices.findByUserId(userId);
 		for (DeviceToken device : tokens) {
-			GatewayService.PushResult result = gateway.push(device.getToken(), title, body, link);
+			GatewayService.PushResult result =
+					gateway.push(device.getToken(), title, body, link, extra);
 			if (result == GatewayService.PushResult.DEAD) {
 				// Token will never deliver again (uninstalled / rotated / wrong sender):
 				// drop it so the device collection self-heals and stops failing.

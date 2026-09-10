@@ -85,6 +85,22 @@ public enum AuditAction {
 	TIME_TIMER_STARTED(DATA, INFO, false),
 	TIME_TIMER_STOPPED(DATA, INFO, false),
 	TIME_TIMER_DISCARDED(DATA, INFO, false),
+	// Handing a period in and what became of it. On by default, unlike the four
+	// above, and for the opposite reason: these are not a record of when somebody
+	// worked but of a decision somebody made *about* their record — who signed a
+	// period off, who sent it back and why, who reopened one that was already
+	// approved. Six months later the only way to answer "who reopened January"
+	// is a line with a name on it.
+	TIMESHEET_SUBMITTED(DATA, INFO, true),
+	TIMESHEET_WITHDRAWN(DATA, INFO, true),
+	TIMESHEET_APPROVED(DATA, NOTICE, true),
+	TIMESHEET_REJECTED(DATA, NOTICE, true),
+	TIMESHEET_REOPENED(DATA, WARNING, true),
+	// Somebody asking for a frozen entry of their own to be opened (Art. 16
+	// DSGVO). The ask changes nothing by itself, which is exactly why it has to
+	// be recorded: otherwise the only trace of a refused correction is a chat
+	// message.
+	TIME_CORRECTION_REQUESTED(DATA, NOTICE, true),
 
 	// --- Time-tracking configuration (policies, tags, per-project settings) ---
 	// An operator changing what the module demands or freezes. On by default:
@@ -97,6 +113,12 @@ public enum AuditAction {
 	TIME_TAG_UPDATED(CONFIGURATION, NOTICE, true),
 	TIME_TAG_DELETED(CONFIGURATION, NOTICE, true),
 	TIME_PROJECT_SETTINGS_CHANGED(CONFIGURATION, NOTICE, true),
+	// Reopening a span inside the freeze, and closing it again. WARNING like the
+	// lock date itself: an exception is the one way an archived month becomes
+	// editable, so it is the record somebody looks for when a closed period has
+	// changed.
+	TIME_LOCK_EXCEPTION_ADDED(CONFIGURATION, WARNING, true),
+	TIME_LOCK_EXCEPTION_REMOVED(CONFIGURATION, NOTICE, true),
 
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),

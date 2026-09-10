@@ -431,11 +431,34 @@ public class GatewayService {
 
 	/** Send one push to a device token via the gateway. */
 	public PushResult push(String token, String title, String body, String link) {
+		return push(token, title, body, link, java.util.Map.of());
+	}
+
+	/**
+	 * As above, with extra entries in the notification's {@code data} payload.
+	 *
+	 * <p>The gateway forwards {@code data} to FCM/WNS verbatim and bounds its size,
+	 * so extra keys are additive: a gateway that has never heard of one passes it
+	 * through, and a client that has never heard of one ignores it. {@code link}
+	 * wins on a collision, because the route is the one entry every client already
+	 * depends on.
+	 */
+	public PushResult push(String token, String title, String body, String link,
+			java.util.Map<String, String> extra) {
 		if (!props.getGateway().isEnabled()) return PushResult.DISABLED;
 		if (!registered()) return PushResult.DISABLED;
 		ConnectEnrollment e = enrollment;
 		try {
-			String data = (link != null && !link.isBlank()) ? ",\"data\":{\"link\":" + jstr(link) + "}" : "";
+			java.util.Map<String, String> payload = new java.util.LinkedHashMap<>();
+			if (extra != null) {
+				extra.forEach((k, v) -> {
+					if (k != null && !k.isBlank() && v != null) payload.put(k, v);
+				});
+			}
+			if (link != null && !link.isBlank()) payload.put("link", link);
+			String data = payload.isEmpty() ? "" : ",\"data\":{" + payload.entrySet().stream()
+					.map(entry -> jstr(entry.getKey()) + ":" + jstr(entry.getValue()))
+					.collect(java.util.stream.Collectors.joining(",")) + "}";
 			String json = "{\"token\":" + jstr(token) + ",\"title\":" + jstr(title)
 					+ ",\"body\":" + jstr(body) + data + "}";
 			HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(gw() + "/push/send"))

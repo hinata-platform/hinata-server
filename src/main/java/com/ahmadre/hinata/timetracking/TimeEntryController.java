@@ -53,6 +53,7 @@ public class TimeEntryController {
 
 	private final TimeTrackingService timeTracking;
 	private final TimerService timers;
+	private final TimesheetApprovalService approvals;
 	private final CurrentUser currentUser;
 
 	// --- DTOs -----------------------------------------------------------------
@@ -229,6 +230,25 @@ public class TimeEntryController {
 			@RequestParam(defaultValue = "50") int size) {
 		return timeTracking.history(id, page, size, currentUser.require())
 				.map(HistoryEntryResponse::from);
+	}
+
+	/**
+	 * Asks for a frozen entry of one's own to be opened.
+	 *
+	 * <p>Art. 16 DSGVO: inaccurate personal data has to be correctable without
+	 * undue delay, and working time is personal data. A freeze with no way to ask
+	 * would be the one thing that right does not allow — so this route exists, it
+	 * reaches whoever can actually lift the freeze (an administrator for the lock
+	 * date, the project's approvers for a submitted period), and it is recorded.
+	 *
+	 * <p>It changes nothing on its own, deliberately. A request that could unfreeze
+	 * anything by being made would be the freeze with an extra step in front of it.
+	 */
+	@PostMapping("/entries/{id}/correction-request")
+	@ResponseStatus(HttpStatus.ACCEPTED)
+	public void requestCorrection(@PathVariable String id,
+			@RequestBody @Valid TimesheetApprovalController.NoteRequest request) {
+		approvals.requestCorrection(id, request.getNote(), currentUser.require());
 	}
 
 	/** Starts a timer carrying this entry's description and placement. */

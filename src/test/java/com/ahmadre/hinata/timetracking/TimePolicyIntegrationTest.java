@@ -185,6 +185,23 @@ class TimePolicyIntegrationTest {
 		store(block);
 	}
 
+	/**
+	 * Moves the running timer's start back, so "an hour of work" can be expressed
+	 * against a frozen clock.
+	 *
+	 * <p>The obvious way — stopping at {@code NOW.plusSeconds(3600)} — is what these
+	 * fixtures used to do, and HIN-88 closed it: {@code endedAt} comes from the
+	 * client and is now refused more than a skew ahead of the server's clock,
+	 * because without that a one-second timer could be stopped a day later and book
+	 * 1440 minutes. Ageing the timer is the honest expression of the same interval
+	 * and is what {@code theSweepFilesWhatItFoundRatherThanArguingWithNobody}
+	 * already did for the ceiling.
+	 */
+	private void ageRunningTimer(Duration by) {
+		mongo.getCollection("running_timers").updateMany(new Document(), new Document("$set",
+				new Document("startedAt", Date.from(NOW.minus(by)))));
+	}
+
 	private void limitTagAccess(boolean limited) {
 		ServerSettings.TimeTracking block = policy();
 		block.setLimitTagAccess(limited);
@@ -287,9 +304,10 @@ class TimePolicyIntegrationTest {
 		tagCatalog.create("Meeting", null, admin);
 		timers.start(TimerService.StartDraft.stopwatch(
 				new TimerService.TimerDraft(null, null, "worked", null, List.of(), false)), member);
+		ageRunningTimer(Duration.ofHours(1));
 
 		TimerService.Stopped stopped = timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(3600), null, null, null, null, List.of("meeting"), null), member);
+				NOW, null, null, null, null, List.of("meeting"), null), member);
 
 		assertThat(stopped.entry().getTags()).containsExactly("Meeting");
 	}
@@ -430,8 +448,10 @@ class TimePolicyIntegrationTest {
 		timers.start(TimerService.StartDraft.stopwatch(
 				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
 
+		ageRunningTimer(Duration.ofHours(1));
+
 		TimerService.Stopped stopped = timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(3600), project.getId(), null, "worked", null, List.of("meeting"),
+				NOW, project.getId(), null, "worked", null, List.of("meeting"),
 				null), member);
 
 		assertThat(stopped.entry().getProjectId()).isEqualTo(project.getId());
@@ -453,8 +473,10 @@ class TimePolicyIntegrationTest {
 		timers.start(TimerService.StartDraft.stopwatch(
 				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
 
+		ageRunningTimer(Duration.ofHours(1));
+
 		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(3600), null, null, null, null, null, null), member))
+				NOW, null, null, null, null, null, null), member))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.required.project");
 
@@ -466,7 +488,7 @@ class TimePolicyIntegrationTest {
 		// And the second attempt, with the composer's answers, files the whole
 		// interval — including the minutes spent answering.
 		TimerService.Stopped stopped = timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(3600), project.getId(), null, "worked", null, null, null), member);
+				NOW, project.getId(), null, "worked", null, null, null), member);
 
 		assertThat(stopped.entry().getDurationMinutes()).isEqualTo(60);
 		assertThat(stopped.entry().getProjectId()).isEqualTo(project.getId());
@@ -482,9 +504,10 @@ class TimePolicyIntegrationTest {
 		timers.start(TimerService.StartDraft.stopwatch(
 				new TimerService.TimerDraft(null, null, "worked", null, List.of(), false)), member);
 		require(true, true, true, true);
+		ageRunningTimer(Duration.ofHours(1));
 
 		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(3600), null, null, null, null, null, null), member))
+				NOW, null, null, null, null, null, null), member))
 				.isInstanceOf(ApiException.class);
 
 		assertThat(mongo.getCollection("running_timers").countDocuments()).isEqualTo(1);
@@ -501,8 +524,10 @@ class TimePolicyIntegrationTest {
 		timers.start(TimerService.StartDraft.stopwatch(
 				new TimerService.TimerDraft(null, null, null, null, List.of(), false)), member);
 
+		ageRunningTimer(Duration.ofHours(1));
+
 		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(3600), null, null, null, null, List.of("brand new word"), null),
+				NOW, null, null, null, null, List.of("brand new word"), null),
 				member))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.required.description");
@@ -642,13 +667,18 @@ class TimePolicyIntegrationTest {
 	void aTimerWhoseDayIsFrozenIsDiscardedRatherThanLeftRunning() {
 		timers.start(TimerService.StartDraft.stopwatch(
 				new TimerService.TimerDraft(null, null, "worked", null, List.of(), false)), member);
-		// A lock that reaches tomorrow freezes the day this timer started on —
-		// the only way the case is reachable, since a timer cannot outlive its
-		// start by more than a day.
-		lockBefore(TODAY.plusDays(1));
+		// The lock reaches today, and the timer started yesterday. That is now the
+		// only way the case is reachable, and the change is the point: this fixture
+		// used to set the lock date to *tomorrow*, which HIN-88 no longer permits
+		// anywhere — a freeze that reaches into the present would block the
+		// recording of working time that is happening right now (R9). So the frozen
+		// day has to be in the past, and the timer has to have crossed midnight
+		// into it, which a timer can (up to its 24-hour ceiling).
+		lockBefore(TODAY);
+		ageRunningTimer(Duration.ofHours(20));
 
 		assertThatThrownBy(() -> timers.stop(new TimerService.StopRequest(null,
-				NOW.plusSeconds(600), null, null, null, null, null, null), member))
+				NOW, null, null, null, null, null, null), member))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.lockedTimer");
 		// Gone, not stuck: every further stop would answer 403 while the clock

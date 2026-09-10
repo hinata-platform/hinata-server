@@ -80,13 +80,19 @@ class TimeTrackingWriteHookTest {
 		when(policy.requiredFields()).thenReturn(
 				new TimeTrackingSettings.RequiredFields(false, false, false, false));
 		when(policy.lockBefore()).thenReturn(null);
+		// The freeze moved out of the service into TimeLocks in HIN-88. A mock that
+		// answers "nothing is frozen" keeps this file about the gate it is named
+		// after; the freeze itself — lock date, exceptions, approvals — is
+		// exercised against a real database in TimePolicyIntegrationTest and
+		// TimesheetApprovalIntegrationTest.
+		TimeLocks locks = mock(TimeLocks.class);
 		TimeTagService tagCatalog = mock(TimeTagService.class);
 		when(tagCatalog.resolve(any(), any()))
 				.thenAnswer(invocation -> TimeTrackingService.normalizeTags(
 						invocation.getArgument(0)));
 		service = spy(new TimeTrackingService(workItems, issues, projects,
 				mock(ProjectReach.class), users, mongo, mock(AuditService.class), settings,
-				policy, tagCatalog, CLOCK));
+				policy, tagCatalog, locks, CLOCK));
 		when(workItems.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 	}
 
