@@ -1,11 +1,13 @@
 package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
@@ -15,11 +17,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -28,9 +36,11 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Handing a period in, and signing it off.
@@ -66,10 +76,29 @@ import java.util.stream.Collectors;
 public class TimesheetApprovalService {
 
 	/** Largest page of approvals handed out, mine or inbox. */
-	public static final int PAGE_MAX = 100;
+	private static final int PAGE_MAX = 100;
 
-	/** Longest window {@code GET /approvals/periods} will enumerate. */
-	public static final int MAX_WINDOW_DAYS = 400;
+	/**
+	 * Longest window {@code GET /approvals/periods} will enumerate.
+	 *
+	 * <p>Named for the route rather than "window", because {@code TimeTrackingService}
+	 * has a {@code MAX_WINDOW_DAYS} of its own worth 31 — two constants of the same
+	 * name in one package, and a reader would have to check which is which.
+	 */
+	private static final int PERIODS_WINDOW_DAYS = 400;
+
+	/**
+	 * Most projects one submission may cover.
+	 *
+	 * <p>The request's own {@code projectIds} is capped by the controller; this is
+	 * the cap for the implicit case, where the candidate set is every project the
+	 * person booked hours against. Each candidate costs several reads, a write, an
+	 * audit record and a notification fan-out.
+	 */
+	private static final int MAX_PROJECTS_PER_SUBMISSION = 100;
+
+	/** Most projects one inbox query narrows to. Beyond this the $in stops being cheap. */
+	private static final int MAX_LED_PROJECTS = 500;
 
 	private final TimesheetApprovalRepository approvals;
 	private final TimeTrackingService entries;
@@ -77,9 +106,11 @@ public class TimesheetApprovalService {
 	private final ProjectTimeSettingsRepository projectSettings;
 	private final TimeTrackingSettings policy;
 	private final ProjectService projects;
+	private final ProjectReach reach;
 	private final UserRepository users;
 	private final NotificationService notifications;
 	private final AuditService audit;
+	private final MongoTemplate mongo;
 	private final Clock clock;
 
 	// --- what a client sees ----------------------------------------------------
@@ -133,13 +164,15 @@ public class TimesheetApprovalService {
 	 * that anchor moves it for the project too.
 	 */
 	public TimeTrackingSettings.ApprovalPeriod periodPolicy(String projectId) {
+		return periodPolicy(projectId == null ? null
+				: projectSettings.findByProjectId(projectId).orElse(null));
+	}
+
+	/** As above, from a row already in hand — see {@code periods}, which loads them in one query. */
+	private TimeTrackingSettings.ApprovalPeriod periodPolicy(ProjectTimeSettings stored) {
 		TimeTrackingSettings.ApprovalPeriod instance = policy.approvalPeriod();
-		if (projectId == null) {
-			return instance;
-		}
-		ProjectTimeSettings.ApprovalPeriod override = projectSettings.findByProjectId(projectId)
-				.map(ProjectTimeSettings::getApprovalPeriod)
-				.orElse(null);
+		ProjectTimeSettings.ApprovalPeriod override =
+				stored == null ? null : stored.getApprovalPeriod();
 		if (override == null) {
 			return instance;
 		}
@@ -153,12 +186,14 @@ public class TimesheetApprovalService {
 
 	/** Whether this project's periods are meant to be handed in; default yes. */
 	public boolean approvalRequired(String projectId) {
-		if (projectId == null) {
-			return false;
-		}
-		return projectSettings.findByProjectId(projectId)
-				.map(ProjectTimeSettings::getApprovalRequired)
-				.orElse(Boolean.TRUE);
+		return projectId != null
+				&& approvalRequired(projectSettings.findByProjectId(projectId).orElse(null));
+	}
+
+	/** As above, from a row already in hand. Absent, or an absent field, means yes. */
+	private static boolean approvalRequired(ProjectTimeSettings stored) {
+		return stored == null || stored.getApprovalRequired() == null
+				|| stored.getApprovalRequired();
 	}
 
 	/**
@@ -179,13 +214,16 @@ public class TimesheetApprovalService {
 		if (from == null || to == null || to.isBefore(from)) {
 			throw ApiException.badRequest("error.time.invalidRange");
 		}
-		if (from.plusDays(MAX_WINDOW_DAYS).isBefore(to)) {
+		// Counted, never offset: `from.plusDays(400)` on a date near LocalDate.MAX
+		// throws before the guard could answer, and the caller supplies the date.
+		// The same reasoning TimeTrackingService.assertWindow spells out.
+		if (ChronoUnit.DAYS.between(from, to) >= PERIODS_WINDOW_DAYS) {
 			throw ApiException.badRequest("error.time.rangeTooLong");
 		}
 		// Per day, not per window: one window can hold several periods, and each
 		// needs its own figure. A single window total shown against three months
 		// would give all three the same number.
-		Map<LocalDate, Map<String, Integer>> perDay =
+		NavigableMap<LocalDate, Map<String, Integer>> perDay =
 				entries.minutesPerProjectAndDay(user.getId(), from, to, projectId);
 		// The projects the caller booked time against in the window, plus the one
 		// they asked about if they named it. A project with no hours in the period
@@ -194,30 +232,50 @@ public class TimesheetApprovalService {
 		perDay.values().forEach(byProject -> projectIds.addAll(byProject.keySet()));
 		projectIds.remove(null);
 		if (projectId != null) {
+			// Checked, because everything below reads that project's stored row: its
+			// rhythm and whether it is handed in at all. Without this the route
+			// answers about any id anybody types — the caller's own hours are never
+			// at risk, but a project's submission policy is not theirs to read. The
+			// sibling route (`ProjectTimeSettingsController.get`) draws the same line.
+			if (!reach.canSee(projects.get(projectId), user)) {
+				throw ApiException.forbidden("error.project.notMember");
+			}
 			projectIds.add(projectId);
 		}
 		List<TimesheetApproval> existing = projectIds.isEmpty() ? List.of()
 				: approvals.findByUserIdAndProjectIdInAndPeriodEndGreaterThanEqualAndPeriodStartLessThanEqual(
 						user.getId(), projectIds, from, to);
 		Map<String, Project> named = namesOf(projectIds, user);
+		// Every project's stored row in one query, and every period's figures in one
+		// pass. Both used to be asked inside the double loop — `approvalRequired(id)`
+		// was an indexed read per (period, project), so a weekly rhythm over a
+		// quarter with twenty projects cost hundreds of round trips to answer one
+		// GET, and the submission lookup was a fresh stream over the whole list each
+		// time.
+		Map<String, ProjectTimeSettings> overrides = overridesFor(projectIds);
+		Map<String, List<TimesheetApproval>> byProject = new LinkedHashMap<>();
+		for (TimesheetApproval row : existing) {
+			byProject.computeIfAbsent(row.getProjectId(), unused -> new ArrayList<>()).add(row);
+		}
 		// One rhythm per answer, because the switcher it feeds has one set of
 		// arrows. Naming a project asks about that project's rhythm — which is
 		// what the filtered timesheet does; asking about everything asks about the
 		// instance's. A list that mixed two grids would be a list of periods that
 		// do not line up, and no client could draw it.
 		TimeTrackingSettings.ApprovalPeriod gridPolicy = projectId != null
-				? periodPolicy(projectId)
+				? periodPolicy(overrides.get(projectId))
 				: policy.approvalPeriod();
 		List<ApprovalPeriods.Period> grid = ApprovalPeriods.hasGrid(gridPolicy)
 				? ApprovalPeriods.periodsIn(from, to, gridPolicy)
 				: freePeriods(existing);
+		Map<String, Map<String, Integer>> minutesByPeriod = minutesPerPeriod(perDay, grid);
 		List<PeriodView> views = new ArrayList<>(grid.size());
 		for (ApprovalPeriods.Period period : grid) {
-			Map<String, Integer> minutes = minutesIn(perDay, period);
+			Map<String, Integer> minutes =
+					minutesByPeriod.getOrDefault(key(period), Map.of());
 			List<ProjectStatus> statuses = new ArrayList<>();
 			for (String id : projectIds) {
-				TimesheetApproval approval = existing.stream()
-						.filter(row -> id.equals(row.getProjectId()))
+				TimesheetApproval approval = byProject.getOrDefault(id, List.of()).stream()
 						.filter(row -> row.getPeriodStart() != null
 								&& !row.getPeriodStart().isAfter(period.end())
 								&& row.getPeriodEnd() != null
@@ -231,7 +289,7 @@ public class TimesheetApprovalService {
 						approval == null ? null : approval.getStatus(),
 						approval == null ? null : approval.getId(),
 						minutes.getOrDefault(id, 0),
-						approvalRequired(id),
+						approvalRequired(overrides.get(id)),
 						approval == null ? null : approval.getNote()));
 			}
 			statuses.sort(Comparator.comparing(ProjectStatus::projectKey,
@@ -241,16 +299,44 @@ public class TimesheetApprovalService {
 		return views;
 	}
 
-	/** This period's share of a per-day tally, folded back to one figure per project. */
-	private static Map<String, Integer> minutesIn(
-			Map<LocalDate, Map<String, Integer>> perDay, ApprovalPeriods.Period period) {
-		Map<String, Integer> minutes = new LinkedHashMap<>();
-		perDay.forEach((day, byProject) -> {
-			if (period.contains(day)) {
-				byProject.forEach((project, booked) -> minutes.merge(project, booked, Integer::sum));
-			}
-		});
-		return minutes;
+	/** The stored rows of several projects, keyed by project; absent means no override. */
+	private Map<String, ProjectTimeSettings> overridesFor(Collection<String> projectIds) {
+		if (projectIds.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, ProjectTimeSettings> byProject = new LinkedHashMap<>();
+		for (ProjectTimeSettings row : projectSettings.findByProjectIdIn(projectIds)) {
+			byProject.put(row.getProjectId(), row);
+		}
+		return byProject;
+	}
+
+	/** A key that identifies one period among the ones being answered about. */
+	private static String key(ApprovalPeriods.Period period) {
+		return period.start() + "/" + period.end();
+	}
+
+	/**
+	 * Folds the per-day tally into one figure per project, for each period.
+	 *
+	 * <p>Each period takes only the days it actually covers, through
+	 * {@link NavigableMap#subMap} on the sorted tally — so the whole job is
+	 * O(periods · log days + days) rather than the O(periods × days) of walking
+	 * every day once per period, which for a daily rhythm over a year was
+	 * forty-eight thousand visits to answer one request.
+	 */
+	private static Map<String, Map<String, Integer>> minutesPerPeriod(
+			NavigableMap<LocalDate, Map<String, Integer>> perDay,
+			List<ApprovalPeriods.Period> grid) {
+		Map<String, Map<String, Integer>> byPeriod = new LinkedHashMap<>();
+		for (ApprovalPeriods.Period period : grid) {
+			Map<String, Integer> minutes = new LinkedHashMap<>();
+			perDay.subMap(period.start(), true, period.end(), true).values()
+					.forEach(byProject -> byProject.forEach(
+							(project, booked) -> minutes.merge(project, booked, Integer::sum)));
+			byPeriod.put(key(period), minutes);
+		}
+		return byPeriod;
 	}
 
 	/**
@@ -351,8 +437,16 @@ public class TimesheetApprovalService {
 		if (periodStart == null || periodEnd == null || periodEnd.isBefore(periodStart)) {
 			throw ApiException.badRequest("error.time.invalidRange");
 		}
-		if (periodStart.plusDays(TimePolicy.PERIOD_MAX_DAYS - 1L).isBefore(periodEnd)) {
+		if (ChronoUnit.DAYS.between(periodStart, periodEnd) >= TimePolicy.PERIOD_MAX_DAYS) {
 			throw ApiException.badRequest("error.time.periodTooLong");
+		}
+		// A period that has not ended yet must not be handed in, for exactly the
+		// reason the lock date may not reach into the future: an approved span is
+		// immutable, so submitting the rest of this month would stop this person
+		// recording the working time they are about to perform (§ 16 Abs. 2 ArbZG,
+		// EuGH C-55/18). One freeze may not have a rule the other is exempt from.
+		if (periodEnd.isAfter(LocalDate.now(clock))) {
+			throw ApiException.badRequest("error.time.periodNotEnded");
 		}
 		Map<String, Integer> minutes =
 				entries.minutesPerProject(user.getId(), periodStart, periodEnd, null);
@@ -368,7 +462,17 @@ public class TimesheetApprovalService {
 			// that then cannot be found.
 			throw ApiException.badRequest("error.time.periodEmpty");
 		}
-		List<TimesheetApproval> submitted = new ArrayList<>(candidates.size());
+		if (candidates.size() > MAX_PROJECTS_PER_SUBMISSION) {
+			throw ApiException.badRequest("error.time.tooManyProjects");
+		}
+		// Everything is checked before anything is written, and that ordering is the
+		// whole point of the two loops. There is no transaction here — the package
+		// does not use one — so a validation that failed mid-write would leave the
+		// earlier projects submitted and frozen while the answer said 400 and
+		// nobody had been asked to decide them. A person would believe nothing
+		// happened and find a month they can no longer edit.
+		Map<String, TimeTrackingSettings.ApprovalPeriod> grids =
+				new LinkedHashMap<>(candidates.size());
 		for (String projectId : candidates) {
 			// The grid is the *project's*, because the project is who approves —
 			// one may run monthly while another closes per quarter.
@@ -376,11 +480,38 @@ public class TimesheetApprovalService {
 			if (!ApprovalPeriods.matchesGrid(periodStart, periodEnd, grid)) {
 				throw ApiException.badRequest("error.time.periodNotOnGrid");
 			}
-			submitted.add(submitOne(projectId, periodStart, periodEnd, grid,
+			grids.put(projectId, grid);
+			assertSubmittable(projectId, periodStart, periodEnd, user);
+		}
+		List<TimesheetApproval> submitted = new ArrayList<>(candidates.size());
+		for (String projectId : candidates) {
+			submitted.add(submitOne(projectId, periodStart, periodEnd, grids.get(projectId),
 					minutes.getOrDefault(projectId, 0), user));
 		}
 		notifyApprovers(submitted, user);
 		return submitted;
+	}
+
+	/**
+	 * Whether this project's span could be handed in, asked before anything is
+	 * written.
+	 *
+	 * <p>The same two questions {@code submitOne} asks, and it still asks them —
+	 * this is not the guard, it is what keeps a refusal from arriving after two
+	 * projects have already been frozen. Between this pass and the write a
+	 * concurrent submission can still appear, which is what the unique index and
+	 * the insert-then-look-again in {@link #save} are for.
+	 */
+	private void assertSubmittable(String projectId, LocalDate periodStart,
+			LocalDate periodEnd, User user) {
+		TimesheetApproval existing = approvals
+				.findByUserIdAndProjectIdAndPeriodStart(user.getId(), projectId, periodStart)
+				.orElse(null);
+		if (existing != null && existing.freezes()) {
+			throw ApiException.conflict("error.time.periodAlreadySubmitted");
+		}
+		assertNoOverlap(user.getId(), projectId, periodStart, periodEnd,
+				existing == null ? null : existing.getId());
 	}
 
 	private TimesheetApproval submitOne(String projectId, LocalDate periodStart,
@@ -430,10 +561,18 @@ public class TimesheetApprovalService {
 	 * <p>The unique index covers two submissions of the same period start, which
 	 * is every rhythm with a grid. It cannot cover two <em>overlapping</em> FREE
 	 * spans: "no two ranges intersect" is not something a Mongo index can express.
-	 * So the check runs before the write and again after it, and the later of the
-	 * two writers stands down — compared on {@code submittedAt}, and on the id
-	 * when those are equal, so the contest has exactly one winner whatever order
-	 * the two arrive in.
+	 * So the check runs before the write and again after it, and whoever finds an
+	 * older row stands down.
+	 *
+	 * <p>Compared on the <em>id</em> alone, and not on {@code submittedAt}, which is
+	 * the version this replaced. That one was stamped in {@code submitOne} before the
+	 * insert, so the stamps could disagree with the order the rows actually appeared
+	 * in: B stamps later, inserts first, re-reads and sees nothing; A stamped earlier,
+	 * inserts second, re-reads, finds B — and stands down only if B is <em>older</em>,
+	 * which it is not. Both rows survive and the span is frozen twice, needing two
+	 * reopens to undo. A Mongo id is assigned at insert, so ordering by it is
+	 * consistent with what each writer can see, and the answer no longer depends on
+	 * which of the two got there first.
 	 */
 	private TimesheetApproval save(TimesheetApproval approval) {
 		TimesheetApproval saved;
@@ -443,25 +582,14 @@ public class TimesheetApprovalService {
 		catch (DuplicateKeyException submittedConcurrently) {
 			throw ApiException.conflict("error.time.periodAlreadySubmitted");
 		}
-		TimesheetApproval winner = overlapping(saved.getUserId(), saved.getProjectId(),
+		boolean somebodyElseIsOlder = overlapping(saved.getUserId(), saved.getProjectId(),
 				saved.getPeriodStart(), saved.getPeriodEnd(), saved.getId()).stream()
-				.min(Comparator.comparing(TimesheetApproval::getSubmittedAt,
-								Comparator.nullsLast(Comparator.naturalOrder()))
-						.thenComparing(TimesheetApproval::getId))
-				.orElse(null);
-		if (winner != null && beats(winner, saved)) {
+				.anyMatch(other -> other.getId().compareTo(saved.getId()) < 0);
+		if (somebodyElseIsOlder) {
 			approvals.deleteById(saved.getId());
 			throw ApiException.conflict("error.time.periodOverlaps");
 		}
 		return saved;
-	}
-
-	private static boolean beats(TimesheetApproval winner, TimesheetApproval mine) {
-		if (winner.getSubmittedAt() == null || mine.getSubmittedAt() == null) {
-			return winner.getId().compareTo(mine.getId()) < 0;
-		}
-		int byTime = winner.getSubmittedAt().compareTo(mine.getSubmittedAt());
-		return byTime != 0 ? byTime < 0 : winner.getId().compareTo(mine.getId()) < 0;
 	}
 
 	private void assertNoOverlap(String userId, String projectId, LocalDate start, LocalDate end,
@@ -572,7 +700,17 @@ public class TimesheetApprovalService {
 		}
 		approval.record(TimesheetApproval.Event.builder()
 				.at(clock.instant()).by(user.getId()).from(from).to(target).note(note).build());
-		TimesheetApproval saved = approvals.save(approval);
+		TimesheetApproval saved;
+		try {
+			saved = approvals.save(approval);
+		}
+		catch (OptimisticLockingFailureException decidedConcurrently) {
+			// Somebody moved this submission between our read and our write — the
+			// owner withdrawing as the approver approves. Answering 409 is what
+			// keeps the audit log honest: the alternative is a record of a decision
+			// whose write lost.
+			throw ApiException.conflict("error.time.approvalChangedMeanwhile");
+		}
 		audited(action, saved, user, note);
 		return saved;
 	}
@@ -600,20 +738,46 @@ public class TimesheetApprovalService {
 		if (state == null) {
 			throw ApiException.badRequest("error.time.entryNotLocked");
 		}
+		// One ask per entry per day. Without it the route is an unthrottled fan-out —
+		// a notification row and an e-mail at every administrator, per call, from
+		// anybody with one entry behind the lock date. Repeating the ask is also not
+		// useful: the first one is already in the audit log and in their inbox.
+		if (alreadyAskedToday(item.getId())) {
+			throw ApiException.conflict("error.time.correctionAlreadyRequested");
+		}
 		Set<String> recipients = state.reason() == TimePolicy.LockReason.LOCK_DATE
 				? adminIds()
 				: approverIds(item.getProjectId());
 		recipients.remove(user.getId());
-		notifications.notifyTimeCorrectionRequested(recipients, user.getDisplayName(),
-				"/time/approvals");
+		if (!recipients.isEmpty()) {
+			notifications.notifyTimeCorrectionRequested(recipients, user.getDisplayName(),
+					"/time/approvals");
+		}
 		audit.event(AuditAction.TIME_CORRECTION_REQUESTED).actor(user)
 				.target(item.getId(), String.valueOf(item.getDate()))
-				.meta("entry", item.getId())
+				.meta("workItem", item.getId())
 				.meta("date", String.valueOf(item.getDate()))
 				.meta("project", item.getProjectId())
 				.meta("reason", state.reason().name())
 				.meta("note", reason)
 				.log();
+	}
+
+	/**
+	 * Whether this entry already carries a correction request from the last day.
+	 *
+	 * <p>Keyed on {@code metadata.workItem}, which is the key the whole product
+	 * hangs an object's history off and which {@code AuditLog} carries a partial
+	 * index for — so the throttle reads an index rather than the collection, and the
+	 * request appears in the entry's own history sheet like every other record
+	 * about it.
+	 */
+	private boolean alreadyAskedToday(String workItemId) {
+		return mongo.exists(Query.query(Criteria
+						.where("action").is(AuditAction.TIME_CORRECTION_REQUESTED)
+						.and("metadata.workItem").is(workItemId)
+						.and("timestamp").gte(clock.instant().minus(Duration.ofDays(1)))),
+				AuditLog.class);
 	}
 
 	// --- who may do what -------------------------------------------------------
@@ -660,10 +824,22 @@ public class TimesheetApprovalService {
 				: ApiException.notFound("timesheetApproval");
 	}
 
+	/**
+	 * The projects this person leads, archived ones included.
+	 *
+	 * <p>Archived deliberately: a closed project's books are exactly the ones still
+	 * needing a reopen, and leaving them out would take the remedy away from the
+	 * lead at the moment it is most likely to be wanted. Capped, because an $in is
+	 * not free and a lead of two thousand projects would otherwise send two thousand
+	 * ids on every page of their inbox.
+	 */
 	private Collection<String> ledProjectIds(User user) {
-		return projects.visibleTo(user).stream()
+		return Stream.concat(projects.visibleTo(user).stream(),
+						projects.archivedVisibleTo(user).stream())
 				.filter(project -> projects.isLeadOrAdmin(project, user))
 				.map(Project::getId)
+				.distinct()
+				.limit(MAX_LED_PROJECTS)
 				.toList();
 	}
 

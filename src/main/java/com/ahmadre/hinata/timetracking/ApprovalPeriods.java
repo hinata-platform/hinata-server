@@ -42,9 +42,6 @@ public final class ApprovalPeriods {
 	 */
 	public static final int MAX_PERIODS = 120;
 
-	/** The longest span one submission may cover, grid or free. */
-	public static final int MAX_PERIOD_DAYS = 92;
-
 	private ApprovalPeriods() {
 	}
 
@@ -130,29 +127,13 @@ public final class ApprovalPeriods {
 	}
 
 	/**
-	 * The period before or after {@code period}, for the switcher's two arrows.
-	 *
-	 * <p>Derived by stepping one day past the edge and asking again, rather than
-	 * by subtracting the length: a semi-monthly period is 13, 14, 15 or 16 days
-	 * long, and a month is four different lengths, so length is not how you get
-	 * to the neighbour.
-	 */
-	public static Period shift(Period period, int direction,
-			TimeTrackingSettings.ApprovalPeriod policy) {
-		LocalDate probe = direction < 0
-				? period.start().minusDays(1)
-				: period.end().plusDays(1);
-		return periodFor(probe, policy);
-	}
-
-	/**
 	 * Whether {@code [start, end]} is exactly one period of this rhythm.
 	 *
 	 * <p>True for FREE, which has no grid to be off — and that is the one answer
 	 * here that is not the whole rule. A free submission still has to be inside
-	 * {@link #MAX_PERIOD_DAYS} and not overlap one already filed, and both of
-	 * those are the service's checks against the collection, which this function
-	 * cannot see. Nothing may use this as the only gate on a submission.
+	 * {@link TimePolicy#PERIOD_MAX_DAYS} and not overlap one already filed, and
+	 * both of those are the service's checks against the collection, which this
+	 * function cannot see. Nothing may use this as the only gate on a submission.
 	 */
 	public static boolean matchesGrid(LocalDate start, LocalDate end,
 			TimeTrackingSettings.ApprovalPeriod policy) {

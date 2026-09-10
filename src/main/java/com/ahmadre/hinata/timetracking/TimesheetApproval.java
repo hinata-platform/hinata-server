@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -55,8 +56,22 @@ import java.util.List;
 // from that tiny set, which is cheaper than a second index would be.
 @CompoundIndex(name = "user_project_end", def = "{'userId': 1, 'projectId': 1, 'periodEnd': 1}")
 // The approver's inbox: the projects they lead, newest submission first, with
-// _id as the tiebreaker so paging is deterministic.
+// _id as the tiebreaker so paging is deterministic. A multi-point $in on the
+// leading field with the sort on the keys that follow plans as a SORT_MERGE, so
+// no blocking sort.
 @CompoundIndex(name = "project_submitted", def = "{'projectId': 1, 'submittedAt': -1, '_id': -1}")
+// The two inboxes that have no project to lead with, and the one thing a second
+// key cannot do: be a sort prefix. An administrator's inbox drops the project
+// filter on purpose, and `mine` never had one — so without these the sort has no
+// index to walk and Mongo reads the collection and sorts it in memory. That is
+// not merely slow: a document carries up to fifty history events, and a few years
+// of monthly submissions puts the sort stage past MongoDB's 32 MB ceiling, at
+// which point the inbox stops answering at all rather than answering late.
+@CompoundIndex(name = "submitted", def = "{'submittedAt': -1, '_id': -1}")
+@CompoundIndex(name = "status_submitted", def = "{'status': 1, 'submittedAt': -1, '_id': -1}")
+@CompoundIndex(name = "user_submitted", def = "{'userId': 1, 'submittedAt': -1, '_id': -1}")
+@CompoundIndex(name = "user_status_submitted",
+		def = "{'userId': 1, 'status': 1, 'submittedAt': -1, '_id': -1}")
 public class TimesheetApproval {
 
 	/** How many decisions one submission keeps in full before the oldest fold away. */
@@ -133,6 +148,21 @@ public class TimesheetApproval {
 	private Instant createdAt;
 
 	private Instant updatedAt;
+
+	/**
+	 * Optimistic lock, and it is load-bearing rather than hygiene.
+	 *
+	 * <p>Every transition is read-check-mutate-write on the whole document, and the
+	 * two that race are the two people involved: the owner presses "withdraw" as the
+	 * approver presses "approve". Both read SUBMITTED, both pass their status check,
+	 * and the later write wins — so the document can end up WITHDRAWN (unfrozen)
+	 * while {@code TIMESHEET_APPROVED} sits in the audit log, and the losing
+	 * transition's event is gone from {@link #history}. A record with a hole in it
+	 * is the one thing this collection may not be. With a version the loser gets an
+	 * {@code OptimisticLockingFailureException}, which the service answers as a 409.
+	 */
+	@Version
+	private Long version;
 
 	/** One transition. {@code from} is null on the first submission. */
 	@Data

@@ -532,7 +532,14 @@ public class ServerSettings {
 		@Data
 		public static class LockException {
 
-			/** Stable id so one exception can be removed without matching on dates. */
+			/**
+			 * Stable id so one exception can be removed without matching on dates.
+			 *
+			 * <p>A server-minted UUID. Held to that shape because it travels back as a
+			 * path segment on the DELETE, and a value that is not one would mean the
+			 * segment is no longer what the route assumes.
+			 */
+			@Pattern(regexp = "^[0-9a-fA-F-]{36}$", message = "error.time.lockExceptionInvalid")
 			private String id;
 
 			/** First day reopened, inclusive. */
@@ -548,10 +555,18 @@ public class ServerSettings {
 			@Size(max = TimePolicy.LOCK_NOTE_MAX, message = "error.time.noteTooLong")
 			private String note;
 
-			/** Who opened it — an administrator's user id, stamped by the server. */
+			/**
+			 * Who opened it — an administrator's user id, stamped by the server.
+			 *
+			 * <p>Read-only on the wire, and the whole list is carried forward
+			 * unchanged by the settings PUT ({@code AdminSettingsController}): an
+			 * audit trail whose author a client can name is not an audit trail.
+			 */
+			@JsonProperty(access = JsonProperty.Access.READ_ONLY)
 			private String by;
 
-			/** When it was opened, stamped by the server. */
+			/** When it was opened, stamped by the server. Read-only on the wire. */
+			@JsonProperty(access = JsonProperty.Access.READ_ONLY)
 			private Instant at;
 		}
 

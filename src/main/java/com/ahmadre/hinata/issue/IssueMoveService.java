@@ -90,6 +90,8 @@ public class IssueMoveService {
 	// — and it owes the ones it just moved out of reach an unsubscribe.
 	private final NotificationService notifications;
 	private final IssueWatcherCleanup watcherCleanup;
+	/** Modules that may refuse to let an issue's hours follow it; see {@link WorkItemMoveGuard}. */
+	private final List<WorkItemMoveGuard> workItemGuards;
 
 	// --- API shapes ----------------------------------------------------------
 
@@ -210,6 +212,15 @@ public class IssueMoveService {
 
 	private Issue moveOne(Issue issue, Project source, Project target, Map<String, String> stateMap,
 			Set<String> moving, boolean keepSprint, User user) {
+		// Before the first write of this issue, because a move re-points the project
+		// on every hour ever logged against it — and from HIN-88 that is what decides
+		// whether those hours are immutable. An issue whose entries sit in a period
+		// somebody has handed in does not move; the alternative is a signed-off total
+		// that no longer matches the entries behind it, reachable by any member of
+		// both projects.
+		for (WorkItemMoveGuard guard : workItemGuards) {
+			guard.check(issue.getId(), source.getId(), target.getId());
+		}
 		String previousReadableId = issue.getReadableId();
 		// Captured before the mutation: a move changes more than the project, and a
 		// watcher is owed all of it in one notice rather than only the headline.

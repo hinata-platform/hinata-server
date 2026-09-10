@@ -194,21 +194,6 @@ class ApprovalPeriodsTest {
 		assertThat(ApprovalPeriods.periodsIn(null, LocalDate.of(2026, 3, 1), monthly())).isEmpty();
 	}
 
-	@Test
-	void shiftWalksToTheNeighbourByTheCalendarAndNotByLength() {
-		// A month is four different lengths and a semi-monthly period is four more,
-		// so subtracting the length is not how you get to the previous one.
-		TimeTrackingSettings.ApprovalPeriod policy =
-				policy(TimePolicy.ApprovalPeriod.SEMI_MONTHLY, null, null, null);
-		ApprovalPeriods.Period secondHalfOfMarch =
-				ApprovalPeriods.periodFor(LocalDate.of(2026, 3, 20), policy);
-		assertThat(ApprovalPeriods.shift(secondHalfOfMarch, -1, policy))
-				.isEqualTo(new ApprovalPeriods.Period(LocalDate.of(2026, 3, 1),
-						LocalDate.of(2026, 3, 15), TimePolicy.ApprovalPeriod.SEMI_MONTHLY));
-		assertThat(ApprovalPeriods.shift(secondHalfOfMarch, 1, policy).start())
-				.isEqualTo(LocalDate.of(2026, 4, 1));
-	}
-
 	// --- the grid check ---------------------------------------------------------------
 
 	@Test

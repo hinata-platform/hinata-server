@@ -49,6 +49,7 @@ import java.util.Objects;
 public class ProjectTimeSettingsController {
 
 	private final ProjectTimeSettingsRepository store;
+	private final TimeLocks locks;
 	private final ProjectService projects;
 	private final ProjectReach reach;
 	private final CurrentUser currentUser;
@@ -109,8 +110,12 @@ public class ProjectTimeSettingsController {
 		private TimePolicy.ApprovalPeriod type;
 		private DayOfWeek weekStartsOn;
 		private LocalDate anchorDate;
+		// The same ceiling the instance-wide rhythm has, and for the same reason: a
+		// submission covers at most 92 days, so a longer rhythm would cut periods
+		// nobody could ever hand in. 366 here would have let a project override
+		// walk past a rule the instance is held to.
 		@Min(value = 1, message = "error.timeTracking.approvalPeriodInvalid")
-		@Max(value = 366, message = "error.timeTracking.approvalPeriodInvalid")
+		@Max(value = TimePolicy.PERIOD_MAX_DAYS, message = "error.timeTracking.approvalPeriodInvalid")
 		private Integer days;
 	}
 
@@ -188,6 +193,9 @@ public class ProjectTimeSettingsController {
 		settings.setUpdatedAt(clock.instant());
 		settings.setUpdatedBy(user.getId());
 		ProjectTimeSettings saved = store.save(settings);
+		// The write gate skips its per-project read while no project has a lock date;
+		// this is the only way that answer can change.
+		locks.forgetProjectLocks();
 		audit.event(AuditAction.TIME_PROJECT_SETTINGS_CHANGED).actor(user)
 				.target(project.getId(), project.getName())
 				.meta("project", project.getId())
