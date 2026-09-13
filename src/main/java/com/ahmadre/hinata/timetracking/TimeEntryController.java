@@ -53,7 +53,7 @@ public class TimeEntryController {
 
 	private final TimeTrackingService timeTracking;
 	private final TimerService timers;
-	private final TimesheetApprovalService approvals;
+	private final TimeCorrectionService corrections;
 	private final CurrentUser currentUser;
 
 	// --- DTOs -----------------------------------------------------------------
@@ -141,15 +141,43 @@ public class TimeEntryController {
 		 */
 		private static final Set<String> VISIBLE = Set.of("minutes", "date", "project", "issue");
 
-		static HistoryEntryResponse from(AuditLog log) {
+		/**
+		 * The two records whose sentences are the point of them. A correction request
+		 * is the owner's own words, and the answer is addressed to the owner — a
+		 * history that showed "answered" without the answer would send them to an
+		 * administrator to read it out.
+		 */
+		private static final Set<com.ahmadre.hinata.audit.AuditAction> CONVERSATION = Set.of(
+				com.ahmadre.hinata.audit.AuditAction.TIME_CORRECTION_REQUESTED,
+				com.ahmadre.hinata.audit.AuditAction.TIME_CORRECTION_ANSWERED,
+				com.ahmadre.hinata.audit.AuditAction.TIME_BACKFILL_GRANTED);
+
+		private static final Set<String> SPOKEN = Set.of("note", "reason");
+
+		/**
+		 * @param readsConversation whether this reader may read the sentences of a
+		 *                          correction record — see
+		 *                          {@link TimeTrackingService.EntryHistory#readsConversation}
+		 */
+		static HistoryEntryResponse from(AuditLog log, boolean readsConversation) {
+			return from(log, readsConversation, log.getActorLabel());
+		}
+
+		/**
+		 * @param actorLabel the name to show for whoever acted, or null for an account
+		 *                   deleted since; see {@link TimeTrackingService.EntryHistory#actorLabelOf}
+		 */
+		static HistoryEntryResponse from(AuditLog log, boolean readsConversation, String actorLabel) {
+			boolean conversation = readsConversation && CONVERSATION.contains(log.getAction());
 			Map<String, String> meta = log.getMetadata() == null ? Map.of()
 					: log.getMetadata().entrySet().stream()
-							.filter(entry -> VISIBLE.contains(entry.getKey()))
+							.filter(entry -> VISIBLE.contains(entry.getKey())
+									|| (conversation && SPOKEN.contains(entry.getKey())))
 							.collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
 									(first, second) -> first, LinkedHashMap::new));
 			return new HistoryEntryResponse(log.getId(), log.getTimestamp(),
 					log.getAction() == null ? null : log.getAction().name(),
-					log.getActorId(), log.getActorLabel(), meta);
+					log.getActorId(), actorLabel, meta);
 		}
 	}
 
@@ -228,8 +256,10 @@ public class TimeEntryController {
 	public Page<HistoryEntryResponse> history(@PathVariable String id,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "50") int size) {
-		return timeTracking.history(id, page, size, currentUser.require())
-				.map(HistoryEntryResponse::from);
+		TimeTrackingService.EntryHistory history = timeTracking.history(id, page, size,
+				currentUser.require());
+		return history.rows().map(log -> HistoryEntryResponse.from(log, history.readsConversation(log),
+						history.actorLabelOf(log)));
 	}
 
 	/**
@@ -248,7 +278,7 @@ public class TimeEntryController {
 	@ResponseStatus(HttpStatus.ACCEPTED)
 	public void requestCorrection(@PathVariable String id,
 			@RequestBody @Valid TimesheetApprovalController.NoteRequest request) {
-		approvals.requestCorrection(id, request.getNote(), currentUser.require());
+		corrections.request(id, request.getNote(), currentUser.require());
 	}
 
 	/** Starts a timer carrying this entry's description and placement. */

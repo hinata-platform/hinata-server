@@ -36,7 +36,7 @@ class TimeEntryHistoryResponseTest {
 				.build();
 
 		TimeEntryController.HistoryEntryResponse response =
-				TimeEntryController.HistoryEntryResponse.from(record);
+				TimeEntryController.HistoryEntryResponse.from(record, true);
 
 		assertThat(response.metadata()).containsOnlyKeys("minutes", "date", "project", "issue");
 		// `owner` and `workItem` are ids the reader already has, `commit` is a
@@ -58,7 +58,7 @@ class TimeEntryHistoryResponseTest {
 				.metadata(metadata())
 				.build();
 
-		String rendered = TimeEntryController.HistoryEntryResponse.from(record).toString();
+		String rendered = TimeEntryController.HistoryEntryResponse.from(record, true).toString();
 
 		assertThat(rendered).doesNotContain("10.0.").doesNotContain("Hinata/");
 	}
@@ -68,7 +68,37 @@ class TimeEntryHistoryResponseTest {
 		AuditLog record = AuditLog.builder().id("a1")
 				.action(AuditAction.TIME_TIMER_STOPPED).build();
 
-		assertThat(TimeEntryController.HistoryEntryResponse.from(record).metadata()).isEmpty();
+		assertThat(TimeEntryController.HistoryEntryResponse.from(record, true).metadata()).isEmpty();
+	}
+
+	@Test
+	void theWordsOfACorrectionReachOnlyAReaderWhoIsPartOfTheConversation() {
+		Map<String, String> meta = new LinkedHashMap<>();
+		meta.put("date", "2026-09-07");
+		meta.put("reason", "LOCK_DATE");
+		meta.put("note", "Ich öffne den Tag heute noch.");
+		AuditLog answer = AuditLog.builder().id("a2")
+				.action(AuditAction.TIME_CORRECTION_ANSWERED).metadata(meta).build();
+
+		assertThat(TimeEntryController.HistoryEntryResponse.from(answer, true).metadata())
+				.containsEntry("note", "Ich öffne den Tag heute noch.")
+				.containsEntry("reason", "LOCK_DATE");
+		// A lead who may see the entry still reads "answered" and the day, not the
+		// sentence an administrator wrote to somebody else about the lock date.
+		assertThat(TimeEntryController.HistoryEntryResponse.from(answer, false).metadata())
+				.containsOnlyKeys("date");
+	}
+
+	@Test
+	void aNoteOnAnyOtherRecordStaysHiddenWhoeverReads() {
+		Map<String, String> meta = new LinkedHashMap<>();
+		meta.put("minutes", "45");
+		meta.put("note", "written somewhere it was never meant to be read");
+		AuditLog edit = AuditLog.builder().id("a3")
+				.action(AuditAction.TIME_ENTRY_UPDATED).metadata(meta).build();
+
+		assertThat(TimeEntryController.HistoryEntryResponse.from(edit, true).metadata())
+				.containsOnlyKeys("minutes");
 	}
 
 	private static Map<String, String> metadata() {

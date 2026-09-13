@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.function.Predicate;
 
 @Tag(name = "Time Tracking")
 @RestController
@@ -49,15 +50,35 @@ public class TimeTrackingController {
 			LocalDate date, int durationMinutes, String activityType, String description,
 			Instant createdAt, Instant startedAt, Instant endedAt, boolean billable,
 			List<String> tags, WorkItem.Source source, Instant updatedAt, String updatedBy,
-			String sharedFromId) {
+			String sharedFromId, boolean hidden) {
 
 		public static WorkItemResponse from(WorkItem item) {
+			return from(item, true);
+		}
+
+		/**
+		 * The entry as this reader may see it.
+		 *
+		 * <p>Without its details (see {@link TimeTrackingService#detailsVisibleTo}) it keeps
+		 * the day, the duration, the activity and what the project needs to know about it,
+		 * and loses everything that says who worked, when exactly and what they wrote.
+		 * {@code hidden} tells the client which of the two it holds, so a missing name is
+		 * never mistaken for a deleted account. The published app reads {@code userId} as
+		 * optional and ignores the fields it does not know.
+		 */
+		public static WorkItemResponse from(WorkItem item, boolean readsDetails) {
+			if (!readsDetails) {
+				return new WorkItemResponse(item.getId(), item.getIssueId(), item.getProjectId(),
+						null, item.getDate(), item.getDurationMinutes(), item.getActivityType(), null,
+						null, null, null, item.isBillable(), List.of(), item.getSource(), null, null,
+						null, true);
+			}
 			return new WorkItemResponse(item.getId(), item.getIssueId(), item.getProjectId(),
 					item.getUserId(), item.getDate(), item.getDurationMinutes(),
 					item.getActivityType(), item.getDescription(), item.getCreatedAt(),
 					item.getStartedAt(), item.getEndedAt(), item.isBillable(), item.getTags(),
 					item.getSource(), item.getUpdatedAt(), item.getUpdatedBy(),
-					item.getSharedFromId());
+					item.getSharedFromId(), false);
 		}
 	}
 
@@ -142,20 +163,28 @@ public class TimeTrackingController {
 
 	// --- per issue ---------------------------------------------------------------
 
-	/** An issue's entries, newest first — an array as before, now capped at the 200 newest. */
+	/**
+	 * An issue's entries, newest first — an array as before, now capped at the 200 newest.
+	 * Somebody else's entries come without their details unless the reader may read them;
+	 * see {@link TimeTrackingService#detailsVisibleTo}.
+	 */
 	@GetMapping("/issues/{issueId}/work-items")
 	public List<WorkItemResponse> list(@PathVariable String issueId) {
 		User user = currentUser.require();
-		return timeTracking.list(issueId, user).stream().map(WorkItemResponse::from).toList();
+		Predicate<WorkItem> readable = timeTracking.detailsVisibleTo(user);
+		return timeTracking.list(issueId, user).stream()
+				.map(item -> WorkItemResponse.from(item, readable.test(item))).toList();
 	}
 
-	/** The same entries, paged (newest first, at most 100 per page). */
+	/** The same entries, paged (newest first, at most 100 per page), under the same rule. */
 	@GetMapping("/issues/{issueId}/work-items/page")
 	public Page<WorkItemResponse> page(@PathVariable String issueId,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "20") int size) {
 		User user = currentUser.require();
-		return timeTracking.page(issueId, page, size, user).map(WorkItemResponse::from);
+		Predicate<WorkItem> readable = timeTracking.detailsVisibleTo(user);
+		return timeTracking.page(issueId, page, size, user)
+				.map(item -> WorkItemResponse.from(item, readable.test(item)));
 	}
 
 	@PostMapping("/issues/{issueId}/work-items")

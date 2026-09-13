@@ -3,6 +3,7 @@ package com.ahmadre.hinata.me;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.issue.IssueWatchService;
+import com.ahmadre.hinata.issue.export.ExportRateLimiter;
 import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.UserService;
@@ -52,7 +53,8 @@ class MeControllerSessionsTest {
 		messages.setFallbackToSystemLocale(false);
 
 		controller = new MeController(me, currentUser, mock(UserEvents.class),
-				mock(DataExportPdfService.class), mock(UserService.class),
+				mock(DataExportPdfService.class), mock(ExportRateLimiter.class),
+				mock(UserService.class),
 				mock(IssueWatchService.class), mock(SecurityPolicy.class), mock(JwtDecoder.class),
 				mock(SettingsService.class), mock(BrandLogoService.class), messages);
 	}

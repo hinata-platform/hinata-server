@@ -188,7 +188,7 @@ class TimeTrackingRequestTest {
 	@Test
 	void theResponseNamesEveryFieldOfTheEntity() {
 		assertThat(componentsOf(TimeTrackingController.WorkItemResponse.class))
-				.containsExactlyInAnyOrderElementsOf(entityFields());
+				.containsExactlyInAnyOrderElementsOf(entityFieldsAndTheReaderFlag());
 	}
 
 	/**
@@ -200,7 +200,18 @@ class TimeTrackingRequestTest {
 	@Test
 	void theMcpViewNamesEveryFieldOfTheEntityToo() {
 		assertThat(componentsOf(TimeTrackingTools.WorkItemView.class))
-				.containsExactlyInAnyOrderElementsOf(entityFields());
+				.containsExactlyInAnyOrderElementsOf(entityFieldsAndTheReaderFlag());
+	}
+
+	/**
+	 * Every field of the entity, and {@code hidden}: the one component without a
+	 * counterpart there, because it says what this reader may see of the entry rather
+	 * than what the entry is.
+	 */
+	private static Set<String> entityFieldsAndTheReaderFlag() {
+		Set<String> names = new java.util.HashSet<>(entityFields());
+		names.add("hidden");
+		return names;
 	}
 
 	private static Set<String> entityFields() {

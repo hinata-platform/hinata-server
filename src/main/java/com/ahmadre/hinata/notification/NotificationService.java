@@ -451,6 +451,30 @@ public class NotificationService {
 				link, null, Routing.of(Notification.Type.TIME_CORRECTION_REQUESTED));
 	}
 
+	/**
+	 * Tells the person who asked for a correction that it was answered. The answer
+	 * itself is in the entry's history, not in the message — a push body carries no
+	 * readable time or project data (R7).
+	 */
+	public void notifyTimeCorrectionAnswered(User owner, String answeredBy, String link) {
+		if (owner == null) return;
+		deliver(Set.of(owner.getId()), Notification.Type.TIME_CORRECTION_ANSWERED,
+				locale -> words.in(locale, "notify.timeCorrectionAnswered.title"),
+				locale -> words.in(locale, "notify.timeCorrectionAnswered.body", answeredBy),
+				locale -> words.in(locale, "notify.timesheet.push"),
+				link, null, Routing.of(Notification.Type.TIME_CORRECTION_ANSWERED));
+	}
+
+	/** Tells the administrators somebody asks for days they cannot record yet to be opened. */
+	public void notifyTimeBackfillRequested(Set<String> recipients, String requester, String link) {
+		if (recipients == null || recipients.isEmpty()) return;
+		deliver(recipients, Notification.Type.TIME_BACKFILL_REQUESTED,
+				locale -> words.in(locale, "notify.timeBackfillRequest.title"),
+				locale -> words.in(locale, "notify.timeBackfillRequest.body", requester),
+				locale -> words.in(locale, "notify.timesheet.push"),
+				link, null, Routing.of(Notification.Type.TIME_BACKFILL_REQUESTED));
+	}
+
 	private void deliverOne(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
@@ -975,7 +999,8 @@ public class NotificationService {
 			case TEAM_ADDED, PROJECT_ADDED -> "invites";
 			case DIGEST -> "digest";
 			case TIME_TIMER_AUTO_STOPPED, TIMESHEET_SUBMITTED, TIMESHEET_APPROVED,
-					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED -> "time";
+					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED,
+					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

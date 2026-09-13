@@ -235,19 +235,49 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 		ServerSettings.TimeTracking.Retention override = db().getRetention();
 		HinataProperties.TimeTracking.Retention fallback = env().getRetention();
 		if (override == null) {
-			return new Retention(fallback.getDescriptionPurgeMonths(), fallback.getEntryPurgeMonths());
+			return new Retention(fallback.getDescriptionPurgeMonths(),
+					atLeastTwoYears(fallback.getEntryPurgeMonths()));
 		}
 		return new Retention(
 				override.getDescriptionPurgeMonths() != null
 						? override.getDescriptionPurgeMonths() : fallback.getDescriptionPurgeMonths(),
-				override.getEntryPurgeMonths() != null
-						? override.getEntryPurgeMonths() : fallback.getEntryPurgeMonths());
+				atLeastTwoYears(override.getEntryPurgeMonths() != null
+						? override.getEntryPurgeMonths() : fallback.getEntryPurgeMonths()));
+	}
+
+	/**
+	 * An entry retention of 1 to 23 months, raised to 24.
+	 *
+	 * <p>The admin area refuses such a value, but one from the environment has nobody
+	 * to refuse it to. A server that would not start is a worse answer than keeping the
+	 * records for the two years the law asks for — and deleting them is the one answer
+	 * that cannot be taken back.
+	 */
+	private static int atLeastTwoYears(int months) {
+		return months > 0 && months < TimePolicy.ENTRY_RETENTION_MIN_MONTHS
+				? TimePolicy.ENTRY_RETENTION_MIN_MONTHS : months;
 	}
 
 	/** The privacy notice shown before the module is first used (blank ⇒ built-in template). */
 	public String privacyNotice() {
 		String override = db().getPrivacyNotice();
 		return override != null && !override.isBlank() ? override : env().getPrivacyNotice();
+	}
+
+	/** How many days back a day may be recorded before a lock exception is needed. */
+	public int maxDaysBack() {
+		Integer override = db().getMaxDaysBack();
+		return override != null ? override : env().getMaxDaysBack();
+	}
+
+	/**
+	 * After how many days an entry is marked as recorded late for its owner, or
+	 * null for no hint. A stored {@code 0} switches off a value the environment set.
+	 */
+	public Integer lateEntryHintDays() {
+		Integer override = db().getLateEntryHintDays();
+		Integer days = override != null ? override : env().getLateEntryHintDays();
+		return days == null || days <= 0 ? null : days;
 	}
 
 	/** Whether external calendars may be subscribed to. */

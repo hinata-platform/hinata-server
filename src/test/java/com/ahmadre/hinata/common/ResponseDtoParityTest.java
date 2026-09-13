@@ -13,6 +13,7 @@ import com.ahmadre.hinata.timetracking.WorkItem;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -107,7 +108,12 @@ class ResponseDtoParityTest {
 		JsonNode entityJson = mapper.valueToTree(entity);
 		JsonNode dtoJson = mapper.valueToTree(TimeTrackingController.WorkItemResponse.from(entity));
 
-		assertThat(dtoJson).isEqualTo(entityJson);
+		// `hidden` is the one field without a counterpart on the entity: it says what
+		// this reader may see of the entry, not what the entry is.
+		assertThat(dtoJson.get("hidden").asBoolean()).isFalse();
+		ObjectNode entryFields = dtoJson.deepCopy();
+		entryFields.remove("hidden");
+		assertThat((JsonNode) entryFields).isEqualTo(entityJson);
 		// The fields the app reads today, unchanged in name and type …
 		assertThat(dtoJson.get("date").asText()).isEqualTo("2026-09-07");
 		assertThat(dtoJson.get("durationMinutes").asInt()).isEqualTo(90);

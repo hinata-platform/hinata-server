@@ -4,6 +4,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.setup.ServerSettings;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -20,10 +21,11 @@ import java.util.Set;
  * Why a day is frozen, who can lift it, and what the way back is.
  *
  * <p>One component for every reason an entry can be immutable, because the
- * alternative is what this stage exists to prevent. After HIN-88 there are two
- * reasons and HIN-96 brings a third (an issued invoice), and three mechanisms
- * each raising their own refusal would give the person on the other end three
- * sentences, three vocabularies and three places to look for the way out. Here
+ * alternative is what this stage exists to prevent. There are three reasons today
+ * (the lock date, a submitted period and, since HIN-89, a day further back than
+ * {@code maxDaysBack}) and HIN-96 brings a fourth (an issued invoice). Mechanisms
+ * each raising their own refusal would give the person on the other end as many
+ * sentences, vocabularies and places to look for the way out. Here
  * they share one: {@link TimePolicy.LockReason}, {@link TimePolicy.LockHolder},
  * {@link TimePolicy.LockRemedy} — reason, who, how — and the client renders all
  * of them with one component.
@@ -46,6 +48,8 @@ public class TimeLocks {
 	private final TimeTrackingSettings policy;
 	private final ProjectTimeSettingsRepository projectSettings;
 	private final TimesheetApprovalRepository approvals;
+	private final TimeBackfillGrantRepository grants;
+	private final java.time.Clock clock;
 
 	/**
 	 * Whether any project has its own lock date; null until asked. See
@@ -66,7 +70,7 @@ public class TimeLocks {
 
 		public TimePolicy.LockHolder holder() {
 			return switch (reason) {
-				case LOCK_DATE -> TimePolicy.LockHolder.ADMIN;
+				case LOCK_DATE, MAX_DAYS_BACK -> TimePolicy.LockHolder.ADMIN;
 				case APPROVAL -> TimePolicy.LockHolder.APPROVER;
 				case INVOICE -> TimePolicy.LockHolder.ACCOUNTING;
 			};
@@ -75,6 +79,10 @@ public class TimeLocks {
 		public TimePolicy.LockRemedy remedy() {
 			return switch (reason) {
 				case LOCK_DATE -> TimePolicy.LockRemedy.LOCK_EXCEPTION;
+				// A day beyond the recording limit is somebody's own backfill — a year
+				// of parental leave, a reconstruction someone ordered — so the way out
+				// opens it for that person, not for the instance.
+				case MAX_DAYS_BACK -> TimePolicy.LockRemedy.BACKFILL_GRANT;
 				case APPROVAL -> TimePolicy.LockRemedy.REOPEN;
 				case INVOICE -> TimePolicy.LockRemedy.CREDIT_NOTE;
 			};
@@ -104,8 +112,16 @@ public class TimeLocks {
 			return details;
 		}
 
-		/** The message that names this reason. Both spell the dates, never an instant. */
+		/** The message that names this reason. Every one spells dates, never an instant. */
 		ApiException refusal() {
+			if (reason == TimePolicy.LockReason.MAX_DAYS_BACK) {
+				// 400 like the 1.x "too old" it replaces while the module is on: the
+				// request names a day the rules do not accept yet, and nothing that
+				// exists is being protected. {@code lockDate} carries the oldest day
+				// that can be recorded without an exception.
+				return new ApiException(HttpStatus.BAD_REQUEST, "error.time.dateBeyondLimit",
+						details(), day(lockDate));
+			}
 			if (reason == TimePolicy.LockReason.APPROVAL && approval != null) {
 				return ApiException.forbidden("error.time.approvalLocked", details(),
 						day(approval.getPeriodStart()), day(approval.getPeriodEnd()));
@@ -228,6 +244,22 @@ public class TimeLocks {
 		return false;
 	}
 
+	/**
+	 * Whether an administrator has opened {@code date} for this person to record.
+	 *
+	 * <p>Asked only once a day is already known to lie behind a limit, so the indexed
+	 * read it costs is never on the path of an ordinary write. The expiry is checked
+	 * here as well as by the TTL index, because Mongo removes expired documents on a
+	 * schedule of its own and a grant must stop applying on the second it says.
+	 */
+	public boolean grantedFor(String userId, LocalDate date) {
+		if (userId == null || date == null || !policy.advancedEnabled()) {
+			return false;
+		}
+		return grants.existsByUserIdAndFromLessThanEqualAndToGreaterThanEqualAndExpiresAtAfter(
+				userId, date, date, clock.instant());
+	}
+
 	// --- the whole question ----------------------------------------------------
 
 	/**
@@ -243,7 +275,8 @@ public class TimeLocks {
 			return null;
 		}
 		LocalDate lock = lockBefore(projectId);
-		if (lock != null && date.isBefore(lock) && !reopenedByException(date)) {
+		if (lock != null && date.isBefore(lock) && !reopenedByException(date)
+				&& !grantedFor(userId, date)) {
 			return new LockState(TimePolicy.LockReason.LOCK_DATE, lock, null);
 		}
 		TimesheetApproval approval = freezingApproval(userId, projectId, date);

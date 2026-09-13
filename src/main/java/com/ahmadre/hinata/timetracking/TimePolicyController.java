@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -20,9 +21,14 @@ import java.util.List;
  * tag they may not coin. A client that could not read them would have to
  * discover each one by being refused, which is both a poor editor and the
  * opposite of what R3 asks for. So the enforced rules are published to anyone
- * signed in, and nothing else is: no retention, no visibility switches, no
- * notice text — those belong to the transparency panel of HIN-89, which frames
- * them.
+ * signed in. Retention and the notice text are not here — they belong to
+ * {@code GET /time/privacy}, which frames them for the person they describe.
+ *
+ * <p>Four fields joined in HIN-89, additively: whether leads see member entries
+ * (a client offering a lead the member rows of the timesheet has to know it may),
+ * how far back a day can be recorded (the date picker's first day), and whether
+ * the self-hints exist (so a client asks {@code /time/hints} only when it would
+ * not be answered with a 404).
  *
  * <p>Resolved through {@link TimeTrackingSettings} rather than read from the
  * stored block, so what a client marks in the editor is what the write gate
@@ -36,6 +42,8 @@ import java.util.List;
 public class TimePolicyController {
 
 	private final TimeTrackingSettings settings;
+	private final TimeBackfillGrantRepository grants;
+	private final java.time.Clock clock;
 	private final CurrentUser currentUser;
 
 	public record RequiredFieldsResponse(boolean project, boolean issue, boolean description,
@@ -81,15 +89,25 @@ public class TimePolicyController {
 	 * getting a 404 from the approvals route would offer an action that does not
 	 * exist, which is the opposite of what publishing the rules is for.
 	 */
+	/**
+	 * Days opened for the reader alone (HIN-89). Only the span and the end: the reason
+	 * is between the reader and the administrator, and it is in the reader's own
+	 * correction request already.
+	 */
+	public record BackfillGrantResponse(LocalDate from, LocalDate to, Instant expiresAt) {
+	}
+
 	public record TimePolicyResponse(RequiredFieldsResponse requiredFields, LocalDate lockBefore,
 			List<LockExceptionResponse> lockExceptions, RoundingResponse rounding,
 			boolean limitTagAccess, boolean defaultBillable, boolean approvalsEnabled,
-			ApprovalPeriodResponse approvalPeriod) {
+			ApprovalPeriodResponse approvalPeriod, boolean leadsSeeMemberEntries, int maxDaysBack,
+			boolean arbzgHintsEnabled, Integer lateEntryHintDays,
+			List<BackfillGrantResponse> myBackfillGrants) {
 	}
 
 	@GetMapping
 	public TimePolicyResponse policy() {
-		currentUser.require();
+		String me = currentUser.require().getId();
 		TimeTrackingSettings.RequiredFields required = settings.requiredFields();
 		TimeTrackingSettings.Rounding rounding = settings.rounding();
 		TimeTrackingSettings.ApprovalPeriod period = settings.approvalPeriod();
@@ -107,6 +125,14 @@ public class TimePolicyController {
 				settings.approvalsEnabled(),
 				new ApprovalPeriodResponse(period.type(),
 						period.weekStartsOn() == null ? null : period.weekStartsOn().name(),
-						period.anchorDate(), period.days()));
+						period.anchorDate(), period.days()),
+				settings.leadsSeeMemberEntries(),
+				settings.maxDaysBack(),
+				settings.arbzgHintsEnabled(),
+				settings.lateEntryHintDays(),
+				grants.findByUserIdAndExpiresAtAfter(me, clock.instant()).stream()
+						.map(grant -> new BackfillGrantResponse(grant.getFrom(), grant.getTo(),
+								grant.getExpiresAt()))
+						.toList());
 	}
 }

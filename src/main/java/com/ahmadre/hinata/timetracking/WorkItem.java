@@ -79,6 +79,17 @@ import java.util.List;
 // indexes above take. Without it a rename would read the whole collection to
 // find three entries, and the admin list would read it once per row.
 @CompoundIndex(name = "tags_date", def = "{'tags': 1, 'date': 1}")
+// The retention sweep walks one day at a time and within the day by _id. With
+// date_user_project it would read and sort every remaining entry of the day for
+// each batch of 500; with this it is a bounded index walk.
+@CompoundIndex(name = "date_id", def = "{'date': 1, '_id': 1}")
+// The descriptions a deleted account left behind. Partial, so it holds only entries
+// that still have one: clearing a description takes the entry out of the index, and
+// the sweep never reads a cleared entry again. _id is the third key only so the key
+// pattern differs from user_date; not every server version accepts two indexes that
+// differ in nothing but their filter.
+@CompoundIndex(name = "user_date_described", def = "{'userId': 1, 'date': 1, '_id': 1}",
+		partialFilter = "{'description': {'$gt': ''}}")
 public class WorkItem {
 
 	/**
