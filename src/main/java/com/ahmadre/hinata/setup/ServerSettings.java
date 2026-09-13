@@ -2,9 +2,11 @@ package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.common.ApprovalPeriodConsistent;
 import com.ahmadre.hinata.common.TimePolicy;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -486,6 +488,21 @@ public class ServerSettings {
 		@Size(max = 20000, message = "error.timeTracking.privacyNoticeTooLong")
 		private String privacyNotice;
 
+		/** How many days back a day may be recorded; null ⇒ env default (365). */
+		@Min(value = 1, message = "error.timeTracking.maxDaysBackInvalid")
+		@Max(value = TimePolicy.MAX_DAYS_BACK_CEILING, message = "error.timeTracking.maxDaysBackInvalid")
+		private Integer maxDaysBack;
+
+		/**
+		 * After how many days an entry carries a "recorded late" hint for its owner;
+		 * null ⇒ env default, which is no hint. {@code 0} is how the admin area says
+		 * "off" over an environment that set one — a stored null could not.
+		 */
+		@Min(value = 0, message = "error.timeTracking.lateEntryHintDaysInvalid")
+		@Max(value = TimePolicy.LATE_ENTRY_HINT_MAX_DAYS,
+				message = "error.timeTracking.lateEntryHintDaysInvalid")
+		private Integer lateEntryHintDays;
+
 		/** Subscribing to external calendars; null ⇒ env default. */
 		private Boolean icsImportEnabled;
 
@@ -625,6 +642,14 @@ public class ServerSettings {
 			@Max(value = TimePolicy.RETENTION_MAX_MONTHS,
 					message = "error.timeTracking.retentionInvalid")
 			private Integer entryPurgeMonths;
+
+			/** Never (0) or at least two years; see {@link TimePolicy#ENTRY_RETENTION_MIN_MONTHS}. */
+			@AssertTrue(message = "error.timeTracking.entryRetentionTooShort")
+			@JsonIgnore
+			public boolean isEntryPurgeLongEnough() {
+				return entryPurgeMonths == null || entryPurgeMonths == 0
+						|| entryPurgeMonths >= TimePolicy.ENTRY_RETENTION_MIN_MONTHS;
+			}
 		}
 	}
 

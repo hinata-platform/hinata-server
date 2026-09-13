@@ -3,6 +3,7 @@ package com.ahmadre.hinata.me;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.issue.IssueWatchService;
+import com.ahmadre.hinata.issue.export.ExportRateLimiter;
 import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
@@ -54,7 +55,8 @@ class MeControllerPagesTest {
 		when(securityPolicy.passwordMinLength()).thenReturn(12);
 
 		controller = new MeController(mock(MeService.class), mock(CurrentUser.class),
-				mock(UserEvents.class), mock(DataExportPdfService.class), mock(UserService.class),
+				mock(UserEvents.class), mock(DataExportPdfService.class), mock(ExportRateLimiter.class),
+				mock(UserService.class),
 				mock(IssueWatchService.class), securityPolicy, mock(JwtDecoder.class), settings,
 				brandLogo, messages);
 	}

@@ -11,7 +11,7 @@ package com.ahmadre.hinata.issue.export;
  * right, but the format could not be a constant once it had to answer in the
  * reader's language and the reader's zone.
  */
-final class ExportText {
+public final class ExportText {
 
 	/**
 	 * Longest file-name stem an export produces, before the extension. Long
@@ -39,7 +39,7 @@ final class ExportText {
 	 * and newline are stripped from the front first, because a formula preceded
 	 * by whitespace is still parsed as a formula.
 	 */
-	static String forSpreadsheet(String value) {
+	public static String forSpreadsheet(String value) {
 		if (value == null || value.isEmpty()) {
 			return "";
 		}

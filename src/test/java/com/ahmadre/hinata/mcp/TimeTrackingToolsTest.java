@@ -80,6 +80,7 @@ class TimeTrackingToolsTest {
 	@Test
 	void listingGoesThroughTheAclCheckedListRatherThanTheRepository() {
 		when(timeTracking.list(anyString(), any())).thenReturn(List.of(item()));
+		when(timeTracking.detailsVisibleTo(me)).thenReturn(entry -> true);
 
 		List<TimeTrackingTools.WorkItemView> views = tools.listWorkItems("HIN-42");
 
@@ -127,6 +128,7 @@ class TimeTrackingToolsTest {
 				.sharedFromId("w1").build();
 		WorkItem legacy = WorkItem.builder().id("w3").source(null).tags(null).build();
 		when(timeTracking.list(anyString(), any())).thenReturn(List.of(modern, legacy));
+		when(timeTracking.detailsVisibleTo(me)).thenReturn(entry -> true);
 
 		List<TimeTrackingTools.WorkItemView> views = tools.listWorkItems("HIN-42");
 
@@ -137,5 +139,24 @@ class TimeTrackingToolsTest {
 		assertThat(views.getFirst().sharedFromId()).isEqualTo("w1");
 		assertThat(views.getLast().source()).isEqualTo("APP");
 		assertThat(views.getLast().tags()).isEmpty();
+	}
+
+	/** A token reads a colleague's entry the way its holder may: the hours without the person. */
+	@Test
+	void anEntryTheHolderMayNotReadComesBackWithoutItsDetails() {
+		WorkItem colleagues = WorkItem.builder().id("w4").issueId("i1").projectId("p1")
+				.userId("u-colleague").date(LocalDate.of(2026, 9, 7)).durationMinutes(45)
+				.description("Arzttermin nachgeholt").source(WorkItem.Source.APP).build();
+		when(timeTracking.list(anyString(), any())).thenReturn(List.of(colleagues));
+		when(timeTracking.detailsVisibleTo(me)).thenReturn(entry -> false);
+
+		List<TimeTrackingTools.WorkItemView> views = tools.listWorkItems("HIN-42");
+
+		assertThat(views).singleElement().satisfies(view -> {
+			assertThat(view.hidden()).isTrue();
+			assertThat(view.durationMinutes()).isEqualTo(45);
+			assertThat(view.userId()).isNull();
+			assertThat(view.description()).isNull();
+		});
 	}
 }

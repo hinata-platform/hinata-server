@@ -113,8 +113,7 @@ public class DataExportPdfService {
 	/** Keeps a long legal name from growing into an unwieldy filename. */
 	private static final int MAX_SLUG = 48;
 
-	private static final DateTimeFormatter DT =
-			DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneId.of("UTC"));
+	private static final DateTimeFormatter DT = PersonalDataExport.INSTANT;
 
 	private final MeService me;
 	private final SessionService sessions;
@@ -124,6 +123,8 @@ public class DataExportPdfService {
 	private final SettingsService settings;
 	private final BrandLogoService brandLogo;
 	private final com.ahmadre.hinata.common.UserWords words;
+	/** The modules holding personal data of their own; see {@link PersonalDataExport}. */
+	private final List<PersonalDataExport> personalData;
 
 	/**
 	 * A suggested, filesystem-safe download name for {@code user}'s export. The
@@ -159,6 +160,11 @@ public class DataExportPdfService {
 			issuesSection(doc, user, locale);
 			commentsSection(doc, user, locale);
 			activitySection(doc, user, locale);
+			for (PersonalDataExport module : personalData) {
+				for (PersonalDataExport.Table table : module.tables(user, locale)) {
+					moduleTable(doc, table, locale);
+				}
+			}
 			footer(doc, locale);
 
 			doc.close();
@@ -384,6 +390,28 @@ public class DataExportPdfService {
 			td(t, l.getOutcome() == null ? "—" : l.getOutcome().name());
 		}
 		doc.add(t);
+	}
+
+	/** A table a module contributed, in this document's letterhead and type. */
+	private void moduleTable(Document doc, PersonalDataExport.Table table, Locale locale) {
+		section(doc, table.title() + " (" + table.rows().size() + ")");
+		if (table.rows().isEmpty()) {
+			doc.add(emptyNote(locale));
+		}
+		else {
+			PdfPTable t = new PdfPTable(table.widths());
+			t.setWidthPercentage(100);
+			table.headers().forEach(header -> th(t, header));
+			for (List<String> row : table.rows()) {
+				row.forEach(cell -> td(t, cell));
+			}
+			doc.add(t);
+		}
+		if (table.note() != null) {
+			Paragraph note = new Paragraph(table.note(), bodyMuted(table.note()));
+			note.setSpacingBefore(4);
+			doc.add(note);
+		}
 	}
 
 	private void footer(Document doc, Locale locale) {

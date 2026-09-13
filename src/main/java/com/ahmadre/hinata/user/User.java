@@ -180,6 +180,14 @@ public class User {
 	@Builder.Default
 	private TimePreferences timePreferences = TimePreferences.defaults();
 
+	/**
+	 * When this person first confirmed they had read the time-tracking privacy
+	 * notice. Evidence that they were informed (Art. 13 DSGVO), never consent —
+	 * working time is not processed on consent. Null until then; the first moment
+	 * is kept.
+	 */
+	private Instant timePrivacyAcknowledgedAt;
+
 	public boolean isAdmin() {
 		return roles != null && roles.contains(Role.ADMIN);
 	}

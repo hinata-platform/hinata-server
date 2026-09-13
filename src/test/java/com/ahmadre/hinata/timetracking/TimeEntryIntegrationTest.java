@@ -219,9 +219,12 @@ class TimeEntryIntegrationTest {
 		assertStatus(() -> create(new TimeTrackingService.NewEntry(null, null, 30,
 						TODAY.plusDays(1), null, null, null, null, null, null), owner),
 				HttpStatus.BAD_REQUEST, "error.time.dateInFuture");
+		// With the module on the limit is the operator's maxDaysBack and the refusal
+		// names the way out (HIN-89); the 1.x sentence stays for the module off,
+		// see TimePrivacyIntegrationTest.
 		assertStatus(() -> create(new TimeTrackingService.NewEntry(null, null, 30,
 						TODAY.minusDays(400), null, null, null, null, null, null), owner),
-				HttpStatus.BAD_REQUEST, "error.time.dateTooOld");
+				HttpStatus.BAD_REQUEST, "error.time.dateBeyondLimit");
 	}
 
 	// --- where an entry may be filed --------------------------------------------

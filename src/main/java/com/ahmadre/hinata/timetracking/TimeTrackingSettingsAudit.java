@@ -107,6 +107,9 @@ public class TimeTrackingSettingsAudit implements SettingsAudit {
 				ServerSettings.TimeTracking::getArbzgHintsEnabled);
 		compare(changes, "icsImportEnabled", was, now,
 				ServerSettings.TimeTracking::getIcsImportEnabled);
+		compare(changes, "maxDaysBack", was, now, ServerSettings.TimeTracking::getMaxDaysBack);
+		compare(changes, "lateEntryHintDays", was, now,
+				ServerSettings.TimeTracking::getLateEntryHintDays);
 		compare(changes, "billingEnabled", was, now, ServerSettings.TimeTracking::getBillingEnabled);
 		compare(changes, "currency", was, now, ServerSettings.TimeTracking::getCurrency);
 		compare(changes, "retention", was, now,

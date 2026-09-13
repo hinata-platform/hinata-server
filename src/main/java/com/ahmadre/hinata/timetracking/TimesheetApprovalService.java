@@ -1,7 +1,6 @@
 package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.audit.AuditAction;
-import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TimePolicy;
@@ -9,7 +8,6 @@ import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.project.ProjectService;
-import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,15 +15,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -39,8 +33,6 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Handing a period in, and signing it off.
@@ -97,12 +89,9 @@ public class TimesheetApprovalService {
 	 */
 	private static final int MAX_PROJECTS_PER_SUBMISSION = 100;
 
-	/** Most projects one inbox query narrows to. Beyond this the $in stops being cheap. */
-	private static final int MAX_LED_PROJECTS = 500;
-
 	private final TimesheetApprovalRepository approvals;
 	private final TimeTrackingService entries;
-	private final TimeLocks locks;
+	private final TimeApprovers approvers;
 	private final ProjectTimeSettingsRepository projectSettings;
 	private final TimeTrackingSettings policy;
 	private final ProjectService projects;
@@ -110,7 +99,6 @@ public class TimesheetApprovalService {
 	private final UserRepository users;
 	private final NotificationService notifications;
 	private final AuditService audit;
-	private final MongoTemplate mongo;
 	private final Clock clock;
 
 	// --- what a client sees ----------------------------------------------------
@@ -383,7 +371,7 @@ public class TimesheetApprovalService {
 					? approvals.findAll(pageable)
 					: approvals.findByStatus(status, pageable);
 		}
-		Collection<String> led = ledProjectIds(user);
+		Collection<String> led = approvers.ledProjectIds(user);
 		if (led.isEmpty()) {
 			return Page.empty(pageable);
 		}
@@ -668,7 +656,7 @@ public class TimesheetApprovalService {
 		if (approval.getStatus() != TimesheetApproval.Status.SUBMITTED) {
 			throw ApiException.conflict("error.time.approvalNotPending");
 		}
-		String reason = trimmedNote(note);
+		String reason = TimeNotes.trimmed(note);
 		if (target == TimesheetApproval.Status.REJECTED && reason == null) {
 			throw ApiException.badRequest("error.time.approvalNoteRequired");
 		}
@@ -698,7 +686,7 @@ public class TimesheetApprovalService {
 		if (approval.getStatus() != TimesheetApproval.Status.APPROVED) {
 			throw ApiException.conflict("error.time.approvalNotApproved");
 		}
-		String reason = trimmedNote(note);
+		String reason = TimeNotes.trimmed(note);
 		if (reason == null) {
 			throw ApiException.badRequest("error.time.approvalNoteRequired");
 		}
@@ -733,71 +721,6 @@ public class TimesheetApprovalService {
 		}
 		audited(action, saved, user, note);
 		return saved;
-	}
-
-	/**
-	 * Asks for a frozen entry to be opened — the person's own Art.-16 route.
-	 *
-	 * <p>It changes nothing. That is deliberate: the request is addressed to
-	 * whoever can lift the freeze, and a mechanism that let the asking itself
-	 * unfreeze anything would be the freeze with an extra step. What it does is
-	 * make the ask visible and recorded, so it cannot be lost in a chat.
-	 *
-	 * <p>An entry that is <em>not</em> frozen is refused. Without that the route
-	 * would be a way to notify a project's leads about any entry at all.
-	 */
-	public void requestCorrection(String workItemId, String note, User user) {
-		assertEnabled();
-		WorkItem item = entries.requireOwn(workItemId, user);
-		String reason = trimmedNote(note);
-		if (reason == null) {
-			throw ApiException.badRequest("error.time.approvalNoteRequired");
-		}
-		TimeLocks.LockState state =
-				locks.lockStateFor(item.getUserId(), item.getProjectId(), item.getDate());
-		if (state == null) {
-			throw ApiException.badRequest("error.time.entryNotLocked");
-		}
-		// One ask per entry per day. Without it the route is an unthrottled fan-out —
-		// a notification row and an e-mail at every administrator, per call, from
-		// anybody with one entry behind the lock date. Repeating the ask is also not
-		// useful: the first one is already in the audit log and in their inbox.
-		if (alreadyAskedToday(item.getId())) {
-			throw ApiException.conflict("error.time.correctionAlreadyRequested");
-		}
-		Set<String> recipients = state.reason() == TimePolicy.LockReason.LOCK_DATE
-				? adminIds()
-				: approverIds(item.getProjectId());
-		recipients.remove(user.getId());
-		if (!recipients.isEmpty()) {
-			notifications.notifyTimeCorrectionRequested(recipients, user.getDisplayName(),
-					"/time/approvals");
-		}
-		audit.event(AuditAction.TIME_CORRECTION_REQUESTED).actor(user)
-				.target(item.getId(), String.valueOf(item.getDate()))
-				.meta("workItem", item.getId())
-				.meta("date", String.valueOf(item.getDate()))
-				.meta("project", item.getProjectId())
-				.meta("reason", state.reason().name())
-				.meta("note", reason)
-				.log();
-	}
-
-	/**
-	 * Whether this entry already carries a correction request from the last day.
-	 *
-	 * <p>Keyed on {@code metadata.workItem}, which is the key the whole product
-	 * hangs an object's history off and which {@code AuditLog} carries a partial
-	 * index for — so the throttle reads an index rather than the collection, and the
-	 * request appears in the entry's own history sheet like every other record
-	 * about it.
-	 */
-	private boolean alreadyAskedToday(String workItemId) {
-		return mongo.exists(Query.query(Criteria
-						.where("action").is(AuditAction.TIME_CORRECTION_REQUESTED)
-						.and("metadata.workItem").is(workItemId)
-						.and("timestamp").gte(clock.instant().minus(Duration.ofDays(1)))),
-				AuditLog.class);
 	}
 
 	// --- who may do what -------------------------------------------------------
@@ -844,57 +767,6 @@ public class TimesheetApprovalService {
 				: ApiException.notFound("timesheetApproval");
 	}
 
-	/**
-	 * The projects this person leads, archived ones included.
-	 *
-	 * <p>Archived deliberately: a closed project's books are exactly the ones still
-	 * needing a reopen, and leaving them out would take the remedy away from the
-	 * lead at the moment it is most likely to be wanted. Capped, because an $in is
-	 * not free and a lead of two thousand projects would otherwise send two thousand
-	 * ids on every page of their inbox.
-	 */
-	private Collection<String> ledProjectIds(User user) {
-		return Stream.concat(projects.visibleTo(user).stream(),
-						projects.archivedVisibleTo(user).stream())
-				.filter(project -> projects.isLeadOrAdmin(project, user))
-				.map(Project::getId)
-				.distinct()
-				.limit(MAX_LED_PROJECTS)
-				.toList();
-	}
-
-	private Set<String> approverIds(String projectId) {
-		Set<String> ids = new LinkedHashSet<>();
-		projects.findOptional(projectId).ifPresent(project -> {
-			if (project.getLeadIds() != null) {
-				ids.addAll(project.getLeadIds());
-			}
-			if (project.getLeadId() != null) {
-				ids.add(project.getLeadId());
-			}
-		});
-		if (ids.isEmpty()) {
-			// A project with no lead still has to have somebody to ask, or the
-			// Art.-16 route would be a button that notifies nobody.
-			ids.addAll(adminIds());
-		}
-		return ids;
-	}
-
-	/**
-	 * Active administrators.
-	 *
-	 * <p>Through the repository's own query rather than by filtering every user:
-	 * this is reached from the Art.-16 route, which anybody may call, and draining
-	 * the user collection per request is how a courtesy feature becomes a way to
-	 * make the server work.
-	 */
-	private Set<String> adminIds() {
-		return users.findByRolesContainingAndActiveIsTrue(Role.ADMIN).stream()
-				.map(User::getId)
-				.collect(Collectors.toCollection(LinkedHashSet::new));
-	}
-
 	// --- notifications and audit ------------------------------------------------
 
 	/**
@@ -908,7 +780,7 @@ public class TimesheetApprovalService {
 	private void notifyApprovers(List<TimesheetApproval> submitted, User actor) {
 		Map<String, Set<String>> byProject = new LinkedHashMap<>();
 		for (TimesheetApproval approval : submitted) {
-			byProject.computeIfAbsent(approval.getProjectId(), this::approverIds);
+			byProject.computeIfAbsent(approval.getProjectId(), approvers::approverIds);
 		}
 		byProject.forEach((projectId, recipients) -> {
 			Set<String> ids = new LinkedHashSet<>(recipients);
@@ -957,20 +829,6 @@ public class TimesheetApprovalService {
 			named.put(project.getId(), project);
 		}
 		return named;
-	}
-
-	private static String trimmedNote(String note) {
-		if (note == null) {
-			return null;
-		}
-		String trimmed = note.trim();
-		if (trimmed.isEmpty()) {
-			return null;
-		}
-		if (trimmed.length() > TimePolicy.LOCK_NOTE_MAX) {
-			throw ApiException.badRequest("error.time.noteTooLong");
-		}
-		return trimmed;
 	}
 
 	/**

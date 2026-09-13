@@ -55,7 +55,7 @@ class DataExportPdfServiceTest {
 		settings = mock(SettingsService.class);
 		brandLogo = mock(BrandLogoService.class);
 		service = new DataExportPdfService(me, sessions, issues, comments, auditLogs, settings,
-				brandLogo, com.ahmadre.hinata.common.UserWordsFixture.real());
+				brandLogo, com.ahmadre.hinata.common.UserWordsFixture.real(), java.util.List.of());
 
 		serverSettings = new ServerSettings();
 		when(settings.get()).thenReturn(serverSettings);

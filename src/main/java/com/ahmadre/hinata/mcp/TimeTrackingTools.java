@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * MCP tools for time tracking. Mirror the REST endpoints: log a work item
@@ -32,20 +33,34 @@ public class TimeTrackingTools {
 	private final ScopeGuard scopeGuard;
 	private final AuditService audit;
 
-	/** Lean projection of a logged work item for MCP callers. */
+	/**
+	 * Lean projection of a logged work item for MCP callers. {@code hidden} marks
+	 * somebody else's entry whose details the caller may not read: it carries the day,
+	 * the duration and the activity, and nothing about who worked or what they wrote.
+	 */
 	public record WorkItemView(String id, String issueId, String projectId, String userId,
 			LocalDate date, int durationMinutes, String activityType, String description,
 			Instant createdAt, Instant startedAt, Instant endedAt, boolean billable,
 			List<String> tags, String source, Instant updatedAt, String updatedBy,
-			String sharedFromId) {
+			String sharedFromId, boolean hidden) {
 
 		static WorkItemView of(WorkItem item) {
+			return of(item, true);
+		}
+
+		static WorkItemView of(WorkItem item, boolean readsDetails) {
+			if (!readsDetails) {
+				return new WorkItemView(item.getId(), item.getIssueId(), item.getProjectId(), null,
+						item.getDate(), item.getDurationMinutes(), item.getActivityType(), null, null,
+						null, null, item.isBillable(), List.of(), item.getSource().name(), null, null,
+						null, true);
+			}
 			return new WorkItemView(item.getId(), item.getIssueId(), item.getProjectId(),
 					item.getUserId(), item.getDate(), item.getDurationMinutes(),
 					item.getActivityType(), item.getDescription(), item.getCreatedAt(),
 					item.getStartedAt(), item.getEndedAt(), item.isBillable(), item.getTags(),
 					item.getSource().name(), item.getUpdatedAt(), item.getUpdatedBy(),
-					item.getSharedFromId());
+					item.getSharedFromId(), false);
 		}
 	}
 
@@ -76,12 +91,16 @@ public class TimeTrackingTools {
 	@McpTool(name = "list_work_items", title = "List work items",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
 			description = "List the work items (logged time) of an issue, newest first (at most "
-					+ "the 200 newest), by issue id or readable id (e.g. HIN-42).")
+					+ "the 200 newest), by issue id or readable id (e.g. HIN-42). Other people's "
+					+ "items may come back with hidden=true: day, duration and activity only.")
 	public List<WorkItemView> listWorkItems(
 			@McpToolParam(description = "Issue id or readable id (e.g. HIN-42)") String issueId) {
 		scopeGuard.require(Scopes.WORKLOG_READ);
 		User me = currentUser.require();
-		return timeTracking.list(issueId, me).stream().map(WorkItemView::of).toList();
+		// The same rule as the REST list: a token never reads more than its holder may.
+		Predicate<WorkItem> readable = timeTracking.detailsVisibleTo(me);
+		return timeTracking.list(issueId, me).stream()
+				.map(item -> WorkItemView.of(item, readable.test(item))).toList();
 	}
 
 	@McpTool(name = "my_timesheet", title = "My timesheet",

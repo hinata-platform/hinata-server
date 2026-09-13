@@ -862,7 +862,7 @@ class TimePolicyIntegrationTest {
 		timeTracking.update(item.getId(), new TimeTrackingService.WorkItemPatch(45, null, null,
 				null, false, null, false, null, null, null), admin);
 
-		Page<AuditLog> history = timeTracking.history(item.getId(), 0, 50, member);
+		Page<AuditLog> history = timeTracking.history(item.getId(), 0, 50, member).rows();
 
 		assertThat(history.getTotalElements()).isEqualTo(1);
 		assertThat(history.getContent().getFirst().getAction())

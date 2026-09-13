@@ -101,6 +101,22 @@ public enum AuditAction {
 	// be recorded: otherwise the only trace of a refused correction is a chat
 	// message.
 	TIME_CORRECTION_REQUESTED(DATA, NOTICE, true),
+	// The answer to such a request, addressed to the person who asked. It carries
+	// the metadata.workItem of the request, so it appears in the entry's own history
+	// right below the question it answers.
+	TIME_CORRECTION_ANSWERED(DATA, NOTICE, true),
+	// Somebody asking an administrator to open days they cannot record yet —
+	// beyond maxDaysBack or before the lock date — because there is no entry yet
+	// to ask a correction about (R9).
+	TIME_BACKFILL_REQUESTED(DATA, NOTICE, true),
+	// An administrator opening such days for that one person, and taking the
+	// grant back. WARNING like a lock exception: it makes closed days writable.
+	TIME_BACKFILL_GRANTED(DATA, WARNING, true),
+	TIME_BACKFILL_REVOKED(DATA, NOTICE, true),
+	// One night's retention sweep and what it did, as counters. The operator's
+	// storage-limitation policy deletes records; the record that it did must not
+	// go with them.
+	TIME_RETENTION_RUN(DATA, NOTICE, true),
 
 	// --- Time-tracking configuration (policies, tags, per-project settings) ---
 	// An operator changing what the module demands or freezes. On by default:

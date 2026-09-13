@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.common.TimeRanges;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
@@ -39,13 +40,19 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Logged time on issues: who may read and change which entries, what a valid
@@ -79,8 +86,12 @@ public class TimeTrackingService {
 	public static final int PAGE_INDEX_MAX = 10_000;
 	/** Longest a single entry may be: one day. */
 	public static final int MAX_MINUTES = 24 * 60;
-	/** How far back an entry may be dated, in days. */
-	public static final int MAX_DAYS_BACK = 365;
+	/**
+	 * How far back an entry may be dated while the module is off, in days. With the
+	 * module on the operator's {@code maxDaysBack} decides, and a lock exception opens
+	 * what lies beyond it.
+	 */
+	public static final int MAX_DAYS_BACK = TimePolicy.MAX_DAYS_BACK_DEFAULT;
 	/** Longest timesheet range, in days. */
 	public static final int MAX_RANGE_DAYS = 92;
 	/**
@@ -155,6 +166,7 @@ public class TimeTrackingService {
 	private final TimeTrackingSettings policy;
 	private final TimeTagService tagCatalog;
 	private final TimeLocks locks;
+	private final TimeApprovers approvers;
 	private final Clock clock;
 
 	// --- shapes ------------------------------------------------------------
@@ -267,7 +279,7 @@ public class TimeTrackingService {
 		if (patch.date() != null) {
 			// Only a day that is being set is checked: an entry older than the
 			// window must stay editable in its other fields.
-			validateDate(patch.date(), zoneOf(user));
+			validateDate(patch.date(), zoneOf(user), item.getUserId());
 			item.setDate(patch.date());
 		}
 		if (patch.activityType() != null) {
@@ -509,17 +521,60 @@ public class TimeTrackingService {
 		return policy.advancedEnabled() ? tagCatalog.resolve(tags, actor) : normalizeTags(tags);
 	}
 
-	/** Whether {@code user} may edit or delete an entry that is not their own: admin or project lead. */
+	/**
+	 * Whether {@code user} may edit or delete an entry that is not their own.
+	 *
+	 * <p>An administrator may. A lead of the entry's project may while leads may read
+	 * their members' entries at all: with the module on that is
+	 * {@code leadsSeeMemberEntries}, because editing an entry one may not read would be
+	 * the same reading by another route. The pre-2.0 remainder belongs to nobody, so a
+	 * lead manages it either way. With the module off the 1.x rule stands and leads
+	 * manage their project's entries.
+	 */
 	public boolean canManageForeign(WorkItem item, User user) {
-		if (user.isAdmin()) {
-			return true;
+		return user.isAdmin() || ((item.getUserId() == null || leadsReadMemberEntries())
+				&& approvers.leads(item.getProjectId(), user));
+	}
+
+	private boolean leadsReadMemberEntries() {
+		return !policy.advancedEnabled() || policy.leadsSeeMemberEntries();
+	}
+
+	/**
+	 * Who may read an entry on an issue beyond its day, its duration and its activity.
+	 *
+	 * <p>Everybody who can see an issue sees that hours were booked on it; that is what
+	 * answers "why did a one-day job take three". Who booked them, when exactly and what
+	 * they wrote is a reading of a colleague's working time, and with the module on it
+	 * follows the rule every other screen follows: the owner, an administrator, and a
+	 * lead of the project while {@code leadsSeeMemberEntries} is on. The pre-2.0
+	 * remainder belongs to nobody and hides nothing. With the module off nothing changes
+	 * for the published app.
+	 *
+	 * <p>A predicate rather than a yes or no per entry, because a list asks it two hundred
+	 * times about the same project: whether the reader leads it is looked up once.
+	 */
+	public Predicate<WorkItem> detailsVisibleTo(User reader) {
+		if (!policy.advancedEnabled() || reader.isAdmin()) {
+			return item -> true;
 		}
-		if (item.getProjectId() == null) {
-			return false;
-		}
-		return projects.findOptional(item.getProjectId())
-				.map(project -> projects.isLeadOrAdmin(project, user))
-				.orElse(false);
+		boolean leadsSee = policy.leadsSeeMemberEntries();
+		Map<String, Boolean> ledProjects = new HashMap<>();
+		return item -> isOwner(item, reader) || item.getUserId() == null
+				|| (leadsSee && item.getProjectId() != null && ledProjects.computeIfAbsent(
+						item.getProjectId(), projectId -> approvers.leads(projectId, reader)));
+	}
+
+	/**
+	 * How far a non-administrator's timesheet reaches.
+	 *
+	 * <p>{@link #MEMBERS_OF_LED_PROJECT} only on the module's own route: a lead who
+	 * names a project they lead sees its members' rows while
+	 * {@code leadsSeeMemberEntries} is on. The 1.x route keeps {@link #OWN_ROWS},
+	 * because its published client has no way to show whose row is whose.
+	 */
+	enum TimesheetReach {
+		OWN_ROWS, MEMBERS_OF_LED_PROJECT
 	}
 
 	private static boolean isOwner(WorkItem item, User user) {
@@ -588,7 +643,7 @@ public class TimeTrackingService {
 	 * live. The entry is named in the metadata, and a partial index on that key
 	 * makes this a lookup rather than a scan.
 	 */
-	public Page<AuditLog> history(String workItemId, int page, int size, User user) {
+	public EntryHistory history(String workItemId, int page, int size, User user) {
 		WorkItem item = workItems.findById(workItemId)
 				.orElseThrow(() -> ApiException.notFound("workItem"));
 		if (!isOwner(item, user) && !user.isAdmin()
@@ -606,8 +661,64 @@ public class TimeTrackingService {
 				Sort.by(Sort.Order.desc("timestamp"), Sort.Order.desc("_id")));
 		Query query = Query.query(Criteria.where("metadata.workItem").is(item.getId()));
 		List<AuditLog> rows = mongo.find(query.with(pageable), AuditLog.class);
-		return PageableExecutionUtils.getPage(rows, pageable,
-				() -> mongo.count(Query.of(query).limit(-1).skip(-1), AuditLog.class));
+		Set<String> departed = departedAmong(rows, item.getUserId());
+		return new EntryHistory(PageableExecutionUtils.getPage(rows, pageable,
+						() -> mongo.count(Query.of(query).limit(-1).skip(-1), AuditLog.class)),
+				isOwner(item, user) || user.isAdmin(),
+				approvers.leads(item.getProjectId(), user),
+				item.getUserId() != null && departed.contains(item.getUserId()),
+				departed);
+	}
+
+	/** The accounts among the page's actors and the entry's owner that have been deleted. */
+	private Set<String> departedAmong(List<AuditLog> rows, String ownerId) {
+		Set<String> ids = rows.stream().map(AuditLog::getActorId).filter(Objects::nonNull)
+				.collect(Collectors.toCollection(HashSet::new));
+		if (ownerId != null) {
+			ids.add(ownerId);
+		}
+		if (ids.isEmpty()) {
+			return Set.of();
+		}
+		Query departed = Query.query(Criteria.where("_id").in(ids));
+		departed.fields().include("_id");
+		return mongo.find(departed, DepartedTimeUser.class).stream().map(DepartedTimeUser::getId)
+				.collect(Collectors.toSet());
+	}
+
+	/**
+	 * One page of an entry's history, and what this reader may read of it.
+	 *
+	 * <p>Reading the history does not mean reading every sentence in it. A correction
+	 * request is addressed to whoever can lift the freeze, and its answer to the
+	 * person who asked: the owner and the administrators read both, a lead reads the
+	 * ones about a submitted period of a project they lead — the conversation they are
+	 * part of — and not the ones about the lock date, which were never theirs.
+	 *
+	 * <p>An account that has been deleted takes its part with it. The conversation of an
+	 * owner who is gone is read to nobody, and an actor who is gone is no longer named:
+	 * the audit log keeps both for as long as the operator keeps it, and this screen is
+	 * not the audit log.
+	 */
+	public record EntryHistory(Page<AuditLog> rows, boolean ownerOrAdmin, boolean leadsProject,
+			boolean ownerDeparted, Set<String> departedActors) {
+
+		public boolean readsConversation(AuditLog log) {
+			if (ownerDeparted) {
+				return false;
+			}
+			if (ownerOrAdmin) {
+				return true;
+			}
+			String reason = log.getMetadata() == null ? null : log.getMetadata().get("reason");
+			return leadsProject && TimePolicy.LockReason.APPROVAL.name().equals(reason);
+		}
+
+		/** The actor's name as recorded, or none for an account deleted since. */
+		public String actorLabelOf(AuditLog log) {
+			return log.getActorId() != null && departedActors.contains(log.getActorId())
+					? null : log.getActorLabel();
+		}
 	}
 
 	// --- entries that stand on their own ---------------------------------------
@@ -659,7 +770,7 @@ public class TimeTrackingService {
 		int minutes = resolveDuration(draft.durationMinutes(), start, end);
 		LocalDate date = draft.date() != null ? draft.date()
 				: LocalDate.ofInstant(start != null ? start : clock.instant(), zone);
-		validateDate(date, zone);
+		validateDate(date, zone, user.getId());
 		WorkItem item = WorkItem.builder()
 				.issueId(placement.issueId())
 				.projectId(placement.projectId())
@@ -962,8 +1073,10 @@ public class TimeTrackingService {
 	 * route keeps answering {@code error.time.invalidRange} for both: the
 	 * published app shows the message it names, and its meaning is not ours to
 	 * change under it.
+	 *
+	 * <p>Package-visible because the self-hints answer for the same 31-day window.
 	 */
-	private void assertWindow(LocalDate from, LocalDate to) {
+	void assertWindow(LocalDate from, LocalDate to) {
 		if (from.isAfter(to)) {
 			throw ApiException.badRequest("error.time.rangeNotAscending");
 		}
@@ -997,7 +1110,7 @@ public class TimeTrackingService {
 	 * <p>Called after the ascending check, so {@code from <= to} and bounding the
 	 * two ends bounds everything between them.
 	 */
-	private static void assertStorable(LocalDate from, LocalDate to, String messageKey) {
+	static void assertStorable(LocalDate from, LocalDate to, String messageKey) {
 		if (from.getYear() < MIN_YEAR || to.getYear() > MAX_YEAR) {
 			throw ApiException.badRequest(messageKey);
 		}
@@ -1177,7 +1290,8 @@ public class TimeTrackingService {
 		// And the values, which the width does not bound — see assertStorable.
 		// This route's message key stays as it is: the published app shows it.
 		assertStorable(from, to, "error.time.invalidRange");
-		return rowsOf(timesheetCriteria(from, to, userId, projectId, requester));
+		return rowsOf(timesheetCriteria(from, to, userId, projectId, requester,
+				TimesheetReach.OWN_ROWS));
 	}
 
 	/**
@@ -1193,7 +1307,8 @@ public class TimeTrackingService {
 	public Page<TimesheetRow> timesheetPage(LocalDate from, LocalDate to, String userId,
 			String projectId, int page, int size, User requester) {
 		assertWindow(from, to);
-		Criteria criteria = timesheetCriteria(from, to, userId, projectId, requester);
+		Criteria criteria = timesheetCriteria(from, to, userId, projectId, requester,
+				TimesheetReach.MEMBERS_OF_LED_PROJECT);
 		Pageable pageable = PageRequest.of(Math.clamp(page, 0, PAGE_INDEX_MAX),
 				Math.clamp(size, 1, PAGE_MAX));
 		List<TimesheetRow> rows = pagedRowsOf(criteria, pageable);
@@ -1211,11 +1326,20 @@ public class TimeTrackingService {
 	 * their own rows — a foreign {@code userId} is refused, never quietly
 	 * replaced — and may narrow to a project they can see. Both filters are
 	 * applied together, so a project can never widen a user.
+	 *
+	 * <p>One exception, and only with {@link TimesheetReach#MEMBERS_OF_LED_PROJECT}:
+	 * a lead who names a project they lead sees its members' rows while
+	 * {@code leadsSeeMemberEntries} is on (HIN-89). Only with the project named, so
+	 * the switch widens a lead's view to the projects they answer for and never to
+	 * the instance.
 	 */
 	private Criteria timesheetCriteria(LocalDate from, LocalDate to, String userId,
-			String projectId, User requester) {
+			String projectId, User requester, TimesheetReach reach) {
 		String effectiveUser = userId;
-		if (!requester.isAdmin()) {
+		boolean seesMembers = !requester.isAdmin() && reach == TimesheetReach.MEMBERS_OF_LED_PROJECT
+				&& projectId != null && policy.leadsSeeMemberEntries()
+				&& approvers.leads(projectId, requester);
+		if (!requester.isAdmin() && !seesMembers) {
 			if (userId == null) {
 				effectiveUser = requester.getId();
 			}
@@ -1223,7 +1347,7 @@ public class TimeTrackingService {
 				throw ApiException.forbidden("error.accessDenied");
 			}
 		}
-		if (!requester.isAdmin() && effectiveUser == null) {
+		if (!requester.isAdmin() && !seesMembers && effectiveUser == null) {
 			// Unreachable today — CurrentUser.require() cannot hand back a user
 			// without an id. It is here because the criteria below narrows only
 			// when it has a value, so the one query that decides who sees whose
@@ -1437,14 +1561,35 @@ public class TimeTrackingService {
 		return instant == null ? null : instant.truncatedTo(ChronoUnit.MILLIS);
 	}
 
-	/** Not after today and not more than a year back — today being the user's today, not the server's. */
-	private void validateDate(LocalDate date, ZoneId zone) {
+	/**
+	 * Not after today, and not further back than the rules allow — today being the
+	 * user's today, not the server's.
+	 *
+	 * <p>With the module off that is the year the 1.x routes have always enforced,
+	 * refused with the sentence the published app knows. With it on the distance is
+	 * the operator's {@code maxDaysBack}, and it is no longer a dead end: a span an
+	 * administrator has opened with a reason lifts it, and the refusal says so in
+	 * the same reason/holder/remedy shape every other "not here" carries (R9). The
+	 * limit is a typo guard; somebody entering a year of parental leave afterwards
+	 * is documenting exactly what § 16 Abs. 2 ArbZG asks to be documented, and a
+	 * {@link TimeBackfillGrant} opens those days for the entry's owner.
+	 */
+	private void validateDate(LocalDate date, ZoneId zone, String ownerId) {
 		LocalDate today = LocalDate.ofInstant(clock.instant(), zone);
 		if (date.isAfter(today)) {
 			throw ApiException.badRequest("error.time.dateInFuture");
 		}
-		if (date.isBefore(today.minusDays(MAX_DAYS_BACK))) {
-			throw ApiException.badRequest("error.time.dateTooOld");
+		if (!policy.advancedEnabled()) {
+			if (date.isBefore(today.minusDays(MAX_DAYS_BACK))) {
+				throw ApiException.badRequest("error.time.dateTooOld");
+			}
+			return;
+		}
+		LocalDate oldest = today.minusDays(policy.maxDaysBack());
+		if (date.isBefore(oldest) && !locks.reopenedByException(date)
+				&& !locks.grantedFor(ownerId, date)) {
+			throw new TimeLocks.LockState(TimePolicy.LockReason.MAX_DAYS_BACK, oldest, null)
+					.refusal();
 		}
 	}
 

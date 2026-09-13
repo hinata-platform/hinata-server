@@ -41,6 +41,12 @@ public class MeController {
 	private final CurrentUser currentUser;
 	private final UserEvents userEvents;
 	private final DataExportPdfService dataExportPdf;
+	/**
+	 * The per-person budget for rendering exports. Both data exports load and shape
+	 * thousands of rows, and the general per-address bucket would let one account
+	 * spend a small instance's heap in a loop.
+	 */
+	private final com.ahmadre.hinata.issue.export.ExportRateLimiter exports;
 	private final com.ahmadre.hinata.user.UserService users;
 	private final com.ahmadre.hinata.issue.IssueWatchService watchedIssues;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
@@ -373,7 +379,9 @@ public class MeController {
 	@Operation(summary = "Download my data export (machine-readable)")
 	@GetMapping("/export")
 	public Map<String, Object> export() {
-		return me.exportData(currentUser.require());
+		User user = currentUser.require();
+		exports.require(user.getId());
+		return me.exportData(user);
 	}
 
 	/**
@@ -396,6 +404,8 @@ public class MeController {
 					.header("Content-Security-Policy", PAGE_CSP)
 					.body(body.getBytes(StandardCharsets.UTF_8));
 		}
+		// After the token: a link nobody may use should answer that, not "too many".
+		exports.require(user.getId());
 		byte[] pdf = dataExportPdf.build(user);
 		return ResponseEntity.ok()
 				.contentType(MediaType.APPLICATION_PDF)

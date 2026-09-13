@@ -94,6 +94,9 @@ public class TimeTrackingAdminPrefill implements SettingsPrefill {
 		view.setRetention(retentionView);
 
 		view.setPrivacyNotice(settings.privacyNotice());
+		view.setMaxDaysBack(settings.maxDaysBack());
+		// Null here is an answer, not a gap: no hint is configured.
+		view.setLateEntryHintDays(settings.lateEntryHintDays());
 		view.setIcsImportEnabled(settings.icsImportEnabled());
 		return view;
 	}

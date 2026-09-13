@@ -32,6 +32,16 @@ public final class TimePolicy {
 	public static final int RETENTION_MAX_MONTHS = 1200;
 
 	/**
+	 * The shortest period after which entries may be deleted automatically: two years.
+	 *
+	 * <p>§ 16 Abs. 2 ArbZG and § 17 Abs. 1 MiLoG ask for working-time records to be
+	 * kept for at least two years. A shorter period set by a slip of the finger — 2 for
+	 * 24 — would delete them for everyone the following night, so the only values an
+	 * entry retention accepts are 0 (never) and this or more.
+	 */
+	public static final int ENTRY_RETENTION_MIN_MONTHS = 24;
+
+	/**
 	 * The longest span one submission may cover: 92 days, the length of the
 	 * longest calendar quarter.
 	 *
@@ -55,6 +65,27 @@ public final class TimePolicy {
 
 	/** Longest reason text on an approval decision, a reopen or a lock exception. */
 	public static final int LOCK_NOTE_MAX = 1000;
+
+	/**
+	 * How many days back a day may be recorded when nothing is configured: a year.
+	 *
+	 * <p>A typo guard — somebody typing 2015 for 2025 — and nothing more. It is the
+	 * value the 1.x routes have always enforced, and with the module off it is still
+	 * the only one, because the published app knows no way past it.
+	 */
+	public static final int MAX_DAYS_BACK_DEFAULT = 365;
+
+	/**
+	 * Ten years, as the ceiling on {@code maxDaysBack}. Not a policy: a bound that
+	 * keeps "today minus this" inside the years a stored date may carry.
+	 */
+	public static final int MAX_DAYS_BACK_CEILING = 3660;
+
+	/**
+	 * A year, as the ceiling on {@code lateEntryHintDays}. A hint that only fires
+	 * after more than a year says nothing any statute asks about.
+	 */
+	public static final int LATE_ENTRY_HINT_MAX_DAYS = 365;
 
 	/** How often a timesheet is submitted for approval. */
 	public enum ApprovalPeriod {
@@ -94,7 +125,14 @@ public final class TimePolicy {
 		/** The period is submitted or approved for this person and project. */
 		APPROVAL,
 		/** An issued invoice references the entry (HIN-96). */
-		INVOICE
+		INVOICE,
+		/**
+		 * The day lies further back than {@code maxDaysBack} allows. Not a freeze of
+		 * anything that exists — the entry is still to be written — but the same
+		 * shape of answer, because the way out is the same act: an administrator
+		 * opens the span with a reason (HIN-89, R9).
+		 */
+		MAX_DAYS_BACK
 	}
 
 	/** Who can lift a freeze. Never the person whose entry it is — that is the point. */
@@ -119,7 +157,12 @@ public final class TimePolicy {
 		/** An approver reopens the period with a reason, and it becomes editable again. */
 		REOPEN,
 		/** Accounting issues a credit note; the invoice itself is never rewritten (HIN-96). */
-		CREDIT_NOTE
+		CREDIT_NOTE,
+		/**
+		 * An administrator opens the days for this one person, with a reason and an
+		 * expiry (HIN-89). Not a lock exception: that would open them for everyone.
+		 */
+		BACKFILL_GRANT
 	}
 
 	/** How a reported duration is folded onto the configured increment. */

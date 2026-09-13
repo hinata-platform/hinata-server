@@ -477,6 +477,25 @@ public class HinataProperties {
 		@Valid
 		private ApprovalPeriod approvalPeriod = new ApprovalPeriod();
 
+		/**
+		 * How many days back a day may be recorded. A typo guard, not a deadline:
+		 * a day beyond it is opened by an administrator's lock exception, never
+		 * refused for good — a late record is better than none (§ 16 Abs. 2 ArbZG).
+		 */
+		@Min(1)
+		@Max(TimePolicy.MAX_DAYS_BACK_CEILING)
+		private int maxDaysBack = TimePolicy.MAX_DAYS_BACK_DEFAULT;
+
+		/**
+		 * After how many days a person is told, on their own entry, that it was
+		 * recorded late. Null (the default) ⇒ no hint. Never seven by default:
+		 * the seven-day rule of § 17 Abs. 1 MiLoG applies to some sectors and to
+		 * marginal employment only, and the hint never blocks anything.
+		 */
+		@Min(1)
+		@Max(TimePolicy.LATE_ENTRY_HINT_MAX_DAYS)
+		private Integer lateEntryHintDays;
+
 		/** Workload reports (booked against capacity). Monitoring-capable ⇒ off. */
 		private boolean workloadReportsEnabled = false;
 

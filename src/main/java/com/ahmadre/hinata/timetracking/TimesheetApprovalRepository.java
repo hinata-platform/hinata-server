@@ -53,13 +53,14 @@ public interface TimesheetApprovalRepository extends MongoRepository<TimesheetAp
 			TimesheetApproval.Status status, Pageable pageable);
 
 	/**
-	 * A deleted account's submissions go with it — see {@code TimeTrackingErasure}.
+	 * A deleted account's submissions, except the ones that were signed off — see
+	 * {@code TimeTrackingErasure} for why an approval outlives the account.
 	 *
-	 * <p>A deleted <em>project</em>'s go too, but through {@code DeletionService},
+	 * <p>A deleted <em>project</em>'s go entirely, but through {@code DeletionService},
 	 * which removes them beside every other collection the cascade touches; that is
 	 * one story in one place, and it runs whether or not the module is switched on.
 	 */
-	long deleteByUserId(String userId);
+	long deleteByUserIdAndStatusNot(String userId, TimesheetApproval.Status status);
 
 	/**
 	 * Whether somebody else has already claimed an overlapping span for this

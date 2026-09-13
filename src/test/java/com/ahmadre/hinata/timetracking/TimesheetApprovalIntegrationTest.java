@@ -99,6 +99,8 @@ class TimesheetApprovalIntegrationTest {
 	@Autowired
 	private TimesheetApprovalService approvals;
 	@Autowired
+	private TimeCorrectionService corrections;
+	@Autowired
 	private TimesheetApprovalRepository approvalRepository;
 	@Autowired
 	private TimeTrackingService timeTracking;
@@ -535,6 +537,9 @@ class TimesheetApprovalIntegrationTest {
 	void theFreezeBindsTheLeadAndTheAdministratorToo() {
 		WorkItem old = entry(member, project, LAST_MONTH_START, 60);
 		submitLastMonth(member);
+		// A lead manages a member's entries only while leads may read them at all
+		// (HIN-89); this is about the freeze, so the lead is given that first.
+		leadsSeeMemberEntries(true);
 
 		// A freeze the most powerful account can edit around is a suggestion. The
 		// way through is an audited reopen, not a quiet edit.
@@ -961,7 +966,7 @@ class TimesheetApprovalIntegrationTest {
 		WorkItem old = entry(member, project, LAST_MONTH_START, 60);
 		submitLastMonth(member);
 
-		approvals.requestCorrection(old.getId(), "Tuesday is double-counted", member);
+		corrections.request(old.getId(), "Tuesday is double-counted", member);
 
 		assertThat(notifiedUsers(Notification.Type.TIME_CORRECTION_REQUESTED))
 				.containsExactlyInAnyOrder(lead.getId(), secondLead.getId());
@@ -975,7 +980,7 @@ class TimesheetApprovalIntegrationTest {
 	void anUnfrozenEntryCannotBeUsedToPingAProjectsLeads() {
 		WorkItem open = entry(member, project, TODAY, 60);
 
-		assertThatThrownBy(() -> approvals.requestCorrection(open.getId(), "look at this", member))
+		assertThatThrownBy(() -> corrections.request(open.getId(), "look at this", member))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.time.entryNotLocked");
 		assertThat(notifications.findAll()).isEmpty();
@@ -986,7 +991,7 @@ class TimesheetApprovalIntegrationTest {
 		WorkItem old = entry(member, project, LAST_MONTH_START, 60);
 		lockBefore(TODAY);
 
-		approvals.requestCorrection(old.getId(), "wrong duration", member);
+		corrections.request(old.getId(), "wrong duration", member);
 
 		// Who can lift it decides who hears about it: the lock date is the
 		// instance's archive, and only an administrator can open a span in it.
@@ -999,7 +1004,7 @@ class TimesheetApprovalIntegrationTest {
 		WorkItem theirs = entry(lead, project, LAST_MONTH_START, 60);
 		submitLastMonth(lead);
 
-		assertThatThrownBy(() -> approvals.requestCorrection(theirs.getId(), "fix it", member))
+		assertThatThrownBy(() -> corrections.request(theirs.getId(), "fix it", member))
 				.isInstanceOf(ApiException.class)
 				.extracting(thrown -> ((ApiException) thrown).getStatus())
 				.isEqualTo(HttpStatus.NOT_FOUND);

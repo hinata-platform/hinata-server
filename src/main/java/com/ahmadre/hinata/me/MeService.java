@@ -58,6 +58,8 @@ public class MeService {
 	private final com.ahmadre.hinata.auth.TokenService tokens;
 	private final com.ahmadre.hinata.auth.PasswordResetService passwordResetService;
 	private final com.ahmadre.hinata.common.UserWords words;
+	/** The modules holding personal data of their own; see {@link PersonalDataExport}. */
+	private final List<PersonalDataExport> personalData;
 
 	/** How long the e-mailed data-export download link stays valid. */
 	private static final long EXPORT_TOKEN_TTL_SECONDS = 72 * 3600L;
@@ -325,6 +327,7 @@ public class MeService {
 		out.put("projects", projectsOf(user).stream()
 				.map(p -> Map.of("key", p.getKey(), "name", p.getName(),
 						"role", projectRole(p, user.getId()))).toList());
+		personalData.forEach(module -> out.put(module.key(), module.data(user)));
 		out.put("generatedAt", Instant.now());
 		return out;
 	}
