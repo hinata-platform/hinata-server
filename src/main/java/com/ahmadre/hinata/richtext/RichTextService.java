@@ -196,8 +196,17 @@ public class RichTextService {
 		}
 	}
 
-	/** The shape of a readable issue id, and the only thing stored as a backlink. */
-	private static final Pattern ISSUE_KEY = Pattern.compile("[A-Za-z]+-\\d+");
+	/**
+	 * The shape of a readable issue id, and the only thing stored as a backlink.
+	 * The project part is the key rule {@code ProjectService} enforces — a letter,
+	 * then one to nine letters or digits ({@code EP26}) — matched case-insensitively.
+	 */
+	private static final Pattern ISSUE_KEY = Pattern.compile("[A-Za-z][A-Za-z0-9]{1,9}-\\d+");
+
+	/** Whether {@code value} has the shape of a readable issue id ({@code EP26-2}). */
+	public static boolean isIssueKey(String value) {
+		return value != null && ISSUE_KEY.matcher(value).matches();
+	}
 
 	/**
 	 * Cap on stored backlinks per document. The list is a multikey index, so its

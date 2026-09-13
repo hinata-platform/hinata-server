@@ -176,6 +176,19 @@ class RichTextServiceTest {
 		assertThat(content.issueKeys()).containsExactly("HIN-1", "MOB-7");
 	}
 
+	/**
+	 * A project key may carry digits after its first letter ({@code EP26}, the
+	 * rule {@code ProjectService} enforces). A key pattern that only allowed
+	 * letters dropped every link to such a project's issues from the index.
+	 */
+	@Test
+	void anIssueKeyWithDigitsInItsProjectKeyIsABacklink() {
+		RichText content = service.fromMarkdown(
+				"{{issue:EP26-2}} {{issue:ws25-10}} {{issue:26EP-1}} {{issue:A-1}} {{issue:ABCDEFGHIJK-1}}");
+
+		assertThat(content.issueKeys()).containsExactly("EP26-2", "WS25-10");
+	}
+
 	@Test
 	void theBacklinkListIsCapped() {
 		String many = IntStream.rangeClosed(1, 500)

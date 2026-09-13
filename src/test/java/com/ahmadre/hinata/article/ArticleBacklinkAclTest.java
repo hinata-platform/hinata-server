@@ -1,7 +1,10 @@
 package com.ahmadre.hinata.article;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ahmadre.hinata.auth.CurrentUser;
@@ -46,6 +49,17 @@ class ArticleBacklinkAclTest {
 	private static final Article TEAM_HIDDEN = Article.builder()
 			.id("a-team").title("Team-Runbook").teamId("t-theirs")
 			.content("HIN-1 auch hier").referencedIssueKeys(List.of("HIN-1"))
+			.build();
+
+	/** A global article that links to nothing — what the ordinary listing returns. */
+	private static final Article GLOBAL = Article.builder()
+			.id("a-global").title("Kontaktdaten").content("Keine Verweise")
+			.build();
+
+	/** A visible article that really links to an issue of a project key with digits. */
+	private static final Article EP26 = Article.builder()
+			.id("a-ep26").title("Erstiparty").projectId("p-mine")
+			.content("Siehe EP26-2").referencedIssueKeys(List.of("EP26-2"))
 			.build();
 
 	@BeforeEach
@@ -99,12 +113,42 @@ class ArticleBacklinkAclTest {
 	}
 
 	@Test
-	void aMalformedKeyIsNotTreatedAsABacklinkQuery() {
-		User user = member();
-		when(articles.findByProjectIdIsNullOrderBySortOrderAsc()).thenReturn(List.of());
+	void aMalformedKeyAnswersWithNoBacklinksRatherThanTheOrdinaryListing() {
+		member();
+		when(articles.findByProjectIdIsNullOrderBySortOrderAsc()).thenReturn(List.of(GLOBAL));
 
-		// Falls through to the ordinary listing rather than querying the index.
+		// A backlink question has exactly one honest answer for a value that
+		// cannot be a key: nothing references it. Falling through to the listing
+		// shows every global article under "documented in" on the issue.
 		assertThat(controller.list(null, false, "not-a-key")).isEmpty();
-		assertThat(user).isNotNull();
+		verify(articles, never()).findByProjectIdIsNullOrderBySortOrderAsc();
+		verify(articles, never()).findByReferencedIssueKeysContains(anyString());
+	}
+
+	/**
+	 * Project keys may contain digits ({@code EP26}). A key pattern of letters
+	 * only rejected {@code EP26-2}, fell through to the ordinary listing, and every
+	 * issue of such a project claimed to be documented in every global article.
+	 */
+	@Test
+	void anIssueKeyWithDigitsInItsProjectKeyQueriesTheIndex() {
+		member();
+		when(articles.findByProjectIdIsNullOrderBySortOrderAsc()).thenReturn(List.of(GLOBAL));
+		when(articles.findByReferencedIssueKeysContains("EP26-2")).thenReturn(List.of(EP26));
+
+		assertThat(controller.list(null, false, "ep26-2"))
+				.extracting(ArticleController.ArticleResponse::id)
+				.containsExactly("a-ep26");
+		verify(articles, never()).findByProjectIdIsNullOrderBySortOrderAsc();
+	}
+
+	@Test
+	void anEmptyReferencesIssueParameterIsStillABacklinkQuery() {
+		member();
+		when(articles.findByProjectIdIsNullOrderBySortOrderAsc()).thenReturn(List.of(GLOBAL));
+
+		assertThat(controller.list(null, false, "")).isEmpty();
+		verify(articles, never()).findByProjectIdIsNullOrderBySortOrderAsc();
+		verify(articles, never()).findByReferencedIssueKeysContains(anyString());
 	}
 }

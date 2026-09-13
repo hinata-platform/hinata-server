@@ -89,7 +89,11 @@ public class ArticleController {
 		// Server-side issue⇄article backlink resolution: the references were
 		// derived when the article was written, so this is an index lookup and
 		// returns only the referencing articles the caller may see.
-		if (referencesIssue != null && referencesIssue.matches("[A-Za-z]+-\\d+")) {
+		if (referencesIssue != null) {
+			// A backlink question never becomes a listing. A value that is not a key
+			// has no referencing articles; falling through to the ordinary list put
+			// every global article under "documented in" on the issue.
+			if (!RichTextService.isIssueKey(referencesIssue)) return List.of();
 			String key = referencesIssue.toUpperCase(java.util.Locale.ROOT);
 			return ArticleResponse.from(
 					filterVisible(articles.findByReferencedIssueKeysContains(key), user)
