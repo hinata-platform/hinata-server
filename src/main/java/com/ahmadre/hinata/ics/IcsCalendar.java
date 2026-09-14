@@ -15,4 +15,10 @@ public record IcsCalendar(String name, List<IcsEvent> events, boolean truncated)
 	public IcsCalendar {
 		events = List.copyOf(events);
 	}
+
+	/** How much, never what: the name and the events describe somebody's schedule. */
+	@Override
+	public String toString() {
+		return "IcsCalendar[events=" + events.size() + ", truncated=" + truncated + "]";
+	}
 }

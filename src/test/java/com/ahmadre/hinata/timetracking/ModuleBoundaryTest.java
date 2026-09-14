@@ -4,6 +4,7 @@ import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.core.domain.properties.HasName;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.lang.ArchRule;
 import org.junit.jupiter.api.Test;
@@ -185,6 +186,26 @@ class ModuleBoundaryTest {
 				.and().doNotHaveSimpleName("IcsUrlCipher")
 				.should().dependOnClassesThat().resideInAnyPackage("org.springframework..", "com.ahmadre.hinata.config..")
 				.because("the parser must run without an application context")
+				.check(PRODUCTION);
+	}
+
+	@Test
+	void onlyTheCalendarParserUsesIcal4jAndOnlyItsRecurrenceEngine() {
+		// ical4j's builder expands time zones without a bound, takes zone ids from a
+		// JVM-wide pool and writes ATTACH values to temporary files; the ics package
+		// documentation has the measurements. Whoever needs more of the library, a
+		// calendar writer for instance, widens this rule on purpose.
+		Set<String> parser = Set.of(ROOT + ".ics.IcsParser");
+		noClasses()
+				.that(not(named(parser, "the ics parser")))
+				.should().dependOnClassesThat().resideInAnyPackage("net.fortuna.ical4j..")
+				.because("only the recurrence engine of ical4j is safe on calendars from strangers")
+				.check(PRODUCTION);
+		noClasses()
+				.that(named(parser, "the ics parser"))
+				.should().dependOnClassesThat(resideInAnyPackage("net.fortuna.ical4j..")
+						.and(not(HasName.Predicates.name("net.fortuna.ical4j.model.Recur"))))
+				.because("the parser borrows the recurrence engine and nothing else")
 				.check(PRODUCTION);
 	}
 

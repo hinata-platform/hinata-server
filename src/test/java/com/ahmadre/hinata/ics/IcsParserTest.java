@@ -476,6 +476,18 @@ class IcsParserTest {
 	}
 
 	@Test
+	void neverPutsWhatACalendarSaysIntoAString() {
+		IcsCalendar calendar = parseFixture("google-export.ics", "2026-03-01T00:00:00Z", "2026-04-15T00:00:00Z");
+
+		assertThat(calendar.toString()).doesNotContain("Ada Lovelace");
+		assertThat(calendar.events()).allSatisfy(event -> assertThat(event.toString())
+				.doesNotContain(event.uid())
+				.doesNotContain(event.summary())
+				.doesNotContain("Raum 3")
+				.doesNotContain("2026"));
+	}
+
+	@Test
 	void aRefusalNamesTheLineTheWayAPersonWritesIt() {
 		ResourceBundle german = ResourceBundle.getBundle("messages", Locale.GERMAN);
 

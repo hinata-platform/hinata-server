@@ -61,6 +61,7 @@ import static com.ahmadre.hinata.ics.IcsFetchError.URL_INVALID;
 import static com.ahmadre.hinata.ics.IcsFetchResult.Outcome.FETCHED;
 import static com.ahmadre.hinata.ics.IcsFetchResult.Outcome.NOT_MODIFIED;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The fetcher against a real HTTPS server on this machine.
@@ -159,7 +160,9 @@ class IcsFetcherTest {
 		// the Dns hook, so none of these may ever reach OkHttp.
 		for (String url : List.of("https://127.0.0.1/feed.ics", "https://127.1/feed.ics",
 				"https://2130706433/feed.ics", "https://[::1]/feed.ics",
-				"https://[::ffff:a9fe:a9fe]/feed.ics", "https://93.184.215.14/feed.ics")) {
+				"https://[::ffff:a9fe:a9fe]/feed.ics", "https://93.184.215.14/feed.ics",
+				// The root name: "." is an address to OkHttp, and empty once a trailing dot is gone.
+				"https://./feed.ics")) {
 			assertThat(fetch(url).error()).as(url).isEqualTo(HOST_NOT_ALLOWED);
 		}
 		assertThat(answers.calls()).isZero();
@@ -279,6 +282,39 @@ class IcsFetcherTest {
 		server.enqueue(calendar().setBody(bomb).setHeader("Content-Encoding", "gzip"));
 
 		assertThat(fetch(FEED).error()).isEqualTo(TOO_LARGE);
+	}
+
+	@Test
+	void stopsReadingPackedBytesThatUnpackToNothingAtTheCap() {
+		// Empty deflate blocks: five bytes each on the wire and nothing unpacked. okio's
+		// inflater keeps reading until it has output, so only the wire count can stop it.
+		Buffer packed = new Buffer().write(new byte[] { 0x1f, (byte) 0x8b, 8, 0, 0, 0, 0, 0, 0, (byte) 0xff });
+		byte[] emptyBlock = { 0, 0, 0, (byte) 0xff, (byte) 0xff };
+		for (int i = 0; i < 4 * 1024 * 1024; i++) {
+			packed.write(emptyBlock);
+		}
+		packed.write(new byte[] { 1, 0, 0, (byte) 0xff, (byte) 0xff, 0, 0, 0, 0, 0, 0, 0, 0 });
+		server.enqueue(calendar()
+				.setHeader("Content-Encoding", "gzip")
+				.setChunkedBody(packed, 64 * 1024)
+				.throttleBody(512 * 1024, 100, TimeUnit.MILLISECONDS));
+		long started = System.nanoTime();
+
+		IcsFetchResult result = fetch(FEED);
+
+		assertThat(result.error()).isEqualTo(TOO_LARGE);
+		// All 20 MB would take four seconds at this pace; the cap comes after a tenth of them.
+		assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+	}
+
+	@Test
+	void refusesToStartWithAHostListEntryThatNamesNoHost() {
+		for (String entry : List.of("*.*.example.org", "*", "cal.example.org:8443", "cal.example.org/feed",
+				"ada@cal.example.org", "[::1]", "10.0.0.1")) {
+			config.setDeniedHosts(List.of("calendar.test", entry));
+
+			assertThatThrownBy(this::fetcher).as(entry).isInstanceOf(IllegalStateException.class);
+		}
 	}
 
 	@Test

@@ -123,8 +123,8 @@ public class IcsFetcher implements DisposableBean {
 
 	IcsFetcher(HinataProperties.Ics config, Resolver resolver, Transport transport, Duration timeout,
 			ExecutorService fetches) {
-		this.allowedHosts = hostPatterns(config.getAllowedHosts());
-		this.deniedHosts = hostPatterns(config.getDeniedHosts());
+		this.allowedHosts = hostPatterns("allowed-hosts", config.getAllowedHosts());
+		this.deniedHosts = hostPatterns("denied-hosts", config.getDeniedHosts());
 		this.resolver = resolver;
 		this.timeout = timeout;
 		this.fetches = fetches;
@@ -284,10 +284,15 @@ public class IcsFetcher implements DisposableBean {
 		CountingSource packed = new CountingSource(wire);
 		BufferedSource source = Okio.buffer(gzip ? new GzipSource(packed) : packed);
 		Buffer buffer = new Buffer();
-		while (source.read(buffer, 8192) != -1) {
-			if (buffer.size() > IcsLexer.MAX_BYTES || packed.count > IcsLexer.MAX_BYTES) {
-				return null;
+		try {
+			while (source.read(buffer, 8192) != -1) {
+				if (buffer.size() > IcsLexer.MAX_BYTES) {
+					return null;
+				}
 			}
+		}
+		catch (TooLarge ex) {
+			return null;
 		}
 		return buffer.readByteArray();
 	}
@@ -330,8 +335,10 @@ public class IcsFetcher implements DisposableBean {
 		if (!PORTS.contains(url.port())) {
 			throw new Refused(IcsFetchError.PORT_NOT_ALLOWED);
 		}
-		String host = withoutTrailingDot(url.host());
-		if (ADDRESS_LITERAL.matcher(host).matches() || !hostAllowed(host)) {
+		// The literal test runs on the host exactly as OkHttp will see it: stripping the
+		// trailing dot first would let "." through, which OkHttp resolves without the hook.
+		String host = url.host();
+		if (host.isEmpty() || ADDRESS_LITERAL.matcher(host).matches() || !hostAllowed(withoutTrailingDot(host))) {
 			throw new Refused(IcsFetchError.HOST_NOT_ALLOWED);
 		}
 		return url;
@@ -352,21 +359,28 @@ public class IcsFetcher implements DisposableBean {
 	 * The operator's entries in the form {@link #target} compares against: parsed by
 	 * the same URL parser, so case, a trailing dot and international names cannot
 	 * make an entry miss the host it names.
+	 *
+	 * <p>An entry that names no host (a second wildcard, a port, a path, an address)
+	 * stops the server from starting. Skipped quietly, a denied host the operator
+	 * believes blocked would simply stay open.
 	 */
-	private static List<String> hostPatterns(List<String> entries) {
+	private static List<String> hostPatterns(String property, List<String> entries) {
 		List<String> patterns = new ArrayList<>();
-		for (String entry : entries == null ? List.<String>of() : entries) {
+		for (int index = 0; entries != null && index < entries.size(); index++) {
+			String entry = entries.get(index);
 			if (entry == null || entry.isBlank()) {
 				continue;
 			}
 			String value = entry.strip();
 			boolean wildcard = value.startsWith("*.");
-			HttpUrl parsed = HttpUrl.parse("https://" + (wildcard ? value.substring(2) : value) + "/");
-			if (parsed == null) {
-				log.warn("Ignoring an entry of hinata.ics host lists that is not a host name");
-				continue;
+			String name = wildcard ? value.substring(2) : value;
+			boolean plainName = !name.isEmpty() && name.chars().noneMatch(c -> "*/:@?#[]\\ ".indexOf(c) >= 0);
+			HttpUrl parsed = plainName ? HttpUrl.parse("https://" + name + "/") : null;
+			String host = parsed == null ? "" : withoutTrailingDot(parsed.host());
+			if (host.isEmpty() || ADDRESS_LITERAL.matcher(host).matches()) {
+				throw new IllegalStateException("hinata.ics." + property + "[" + index + "] is neither a host name "
+						+ "nor *. followed by one: " + value);
 			}
-			String host = withoutTrailingDot(parsed.host());
 			patterns.add(wildcard ? "*." + host : host);
 		}
 		return List.copyOf(patterns);
@@ -472,7 +486,12 @@ public class IcsFetcher implements DisposableBean {
 		private static final long serialVersionUID = 1L;
 	}
 
-	/** Counts what passes through, so the cap also sees the bytes as they came off the wire. */
+	/**
+	 * Counts the bytes as they come off the wire and stops at the cap inside the very
+	 * read that crosses it. Counting outside is too late for gzip: okio's inflater keeps
+	 * reading until it has output, and empty deflate blocks give it none, so one read
+	 * could swallow the whole stream.
+	 */
 	private static final class CountingSource extends ForwardingSource {
 
 		private long count;
@@ -486,8 +505,17 @@ public class IcsFetcher implements DisposableBean {
 			long read = super.read(sink, byteCount);
 			if (read > 0) {
 				count += read;
+				if (count > IcsLexer.MAX_BYTES) {
+					throw new TooLarge();
+				}
 			}
 			return read;
 		}
+	}
+
+	/** More than the cap came off the wire; an IOException, because that is all a Source may throw. */
+	private static final class TooLarge extends IOException {
+		@Serial
+		private static final long serialVersionUID = 1L;
 	}
 }
