@@ -33,6 +33,11 @@ import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.Spliterator;
 import java.util.TreeMap;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinWorkerThread;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -56,9 +61,11 @@ import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_LARGE;
  *
  * <ul>
  * <li><b>Cut</b>, shown as {@link IcsCalendar#truncated()}: events after the first
- * 5,000; occurrences after 500 in one series and after the earliest 5,000 of the
- * window; a COUNT above 5,000; a rule the engine is not given (see {@link IcsRule});
- * and a calendar that has spent its recurrence steps or its two seconds.</li>
+ * 5,000; time zone definitions after the first 100, and observances after the first
+ * 50 in one of them; occurrences after 500 in one series and after the earliest 5,000
+ * of the window; a COUNT above 5,000; a rule the engine is not given (see
+ * {@link IcsRule}); and a calendar that has spent its recurrence steps or its two
+ * seconds.</li>
  * <li><b>Refused</b>: more than 2 MB, anything that is not a calendar, the structural
  * limits of {@link IcsLexer}, more than 10,000 RDATE or EXDATE values in one event,
  * and every value that cannot be read.</li>
@@ -70,8 +77,12 @@ import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_LARGE;
  * is read in the zone the caller names, the reader's own, and an all-day event is
  * placed in that zone too when it is compared with the window.
  *
- * <p>ical4j checks BYDAY with a parallel stream on the JVM's common pool. Run parses
- * on an executor of your own, never on a request or scheduler thread.
+ * <p>Each calendar is read on a thread of its own, in a pool of one. ical4j checks
+ * BYDAY with a parallel stream, which then stays on that thread instead of spreading
+ * over the JVM's common pool, and when the two seconds are up the thread is
+ * interrupted, which ends even a single long step of the engine. The caller waits for
+ * it, so parses still belong on an executor of their own, not on a request or
+ * scheduler thread.
  */
 public final class IcsParser {
 
@@ -99,8 +110,9 @@ public final class IcsParser {
 	private static final long WORK_BUDGET = 250_000;
 
 	/**
-	 * The last line of defence. What one step costs depends on the rule: a step may build
-	 * a thousand empty periods before the engine gives up. Real calendars take milliseconds.
+	 * What the series of one calendar may take. A step of the engine still running then
+	 * is interrupted; one step may build a thousand empty periods before the engine gives
+	 * up. Real calendars take milliseconds.
 	 */
 	private static final Duration TIME_BUDGET = Duration.ofSeconds(2);
 
@@ -115,6 +127,16 @@ public final class IcsParser {
 	private static final Comparator<Ranked> ORDER = Comparator.comparing(Ranked::start)
 			.thenComparing(Ranked::uid)
 			.thenComparing(ranked -> ranked.event().recurrenceId() == null ? "" : ranked.event().recurrenceId());
+
+	/** The thread one calendar is read on; its pool has no other. */
+	private static final ForkJoinPool.ForkJoinWorkerThreadFactory OWN_THREAD = pool -> {
+		ForkJoinWorkerThread thread = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(pool);
+		thread.setName("ics-parse");
+		return thread;
+	};
+
+	/** Interrupts a reading whose time is up; ical4j gives up a step when its thread is interrupted. */
+	private static final ScheduledThreadPoolExecutor ALARMS = alarms();
 
 	private IcsParser() {
 	}
@@ -144,6 +166,18 @@ public final class IcsParser {
 		if (ics.length > IcsLexer.MAX_BYTES) {
 			throw new IcsParseException(TOO_LARGE, 0);
 		}
+		// No second thread, not even to stand in for a blocked one: the pool stays at one.
+		ForkJoinPool own = new ForkJoinPool(1, OWN_THREAD, null, false, 1, 1, 1, pool -> true, 1, TimeUnit.SECONDS);
+		try {
+			return own.submit(() -> read(ics, from, to, readerZone, workBudget, timeBudget)).join();
+		}
+		finally {
+			own.shutdownNow();
+		}
+	}
+
+	private static IcsCalendar read(byte[] ics, Instant from, Instant to, ZoneId readerZone, long workBudget,
+			Duration timeBudget) {
 		try {
 			IcsLexer.Result read = IcsLexer.read(ics, MAX_EVENTS);
 			return new Reading(read.calendar(), from, to, readerZone, read.truncated(), workBudget, timeBudget)
@@ -157,6 +191,13 @@ public final class IcsParser {
 			// message of whatever failed stays behind: it may quote the file.
 			throw new IcsParseException(MALFORMED, 0);
 		}
+	}
+
+	private static ScheduledThreadPoolExecutor alarms() {
+		ScheduledThreadPoolExecutor alarms = new ScheduledThreadPoolExecutor(1,
+				Thread.ofPlatform().name("ics-parse-alarm").daemon().factory());
+		alarms.setRemoveOnCancelPolicy(true);
+		return alarms;
 	}
 
 	/** How a wall-clock time becomes an instant, and the zone shown beside it; null shows the offset of the moment. */
@@ -290,7 +331,21 @@ public final class IcsParser {
 			}
 		}
 
+		/** The calendar, read on this thread, which the alarm interrupts when the time is up. */
 		IcsCalendar calendar() {
+			ScheduledFuture<?> alarm = ALARMS.schedule(Thread.currentThread()::interrupt,
+					deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+			try {
+				return collect();
+			}
+			finally {
+				alarm.cancel(false);
+				// An alarm that went off has done its work; the mark it left on the thread is spent.
+				Thread.interrupted();
+			}
+		}
+
+		private IcsCalendar collect() {
 			Map<String, Event> masters = new LinkedHashMap<>();
 			List<Event> overrides = new ArrayList<>();
 			for (Component vevent : calendar.children("VEVENT")) {
@@ -338,7 +393,8 @@ public final class IcsParser {
 				starts.putIfAbsent(series.order(start), start);
 			}
 			IcsRule rule = master.rule();
-			if (rule != null && admit(rule) && !series.endsBeforeWindow()) {
+			// A series that ended before the window has nothing left to cut.
+			if (rule != null && !series.endsBeforeWindow() && admit(rule)) {
 				walk(rule, master.ruleLine(), series, starts);
 			}
 			int kept = 0;
@@ -377,6 +433,11 @@ public final class IcsParser {
 				}
 			}
 			catch (RuntimeException ex) {
+				// The alarm's interrupt makes ical4j give up the step with an exception of its own.
+				if (outOfTime()) {
+					truncated = true;
+					return;
+				}
 				throw new IcsParseException(MALFORMED, line);
 			}
 		}
@@ -395,12 +456,16 @@ public final class IcsParser {
 
 		/** One step of the engine: false, and the result cut, once the calendar has spent its steps or its time. */
 		private boolean step() {
-			if (budget <= 0 || System.nanoTime() - deadline > 0) {
+			if (budget <= 0 || outOfTime()) {
 				truncated = true;
 				return false;
 			}
 			budget--;
 			return true;
+		}
+
+		private boolean outOfTime() {
+			return System.nanoTime() - deadline >= 0 || Thread.currentThread().isInterrupted();
 		}
 
 		/** A series of wall-clock times, in the zone of its DTSTART. */

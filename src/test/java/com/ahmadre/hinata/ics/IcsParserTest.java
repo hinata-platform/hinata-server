@@ -351,20 +351,20 @@ class IcsParserTest {
 
 	@Test
 	void stopsExpandingOnceTheCalendarHasSpentItsTime() {
-		// A position past the candidates of every month: a single step builds a thousand empty
-		// months before the engine gives up. Cheap in steps, dear in time.
+		// 5,000 series that each walk 5,000 hourly occurrences in the year 2000, long before the
+		// window: short steps, and about ten seconds of them on a laptop.
 		CharSequence[] series = new CharSequence[5000];
 		for (int i = 0; i < series.length; i++) {
-			series[i] = event("empty" + i, "DTSTART:19000101T000000Z",
-					"RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=70");
+			series[i] = event("hourly" + i, "DTSTART:20000101T000000Z",
+					"RRULE:FREQ=DAILY;COUNT=5000;BYHOUR=" + range(0, 23));
 		}
 		long started = System.nanoTime();
 
-		// Steps without end, so only the time can cut this calendar.
+		// Steps without end, so only the time can cut this calendar. Whether it runs out
+		// between two steps or inside one, the calendar comes back cut, not refused.
 		IcsCalendar calendar = assertTimeoutPreemptively(Duration.ofSeconds(120),
 				() -> parseWithin(calendar(series), Long.MAX_VALUE, Duration.ofMillis(300)));
 
-		// Without the deadline this calendar takes about four seconds on a laptop.
 		assertThat(calendar.truncated()).isTrue();
 		assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
 	}
@@ -381,6 +381,38 @@ class IcsParserTest {
 	}
 
 	@Test
+	void aSeriesThatEndedLongBeforeTheWindowCutsNothing() {
+		// Neither rule goes to the engine, and neither could reach March 2026 anyway.
+		String ics = calendar(
+				event("hourly", "DTSTART:20180101T090000Z", "RRULE:FREQ=HOURLY;UNTIL=20190101T000000Z"),
+				event("rare", "DTSTART:20180101T090000Z", "RRULE:FREQ=WEEKLY;INTERVAL=104;UNTIL=20190101T000000Z"));
+
+		IcsCalendar calendar = parse(ics, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z");
+
+		assertThat(calendar.events()).isEmpty();
+		assertThat(calendar.truncated()).isFalse();
+	}
+
+	@Test
+	void saysSoWhenItLeavesTimeZoneDefinitionsUnread() {
+		String observance = "BEGIN:STANDARD\r\nDTSTART:19700101T000000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0100\r\n"
+				+ "END:STANDARD\r\n";
+		StringBuilder manyZones = new StringBuilder();
+		for (int i = 0; i <= 100; i++) {
+			manyZones.append("BEGIN:VTIMEZONE\r\nTZID:Zone ").append(i).append("\r\n").append(observance)
+					.append("END:VTIMEZONE\r\n");
+		}
+		String manyObservances = "BEGIN:VTIMEZONE\r\nTZID:Busy\r\n" + observance.repeat(51) + "END:VTIMEZONE\r\n";
+		String event = event("late", "DTSTART;TZID=Zone 100:20260301T090000");
+
+		// The 101st definition and the 51st observance are read past, and the result says so.
+		assertThat(parse(calendar(manyZones, event), "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z").truncated())
+				.isTrue();
+		assertThat(parse(calendar(manyObservances, event), "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z").truncated())
+				.isTrue();
+	}
+
+	@Test
 	void keepsTheFirstOfAPropertyThatMayOccurOnce() {
 		String ics = calendar(event("twice",
 				"DTSTART:20260301T090000Z", "SUMMARY:first", "SUMMARY:second", "DTSTART:20260301T100000Z"));
@@ -389,6 +421,19 @@ class IcsParserTest {
 
 		assertThat(event.summary()).isEqualTo("first");
 		assertThat(((IcsEvent.Timed) event).start()).isEqualTo(Instant.parse("2026-03-01T09:00:00Z"));
+	}
+
+	@Test
+	void refusesMoreRepeatedDatesThanACalendarNeedsAndReadsPastEmptyOnes() {
+		// Three events within their own 10,000 lines, 20,001 together.
+		String dates = "RDATE:20260301T090000Z\r\n".repeat(6_667).strip();
+		String tooMany = calendar(event("a", "DTSTART:20260301T090000Z", dates),
+				event("b", "DTSTART:20260301T090000Z", dates), event("c", "DTSTART:20260301T090000Z", dates));
+		String empty = calendar(event("quiet", "DTSTART:20260301T090000Z", "RDATE:\r\n".repeat(30_000).strip()));
+
+		assertThatThrownBy(() -> parse(tooMany, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z"))
+				.isInstanceOfSatisfying(IcsParseException.class, ex -> assertThat(ex.reason()).isEqualTo(MALFORMED));
+		assertThat(parse(empty, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z").events()).hasSize(1);
 	}
 
 	@Test

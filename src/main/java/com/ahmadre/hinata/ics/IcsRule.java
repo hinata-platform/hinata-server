@@ -24,15 +24,21 @@ import java.util.stream.Collectors;
  * which overflows and then never returns once the series starts more than 2³⁰ steps
  * before the window; a series with COUNT is walked from its first occurrence; every BY
  * list multiplies the candidates the engine builds for each period, also for periods
- * that turn out empty; and BYDAY is checked with a parallel stream on the JVM's common
- * pool. So:
+ * that turn out empty; a period that stays empty is followed, within the same step, by
+ * up to a thousand more before the engine gives up; and BYDAY is expanded from every
+ * date the other lists built, across its whole month or year, and checked with a
+ * parallel stream. So:
  *
  * <ul>
  * <li>only DAILY, WEEKLY, MONTHLY and YEARLY are expanded, where no year between 1 and
  * 9999 is 2³⁰ steps away;</li>
- * <li>COUNT is cut at {@link #MAX_COUNT}. A rule with an INTERVAL above
- * {@link #MAX_INTERVAL}, with more than {@link #MAX_CANDIDATES_PER_PERIOD} candidates in
- * a period, or with a BYSETPOS beyond its candidates is read but not expanded;</li>
+ * <li>COUNT is cut at {@link #MAX_COUNT};</li>
+ * <li>a rule is read but not expanded when its INTERVAL is above {@link #MAX_INTERVAL},
+ * when it names a list RFC 5545 has no use for with its frequency, such as BYMONTHDAY in
+ * a weekly rule, when a period may hold more than {@link #MAX_CANDIDATES_PER_PERIOD}
+ * candidates the way the engine builds them, when it names a weekday position no month
+ * has, such as a sixth Monday, or when its BYSETPOS lies beyond the most candidates a
+ * period can hold, which would leave every period empty;</li>
  * <li>repeated values in a list are dropped, so Monday written three hundred times costs
  * what one Monday costs;</li>
  * <li>UNTIL is left out of what the engine gets, because it would compare a UTC value
@@ -61,6 +67,12 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 	private static final Set<String> FREQUENCIES =
 			Set.of("SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY");
 	private static final Set<String> EXPANDED = Set.of("DAILY", "WEEKLY", "MONTHLY", "YEARLY");
+
+	/** The lists the table in RFC 5545 3.3.10 marks N/A for an expanded frequency. */
+	private static final Map<String, Set<String>> NOT_APPLICABLE = Map.of(
+			"DAILY", Set.of("BYWEEKNO", "BYYEARDAY"),
+			"WEEKLY", Set.of("BYWEEKNO", "BYYEARDAY", "BYMONTHDAY"),
+			"MONTHLY", Set.of("BYWEEKNO", "BYYEARDAY"));
 	private static final Set<String> WEEK_DAYS = Set.of("MO", "TU", "WE", "TH", "FR", "SA", "SU");
 	private static final List<String> TIMES_OF_DAY = List.of("BYHOUR", "BYMINUTE", "BYSECOND");
 	private static final Pattern WEEKDAY = Pattern.compile("([+-]?\\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)");
@@ -113,7 +125,7 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 		}
 		StringBuilder forRecur = new StringBuilder("FREQ=").append(frequency);
 		Map<String, Integer> sizes = new LinkedHashMap<>();
-		Weekdays weekdays = new Weekdays("", 0, 0);
+		Weekdays weekdays = new Weekdays("", 0, 0, 0);
 		boolean shortened = false;
 		long interval = 1;
 		long setPosition = 0;
@@ -156,44 +168,82 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 			}
 			forRecur.append(';').append(name).append('=').append(written);
 		}
-		long candidates = candidates(frequency, sizes, weekdays);
-		boolean expandable = EXPANDED.contains(frequency) && interval <= MAX_INTERVAL
-				&& candidates <= MAX_CANDIDATES_PER_PERIOD && setPosition <= candidates;
+		boolean applicable = sizes.keySet().stream().noneMatch(NOT_APPLICABLE.getOrDefault(frequency, Set.of())::contains);
+		boolean withinMonths = frequency.equals("MONTHLY") || frequency.equals("YEARLY") && sizes.containsKey("BYMONTH");
+		boolean positionsExist = weekdays.largestOrdinal() <= (withinMonths ? 5 : 53);
+		boolean setPositionReached = setPosition == 0 || setPosition <= mostPerPeriod(frequency, sizes, weekdays);
+		boolean expandable = EXPANDED.contains(frequency) && interval <= MAX_INTERVAL && applicable
+				&& candidates(frequency, sizes, weekdays) <= MAX_CANDIDATES_PER_PERIOD
+				&& positionsExist && setPositionReached;
 		return new IcsRule(forRecur.toString(), until, expandable, shortened);
 	}
 
 	/**
-	 * An upper bound on the candidates the engine builds for one period, after the table
-	 * in RFC 5545 3.3.10 of which parts expand a period and which only limit it.
+	 * An upper bound on the candidates the engine builds for one period. It follows ical4j
+	 * where ical4j and the table in RFC 5545 3.3.10 differ: the engine expands BYDAY from
+	 * every date the other lists built, across the whole month or year, also where the
+	 * RFC has BYDAY only limit them.
 	 */
 	private static long candidates(String frequency, Map<String, Integer> sizes, Weekdays weekdays) {
-		boolean yearly = frequency.equals("YEARLY");
-		boolean monthly = frequency.equals("MONTHLY");
-		boolean weekly = frequency.equals("WEEKLY");
 		int months = sizes.getOrDefault("BYMONTH", 0);
 		int weeks = sizes.getOrDefault("BYWEEKNO", 0);
 		int yearDays = sizes.getOrDefault("BYYEARDAY", 0);
 		int monthDays = sizes.getOrDefault("BYMONTHDAY", 0);
-		boolean namedDays = weekdays.plain() + weekdays.ordinal() > 0;
 		long estimate = 1;
-		if (yearly) {
+		if (frequency.equals("YEARLY")) {
 			estimate *= Math.max(months, 1);
-			estimate *= weeks == 0 ? 1 : (long) weeks * (namedDays ? 1 : 7);
+			estimate *= weeks == 0 ? 1 : weeks * 7L;
 			estimate *= Math.max(yearDays, 1);
 			estimate *= monthDays == 0 ? 1 : (long) monthDays * (months > 0 ? 1 : 12);
 		}
-		else if (monthly) {
+		else if (frequency.equals("MONTHLY")) {
 			estimate *= Math.max(monthDays, 1);
 		}
-		boolean daysExpand = weekly || (yearly || monthly) && yearDays == 0 && monthDays == 0;
-		if (namedDays && daysExpand) {
-			int perPlainDay = weekly || weeks > 0 ? 1 : monthly || months > 0 ? 5 : 53;
-			estimate *= (long) weekdays.plain() * perPlainDay + weekdays.ordinal();
+		if (weekdays.count() > 0) {
+			long perPlainDay = switch (frequency) {
+				case "MONTHLY" -> 5;
+				case "YEARLY" -> months > 0 ? 5 : 53;
+				default -> 1;
+			};
+			estimate *= weekdays.plain() * perPlainDay + weekdays.ordinal();
 		}
 		for (String time : TIMES_OF_DAY) {
 			estimate *= Math.max(sizes.getOrDefault(time, 0), 1);
 		}
 		return estimate;
+	}
+
+	/**
+	 * The most candidates one period can really hold, for the rules BYSETPOS is written
+	 * with: weekdays within a week, a month or a year, and times of day. -1 for any other
+	 * shape, where no position is risked. In a month every weekday comes four times and at
+	 * most three come a fifth time; in a year every weekday comes 52 times and at most two
+	 * a 53rd time; a weekday position names one day.
+	 */
+	private static long mostPerPeriod(String frequency, Map<String, Integer> sizes, Weekdays weekdays) {
+		boolean onlyWeekdays = weekdays.count() > 0 && !sizes.containsKey("BYWEEKNO")
+				&& !sizes.containsKey("BYYEARDAY") && !sizes.containsKey("BYMONTHDAY");
+		if (!onlyWeekdays) {
+			return -1;
+		}
+		long plain = weekdays.plain();
+		long perMonth = 4 * plain + Math.min(plain, 3) + weekdays.ordinal();
+		long days = switch (frequency) {
+			case "WEEKLY" -> plain;
+			case "MONTHLY" -> perMonth;
+			case "YEARLY" -> sizes.containsKey("BYMONTH")
+					? sizes.get("BYMONTH") * perMonth
+					: 52 * plain + Math.min(plain, 2) + weekdays.ordinal();
+			default -> -1;
+		};
+		if (days < 0) {
+			return -1;
+		}
+		long most = days;
+		for (String time : TIMES_OF_DAY) {
+			most *= Math.max(sizes.getOrDefault(time, 0), 1);
+		}
+		return most;
 	}
 
 	private static Map<String, String> parts(String value) {
@@ -263,14 +313,16 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 		Set<String> distinct = new LinkedHashSet<>();
 		int plain = 0;
 		int ordinal = 0;
+		long largestOrdinal = 0;
 		for (String value : values) {
 			Matcher weekday = WEEKDAY.matcher(value);
 			if (!weekday.matches()) {
 				throw invalid();
 			}
 			String written = weekday.group(2);
+			long position = 0;
 			if (weekday.group(1) != null) {
-				long position = Long.parseLong(weekday.group(1));
+				position = Long.parseLong(weekday.group(1));
 				// "The second Monday" exists within a month or a year, not within a week or a day.
 				if (position == 0 || Math.abs(position) > 53 || !(frequency.equals("MONTHLY") || frequency.equals("YEARLY"))) {
 					throw invalid();
@@ -278,15 +330,16 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 				written = position + written;
 			}
 			if (distinct.add(written)) {
-				if (weekday.group(1) == null) {
+				if (position == 0) {
 					plain++;
 				}
 				else {
 					ordinal++;
+					largestOrdinal = Math.max(largestOrdinal, Math.abs(position));
 				}
 			}
 		}
-		return new Weekdays(String.join(",", distinct), plain, ordinal);
+		return new Weekdays(String.join(",", distinct), plain, ordinal, largestOrdinal);
 	}
 
 	private static DateTimeException invalid() {
@@ -299,6 +352,10 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 	private record Numbers(String written, int size, long largest) {
 	}
 
-	private record Weekdays(String written, int plain, int ordinal) {
+	private record Weekdays(String written, int plain, int ordinal, long largestOrdinal) {
+
+		int count() {
+			return plain + ordinal;
+		}
 	}
 }
