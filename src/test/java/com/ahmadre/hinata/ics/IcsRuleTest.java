@@ -97,20 +97,26 @@ class IcsRuleTest {
 	}
 
 	@Test
-	void doesNotExpandPositionsNoPeriodReaches() {
-		// Two hours on every day of a month make 62 candidates at most, although 70 are estimated.
-		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=62", false).expandable())
+	void expandsOnlyPositionsEveryPeriodReaches() {
+		// Two hours on every day of a month: 56 candidates in February, 62 in the longest months.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=56", false).expandable())
 				.isTrue();
-		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=63", false).expandable())
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=57", false).expandable())
+				.isFalse();
+		// Every month has four Mondays and some have five; every year has 52 and some 53.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO;BYSETPOS=4", false).expandable()).isTrue();
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO;BYSETPOS=5", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=MO;BYSETPOS=52", false).expandable()).isTrue();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=MO;BYSETPOS=53", false).expandable()).isFalse();
+		// A fifth Monday and a fifth Thursday never fall in the same month, and the longest
+		// months never give both weekdays a fifth day either.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=5MO,5TH;BYSETPOS=2", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYMONTH=1,3,5,7,8,10,12;BYDAY=MO,TH;BYSETPOS=70", false).expandable())
 				.isFalse();
 		// No month has a sixth Monday, also not in a yearly rule of months; a year has a 53rd.
 		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=6MO", false).expandable()).isFalse();
 		assertThat(IcsRule.read("FREQ=YEARLY;BYMONTH=1;BYDAY=6MO", false).expandable()).isFalse();
 		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=53MO", false).expandable()).isTrue();
-		// The fifth Monday comes in some months, the 53rd in some years.
-		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO;BYSETPOS=5", false).expandable()).isTrue();
-		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=MO;BYSETPOS=53", false).expandable()).isTrue();
-		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=MO;BYSETPOS=54", false).expandable()).isFalse();
 		// Beside other lists a position is not risked.
 		assertThat(IcsRule.read("FREQ=MONTHLY;BYMONTHDAY=1,15;BYSETPOS=-1", false).expandable()).isFalse();
 	}

@@ -7,7 +7,8 @@
  * <li>{@link com.ahmadre.hinata.ics.IcsFetcher} fetches a calendar from an address
  * somebody typed, hardened against SSRF.</li>
  * <li>{@link com.ahmadre.hinata.ics.IcsParser} reads one into the occurrences of a
- * window. It is a pure function and needs no application context.</li>
+ * window. It needs no application context and keeps no state between calls, and it
+ * reads each calendar on a thread of its own.</li>
  * <li>{@link com.ahmadre.hinata.ics.IcsUrlCipher} encrypts the addresses that are
  * stored.</li>
  * </ul>

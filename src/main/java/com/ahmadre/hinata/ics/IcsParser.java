@@ -48,10 +48,11 @@ import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_LARGE;
  * Reads an external calendar (RFC 5545) into the occurrences that fall inside a
  * window.
  *
- * <p>Pure and Spring-free, like {@code team/TeamAccess}: bytes and a window go in,
- * an {@link IcsCalendar} comes out, and a calendar that cannot be read is an
+ * <p>Spring-free and without state between calls: bytes and a window go in, an
+ * {@link IcsCalendar} comes out, and a calendar that cannot be read is an
  * {@link IcsParseException} with a reason and a line. Nothing else leaves, whatever
- * the bytes are.
+ * the bytes are. It is not a pure function, though: it reads on a thread of its own,
+ * and the clock can cut its result, see the last paragraph.
  *
  * <p>What is read: VEVENT with UID, RECURRENCE-ID, DTSTART, DTEND or DURATION,
  * SUMMARY, LOCATION, DESCRIPTION, STATUS and TRANSP; its RRULE, RDATE and EXDATE;
