@@ -227,17 +227,23 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 		if (sizes.containsKey("BYWEEKNO") || sizes.containsKey("BYYEARDAY") || sizes.containsKey("BYMONTHDAY")) {
 			return 0;
 		}
-		long perMonth = 4L * weekdays.plain() + weekdays.surelyNamed(4);
-		long least = switch (frequency) {
-			// Without BYDAY a daily period is its day and a weekly one the weekday of DTSTART.
-			case "DAILY" -> weekdays.count() == 0 ? 1 : 0;
-			case "WEEKLY" -> weekdays.count() == 0 ? 1 : weekdays.plain();
-			case "MONTHLY" -> weekdays.count() == 0 ? 0 : perMonth;
-			case "YEARLY" -> weekdays.count() == 0 ? 0 : sizes.containsKey("BYMONTH")
-					? sizes.get("BYMONTH") * perMonth
-					: 52L * weekdays.plain() + weekdays.surelyNamed(52);
-			default -> 0;
-		};
+		long least;
+		if (weekdays.count() == 0) {
+			// Without BYDAY a day holds itself and a week the weekday of DTSTART. A month need
+			// not hold the day of DTSTART, the 31st say, nor a year the 29th of February.
+			least = frequency.equals("DAILY") || frequency.equals("WEEKLY") ? 1 : 0;
+		}
+		else {
+			long perMonth = 4L * weekdays.plain() + weekdays.surelyNamed(4);
+			least = switch (frequency) {
+				case "WEEKLY" -> weekdays.plain();
+				case "MONTHLY" -> perMonth;
+				case "YEARLY" -> sizes.containsKey("BYMONTH")
+						? sizes.get("BYMONTH") * perMonth
+						: 52L * weekdays.plain() + weekdays.surelyNamed(52);
+				default -> 0;
+			};
+		}
 		for (String time : TIMES_OF_DAY) {
 			least *= Math.max(sizes.getOrDefault(time, 0), 1);
 		}

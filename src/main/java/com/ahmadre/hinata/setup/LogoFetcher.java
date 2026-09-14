@@ -52,14 +52,15 @@ import java.util.concurrent.TimeUnit;
  *       whole fetch, lookups and redirects included, has {@link #TIMEOUT}.</li>
  * </ul>
  *
- * <p>Only for the logo. Pasted images used to come through here over
- * {@code /api/v1/media/proxy}; no client has called that since the app draws them
- * itself (HIN-12), so the route is gone. Fetching addresses that signed-in people
- * choose would need limits per person this class does not have.
+ * <p>Only for the logo, which is why the class does not leave this package. Pasted
+ * images used to come through here over {@code /api/v1/media/proxy}; no client has
+ * called that since the app draws them itself (HIN-12), so the route is gone.
+ * Fetching addresses that signed-in people choose would need limits per person this
+ * class does not have.
  */
 @Slf4j
 @Component
-public class LogoFetcher implements DisposableBean {
+class LogoFetcher implements DisposableBean {
 
 	/** A logo is branding, not a photograph. */
 	private static final long MAX_BYTES = 5L * 1024 * 1024;
@@ -95,7 +96,7 @@ public class LogoFetcher implements DisposableBean {
 	private final PublicDns dns;
 	private final OkHttpClient client;
 
-	public LogoFetcher() {
+	LogoFetcher() {
 		this(PublicDns.Resolver.SYSTEM, null, TIMEOUT);
 	}
 
@@ -120,7 +121,7 @@ public class LogoFetcher implements DisposableBean {
 	 * @throws ApiException 400 for an address that may not be fetched and for an answer
 	 *                      that is no usable image
 	 */
-	public StorageService.StoredObject fetchLogo(String rawUrl) {
+	StorageService.StoredObject fetchLogo(String rawUrl) {
 		HttpUrl url = target(rawUrl == null ? null : HttpUrl.parse(rawUrl.strip()));
 		long deadline = System.nanoTime() + timeout.toNanos();
 		for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
