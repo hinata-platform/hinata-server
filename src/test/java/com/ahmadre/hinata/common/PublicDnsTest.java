@@ -3,7 +3,6 @@ package com.ahmadre.hinata.common;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
@@ -11,7 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -51,57 +49,15 @@ class PublicDnsTest {
 	}
 
 	@Test
-	void givesUpWhenTheRequestRunsOutOfTimeAndHoldsNothingAgainstTheName() throws IOException {
+	void givesUpWhenTheRequestRunsOutOfTime() {
 		PublicDns dns = dns(hangingFor("slow"), Duration.ofSeconds(10));
 		long started = System.nanoTime();
 
-		assertThatThrownBy(() -> dns.within("ada", in(200), () -> dns.lookup("slow.test")))
-				.isInstanceOf(PublicDns.SlowLookup.class);
+		assertThatThrownBy(() -> dns.within(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200),
+				() -> dns.lookup("slow.test"))).isInstanceOf(PublicDns.SlowLookup.class);
 
+		// The lookup may take ten seconds, the request had a fifth of one.
 		assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
-		released.countDown();
-		// The request ran out of time, not the name: it is asked again.
-		assertThat(dns.lookup("slow.test")).containsExactly(PUBLIC);
-	}
-
-	@Test
-	void countsTheLookupsOfOneRequesterUntilTheyEnd() throws IOException {
-		AtomicInteger askedForImages = new AtomicInteger();
-		PublicDns dns = dns(host -> {
-			if (host.startsWith("hang")) {
-				await(released);
-			}
-			else {
-				askedForImages.incrementAndGet();
-			}
-			return new InetAddress[] { PUBLIC };
-		}, Duration.ofSeconds(10));
-		for (int i = 0; i < 4; i++) {
-			String hanging = "hang" + i + ".test";
-			assertThatThrownBy(() -> dns.within("ada", in(50), () -> dns.lookup(hanging)))
-					.isInstanceOf(PublicDns.SlowLookup.class);
-		}
-
-		// Ada's four given-up lookups still run: hers is refused before anyone is asked, Bea's is answered.
-		assertThatThrownBy(() -> dns.within("ada", in(5_000), () -> dns.lookup("images.test")))
-				.isInstanceOf(PublicDns.SlowLookup.class);
-		assertThat(askedForImages).hasValue(0);
-		assertThat(dns.within("bea", in(5_000), () -> dns.lookup("images.test"))).containsExactly(PUBLIC);
-	}
-
-	@Test
-	void refusesANameThatJustTimedOutWithoutAskingAgain() {
-		AtomicInteger asked = new AtomicInteger();
-		PublicDns dns = dns(host -> {
-			asked.incrementAndGet();
-			await(released);
-			return new InetAddress[] { PUBLIC };
-		}, Duration.ofMillis(100));
-
-		assertThatThrownBy(() -> dns.lookup("mute.test")).isInstanceOf(PublicDns.SlowLookup.class);
-		assertThatThrownBy(() -> dns.lookup("mute.test")).isInstanceOf(PublicDns.SlowLookup.class);
-
-		assertThat(asked).hasValue(1);
 	}
 
 	@Test
@@ -128,7 +84,7 @@ class PublicDnsTest {
 		return dns;
 	}
 
-	/** Answers every host at once, except those starting with [prefix], which wait for the test to release them. */
+	/** Answers every host at once, except those starting with [prefix], which wait for the test to end. */
 	private PublicDns.Resolver hangingFor(String prefix) {
 		return host -> {
 			if (host.startsWith(prefix)) {
@@ -136,10 +92,6 @@ class PublicDnsTest {
 			}
 			return new InetAddress[] { PUBLIC };
 		};
-	}
-
-	private static long in(long millis) {
-		return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
 	}
 
 	private static InetAddress literal(String address) {

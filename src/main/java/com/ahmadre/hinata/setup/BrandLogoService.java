@@ -69,14 +69,16 @@ public class BrandLogoService {
 	 * {@code null} when that particular rendition does not exist (no logo at all,
 	 * or an SVG that cannot be rasterized). Resolved once, so a failing external host
 	 * is not asked on every consumer; one that fails after it has answered keeps its
-	 * last bytes and is asked again after {@link #RETRY_AFTER}.
+	 * last bytes and is asked again after {@link #RETRY_AFTER}. {@code refreshAt} is
+	 * when the next consumer derives it anew, and null for an upload, which never goes
+	 * stale.
 	 */
 	private record Snapshot(String key, String organization, BrandAsset display, byte[] raster,
-			java.util.Map<String, java.util.Optional<byte[]>> bands, Instant at) {
+			java.util.Map<String, java.util.Optional<byte[]>> bands, Instant refreshAt) {
 
-		/** The same renditions, counted as fetched at [at]. */
-		Snapshot refreshedAt(Instant at) {
-			return new Snapshot(key, organization, display, raster, bands, at);
+		/** The same renditions, derived anew at [refreshAt]. */
+		Snapshot refreshingAt(Instant refreshAt) {
+			return new Snapshot(key, organization, display, raster, bands, refreshAt);
 		}
 	}
 
@@ -193,7 +195,7 @@ public class BrandLogoService {
 				// The host did not answer this time. Serving nothing would take the logo out
 				// of the app, the mails and the exports for a whole TTL, so the last bytes
 				// stay and the next attempt comes after RETRY_AFTER.
-				derived = current.refreshedAt(Instant.now().minus(EXTERNAL_TTL).plus(RETRY_AFTER));
+				derived = current.refreshingAt(Instant.now().plus(RETRY_AFTER));
 			}
 			cache = derived;
 			return derived;
@@ -204,11 +206,7 @@ public class BrandLogoService {
 	}
 
 	private boolean isStale(Snapshot snap) {
-		if (snap.key() == null || !OrganizationLogoService.isInternal(snap.key())) {
-			return snap.at().plus(EXTERNAL_TTL).isBefore(Instant.now());
-		}
-		// Uploaded: the key already changes on re-upload, and removal fires an event.
-		return false;
+		return snap.refreshAt() != null && snap.refreshAt().isBefore(Instant.now());
 	}
 
 	private static java.util.Map<String, java.util.Optional<byte[]>> bandCache() {
@@ -228,19 +226,19 @@ public class BrandLogoService {
 	}
 
 	private Snapshot derive(String key) {
-		Instant now = Instant.now();
+		Instant refreshAt = key != null && OrganizationLogoService.isInternal(key) ? null : Instant.now().plus(EXTERNAL_TTL);
 		String organization = organizationName();
 		if (key == null || key.isBlank()) {
-			return new Snapshot(key, organization, null, null, bandCache(), now);
+			return new Snapshot(key, organization, null, null, bandCache(), refreshAt);
 		}
 		BrandAsset display = fetchDisplay(key);
 		if (display == null) {
-			return new Snapshot(key, organization, null, null, bandCache(), now);
+			return new Snapshot(key, organization, null, null, bandCache(), refreshAt);
 		}
 		// Bands are composed lazily per backdrop rather than eagerly here: an
 		// instance sends a handful of the thirteen mail kinds, and each band costs
 		// an image decode plus a font render.
-		return new Snapshot(key, organization, display, toRaster(display), bandCache(), now);
+		return new Snapshot(key, organization, display, toRaster(display), bandCache(), refreshAt);
 	}
 
 	/** The configured bytes, from object storage or the external host. Never throws. */
@@ -254,9 +252,8 @@ public class BrandLogoService {
 								stored.contentType() == null ? "image/png" : stored.contentType(), true))
 						.orElse(null);
 			}
-			// External: through the fetcher's logo lane, which checks the address,
-			// connects only to what it checked, takes display types only and reads at
-			// most 5 MB.
+			// External: through the fetcher, which checks the address, connects only to
+			// what it checked, takes image types a browser renders and reads at most 5 MB.
 			StorageService.StoredObject fetched = fetcher.fetchLogo(url);
 			return new BrandAsset(fetched.data(), fetched.contentType(), false);
 		}
