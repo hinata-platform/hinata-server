@@ -125,10 +125,11 @@ dependencies {
     // RRULEs the package has checked. Groovy, jparsec and Caffeine are optional
     // feature variants in ical4j's Gradle metadata and are not pulled in.
     implementation("org.mnode.ical4j:ical4j:$ical4jVersion")
-    // The ics fetcher's HTTP client. MinIO brings it anyway; it is declared here
-    // because the fetcher depends on it directly: its Dns hook lets a request
-    // connect to exactly the address that was checked, which the JDK client
-    // cannot do.
+    // The HTTP client for requests to addresses somebody else chose: the calendar
+    // fetcher and the image proxy, both through common/PublicDns. MinIO brings it
+    // anyway; it is declared here because they depend on it directly: its Dns hook
+    // lets a request connect to exactly the address that was checked, which the
+    // JDK client cannot do.
     implementation("com.squareup.okhttp3:okhttp:$okhttpVersion")
 
     // Security & SSO
@@ -177,8 +178,9 @@ dependencies {
     testImplementation("org.testcontainers:testcontainers-mongodb")
     // Module encapsulation: see timetracking/ModuleBoundaryTest.
     testImplementation("com.tngtech.archunit:archunit-junit5:$archunitVersion")
-    // The ics fetcher's tests: a local HTTPS server with a throwaway certificate
-    // authority, in the same version as the client it talks to.
+    // The tests of both fetchers: a local server, for the calendar fetcher over
+    // HTTPS with a throwaway certificate authority, in the same version as the
+    // client they talk to.
     testImplementation("com.squareup.okhttp3:mockwebserver:$okhttpVersion")
     testImplementation("com.squareup.okhttp3:okhttp-tls:$okhttpVersion")
     testCompileOnly("org.projectlombok:lombok")

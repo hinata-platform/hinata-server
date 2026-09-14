@@ -96,6 +96,45 @@ class IcsRuleTest {
 		assertThat(rule.forRecur()).isEqualTo("FREQ=DAILY;COUNT=5000");
 	}
 
+	@Test
+	void doesNotExpandPositionsNoPeriodReaches() {
+		// Two hours on every day of a month make 62 candidates at most, although 70 are estimated.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=62", false).expandable())
+				.isTrue();
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=63", false).expandable())
+				.isFalse();
+		// No month has a sixth Monday, also not in a yearly rule of months; a year has a 53rd.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=6MO", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYMONTH=1;BYDAY=6MO", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=53MO", false).expandable()).isTrue();
+		// The fifth Monday comes in some months, the 53rd in some years.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=MO;BYSETPOS=5", false).expandable()).isTrue();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=MO;BYSETPOS=53", false).expandable()).isTrue();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=MO;BYSETPOS=54", false).expandable()).isFalse();
+		// Beside other lists a position is not risked.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYMONTHDAY=1,15;BYSETPOS=-1", false).expandable()).isFalse();
+	}
+
+	@Test
+	void countsTheCandidatesTheWayTheEngineBuildsThem() {
+		// ical4j expands BYDAY from every date BYWEEKNO names, across the whole year: fourteen
+		// weeks of seven days build thousands of candidates, not 98.
+		assertThat(IcsRule.read("FREQ=YEARLY;BYWEEKNO=" + range(1, 14) + ";BYDAY=MO,TU,WE,TH,FR,SA,SU", false)
+				.expandable()).isFalse();
+		// Friday the 13th and the first Tuesday after a Monday in November stay well within.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYMONTHDAY=13;BYDAY=FR", false).expandable()).isTrue();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYMONTH=11;BYMONTHDAY=2,3,4,5,6,7,8;BYDAY=TU", false).expandable())
+				.isTrue();
+	}
+
+	@Test
+	void doesNotExpandListsTheFrequencyHasNoUseFor() {
+		assertThat(IcsRule.read("FREQ=WEEKLY;BYDAY=MO;BYMONTHDAY=13", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYYEARDAY=100", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=DAILY;BYWEEKNO=20", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=YEARLY;BYWEEKNO=20", false).expandable()).isTrue();
+	}
+
 	private static String range(int from, int to) {
 		return IntStream.rangeClosed(from, to).mapToObj(String::valueOf).collect(Collectors.joining(","));
 	}

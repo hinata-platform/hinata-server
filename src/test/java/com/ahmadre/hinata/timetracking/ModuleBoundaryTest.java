@@ -138,13 +138,26 @@ class ModuleBoundaryTest {
 	}
 
 	@Test
-	void nothingOutsideTheNewPackagesReachesIntoThemAtAll() {
-		// No bridges and no storage contract here: availability and billing arrive
-		// in stages 10 and 15 with nothing outside them entitled to know.
+	void onlyTimeTrackingAndShiftPlanningReadAvailability() {
+		// No bridges and no storage contract here. Capacity has two readers by design:
+		// time tracking, which shows absences and holidays beside the entries, and
+		// shift planning (HIN-43/45), which checks shifts against them. Neither may
+		// ask it before a write: a marking must never turn into a refusal (R9).
 		noClasses()
-				.that(resideOutsideOfPackages("..availability..", "..billing.."))
-				.should().dependOnClassesThat().resideInAnyPackage("..availability..", "..billing..")
-				.because("capacity and money are the module's own business")
+				.that(resideOutsideOfPackages("..availability..", "..timetracking..", "..schedule.."))
+				.should().dependOnClassesThat().resideInAnyPackage("..availability..")
+				.because("capacity is read by time tracking and shift planning, and by nobody else")
+				.check(PRODUCTION);
+	}
+
+	@Test
+	void nothingOutsideBillingReachesIntoIt() {
+		// Billing arrives in stage 15 with nothing outside it entitled to know. Whether
+		// time tracking may ask it about invoiced days is decided there, on purpose.
+		noClasses()
+				.that(resideOutsideOfPackages("..billing.."))
+				.should().dependOnClassesThat().resideInAnyPackage("..billing..")
+				.because("money is the module's own business")
 				.check(PRODUCTION);
 	}
 

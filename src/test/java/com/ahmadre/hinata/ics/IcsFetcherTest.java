@@ -477,8 +477,10 @@ class IcsFetcherTest {
 
 	/**
 	 * Everything logged while [action] runs, through Logback and through
-	 * java.util.logging (where OkHttp writes), at every level. The test server's
-	 * own request log is left out: it prints the request line it received.
+	 * java.util.logging (where OkHttp writes), at every level. The test server's own
+	 * request log is left out on both ways: it prints the request line it received, and
+	 * once a Spring Boot test in the same JVM has bridged java.util.logging into SLF4J,
+	 * it arrives through Logback as well.
 	 */
 	private static List<String> captureEveryLog(Runnable action) {
 		Logger root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
@@ -490,9 +492,8 @@ class IcsFetcherTest {
 		Handler handler = new Handler() {
 			@Override
 			public void publish(LogRecord entry) {
-				String name = String.valueOf(entry.getLoggerName());
-				if (!name.startsWith("okhttp3.mockwebserver")) {
-					julLines.add(name + " " + entry.getMessage() + " " + entry.getThrown());
+				if (!isTestServer(entry.getLoggerName())) {
+					julLines.add(entry.getLoggerName() + " " + entry.getMessage() + " " + entry.getThrown());
 				}
 			}
 
@@ -519,11 +520,17 @@ class IcsFetcherTest {
 			julRoot.removeHandler(handler);
 			julRoot.setLevel(julLevel);
 		}
-		Stream<String> logback = appender.list.stream().map(event -> {
-			IThrowableProxy thrown = event.getThrowableProxy();
-			return event.getLoggerName() + " " + event.getFormattedMessage()
-					+ (thrown == null ? "" : " " + ThrowableProxyUtil.asString(thrown));
-		});
+		Stream<String> logback = appender.list.stream()
+				.filter(event -> !isTestServer(event.getLoggerName()))
+				.map(event -> {
+					IThrowableProxy thrown = event.getThrowableProxy();
+					return event.getLoggerName() + " " + event.getFormattedMessage()
+							+ (thrown == null ? "" : " " + ThrowableProxyUtil.asString(thrown));
+				});
 		return Stream.concat(logback, julLines.stream()).toList();
+	}
+
+	private static boolean isTestServer(String loggerName) {
+		return loggerName != null && loggerName.startsWith("okhttp3.mockwebserver");
 	}
 }

@@ -65,6 +65,17 @@ class IcsUrlCipherTest {
 	}
 
 	@Test
+	void bindsEveryValueToSomething() {
+		IcsUrlCipher cipher = new IcsUrlCipher(SECRET);
+		String stored = cipher.encrypt(URL, ADA);
+
+		for (String nothing : new String[] { null, "", "  " }) {
+			assertThatThrownBy(() -> cipher.encrypt(URL, nothing)).isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> cipher.decrypt(stored, nothing)).isInstanceOf(IllegalArgumentException.class);
+		}
+	}
+
+	@Test
 	void everyValueGetsItsOwnNonce() {
 		IcsUrlCipher cipher = new IcsUrlCipher(SECRET);
 

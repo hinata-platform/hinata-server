@@ -26,12 +26,15 @@ import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_MANY_COMPONENT
  * <p>Some limits cut and some refuse, and whoever shows the result needs to know which:
  *
  * <ul>
- * <li><b>Cut</b>, and the result says so: events after the first {@code maxEvents}.</li>
+ * <li><b>Cut</b>, and the result says so: events after the first {@code maxEvents},
+ * time zone definitions after the first {@value #MAX_TIMEZONES}, and observances after
+ * the first {@value #MAX_OBSERVANCES} in one definition.</li>
  * <li><b>Refused</b> with an {@link IcsParseException}: more than
  * {@link #MAX_COMPONENTS} components of any kind, nesting deeper than
  * {@link #MAX_DEPTH}, an unfolded line longer than {@link #MAX_LINE} that the parser would
- * read, more than {@link #MAX_REPEATED} RDATE or EXDATE lines in one event, and a
- * structure that does not close.</li>
+ * read, more than {@link #MAX_REPEATED} RDATE or EXDATE lines in one event or
+ * {@link #MAX_REPEATED_IN_CALENDAR} in the whole calendar, and a structure that does not
+ * close. An RDATE or EXDATE without a value is read past and counts for neither.</li>
  * </ul>
  */
 final class IcsLexer {
@@ -49,6 +52,9 @@ final class IcsLexer {
 
 	/** RDATE and EXDATE lines in one event; the parser allows as many values. */
 	static final int MAX_REPEATED = 10_000;
+
+	/** RDATE and EXDATE lines in the whole calendar. */
+	static final int MAX_REPEATED_IN_CALENDAR = 20_000;
 
 	private static final int MAX_NAME = 64;
 	private static final int MAX_TIMEZONES = 100;
@@ -90,7 +96,7 @@ final class IcsLexer {
 		final List<Property> properties = new ArrayList<>();
 		final List<Component> children = new ArrayList<>();
 
-		/** How often each kept name occurred, the ones read past included. */
+		/** How often each kept name occurred, the ones read past included; an RDATE or EXDATE without a value does not count. */
 		private final Map<String, Integer> occurrences = new HashMap<>();
 
 		Component(String name) {
@@ -139,6 +145,7 @@ final class IcsLexer {
 		private int components;
 		private int events;
 		private int timezones;
+		private int repeatedLines;
 		private boolean truncated;
 
 		Reader(String text, int maxEvents) {
@@ -202,12 +209,20 @@ final class IcsLexer {
 					events++;
 					return true;
 				case "VCALENDAR>VTIMEZONE":
-					return timezones++ < MAX_TIMEZONES;
+					return underCap(timezones++ < MAX_TIMEZONES);
 				case "VTIMEZONE>STANDARD", "VTIMEZONE>DAYLIGHT":
-					return parent.kept().children.size() < MAX_OBSERVANCES;
+					return underCap(parent.kept().children.size() < MAX_OBSERVANCES);
 				default:
 					return false;
 			}
+		}
+
+		/** [admitted] as it is; when a cap turned the component away, the result is marked as cut. */
+		private boolean underCap(boolean admitted) {
+			if (!admitted) {
+				truncated = true;
+			}
+			return admitted;
 		}
 
 		/** Closes [component]; true when that was the calendar itself. */
@@ -224,14 +239,25 @@ final class IcsLexer {
 			if (wanted == null || !wanted.contains(name)) {
 				return;
 			}
-			int occurrence = current.kept().occurrences.merge(name, 1, Integer::sum);
-			if (!REPEATED.contains(name) && occurrence > 1) {
+			boolean repeated = REPEATED.contains(name);
+			if (!repeated && current.kept().occurrences.merge(name, 1, Integer::sum) > 1) {
 				return;
 			}
-			if (occurrence > MAX_REPEATED || overlong) {
+			if (overlong) {
 				throw malformed();
 			}
-			current.kept().properties.add(property(name, content));
+			Property property = property(name, content);
+			if (repeated) {
+				// An empty RDATE or EXDATE says nothing, so it is neither kept nor counted.
+				if (property.value().isBlank()) {
+					return;
+				}
+				if (current.kept().occurrences.merge(name, 1, Integer::sum) > MAX_REPEATED
+						|| ++repeatedLines > MAX_REPEATED_IN_CALENDAR) {
+					throw malformed();
+				}
+			}
+			current.kept().properties.add(property);
 		}
 
 		/** NAME *(";" PARAM "=" VALUE *("," VALUE)) ":" VALUE, parameter values quoted or not. */

@@ -85,7 +85,7 @@ public class IcsUrlCipher {
 	 */
 	public String encrypt(String url, String boundTo) {
 		SecretKey secretKey = requireKey();
-		if (url == null || boundTo == null) {
+		if (url == null || boundTo == null || boundTo.isBlank()) {
 			throw new IllegalArgumentException("a calendar URL and what it is bound to are needed");
 		}
 		try {
@@ -113,7 +113,7 @@ public class IcsUrlCipher {
 	 */
 	public String decrypt(String stored, String boundTo) {
 		SecretKey secretKey = requireKey();
-		if (boundTo == null) {
+		if (boundTo == null || boundTo.isBlank()) {
 			throw new IllegalArgumentException("what the value is bound to is needed");
 		}
 		if (stored == null || !stored.startsWith(VERSION)) {
