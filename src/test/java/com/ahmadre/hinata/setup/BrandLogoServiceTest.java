@@ -35,7 +35,7 @@ class BrandLogoServiceTest {
 	private BrandLogoService brandLogo;
 
 	@BeforeEach
-	void configureAnExternalLogo() throws Exception {
+	void configureAnExternalLogo() {
 		ServerSettings configured = new ServerSettings();
 		configured.setOrganizationName("Hinata");
 		configured.getGeneral().setLogoUrl(ADDRESS);
@@ -45,7 +45,7 @@ class BrandLogoServiceTest {
 	}
 
 	@Test
-	void servesAVectorLogoButDrawsNothingFromIt() throws Exception {
+	void servesAVectorLogoButDrawsNothingFromIt() {
 		when(fetcher.fetchLogo(ADDRESS)).thenReturn(new StorageService.StoredObject(SVG, "image/svg+xml"));
 
 		assertThat(brandLogo.display()).hasValueSatisfying(asset -> assertThat(asset.contentType()).isEqualTo("image/svg+xml"));
@@ -63,8 +63,8 @@ class BrandLogoServiceTest {
 				.thenReturn(new StorageService.StoredObject(NEWER_PNG, "image/png"));
 		assertThat(brandLogo.display()).isPresent();
 
-		// Fifteen minutes on, the host does not answer, and the last bytes stay.
-		clock.advance(Duration.ofMinutes(16));
+		// Once the fifteen minutes have passed, the host does not answer, and the last bytes stay.
+		clock.advance(Duration.ofMinutes(15).plusSeconds(1));
 		assertThat(brandLogo.display()).hasValueSatisfying(asset -> assertThat(asset.bytes()).isEqualTo(PNG));
 		assertThat(brandLogo.raster()).contains(PNG);
 		// Within the minute nobody asks the host again.
