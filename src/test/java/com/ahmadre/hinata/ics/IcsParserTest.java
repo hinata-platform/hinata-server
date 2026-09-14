@@ -332,6 +332,66 @@ class IcsParserTest {
 	}
 
 	@Test
+	void paysForEveryStepOfTheEngineNotOnlyForWhatItHandsOver() {
+		// Each series starts 26 years before the window, and the engine answers more than a
+		// hundred times before it hands anything over. Paid per occurrence, all of that was free.
+		CharSequence[] series = new CharSequence[3000];
+		for (int i = 0; i < series.length; i++) {
+			series[i] = event("busy" + i, "DTSTART:20000101T000000Z",
+					"RRULE:FREQ=YEARLY;BYMONTH=" + range(1, 12) + ";BYMONTHDAY=" + range(1, 8));
+		}
+
+		// Time enough for all of it, so only the steps can cut this calendar.
+		IcsCalendar calendar = assertTimeoutPreemptively(Duration.ofSeconds(60),
+				() -> parseWithin(calendar(series), 50_000, Duration.ofMinutes(10)));
+
+		assertThat(calendar.truncated()).isTrue();
+		assertThat(calendar.events()).hasSizeLessThan(series.length);
+	}
+
+	@Test
+	void stopsExpandingOnceTheCalendarHasSpentItsTime() {
+		// A position past the candidates of every month: a single step builds a thousand empty
+		// months before the engine gives up. Cheap in steps, dear in time.
+		CharSequence[] series = new CharSequence[5000];
+		for (int i = 0; i < series.length; i++) {
+			series[i] = event("empty" + i, "DTSTART:19000101T000000Z",
+					"RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=0,1;BYSETPOS=70");
+		}
+		long started = System.nanoTime();
+
+		// Steps without end, so only the time can cut this calendar.
+		IcsCalendar calendar = assertTimeoutPreemptively(Duration.ofSeconds(120),
+				() -> parseWithin(calendar(series), Long.MAX_VALUE, Duration.ofMillis(300)));
+
+		// Without the deadline this calendar takes about four seconds on a laptop.
+		assertThat(calendar.truncated()).isTrue();
+		assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+	}
+
+	@Test
+	void aSeriesEndingBeforeTheWindowStillShowsTheNightThatReachesIntoIt() {
+		// The last shift starts at 22:00 on the 5th, which UNTIL allows, and ends at 02:00 on the 6th.
+		String ics = calendar(event("nights",
+				"DTSTART:20260301T220000Z", "DTEND:20260302T020000Z", "RRULE:FREQ=DAILY;UNTIL=20260305T220000Z"));
+
+		IcsCalendar calendar = parse(ics, "2026-03-06T00:00:00Z", "2026-03-07T00:00:00Z");
+
+		assertThat(calendar.events()).extracting(IcsEvent::recurrenceId).containsExactly("20260305T220000Z");
+	}
+
+	@Test
+	void keepsTheFirstOfAPropertyThatMayOccurOnce() {
+		String ics = calendar(event("twice",
+				"DTSTART:20260301T090000Z", "SUMMARY:first", "SUMMARY:second", "DTSTART:20260301T100000Z"));
+
+		IcsEvent event = parse(ics, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z").events().get(0);
+
+		assertThat(event.summary()).isEqualTo("first");
+		assertThat(((IcsEvent.Timed) event).start()).isEqualTo(Instant.parse("2026-03-01T09:00:00Z"));
+	}
+
+	@Test
 	void refusesMoreComponentsThanAnyCalendarHas() {
 		String ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + "BEGIN:X-C\r\nEND:X-C\r\n".repeat(20_000) + "END:VCALENDAR\r\n";
 
@@ -526,6 +586,12 @@ class IcsParserTest {
 
 	private static IcsCalendar parse(String ics, String from, String to) {
 		return IcsParser.parse(ics.getBytes(StandardCharsets.UTF_8), Instant.parse(from), Instant.parse(to), BERLIN);
+	}
+
+	/** The first of March 2026, with [steps] and [time] for the series. */
+	private static IcsCalendar parseWithin(String ics, long steps, Duration time) {
+		return IcsParser.parse(ics.getBytes(StandardCharsets.UTF_8), Instant.parse("2026-03-01T00:00:00Z"),
+				Instant.parse("2026-03-02T00:00:00Z"), BERLIN, steps, time);
 	}
 
 	private static byte[] fixture(String name) {

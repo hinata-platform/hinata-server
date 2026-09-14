@@ -17,6 +17,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.time.temporal.Temporal;
 import java.time.zone.ZoneRules;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -32,7 +33,6 @@ import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.Spliterator;
 import java.util.TreeMap;
-import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -50,16 +50,28 @@ import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_LARGE;
  *
  * <p>What is read: VEVENT with UID, RECURRENCE-ID, DTSTART, DTEND or DURATION,
  * SUMMARY, LOCATION, DESCRIPTION, STATUS and TRANSP; its RRULE, RDATE and EXDATE;
- * and VTIMEZONE, for the zone names nothing else explains. Series are expanded only
- * inside the window, and nothing grows without a cap: 5,000 events read, 500
- * occurrences per series, 5,000 per window. A cap that was reached shows as
- * {@link IcsCalendar#truncated()}; it is not an error.
+ * and VTIMEZONE, for the zone names nothing else explains.
+ *
+ * <p>Nothing grows without a limit, and a limit either cuts or refuses:
+ *
+ * <ul>
+ * <li><b>Cut</b>, shown as {@link IcsCalendar#truncated()}: events after the first
+ * 5,000; occurrences after 500 in one series and after the earliest 5,000 of the
+ * window; a COUNT above 5,000; a rule the engine is not given (see {@link IcsRule});
+ * and a calendar that has spent its recurrence steps or its two seconds.</li>
+ * <li><b>Refused</b>: more than 2 MB, anything that is not a calendar, the structural
+ * limits of {@link IcsLexer}, more than 10,000 RDATE or EXDATE values in one event,
+ * and every value that cannot be read.</li>
+ * </ul>
  *
  * <p>Times follow RFC 5545. A time with a zone is converted with that zone's rules,
  * the way it reads on the wall there, so a weekly meeting at half past nine stays at
  * half past nine across the change to summer time. A time without a zone (floating)
  * is read in the zone the caller names, the reader's own, and an all-day event is
  * placed in that zone too when it is compared with the window.
+ *
+ * <p>ical4j checks BYDAY with a parallel stream on the JVM's common pool. Run parses
+ * on an executor of your own, never on a request or scheduler thread.
  */
 public final class IcsParser {
 
@@ -80,11 +92,17 @@ public final class IcsParser {
 	private static final int MAX_DATES = 10_000;
 
 	/**
-	 * Recurrence steps one calendar may cost. A series with COUNT is walked by the
-	 * engine from its first occurrence, so it pays its COUNT before it starts; every
-	 * occurrence taken from the engine costs one more.
+	 * Steps of the recurrence engine one calendar may take. Every step is paid for, also
+	 * one in which the engine hands nothing over because it passed a candidate before the
+	 * window, and so is the start of every series.
 	 */
 	private static final long WORK_BUDGET = 250_000;
+
+	/**
+	 * The last line of defence. What one step costs depends on the rule: a step may build
+	 * a thousand empty periods before the engine gives up. Real calendars take milliseconds.
+	 */
+	private static final Duration TIME_BUDGET = Duration.ofSeconds(2);
 
 	/** Wider than any UTC offset, so nothing is lost at the edges of the window before it is converted. */
 	private static final Duration MARGIN = Duration.ofHours(18);
@@ -93,6 +111,10 @@ public final class IcsParser {
 			DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
 
 	private static final Zone UTC = new Zone(ZoneOffset.UTC.getRules(), ZoneOffset.UTC, false);
+
+	private static final Comparator<Ranked> ORDER = Comparator.comparing(Ranked::start)
+			.thenComparing(Ranked::uid)
+			.thenComparing(ranked -> ranked.event().recurrenceId() == null ? "" : ranked.event().recurrenceId());
 
 	private IcsParser() {
 	}
@@ -107,6 +129,15 @@ public final class IcsParser {
 	 * @throws IllegalArgumentException when there is no window or no zone
 	 */
 	public static IcsCalendar parse(byte[] ics, Instant from, Instant to, ZoneId readerZone) {
+		return parse(ics, from, to, readerZone, WORK_BUDGET, TIME_BUDGET);
+	}
+
+	/**
+	 * {@link #parse(byte[], Instant, Instant, ZoneId)} with other budgets for the series, so a
+	 * test can reach each limit on its own.
+	 */
+	static IcsCalendar parse(byte[] ics, Instant from, Instant to, ZoneId readerZone, long workBudget,
+			Duration timeBudget) {
 		if (ics == null || from == null || to == null || readerZone == null || !from.isBefore(to)) {
 			throw new IllegalArgumentException("a calendar, a window that is not empty and a zone are needed");
 		}
@@ -115,7 +146,8 @@ public final class IcsParser {
 		}
 		try {
 			IcsLexer.Result read = IcsLexer.read(ics, MAX_EVENTS);
-			return new Reading(read.calendar(), from, to, readerZone, read.truncated()).calendar();
+			return new Reading(read.calendar(), from, to, readerZone, read.truncated(), workBudget, timeBudget)
+					.calendar();
 		}
 		catch (IcsParseException ex) {
 			throw ex;
@@ -155,11 +187,15 @@ public final class IcsParser {
 	/**
 	 * A VEVENT, read. {@code exact} is the length DTEND gives a timed event,
 	 * {@code nominal} the one DURATION gives it, {@code days} the length of an all-day
-	 * event; RFC 5545 3.8.5.3 has each series occurrence keep the kind its master has.
+	 * event; RFC 5545 3.8.5.3 has each occurrence of a series keep its master's kind.
 	 */
 	private record Event(String uid, Stamp start, Duration exact, IcsValues.Span nominal, long days, IcsRule rule,
 			int ruleLine, List<Stamp> rdates, List<Stamp> exdates, Stamp recurrenceId, String summary, String location,
 			String description, IcsEvent.Status status, boolean transparent) {
+	}
+
+	/** An occurrence among the earliest ones kept so far, with the key it is ordered by. */
+	private record Ranked(Instant start, String uid, IcsEvent event) {
 	}
 
 	/**
@@ -168,8 +204,8 @@ public final class IcsParser {
 	 * <p>The engine's spliterator also answers "there is more" for a candidate it steps
 	 * over before the window, without handing one over. That breaks the Spliterator
 	 * contract, and Java's iterator adapter reads it as the end, so every series whose
-	 * first occurrence lay before the window came back empty. The parser calls
-	 * tryAdvance itself and looks whether something arrived.
+	 * first occurrence lay before the window came back empty. The parser calls tryAdvance
+	 * itself and looks whether something arrived.
 	 */
 	private static final class Handed<T> implements Consumer<T> {
 
@@ -187,6 +223,41 @@ public final class IcsParser {
 		}
 	}
 
+	/**
+	 * What sets a series of times apart from a series of days. The walk through the rule,
+	 * the caps and the choice of occurrences are the same for both, in
+	 * {@link Reading#expand}.
+	 */
+	private interface Series<T extends Temporal> {
+
+		/** The first occurrence, which the engine counts from. */
+		T seed();
+
+		/** Where the engine starts looking: early enough for every offset and for an occurrence that lasts into the window. */
+		T low();
+
+		/** Where the engine stops looking. */
+		T high();
+
+		/** UNTIL ends the series before any occurrence can reach the window. */
+		boolean endsBeforeWindow();
+
+		boolean afterUntil(T start);
+
+		/** DTSTART and the RDATE values, which count whatever the rule says. */
+		List<T> fixed();
+
+		/** The instant an occurrence is ordered and told apart by. */
+		Instant order(T start);
+
+		/** Struck out by EXDATE, or moved by an event of its own with a RECURRENCE-ID. */
+		boolean skipped(T start);
+
+		boolean overlaps(T start);
+
+		IcsEvent occurrence(T start);
+	}
+
 	private static final class Reading {
 
 		private final Component calendar;
@@ -194,19 +265,29 @@ public final class IcsParser {
 		private final Instant to;
 		private final ZoneId readerZone;
 		private final Zone floating;
+		private final Map<String, Component> timezones = new HashMap<>();
 		private final Map<String, Optional<Zone>> zones = new HashMap<>();
-		private final PriorityQueue<IcsEvent> latestFirst;
-		private long budget = WORK_BUDGET;
+		private final PriorityQueue<Ranked> latestFirst = new PriorityQueue<>(ORDER.reversed());
+		private final long deadline;
+		private long budget;
 		private boolean truncated;
 
-		Reading(Component calendar, Instant from, Instant to, ZoneId readerZone, boolean truncated) {
+		Reading(Component calendar, Instant from, Instant to, ZoneId readerZone, boolean truncated, long workBudget,
+				Duration timeBudget) {
 			this.calendar = calendar;
 			this.from = from;
 			this.to = to;
 			this.readerZone = readerZone;
 			this.floating = new Zone(readerZone.getRules(), readerZone, true);
 			this.truncated = truncated;
-			this.latestFirst = new PriorityQueue<>(order().reversed());
+			this.budget = workBudget;
+			this.deadline = System.nanoTime() + timeBudget.toNanos();
+			for (Component timezone : calendar.children("VTIMEZONE")) {
+				String tzid = value(timezone, "TZID");
+				if (tzid != null) {
+					timezones.putIfAbsent(normalized(tzid), timezone);
+				}
+			}
 		}
 
 		IcsCalendar calendar() {
@@ -234,10 +315,10 @@ public final class IcsParser {
 					emit(master, null);
 				}
 				else if (master.start().isDate()) {
-					days(master, moved);
+					expand(master, new Days(master, moved));
 				}
 				else {
-					times(master, moved);
+					expand(master, new Times(master, moved));
 				}
 			}
 			// A moved occurrence stands on its own times, whether or not its series is in this file.
@@ -245,9 +326,244 @@ public final class IcsParser {
 				Stamp id = override.recurrenceId();
 				emit(override, id.isDate() ? dayId(id.date()) : UTC_ID.format(id.instant()));
 			}
-			List<IcsEvent> events = new ArrayList<>(latestFirst);
-			events.sort(order());
+			List<IcsEvent> events = latestFirst.stream().sorted(ORDER).map(Ranked::event).toList();
 			return new IcsCalendar(text(calendar.first("X-WR-CALNAME"), MAX_CALENDAR_NAME), events, truncated);
+		}
+
+		// --- series ------------------------------------------------------------------------
+
+		private <T extends Temporal> void expand(Event master, Series<T> series) {
+			TreeMap<Instant, T> starts = new TreeMap<>();
+			for (T start : series.fixed()) {
+				starts.putIfAbsent(series.order(start), start);
+			}
+			IcsRule rule = master.rule();
+			if (rule != null && admit(rule) && !series.endsBeforeWindow()) {
+				walk(rule, master.ruleLine(), series, starts);
+			}
+			int kept = 0;
+			for (T start : starts.values()) {
+				if (series.skipped(start) || !series.overlaps(start)) {
+					continue;
+				}
+				if (kept == MAX_PER_SERIES) {
+					truncated = true;
+					break;
+				}
+				kept++;
+				offer(series.order(start), master.uid(), () -> series.occurrence(start));
+			}
+		}
+
+		/** Takes the rule's occurrences into [starts] until the series, the window or the calendar has had enough. */
+		private <T extends Temporal> void walk(IcsRule rule, int line, Series<T> series, TreeMap<Instant, T> starts) {
+			try {
+				Spliterator<T> dates = new Recur<T>(rule.forRecur(), false)
+						.getDatesAsStream(series.seed(), series.low(), series.high(), -1).spliterator();
+				Handed<T> handed = new Handed<>();
+				int inWindow = 0;
+				while (inWindow <= MAX_PER_SERIES && step() && dates.tryAdvance(handed)) {
+					T start = handed.take();
+					if (start == null) {
+						continue;
+					}
+					if (series.afterUntil(start)) {
+						break;
+					}
+					starts.putIfAbsent(series.order(start), start);
+					if (!series.skipped(start) && series.overlaps(start)) {
+						inWindow++;
+					}
+				}
+			}
+			catch (RuntimeException ex) {
+				throw new IcsParseException(MALFORMED, line);
+			}
+		}
+
+		/** Whether the engine may start on [rule]; a cut or a refusal marks the result as cut. */
+		private boolean admit(IcsRule rule) {
+			if (rule.shortened()) {
+				truncated = true;
+			}
+			if (!rule.expandable()) {
+				truncated = true;
+				return false;
+			}
+			return step();
+		}
+
+		/** One step of the engine: false, and the result cut, once the calendar has spent its steps or its time. */
+		private boolean step() {
+			if (budget <= 0 || System.nanoTime() - deadline > 0) {
+				truncated = true;
+				return false;
+			}
+			budget--;
+			return true;
+		}
+
+		/** A series of wall-clock times, in the zone of its DTSTART. */
+		private final class Times implements Series<LocalDateTime> {
+
+			private final Event master;
+			private final Zone zone;
+			private final Instant searchFrom;
+			private final Instant until;
+			private final Set<Instant> skippedTimes = new HashSet<>();
+			private final Set<LocalDate> skippedDays = new HashSet<>();
+
+			Times(Event master, List<Event> moved) {
+				this.master = master;
+				this.zone = master.start().zone();
+				this.searchFrom = from.minus(longest(master));
+				IcsRule rule = master.rule();
+				this.until = rule == null || rule.until() == null ? null : rule.until().instant(zone.rules());
+				List<Stamp> exceptions = new ArrayList<>(master.exdates());
+				moved.forEach(override -> exceptions.add(override.recurrenceId()));
+				for (Stamp exception : exceptions) {
+					if (exception.isDate()) {
+						skippedDays.add(exception.date());
+					}
+					else {
+						skippedTimes.add(exception.instant());
+					}
+				}
+			}
+
+			@Override
+			public LocalDateTime seed() {
+				return master.start().local();
+			}
+
+			@Override
+			public LocalDateTime low() {
+				return LocalDateTime.ofInstant(searchFrom.minus(MARGIN), ZoneOffset.UTC);
+			}
+
+			@Override
+			public LocalDateTime high() {
+				return LocalDateTime.ofInstant(to.plus(MARGIN), ZoneOffset.UTC);
+			}
+
+			@Override
+			public boolean endsBeforeWindow() {
+				return until != null && until.isBefore(searchFrom);
+			}
+
+			@Override
+			public boolean afterUntil(LocalDateTime start) {
+				return until != null && order(start).isAfter(until);
+			}
+
+			@Override
+			public List<LocalDateTime> fixed() {
+				List<LocalDateTime> starts = new ArrayList<>();
+				starts.add(master.start().local());
+				for (Stamp rdate : master.rdates()) {
+					if (rdate.isDate()) {
+						starts.add(rdate.date().atTime(master.start().local().toLocalTime()));
+					}
+					else {
+						Instant instant = rdate.instant();
+						starts.add(LocalDateTime.ofInstant(instant, zone.rules().getOffset(instant)));
+					}
+				}
+				return starts;
+			}
+
+			@Override
+			public Instant order(LocalDateTime start) {
+				return IcsZones.instant(start, zone.rules());
+			}
+
+			@Override
+			public boolean skipped(LocalDateTime start) {
+				return skippedTimes.contains(order(start)) || skippedDays.contains(start.toLocalDate());
+			}
+
+			@Override
+			public boolean overlaps(LocalDateTime start) {
+				Instant begin = order(start);
+				return Reading.this.overlaps(begin, end(master, start, begin));
+			}
+
+			@Override
+			public IcsEvent occurrence(LocalDateTime start) {
+				Instant begin = order(start);
+				return timed(master, UTC_ID.format(begin), begin, end(master, start, begin));
+			}
+		}
+
+		/** A series of whole days, placed in the reader's zone. */
+		private final class Days implements Series<LocalDate> {
+
+			private final Event master;
+			private final LocalDate low;
+			private final LocalDate until;
+			private final Set<LocalDate> skippedDays = new HashSet<>();
+
+			Days(Event master, List<Event> moved) {
+				this.master = master;
+				this.low = day(from).minusDays(master.days() + 1);
+				IcsRule rule = master.rule();
+				this.until = rule == null || rule.until() == null ? null : rule.until().day();
+				master.exdates().forEach(exdate -> skippedDays.add(exdate.day()));
+				moved.forEach(override -> skippedDays.add(override.recurrenceId().day()));
+			}
+
+			@Override
+			public LocalDate seed() {
+				return master.start().date();
+			}
+
+			@Override
+			public LocalDate low() {
+				return low;
+			}
+
+			@Override
+			public LocalDate high() {
+				return day(to).plusDays(1);
+			}
+
+			@Override
+			public boolean endsBeforeWindow() {
+				return until != null && until.isBefore(low);
+			}
+
+			@Override
+			public boolean afterUntil(LocalDate start) {
+				return until != null && start.isAfter(until);
+			}
+
+			@Override
+			public List<LocalDate> fixed() {
+				List<LocalDate> starts = new ArrayList<>();
+				starts.add(master.start().date());
+				master.rdates().forEach(rdate -> starts.add(rdate.day()));
+				return starts;
+			}
+
+			@Override
+			public Instant order(LocalDate start) {
+				return startOfDay(start);
+			}
+
+			@Override
+			public boolean skipped(LocalDate start) {
+				return skippedDays.contains(start);
+			}
+
+			@Override
+			public boolean overlaps(LocalDate start) {
+				return Reading.this.overlaps(start, start.plusDays(master.days()));
+			}
+
+			@Override
+			public IcsEvent occurrence(LocalDate start) {
+				return allDay(master, dayId(start), start, start.plusDays(master.days()));
+			}
 		}
 
 		// --- reading an event ------------------------------------------------------------
@@ -323,38 +639,24 @@ public final class IcsParser {
 		}
 
 		private Zone zone(String tzid) {
-			return zones.computeIfAbsent(tzid, this::resolve).orElse(floating);
+			return zones.computeIfAbsent(normalized(tzid), this::resolve).orElse(floating);
 		}
 
 		/** A name a table knows, else the calendar's own definition of it, else nothing: the time floats. */
-		private Optional<Zone> resolve(String tzid) {
-			Optional<ZoneId> named = IcsZones.byName(tzid);
+		private Optional<Zone> resolve(String name) {
+			Optional<ZoneId> named = IcsZones.byName(name);
 			if (named.isPresent()) {
 				return Optional.of(new Zone(named.get().getRules(), named.get(), false));
 			}
-			return IcsZoneDefinitions.rules(definition(tzid)).map(rules -> new Zone(rules, null, false));
-		}
-
-		private List<Observance> definition(String tzid) {
-			String wanted = tzid.strip();
-			Component match = null;
-			for (Component timezone : calendar.children("VTIMEZONE")) {
-				String name = value(timezone, "TZID") == null ? "" : value(timezone, "TZID").strip();
-				if (name.equals(wanted)) {
-					match = timezone;
-					break;
-				}
-				if (match == null && name.equalsIgnoreCase(wanted)) {
-					match = timezone;
-				}
+			Component definition = timezones.get(name);
+			if (definition == null) {
+				return Optional.empty();
 			}
-			if (match == null) {
-				return List.of();
-			}
-			return match.children.stream()
+			List<Observance> observances = definition.children.stream()
 					.map(block -> new Observance(block.name.equals("DAYLIGHT"), value(block, "DTSTART"),
 							value(block, "TZOFFSETFROM"), value(block, "TZOFFSETTO"), value(block, "RRULE")))
 					.toList();
+			return IcsZoneDefinitions.rules(observances).map(rules -> new Zone(rules, null, false));
 		}
 
 		// --- occurrences -----------------------------------------------------------------
@@ -364,179 +666,29 @@ public final class IcsParser {
 			if (start.isDate()) {
 				LocalDate end = start.date().plusDays(event.days());
 				if (overlaps(start.date(), end)) {
-					offer(allDay(event, recurrenceId, start.date(), end));
+					offer(startOfDay(start.date()), event.uid(), () -> allDay(event, recurrenceId, start.date(), end));
 				}
 				return;
 			}
 			Instant begin = start.instant();
 			Instant end = end(event, start.local(), begin);
 			if (overlaps(begin, end)) {
-				offer(timed(event, recurrenceId, begin, end));
+				offer(begin, event.uid(), () -> timed(event, recurrenceId, begin, end));
 			}
 		}
 
-		/** A timed series: DTSTART, RDATE and the rule's occurrences, less EXDATE and the moved ones. */
-		private void times(Event master, List<Event> moved) {
-			Zone zone = master.start().zone();
-			Set<Instant> skipped = new HashSet<>();
-			Set<LocalDate> skippedDays = new HashSet<>();
-			List<Stamp> exceptions = new ArrayList<>(master.exdates());
-			moved.forEach(override -> exceptions.add(override.recurrenceId()));
-			for (Stamp exception : exceptions) {
-				if (exception.isDate()) {
-					skippedDays.add(exception.date());
-				}
-				else {
-					skipped.add(exception.instant());
-				}
-			}
-			TreeMap<Instant, LocalDateTime> starts = new TreeMap<>();
-			starts.put(master.start().instant(), master.start().local());
-			for (Stamp rdate : master.rdates()) {
-				if (rdate.isDate()) {
-					LocalDateTime local = rdate.date().atTime(master.start().local().toLocalTime());
-					starts.put(IcsZones.instant(local, zone.rules()), local);
-				}
-				else {
-					Instant instant = rdate.instant();
-					starts.put(instant, LocalDateTime.ofInstant(instant, zone.rules().getOffset(instant)));
-				}
-			}
-			IcsRule rule = master.rule();
-			if (rule != null && admit(rule)) {
-				Instant until = rule.until() == null ? null : until(rule.until(), zone);
-				if (until == null || !until.isBefore(from)) {
-					LocalDateTime low = LocalDateTime.ofInstant(from.minus(longest(master)).minus(MARGIN), ZoneOffset.UTC);
-					LocalDateTime high = LocalDateTime.ofInstant(to.plus(MARGIN), ZoneOffset.UTC);
-					try {
-						Spliterator<LocalDateTime> dates = new Recur<LocalDateTime>(rule.forRecur(), false)
-								.getDatesAsStream(master.start().local(), low, high, -1).spliterator();
-						Handed<LocalDateTime> handed = new Handed<>();
-						int inWindow = 0;
-						while (inWindow <= MAX_PER_SERIES && dates.tryAdvance(handed)) {
-							LocalDateTime local = handed.take();
-							if (local == null) {
-								continue;
-							}
-							if (!charge(1)) {
-								break;
-							}
-							Instant start = IcsZones.instant(local, zone.rules());
-							if (until != null && start.isAfter(until)) {
-								break;
-							}
-							starts.put(start, local);
-							if (!skipped.contains(start) && !skippedDays.contains(local.toLocalDate())
-									&& overlaps(start, end(master, local, start))) {
-								inWindow++;
-							}
-						}
-					}
-					catch (RuntimeException ex) {
-						throw new IcsParseException(MALFORMED, master.ruleLine());
-					}
-				}
-			}
-			int kept = 0;
-			for (Map.Entry<Instant, LocalDateTime> occurrence : starts.entrySet()) {
-				Instant start = occurrence.getKey();
-				LocalDateTime local = occurrence.getValue();
-				Instant end = end(master, local, start);
-				if (skipped.contains(start) || skippedDays.contains(local.toLocalDate()) || !overlaps(start, end)) {
-					continue;
-				}
-				if (kept == MAX_PER_SERIES) {
-					truncated = true;
-					break;
-				}
-				kept++;
-				offer(timed(master, UTC_ID.format(start), start, end));
-			}
-		}
-
-		/** A series of days: the same as {@link #times}, counted in dates. */
-		private void days(Event master, List<Event> moved) {
-			Set<LocalDate> skipped = new HashSet<>();
-			master.exdates().forEach(exdate -> skipped.add(exdate.day()));
-			moved.forEach(override -> skipped.add(override.recurrenceId().day()));
-			TreeSet<LocalDate> starts = new TreeSet<>();
-			starts.add(master.start().date());
-			master.rdates().forEach(rdate -> starts.add(rdate.day()));
-			IcsRule rule = master.rule();
-			if (rule != null && admit(rule)) {
-				LocalDate until = rule.until() == null ? null : untilDay(rule.until());
-				LocalDate low = day(from).minusDays(master.days() + 1);
-				LocalDate high = day(to).plusDays(1);
-				if (until == null || !until.isBefore(low)) {
-					try {
-						Spliterator<LocalDate> dates = new Recur<LocalDate>(rule.forRecur(), false)
-								.getDatesAsStream(master.start().date(), low, high, -1).spliterator();
-						Handed<LocalDate> handed = new Handed<>();
-						int inWindow = 0;
-						while (inWindow <= MAX_PER_SERIES && dates.tryAdvance(handed)) {
-							LocalDate date = handed.take();
-							if (date == null) {
-								continue;
-							}
-							if (!charge(1)) {
-								break;
-							}
-							if (until != null && date.isAfter(until)) {
-								break;
-							}
-							starts.add(date);
-							if (!skipped.contains(date) && overlaps(date, date.plusDays(master.days()))) {
-								inWindow++;
-							}
-						}
-					}
-					catch (RuntimeException ex) {
-						throw new IcsParseException(MALFORMED, master.ruleLine());
-					}
-				}
-			}
-			int kept = 0;
-			for (LocalDate date : starts) {
-				LocalDate end = date.plusDays(master.days());
-				if (skipped.contains(date) || !overlaps(date, end)) {
-					continue;
-				}
-				if (kept == MAX_PER_SERIES) {
-					truncated = true;
-					break;
-				}
-				kept++;
-				offer(allDay(master, dayId(date), date, end));
-			}
-		}
-
-		/** Whether the engine may expand [rule]; a cut or a refusal marks the result as cut. */
-		private boolean admit(IcsRule rule) {
-			if (rule.shortened()) {
+		/** Keeps the earliest occurrences of the window; [occurrence] is built only when it is kept. */
+		private void offer(Instant start, String uid, Supplier<IcsEvent> occurrence) {
+			if (latestFirst.size() == MAX_OCCURRENCES) {
 				truncated = true;
-			}
-			if (!rule.expandable()) {
-				truncated = true;
-				return false;
-			}
-			return charge(rule.count() == null ? 0 : rule.count());
-		}
-
-		private boolean charge(long steps) {
-			if (steps > budget) {
-				truncated = true;
-				return false;
-			}
-			budget -= steps;
-			return true;
-		}
-
-		private void offer(IcsEvent occurrence) {
-			latestFirst.offer(occurrence);
-			if (latestFirst.size() > MAX_OCCURRENCES) {
+				Ranked latest = latestFirst.peek();
+				int order = start.compareTo(latest.start());
+				if (order > 0 || order == 0 && uid.compareTo(latest.uid()) >= 0) {
+					return;
+				}
 				latestFirst.poll();
-				truncated = true;
 			}
+			latestFirst.offer(new Ranked(start, uid, occurrence.get()));
 		}
 
 		/** The window holds the start of a moment, or some part of something that lasts. */
@@ -548,25 +700,15 @@ public final class IcsParser {
 		}
 
 		private boolean overlaps(LocalDate start, LocalDate end) {
-			return start.atStartOfDay(readerZone).toInstant().isBefore(to)
-					&& end.atStartOfDay(readerZone).toInstant().isAfter(from);
+			return startOfDay(start).isBefore(to) && startOfDay(end).isAfter(from);
+		}
+
+		private Instant startOfDay(LocalDate date) {
+			return date.atStartOfDay(readerZone).toInstant();
 		}
 
 		private LocalDate day(Instant instant) {
 			return instant.atZone(readerZone).toLocalDate();
-		}
-
-		private Comparator<IcsEvent> order() {
-			return Comparator.comparing(this::startOf)
-					.thenComparing(IcsEvent::uid)
-					.thenComparing(event -> event.recurrenceId() == null ? "" : event.recurrenceId());
-		}
-
-		private Instant startOf(IcsEvent event) {
-			return switch (event) {
-				case IcsEvent.Timed timed -> timed.start();
-				case IcsEvent.AllDay day -> day.start().atStartOfDay(readerZone).toInstant();
-			};
 		}
 
 		private static IcsEvent.Timed timed(Event event, String recurrenceId, Instant start, Instant end) {
@@ -580,7 +722,7 @@ public final class IcsParser {
 					event.description(), event.status(), event.transparent());
 		}
 
-		// --- lengths and bounds ------------------------------------------------------------
+		// --- lengths ---------------------------------------------------------------------
 
 		private static Duration exact(Stamp start, Stamp end) {
 			Instant last = end.isDate() ? IcsZones.instant(end.date().atStartOfDay(), start.zone().rules()) : end.instant();
@@ -620,20 +762,7 @@ public final class IcsParser {
 			return Duration.ZERO;
 		}
 
-		/** The last instant UNTIL allows. A date allows its whole day. */
-		private static Instant until(String until, Zone zone) {
-			if (until.length() == 8) {
-				return IcsZones.instant(IcsValues.date(until).plusDays(1).atStartOfDay(), zone.rules()).minusNanos(1);
-			}
-			LocalDateTime local = IcsValues.dateTime(until);
-			return IcsValues.isUtc(until) ? local.toInstant(ZoneOffset.UTC) : IcsZones.instant(local, zone.rules());
-		}
-
-		private static LocalDate untilDay(String until) {
-			return until.length() == 8 ? IcsValues.date(until) : IcsValues.dateTime(until).toLocalDate();
-		}
-
-		// --- text --------------------------------------------------------------------------
+		// --- text ----------------------------------------------------------------------------
 
 		private static String uid(Component vevent) {
 			String uid = text(vevent.first("UID"), MAX_UID);
@@ -677,6 +806,11 @@ public final class IcsParser {
 		private static String value(Component component, String property) {
 			Property found = component.first(property);
 			return found == null ? null : found.value();
+		}
+
+		/** A TZID as it is looked up: calendars are not consistent about case or spaces. */
+		private static String normalized(String tzid) {
+			return tzid.strip().toLowerCase(Locale.ROOT);
 		}
 
 		private static String dayId(LocalDate date) {
