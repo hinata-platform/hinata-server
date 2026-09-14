@@ -57,13 +57,8 @@ public class BrandLogoService {
 	 */
 	private static final Duration EXTERNAL_TTL = Duration.ofMinutes(15);
 
-	/**
-	 * Logos are branding, not photographs. The upload path already normalizes to
-	 * {@value OrganizationLogoService#MAX_EDGE}px; this caps the external path so
-	 * one hostile (or merely careless) URL cannot park tens of megabytes in the
-	 * cache of a process that also serves the API.
-	 */
-	private static final int MAX_DISPLAY_BYTES = 5 * 1024 * 1024;
+	/** How soon a logo whose host did not answer is asked again; its last bytes are served meanwhile. */
+	private static final Duration RETRY_AFTER = Duration.ofMinutes(1);
 
 	private final SettingsService settings;
 	private final OrganizationLogoService logoService;
@@ -72,11 +67,17 @@ public class BrandLogoService {
 	/**
 	 * Everything derived from one {@code logoUrl}, swapped atomically. Fields are
 	 * {@code null} when that particular rendition does not exist (no logo at all,
-	 * or an SVG that cannot be rasterized) — resolved once, so a failing external
-	 * host is not retried on every consumer for the whole TTL.
+	 * or an SVG that cannot be rasterized). Resolved once, so a failing external host
+	 * is not asked on every consumer; one that fails after it has answered keeps its
+	 * last bytes and is asked again after {@link #RETRY_AFTER}.
 	 */
 	private record Snapshot(String key, String organization, BrandAsset display, byte[] raster,
 			java.util.Map<String, java.util.Optional<byte[]>> bands, Instant at) {
+
+		/** The same renditions, counted as fetched at [at]. */
+		Snapshot refreshedAt(Instant at) {
+			return new Snapshot(key, organization, display, raster, bands, at);
+		}
 	}
 
 	private volatile Snapshot cache;
@@ -187,6 +188,13 @@ public class BrandLogoService {
 				return current;
 			}
 			Snapshot derived = derive(key);
+			if (derived.display() == null && current != null && java.util.Objects.equals(current.key(), key)
+					&& current.display() != null) {
+				// The host did not answer this time. Serving nothing would take the logo out
+				// of the app, the mails and the exports for a whole TTL, so the last bytes
+				// stay and the next attempt comes after RETRY_AFTER.
+				derived = current.refreshedAt(Instant.now().minus(EXTERNAL_TTL).plus(RETRY_AFTER));
+			}
 			cache = derived;
 			return derived;
 		}
@@ -246,16 +254,10 @@ public class BrandLogoService {
 								stored.contentType() == null ? "image/png" : stored.contentType(), true))
 						.orElse(null);
 			}
-			// External: goes through the SSRF-hardened fetcher — http(s) only, every
-			// resolved address checked as public unicast, redirects re-validated per
-			// hop, content type allow-listed and the body read under a hard cap.
-			StorageService.StoredObject fetched =
-					fetcher.fetch(url, ExternalImageFetcher.DISPLAY_TYPES);
-			if (fetched.data().length > MAX_DISPLAY_BYTES) {
-				log.warn("Organization logo at {} is {} bytes; ignoring it",
-						sanitize(url), fetched.data().length);
-				return null;
-			}
+			// External: through the fetcher's logo lane, which checks the address,
+			// connects only to what it checked, takes display types only and reads at
+			// most 5 MB.
+			StorageService.StoredObject fetched = fetcher.fetchLogo(url);
 			return new BrandAsset(fetched.data(), fetched.contentType(), false);
 		}
 		catch (Exception ex) {
