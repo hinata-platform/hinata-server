@@ -191,8 +191,9 @@ class ModuleBoundaryTest {
 
 	@Test
 	void readingACalendarNeedsNoApplicationContext() {
-		// The parser is a pure function, like TeamAccess. Spring and the
-		// configuration come in at the fetcher and the cipher, and nowhere else.
+		// The parser needs no application context and keeps no state between calls.
+		// Spring and the configuration come in at the fetcher and the cipher, and
+		// nowhere else.
 		noClasses()
 				.that().resideInAPackage("..ics..")
 				.and().doNotHaveSimpleName("IcsFetcher")
