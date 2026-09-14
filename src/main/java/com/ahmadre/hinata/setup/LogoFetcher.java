@@ -1,4 +1,4 @@
-package com.ahmadre.hinata.media;
+package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.CappedBody;
@@ -52,14 +52,14 @@ import java.util.concurrent.TimeUnit;
  *       whole fetch, lookups and redirects included, has {@link #TIMEOUT}.</li>
  * </ul>
  *
- * <p>Pasted images used to come through here too, over {@code /api/v1/media/proxy}.
- * No client has called that since the app renders them itself (HIN-12), so the route
- * is gone, and with it a way for signed-in people to make this server fetch whatever
- * they like at a rate of their choosing.
+ * <p>Only for the logo. Pasted images used to come through here over
+ * {@code /api/v1/media/proxy}; no client has called that since the app draws them
+ * itself (HIN-12), so the route is gone. Fetching addresses that signed-in people
+ * choose would need limits per person this class does not have.
  */
 @Slf4j
 @Component
-public class ExternalImageFetcher implements DisposableBean {
+public class LogoFetcher implements DisposableBean {
 
 	/** A logo is branding, not a photograph. */
 	private static final long MAX_BYTES = 5L * 1024 * 1024;
@@ -75,19 +75,17 @@ public class ExternalImageFetcher implements DisposableBean {
 	static final Duration TIMEOUT = Duration.ofSeconds(25);
 
 	/**
-	 * Raster images only; {@code image/svg+xml} is excluded. This is the set every
-	 * caller that will <em>decode</em> the bytes must check against: an SVG is a
-	 * document, not a bitmap, and no decoder in this process should ever be pointed
-	 * at one.
+	 * Raster images only; {@code image/svg+xml} is excluded. Whoever <em>decodes</em>
+	 * the logo checks against this set first: an SVG is a document, not a bitmap, and
+	 * no decoder in this process should ever be pointed at one.
 	 */
-	public static final Set<String> RASTER_TYPES =
+	static final Set<String> RASTER_TYPES =
 			Set.of("image/png", "image/jpeg", "image/gif", "image/webp");
 
 	/**
 	 * {@link #RASTER_TYPES} plus the vector and icon types a browser renders safely.
 	 * The logo's bytes go straight to a client under a locked-down CSP, see
-	 * {@code MetaController#logo()}; whoever draws it here checks
-	 * {@link #RASTER_TYPES} first.
+	 * {@code MetaController#logo()}.
 	 */
 	private static final Set<String> DISPLAY_TYPES = Set.of("image/png", "image/jpeg",
 			"image/gif", "image/webp", "image/svg+xml", "image/avif", "image/x-icon",
@@ -97,12 +95,12 @@ public class ExternalImageFetcher implements DisposableBean {
 	private final PublicDns dns;
 	private final OkHttpClient client;
 
-	public ExternalImageFetcher() {
+	public LogoFetcher() {
 		this(PublicDns.Resolver.SYSTEM, null, TIMEOUT);
 	}
 
 	/** For tests: [sockets] replaces the platform's sockets unless it is null. */
-	ExternalImageFetcher(PublicDns.Resolver resolver, SocketFactory sockets, Duration timeout) {
+	LogoFetcher(PublicDns.Resolver resolver, SocketFactory sockets, Duration timeout) {
 		this.timeout = timeout;
 		this.dns = new PublicDns("logo-lookup", resolver, LOOKUP_TIMEOUT);
 		OkHttpClient.Builder builder = dns.clientBuilder()
@@ -116,7 +114,7 @@ public class ExternalImageFetcher implements DisposableBean {
 	}
 
 	/**
-	 * The organization logo at [rawUrl], raster or vector. For {@code BrandLogoService},
+	 * The organization logo at [rawUrl], raster or vector. For {@link BrandLogoService},
 	 * which fetches it once at a time and keeps it.
 	 *
 	 * @throws ApiException 400 for an address that may not be fetched and for an answer
