@@ -17,12 +17,22 @@ import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_MANY_COMPONENT
 /**
  * Reads the bytes of a calendar into components and properties, and does nothing else.
  *
- * <p>Every limit applies while reading, before anything is built from what was read:
- * the length of an unfolded line, how deep components nest, how many there are, how
- * many events are kept. What the parser has no use for (a VALARM, a VTODO, an
- * X-property, an ATTACH) is read past without keeping any of it, so it can neither
- * fill memory nor fail the calendar. Lines may end in CRLF or in LF alone; both
- * occur in real feeds.
+ * <p>Every limit applies while reading, before anything is built from what was read.
+ * What the parser has no use for is read past without keeping any of it: a VALARM, a
+ * VTODO, an X-property, an ATTACH, every parameter but VALUE and TZID, and a second
+ * SUMMARY or DTSTART in the same event. None of that can fill memory or fail the
+ * calendar. Lines may end in CRLF or in LF alone; both occur in real feeds.
+ *
+ * <p>Some limits cut and some refuse, and whoever shows the result needs to know which:
+ *
+ * <ul>
+ * <li><b>Cut</b>, and the result says so: events after the first {@code maxEvents}.</li>
+ * <li><b>Refused</b> with an {@link IcsParseException}: more than
+ * {@link #MAX_COMPONENTS} components of any kind, nesting deeper than
+ * {@link #MAX_DEPTH}, an unfolded line longer than {@link #MAX_LINE} that the parser would
+ * read, more than {@link #MAX_REPEATED} RDATE or EXDATE lines in one event, and a
+ * structure that does not close.</li>
+ * </ul>
  */
 final class IcsLexer {
 
@@ -37,8 +47,10 @@ final class IcsLexer {
 	/** Components of any kind, kept or not. */
 	static final int MAX_COMPONENTS = 20_000;
 
+	/** RDATE and EXDATE lines in one event; the parser allows as many values. */
+	static final int MAX_REPEATED = 10_000;
+
 	private static final int MAX_NAME = 64;
-	private static final int MAX_PARAMETERS = 32;
 	private static final int MAX_TIMEZONES = 100;
 	private static final int MAX_OBSERVANCES = 50;
 
@@ -54,10 +66,16 @@ final class IcsLexer {
 			"STANDARD", Set.of("DTSTART", "TZOFFSETFROM", "TZOFFSETTO", "RRULE"),
 			"DAYLIGHT", Set.of("DTSTART", "TZOFFSETFROM", "TZOFFSETTO", "RRULE"));
 
+	/** The properties a component may hold more than once; of every other one only the first is kept. */
+	private static final Set<String> REPEATED = Set.of("RDATE", "EXDATE");
+
+	/** The only parameters the parser reads. */
+	private static final Set<String> PARAMETERS = Set.of("VALUE", "TZID");
+
 	private IcsLexer() {
 	}
 
-	/** A property as written: its name and parameter names upper-cased, parameter quotes removed, the value untouched. */
+	/** A property as written: its name upper-cased, VALUE and TZID without quotes, the value untouched. */
 	record Property(String name, Map<String, String> parameters, String value, int line) {
 
 		String parameter(String parameter) {
@@ -71,6 +89,9 @@ final class IcsLexer {
 		final String name;
 		final List<Property> properties = new ArrayList<>();
 		final List<Component> children = new ArrayList<>();
+
+		/** How often each kept name occurred, the ones read past included. */
+		private final Map<String, Integer> occurrences = new HashMap<>();
 
 		Component(String name) {
 			this.name = name;
@@ -203,7 +224,11 @@ final class IcsLexer {
 			if (wanted == null || !wanted.contains(name)) {
 				return;
 			}
-			if (overlong) {
+			int occurrence = current.kept().occurrences.merge(name, 1, Integer::sum);
+			if (!REPEATED.contains(name) && occurrence > 1) {
+				return;
+			}
+			if (occurrence > MAX_REPEATED || overlong) {
 				throw malformed();
 			}
 			current.kept().properties.add(property(name, content));
@@ -212,7 +237,7 @@ final class IcsLexer {
 		/** NAME *(";" PARAM "=" VALUE *("," VALUE)) ":" VALUE, parameter values quoted or not. */
 		private Property property(String name, String content) {
 			int at = name.length();
-			Map<String, String> parameters = new HashMap<>();
+			Map<String, String> parameters = new HashMap<>(4);
 			while (at < content.length() && content.charAt(at) == ';') {
 				int nameStart = ++at;
 				while (at < content.length() && isNameChar(content.charAt(at))) {
@@ -222,7 +247,8 @@ final class IcsLexer {
 					throw malformed();
 				}
 				String parameter = content.substring(nameStart, at).toUpperCase(Locale.ROOT);
-				StringBuilder value = new StringBuilder();
+				StringBuilder value = PARAMETERS.contains(parameter) && !parameters.containsKey(parameter)
+						? new StringBuilder() : null;
 				do {
 					at++;
 					if (at < content.length() && content.charAt(at) == '"') {
@@ -230,7 +256,9 @@ final class IcsLexer {
 						if (close < 0) {
 							throw malformed();
 						}
-						value.append(content, at + 1, close);
+						if (value != null) {
+							value.append(content, at + 1, close);
+						}
 						at = close + 1;
 					}
 					else {
@@ -238,14 +266,16 @@ final class IcsLexer {
 						while (at < content.length() && ";:,\"".indexOf(content.charAt(at)) < 0) {
 							at++;
 						}
-						value.append(content, start, at);
+						if (value != null) {
+							value.append(content, start, at);
+						}
 					}
-					if (at < content.length() && content.charAt(at) == ',') {
+					if (value != null && at < content.length() && content.charAt(at) == ',') {
 						value.append(',');
 					}
 				} while (at < content.length() && content.charAt(at) == ',');
-				if (parameters.size() < MAX_PARAMETERS) {
-					parameters.putIfAbsent(parameter, value.toString());
+				if (value != null) {
+					parameters.put(parameter, value.toString());
 				}
 			}
 			if (at >= content.length() || content.charAt(at) != ':') {

@@ -16,27 +16,32 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
- * The rules of a time zone a calendar defines for itself in a VTIMEZONE block, for
- * the zone names no table knows ({@code Mitteleuropäische Zeit}, {@code Customized
- * Time Zone}).
+ * The rules of a time zone a calendar defines for itself in a VTIMEZONE block, for the
+ * zone names no table knows ({@code Mitteleuropäische Zeit}, {@code Customized Time
+ * Zone}).
  *
  * <p>What calendars write there is narrow: a STANDARD and a DAYLIGHT block, each
- * recurring yearly on one weekday of one month ("the last Sunday of March"). That
- * shape maps exactly onto java.time's {@link ZoneOffsetTransitionRule}, and the
- * result is a {@link ZoneRules} object of its own, registered nowhere. The newest
- * block of each kind is the rule in force; older blocks are history.
+ * recurring yearly on one weekday of one month ("the last Sunday of March"). That shape
+ * maps exactly onto java.time's {@link ZoneOffsetTransitionRule}, and the result is a
+ * {@link ZoneRules} object of its own, registered nowhere. The newest block of each kind
+ * is the rule in force; older blocks are history.
  *
- * <p>Anything else (no DAYLIGHT block, a rule on a day of the month, a rule that
- * ends) falls back to the standard offset of the newest block. That is an hour off
- * in summer at worst, and never a walk over the four hundred years of onsets an
- * observance starting in 1601 describes.
+ * <p>This is deliberately not {@link IcsRule}: an event's RRULE may be anything RFC 5545
+ * allows and has to be checked for what it costs, while a block here is either exactly
+ * this one shape or of no use. Anything else (no DAYLIGHT block, a rule on a day of the
+ * month, a rule that ends, a block that cannot be read) falls back to the standard
+ * offset of the newest block. That is an hour off in summer at worst, and never a walk
+ * over the four hundred years of onsets an observance starting in 1601 describes.
  */
 final class IcsZoneDefinitions {
 
 	/** The year the yearly rules are anchored in; java.time applies them only after an explicit transition. */
 	private static final int ANCHOR_YEAR = 1900;
+
+	private static final int MAX_RULE = 128;
 
 	private static final Pattern WEEKDAY = Pattern.compile("([+-]?[1-5])(MO|TU|WE|TH|FR|SA|SU)");
 
@@ -63,17 +68,24 @@ final class IcsZoneDefinitions {
 		if (standardOffset.equals(daylight.offsetTo()) || toSummer.isEmpty() || toWinter.isEmpty()) {
 			return Optional.of(ZoneRules.of(standardOffset));
 		}
-		List<ZoneOffsetTransitionRule> rules = java.util.stream.Stream.of(toSummer.get(), toWinter.get())
-				.sorted(Comparator.comparingInt(IcsZoneDefinitions::placeInYear))
-				.toList();
-		ZoneOffsetTransition anchor = rules.get(0).createTransition(ANCHOR_YEAR);
-		return Optional.of(ZoneRules.of(standardOffset, anchor.getOffsetBefore(), List.of(), List.of(anchor), rules));
+		try {
+			List<ZoneOffsetTransitionRule> rules = Stream.of(toSummer.get(), toWinter.get())
+					.sorted(Comparator.comparingInt(IcsZoneDefinitions::placeInYear))
+					.toList();
+			ZoneOffsetTransition anchor = rules.get(0).createTransition(ANCHOR_YEAR);
+			return Optional.of(ZoneRules.of(standardOffset, anchor.getOffsetBefore(), List.of(), List.of(anchor), rules));
+		}
+		catch (IllegalArgumentException | DateTimeException ex) {
+			// Blocks that contradict each other, such as a change from an offset to itself.
+			return Optional.of(ZoneRules.of(standardOffset));
+		}
 	}
 
 	private static Readable newest(List<Observance> observances, boolean daylight) {
 		Readable newest = null;
 		for (Observance observance : observances) {
-			if (observance.daylight() != daylight) {
+			if (observance.daylight() != daylight || observance.start() == null || observance.offsetFrom() == null
+					|| observance.offsetTo() == null) {
 				continue;
 			}
 			try {
@@ -84,7 +96,7 @@ final class IcsZoneDefinitions {
 					newest = readable;
 				}
 			}
-			catch (DateTimeException | NullPointerException ex) {
+			catch (DateTimeException ex) {
 				// An unreadable block describes nothing; the others may still.
 			}
 		}
@@ -93,14 +105,14 @@ final class IcsZoneDefinitions {
 
 	/** "FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU" and nothing more, as a java.time rule. */
 	private static Optional<ZoneOffsetTransitionRule> yearly(Readable observance, ZoneOffset standardOffset) {
-		if (observance.rrule() == null || observance.rrule().length() > 128) {
+		if (observance.rrule() == null || observance.rrule().length() > MAX_RULE) {
 			return Optional.empty();
 		}
 		Map<String, String> parts = new HashMap<>();
 		for (String part : observance.rrule().toUpperCase(Locale.ROOT).split(";")) {
 			int equals = part.indexOf('=');
-			if (equals > 0) {
-				parts.put(part.substring(0, equals).strip(), part.substring(equals + 1).strip());
+			if (equals > 0 && parts.put(part.substring(0, equals).strip(), part.substring(equals + 1).strip()) != null) {
+				return Optional.empty();
 			}
 		}
 		parts.remove("WKST");
@@ -109,23 +121,22 @@ final class IcsZoneDefinitions {
 		}
 		parts.remove("INTERVAL");
 		Matcher weekday = WEEKDAY.matcher(parts.getOrDefault("BYDAY", ""));
-		String month = parts.getOrDefault("BYMONTH", "");
-		if (parts.size() != 3 || !"YEARLY".equals(parts.get("FREQ")) || !weekday.matches() || !month.matches("\\d{1,2}")
-				|| Integer.parseInt(month) < 1 || Integer.parseInt(month) > 12) {
+		String monthText = parts.getOrDefault("BYMONTH", "");
+		if (parts.size() != 3 || !"YEARLY".equals(parts.get("FREQ")) || !weekday.matches() || !monthText.matches("\\d{1,2}")) {
 			return Optional.empty();
 		}
+		int month = Integer.parseInt(monthText);
 		int ordinal = Integer.parseInt(weekday.group(1));
-		if (ordinal <= -5) {
+		if (month < 1 || month > 12 || ordinal <= -5) {
 			// Five weekdays back from the end of a month is further than java.time counts.
 			return Optional.empty();
 		}
 		// java.time counts "on or after" a day of the month, or "on or before" one counted
 		// from its end. A fifth weekday is how Windows says "the last one".
 		int dayIndicator = ordinal >= 5 ? -1 : ordinal > 0 ? 1 + (ordinal - 1) * 7 : -1 + (ordinal + 1) * 7;
-		return Optional.of(ZoneOffsetTransitionRule.of(Month.of(Integer.parseInt(month)), dayIndicator,
-				dayOfWeek(weekday.group(2)), observance.start().toLocalTime(), false,
-				ZoneOffsetTransitionRule.TimeDefinition.WALL, standardOffset, observance.offsetFrom(),
-				observance.offsetTo()));
+		return Optional.of(ZoneOffsetTransitionRule.of(Month.of(month), dayIndicator, dayOfWeek(weekday.group(2)),
+				observance.start().toLocalTime(), false, ZoneOffsetTransitionRule.TimeDefinition.WALL, standardOffset,
+				observance.offsetFrom(), observance.offsetTo()));
 	}
 
 	private static int placeInYear(ZoneOffsetTransitionRule rule) {
