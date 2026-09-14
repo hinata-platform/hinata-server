@@ -6,6 +6,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.ThrowableProxyUtil;
 import ch.qos.logback.core.read.ListAppender;
+import com.ahmadre.hinata.common.PreparedAnswers;
+import com.ahmadre.hinata.common.PublicDns;
+import com.ahmadre.hinata.common.RemappedSockets;
 import com.ahmadre.hinata.config.HinataProperties;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -21,19 +24,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
-import javax.net.SocketFactory;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -41,7 +39,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.stream.Stream;
@@ -90,8 +87,8 @@ class IcsFetcherTest {
 
 	private final List<IcsFetcher> fetchers = new ArrayList<>();
 	private MockWebServer server;
-	private Remap sockets;
-	private Answers answers;
+	private RemappedSockets sockets;
+	private PreparedAnswers answers;
 	private HinataProperties.Ics config;
 
 	@BeforeEach
@@ -99,8 +96,8 @@ class IcsFetcherTest {
 		server = new MockWebServer();
 		server.useHttps(serverCertificate(HOST), false);
 		server.start();
-		sockets = new Remap(new InetSocketAddress(InetAddress.getByName(server.getHostName()), server.getPort()));
-		answers = new Answers(new InetAddress[] { PUBLIC });
+		sockets = new RemappedSockets(new InetSocketAddress(InetAddress.getByName(server.getHostName()), server.getPort()));
+		answers = new PreparedAnswers(new InetAddress[] { PUBLIC });
 		config = new HinataProperties.Ics();
 	}
 
@@ -132,25 +129,25 @@ class IcsFetcherTest {
 	void connectsToTheAddressItCheckedAndAsksOnlyOnce() {
 		// DNS rebinding: a public answer for the check, a loopback one for the
 		// connection. There is no second question for it to answer.
-		answers = new Answers(new InetAddress[] { PUBLIC }, new InetAddress[] { LOOPBACK });
+		answers = new PreparedAnswers(new InetAddress[] { PUBLIC }, new InetAddress[] { LOOPBACK });
 		server.enqueue(calendar());
 
 		IcsFetchResult result = fetch(FEED);
 
 		assertThat(result.outcome()).isEqualTo(FETCHED);
 		assertThat(answers.calls()).isEqualTo(1);
-		assertThat(sockets.requested).containsExactly(new InetSocketAddress(PUBLIC, 443));
+		assertThat(sockets.requested()).containsExactly(new InetSocketAddress(PUBLIC, 443));
 	}
 
 	@Test
 	void refusesAHostWithAnyAddressOffThePublicInternetBeforeConnecting() {
 		for (InetAddress[] answer : List.of(new InetAddress[] { PRIVATE },
 				new InetAddress[] { PUBLIC, PRIVATE }, new InetAddress[] { METADATA })) {
-			answers = new Answers(answer);
+			answers = new PreparedAnswers(answer);
 
 			assertThat(fetch(FEED).error()).isEqualTo(HOST_NOT_ALLOWED);
 		}
-		assertThat(sockets.requested).isEmpty();
+		assertThat(sockets.requested()).isEmpty();
 		assertThat(server.getRequestCount()).isZero();
 	}
 
@@ -166,7 +163,7 @@ class IcsFetcherTest {
 			assertThat(fetch(url).error()).as(url).isEqualTo(HOST_NOT_ALLOWED);
 		}
 		assertThat(answers.calls()).isZero();
-		assertThat(sockets.requested).isEmpty();
+		assertThat(sockets.requested()).isEmpty();
 	}
 
 	@Test
@@ -181,7 +178,7 @@ class IcsFetcherTest {
 		server.enqueue(calendar());
 		assertThat(fetch("webcal://" + HOST + "/feed.ics").outcome()).isEqualTo(FETCHED);
 		assertThat(fetch("https://" + HOST + ":8443/feed.ics").outcome()).isEqualTo(FETCHED);
-		assertThat(sockets.requested)
+		assertThat(sockets.requested())
 				.containsExactly(new InetSocketAddress(PUBLIC, 443), new InetSocketAddress(PUBLIC, 8443));
 	}
 
@@ -236,7 +233,7 @@ class IcsFetcherTest {
 	@Test
 	void givesUpOnALookupThatNeverAnswers() {
 		CountDownLatch never = new CountDownLatch(1);
-		IcsFetcher.Resolver hanging = host -> {
+		PublicDns.Resolver hanging = host -> {
 			await(never);
 			return new InetAddress[] { PUBLIC };
 		};
@@ -365,10 +362,10 @@ class IcsFetcherTest {
 		assertThat(fetch(FEED).error()).isEqualTo(HOST_NOT_ALLOWED);
 
 		config.setAllowedHosts(List.of("*.test"));
-		answers = new Answers(new InetAddress[] { PRIVATE });
+		answers = new PreparedAnswers(new InetAddress[] { PRIVATE });
 		assertThat(fetch(FEED).error()).isEqualTo(HOST_NOT_ALLOWED);
 
-		answers = new Answers(new InetAddress[] { PUBLIC });
+		answers = new PreparedAnswers(new InetAddress[] { PUBLIC });
 		server.enqueue(calendar());
 		assertThat(fetch(FEED).outcome()).isEqualTo(FETCHED);
 	}
@@ -407,7 +404,7 @@ class IcsFetcherTest {
 			results.add(fetch(secretUrl));
 			results.add(fetcher(answers, Duration.ofMillis(500), IcsFetcher.pool("test", 1, 1))
 					.fetch(secretUrl, null, null).join());
-			answers = new Answers(new InetAddress[] { PRIVATE });
+			answers = new PreparedAnswers(new InetAddress[] { PRIVATE });
 			results.add(fetch(secretUrl));
 			results.add(fetch("https://ada:" + TOKEN + "@" + HOST + "/feed.ics"));
 			results.add(fetch("http://" + HOST + "/feed.ics?token=" + TOKEN));
@@ -428,7 +425,7 @@ class IcsFetcherTest {
 		return fetcher(answers, IcsFetcher.TIMEOUT, IcsFetcher.pool("test", 2, 4));
 	}
 
-	private IcsFetcher fetcher(IcsFetcher.Resolver resolver, Duration timeout, ExecutorService executor) {
+	private IcsFetcher fetcher(PublicDns.Resolver resolver, Duration timeout, ExecutorService executor) {
 		HandshakeCertificates trust = new HandshakeCertificates.Builder()
 				.addTrustedCertificate(AUTHORITY.certificate())
 				.build();
@@ -528,68 +525,5 @@ class IcsFetcherTest {
 					+ (thrown == null ? "" : " " + ThrowableProxyUtil.asString(thrown));
 		});
 		return Stream.concat(logback, julLines.stream()).toList();
-	}
-
-	/** Connects every socket to the local server, and notes the address the fetcher asked for. */
-	private static final class Remap extends SocketFactory {
-
-		private final InetSocketAddress server;
-		private final List<InetSocketAddress> requested = new CopyOnWriteArrayList<>();
-
-		Remap(InetSocketAddress server) {
-			this.server = server;
-		}
-
-		@Override
-		public Socket createSocket() {
-			return new Socket() {
-				@Override
-				public void connect(SocketAddress endpoint, int timeout) throws IOException {
-					requested.add((InetSocketAddress) endpoint);
-					super.connect(server, timeout);
-				}
-			};
-		}
-
-		@Override
-		public Socket createSocket(String host, int port) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public Socket createSocket(String host, int port, InetAddress localHost, int localPort) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public Socket createSocket(InetAddress host, int port) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort) {
-			throw new UnsupportedOperationException();
-		}
-	}
-
-	/** Prepared answers in order, the last one repeated, and a count of the questions. */
-	private static final class Answers implements IcsFetcher.Resolver {
-
-		private final Deque<InetAddress[]> queue = new ArrayDeque<>();
-		private final AtomicInteger calls = new AtomicInteger();
-
-		Answers(InetAddress[]... answers) {
-			queue.addAll(List.of(answers));
-		}
-
-		@Override
-		public synchronized InetAddress[] resolve(String host) {
-			calls.incrementAndGet();
-			return queue.size() > 1 ? queue.poll() : queue.peek();
-		}
-
-		int calls() {
-			return calls.get();
-		}
 	}
 }

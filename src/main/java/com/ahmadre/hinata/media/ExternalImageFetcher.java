@@ -1,31 +1,30 @@
 package com.ahmadre.hinata.media;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.CappedBody;
 import com.ahmadre.hinata.common.PublicAddresses;
+import com.ahmadre.hinata.common.PublicDns;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.Call;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.stereotype.Component;
 
-import java.io.ByteArrayOutputStream;
+import javax.net.SocketFactory;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.InetAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.UnknownHostException;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Set;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Fetches an external image URL <b>server-side</b> so the browser can render it
- * without hitting cross-origin (CORS) failures — Flutter web's CanvasKit taints
+ * without hitting cross-origin (CORS) failures. Flutter web's CanvasKit taints
  * on a cross-origin {@code <img>} and silently drops it, so images pasted by URL
  * never appear. The bytes are proxied back through our own origin instead.
  *
@@ -37,41 +36,37 @@ import java.util.concurrent.TimeUnit;
  *       {@link PublicAddresses} defines it: loopback, link-local and the cloud
  *       metadata IP, private and CGNAT ranges, unique-local IPv6, multicast,
  *       wildcard and the IPv6 forms that wrap one of them are all rejected;</li>
+ *   <li>the connection goes to exactly the addresses that were checked
+ *       ({@link PublicDns}), so a rebinding DNS server gets no second question,
+ *       and no proxy or pooled connection sits in between;</li>
+ *   <li>a host written as an address is checked here before the request, because
+ *       OkHttp connects to it without a lookup, and only its plain spelling is
+ *       taken: {@code 127.1}, {@code 2130706433} and {@code .} are refused;</li>
  *   <li>redirects are followed manually (max {@value #MAX_REDIRECTS}) so each
- *       hop's host is re-validated — an allowed host can't 302 to an internal
+ *       hop's host is checked again, and an allowed host can't 302 to an internal
  *       one;</li>
- *   <li>the response must be an allow-listed raster image type (SVG excluded —
- *       it can carry script);</li>
- *   <li>the body is read with a hard {@value #MAX_BYTES}-byte cap <em>and</em> its
- *       own deadline — the request timeout does not cover it, see
- *       {@link #readCapped}.</li>
+ *   <li>the response must be an allow-listed image type (see {@link #RASTER_TYPES});</li>
+ *   <li>the body is read against a hard 10 MB cap ({@link CappedBody}), and the
+ *       whole fetch, redirects included, has {@link #TIMEOUT}.</li>
  * </ul>
- * A residual DNS-rebinding TOCTOU window remains (validate → connect can
- * re-resolve). It is accepted: the win would require pinning the validated
- * address into the connection, which the JDK client does not expose. Note that
- * this is no longer only reachable from authenticated flows — the organization
- * logo lands here from the public {@code /api/v1/meta/logo} — so anything added
- * to this class has to stay safe for an anonymous caller.
+ * This is not only reachable from authenticated flows: the organization logo lands
+ * here from the public {@code /api/v1/meta/logo}, so anything added to this class
+ * has to stay safe for an anonymous caller.
  */
 @Slf4j
 @Component
-public class ExternalImageFetcher {
+public class ExternalImageFetcher implements DisposableBean {
 
 	private static final long MAX_BYTES = 10L * 1024 * 1024;
 	private static final int MAX_REDIRECTS = 3;
+	private static final Duration LOOKUP_TIMEOUT = Duration.ofSeconds(5);
 	private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(6);
-	private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
-	/** How long the body may take to arrive once the headers have. See readCapped. */
-	private static final Duration BODY_TIMEOUT = Duration.ofSeconds(15);
+	/** The longest silence while waiting for the headers or for the next part of the body. */
+	private static final Duration READ_TIMEOUT = Duration.ofSeconds(10);
 
-	/** One daemon thread, shared: it only ever closes a stalled stream. */
-	private static final ScheduledExecutorService WATCHDOG =
-			Executors.newSingleThreadScheduledExecutor(runnable -> {
-				Thread thread = new Thread(runnable, "external-image-read-watchdog");
-				thread.setDaemon(true);
-				return thread;
-			});
+	/** Everything one fetch may take, redirects included: lookups, connections, headers and body. */
+	static final Duration TIMEOUT = Duration.ofSeconds(25);
 
 	/**
 	 * Raster images only; {@code image/svg+xml} is excluded. This is the set every
@@ -84,17 +79,34 @@ public class ExternalImageFetcher {
 	/**
 	 * {@link #RASTER_TYPES} plus the vector and icon types a browser renders
 	 * safely. Only for callers that hand the bytes straight to a client and serve
-	 * them under a locked-down CSP — see {@code MetaController#logo()}. Never for a
+	 * them under a locked-down CSP, see {@code MetaController#logo()}. Never for a
 	 * caller that decodes or rasterizes them server-side.
 	 */
 	public static final Set<String> DISPLAY_TYPES = Set.of("image/png", "image/jpeg",
 			"image/gif", "image/webp", "image/svg+xml", "image/avif", "image/x-icon",
 			"image/vnd.microsoft.icon");
 
-	private final HttpClient client = HttpClient.newBuilder()
-			.followRedirects(HttpClient.Redirect.NEVER)
-			.connectTimeout(CONNECT_TIMEOUT)
-			.build();
+	private final PublicDns dns;
+	private final OkHttpClient client;
+	private final Duration timeout;
+
+	public ExternalImageFetcher() {
+		this(PublicDns.Resolver.SYSTEM, null, TIMEOUT);
+	}
+
+	/** For tests: [sockets] replaces the platform's sockets unless it is null. */
+	ExternalImageFetcher(PublicDns.Resolver resolver, SocketFactory sockets, Duration timeout) {
+		this.dns = new PublicDns("image-lookup", resolver, LOOKUP_TIMEOUT);
+		this.timeout = timeout;
+		OkHttpClient.Builder builder = dns.clientBuilder()
+				.connectTimeout(CONNECT_TIMEOUT)
+				.readTimeout(READ_TIMEOUT)
+				.writeTimeout(READ_TIMEOUT);
+		if (sockets != null) {
+			builder.socketFactory(sockets);
+		}
+		this.client = builder.build();
+	}
 
 	/** Fetches [rawUrl] and returns its validated raster image bytes + content type. */
 	public StorageService.StoredObject fetch(String rawUrl) {
@@ -107,145 +119,104 @@ public class ExternalImageFetcher {
 	 * client, in which case {@link #DISPLAY_TYPES} widens it to SVG and friends.
 	 */
 	public StorageService.StoredObject fetch(String rawUrl, Set<String> allowedTypes) {
-		URI uri = parse(rawUrl);
+		HttpUrl url = requireHttp(rawUrl == null ? null : HttpUrl.parse(rawUrl.strip()));
+		long deadline = System.nanoTime() + timeout.toNanos();
 		for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
-			requireSafeHost(uri);
-			HttpResponse<InputStream> response = send(uri);
-			int status = response.statusCode();
-			if (status >= 300 && status < 400) {
-				String location = response.headers().firstValue("location").orElse(null);
-				close(response.body());
-				if (location == null) {
+			requirePublicLiteral(url);
+			try (Response response = send(url, deadline)) {
+				int status = response.code();
+				if (status >= 300 && status < 400) {
+					String location = response.header("Location");
+					if (location == null) {
+						throw fetchFailed();
+					}
+					url = requireHttp(url.resolve(location));
+					continue;
+				}
+				if (status != 200) {
 					throw fetchFailed();
 				}
-				uri = requireHttp(uri.resolve(location));
-				continue;
+				String contentType = baseType(response.header("Content-Type"));
+				if (!allowedTypes.contains(contentType)) {
+					throw ApiException.badRequest("error.media.notAnImage");
+				}
+				byte[] bytes = CappedBody.read(response, MAX_BYTES);
+				if (bytes.length == 0) {
+					throw fetchFailed();
+				}
+				return new StorageService.StoredObject(bytes, contentType);
 			}
-			if (status != 200) {
-				close(response.body());
+			catch (CappedBody.TooLarge ex) {
+				throw ApiException.badRequest("error.media.tooLarge");
+			}
+			catch (PublicDns.NotPublic ex) {
+				throw notAllowed(url);
+			}
+			catch (PublicDns.SlowLookup ex) {
 				throw fetchFailed();
 			}
-			String contentType = response.headers().firstValue("content-type")
-					.map(ExternalImageFetcher::baseType).orElse("");
-			if (!allowedTypes.contains(contentType)) {
-				close(response.body());
-				throw ApiException.badRequest("error.media.notAnImage");
+			catch (UnknownHostException ex) {
+				throw ApiException.badRequest("error.media.urlNotAllowed");
 			}
-			return new StorageService.StoredObject(readCapped(response.body()), contentType);
+			catch (IOException ex) {
+				throw fetchFailed();
+			}
 		}
 		throw fetchFailed();
 	}
 
-	private HttpResponse<InputStream> send(URI uri) {
-		try {
-			HttpRequest request = HttpRequest.newBuilder(uri)
-					.timeout(REQUEST_TIMEOUT)
-					.header("Accept", "image/*")
-					.GET()
-					.build();
-			return client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-		}
-		catch (IOException ex) {
+	@Override
+	public void destroy() {
+		dns.shutdown();
+		client.connectionPool().evictAll();
+	}
+
+	/** One hop, within what is left of the fetch's time. */
+	private Response send(HttpUrl url, long deadline) throws IOException {
+		long remaining = deadline - System.nanoTime();
+		if (remaining <= 0) {
 			throw fetchFailed();
 		}
-		catch (InterruptedException ex) {
-			Thread.currentThread().interrupt();
-			throw fetchFailed();
-		}
+		Call call = client.newCall(new Request.Builder().url(url).get()
+				.header("User-Agent", "hinata")
+				.header("Accept", "image/*")
+				.header("Accept-Encoding", "identity")
+				.build());
+		call.timeout().timeout(remaining, TimeUnit.NANOSECONDS);
+		return call.execute();
 	}
 
-	private URI parse(String rawUrl) {
-		if (rawUrl == null || rawUrl.isBlank()) {
+	/** An http or https address with a host; OkHttp parses nothing else into an HttpUrl. */
+	private static HttpUrl requireHttp(HttpUrl url) {
+		if (url == null || url.host().isEmpty()) {
 			throw ApiException.badRequest("error.media.urlInvalid");
 		}
-		try {
-			return requireHttp(new URI(rawUrl.trim()));
-		}
-		catch (URISyntaxException ex) {
-			throw ApiException.badRequest("error.media.urlInvalid");
-		}
-	}
-
-	private URI requireHttp(URI uri) {
-		String scheme = uri.getScheme();
-		if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
-				|| uri.getHost() == null || uri.getHost().isBlank()) {
-			throw ApiException.badRequest("error.media.urlInvalid");
-		}
-		return uri;
-	}
-
-	/** Rejects the request unless every resolved address is a public host. */
-	private void requireSafeHost(URI uri) {
-		InetAddress[] addresses;
-		try {
-			addresses = InetAddress.getAllByName(uri.getHost());
-		}
-		catch (UnknownHostException ex) {
-			throw ApiException.badRequest("error.media.urlNotAllowed");
-		}
-		for (InetAddress address : addresses) {
-			if (!PublicAddresses.isPublic(address)) {
-				log.warn("Blocked SSRF-prone image proxy target: {} -> {}", uri.getHost(),
-						address.getHostAddress());
-				throw ApiException.badRequest("error.media.urlNotAllowed");
-			}
-		}
+		return url;
 	}
 
 	/**
-	 * Reads the body under a deadline as well as the size cap.
-	 *
-	 * <p>{@code HttpRequest.timeout} does <em>not</em> bound this.
-	 * {@code BodyHandlers.ofInputStream()} completes the response future as soon
-	 * as the headers arrive, and the request timer is cancelled with it — so a
-	 * host that answers 200 and then trickles (or simply stops) leaves
-	 * {@code read()} parked forever. A deadline checked inside the loop would not
-	 * help either, because the thread is blocked *in* the read and never gets back
-	 * to the condition. Closing the stream from a watchdog is what actually
-	 * unblocks it: the read throws and lands in the {@code IOException} branch
-	 * below, which every caller already treats as "no image".
+	 * OkHttp connects to a host written as an address without a lookup, so such a host
+	 * is checked here, and only in its plain spelling. A name is checked by the lookup.
 	 */
-	private byte[] readCapped(InputStream body) {
-		ScheduledFuture<?> deadline = WATCHDOG.schedule(
-				() -> close(body), BODY_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-		try (body) {
-			ByteArrayOutputStream out = new ByteArrayOutputStream();
-			byte[] chunk = new byte[8192];
-			int read;
-			long total = 0;
-			while ((read = body.read(chunk)) != -1) {
-				total += read;
-				if (total > MAX_BYTES) {
-					throw ApiException.badRequest("error.media.tooLarge");
-				}
-				out.write(chunk, 0, read);
-			}
-			if (out.size() == 0) {
-				throw fetchFailed();
-			}
-			return out.toByteArray();
+	private static void requirePublicLiteral(HttpUrl url) {
+		String host = url.host();
+		if (PublicDns.looksLikeAddress(host)
+				&& !PublicDns.plainAddress(host).map(PublicAddresses::isPublic).orElse(false)) {
+			throw notAllowed(url);
 		}
-		catch (IOException ex) {
-			throw fetchFailed();
-		}
-		finally {
-			deadline.cancel(false);
-		}
+	}
+
+	private static ApiException notAllowed(HttpUrl url) {
+		log.warn("Blocked SSRF-prone image proxy target: {}", url.host());
+		return ApiException.badRequest("error.media.urlNotAllowed");
 	}
 
 	private static String baseType(String header) {
+		if (header == null) {
+			return "";
+		}
 		int semicolon = header.indexOf(';');
-		return (semicolon >= 0 ? header.substring(0, semicolon) : header).trim().toLowerCase();
-	}
-
-	private static void close(InputStream stream) {
-		try {
-			stream.close();
-		}
-		catch (IOException ignored) {
-			// best-effort cleanup of the discarded redirect/error body
-		}
+		return (semicolon >= 0 ? header.substring(0, semicolon) : header).trim().toLowerCase(Locale.ROOT);
 	}
 
 	private static ApiException fetchFailed() {

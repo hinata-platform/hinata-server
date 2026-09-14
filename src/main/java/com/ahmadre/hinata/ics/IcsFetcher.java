@@ -1,23 +1,16 @@
 package com.ahmadre.hinata.ics;
 
+import com.ahmadre.hinata.common.CappedBody;
 import com.ahmadre.hinata.common.PublicAddresses;
+import com.ahmadre.hinata.common.PublicDns;
 import com.ahmadre.hinata.config.HinataProperties;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
-import okhttp3.ConnectionPool;
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.Protocol;
 import okhttp3.Request;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
-import okio.Buffer;
-import okio.BufferedSource;
-import okio.ForwardingSource;
-import okio.GzipSource;
-import okio.Okio;
-import okio.Source;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -29,8 +22,6 @@ import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.Serial;
-import java.net.InetAddress;
-import java.net.Proxy;
 import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -40,15 +31,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Pattern;
 
 /**
  * Fetches an external calendar from an address a person or an administrator typed.
@@ -62,27 +48,21 @@ import java.util.regex.Pattern;
  * No user name or password in the address. Calendar services put their token in
  * the query, which is accepted and never written anywhere.</li>
  * <li><b>The host must be a name.</b> Anything OkHttp reads as an address literal
- * is refused, because OkHttp connects to a literal without consulting the
- * {@code Dns} hook below. An operator can narrow the hosts further with
- * {@code hinata.ics.allowed-hosts} and {@code denied-hosts}; neither list can open
- * what the address check closes.</li>
- * <li><b>Resolve once, check every answer, connect to exactly those.</b> The
- * {@code Dns} hook is OkHttp's only way from a name to a socket. It resolves,
- * refuses the host if any answer is off the public internet
- * ({@link PublicAddresses}), and hands OkHttp the checked addresses, so there is
- * no second lookup a rebinding DNS server could answer differently. No proxy is
- * used: a proxy would resolve the name itself.</li>
+ * is refused, because OkHttp connects to a literal without a lookup. An operator can
+ * narrow the hosts further with {@code hinata.ics.allowed-hosts} and
+ * {@code denied-hosts}; neither list can open what the address check closes.</li>
+ * <li><b>Resolve once, check every answer, connect to exactly those</b>, through
+ * {@link PublicDns}. The host is refused if any answer is off the public internet
+ * ({@link PublicAddresses}), and there is no second lookup a rebinding DNS server
+ * could answer differently. No proxy, no pooled connection.</li>
  * <li><b>No redirects</b>, not even to the same host. A 3xx is an error, so a
  * public host cannot point the request inward.</li>
  * <li><b>Ten seconds for everything</b>: lookup, connection and body. The body is
- * read against a 2 MB cap and abandoned at the cap, not measured afterwards.
- * {@code Accept-Encoding: identity} is sent, but iCloud answers with gzip all the
- * same, so gzip is unpacked and the cap counts the unpacked bytes as well as the
- * packed ones: a small body cannot unfold into a large one. Any other encoding is
- * refused.</li>
- * <li><b>HTTP/1.1 only</b>, whose response headers OkHttp caps at 256 KB. A
- * calendar gains nothing from HTTP/2, and HTTP/2 header frames have no such cap
- * here.</li>
+ * read against a 2 MB cap and abandoned at the cap, not measured afterwards
+ * ({@link CappedBody}). {@code Accept-Encoding: identity} is sent, but iCloud answers
+ * with gzip all the same, so gzip is unpacked, with the packed and the unpacked bytes
+ * both counted. Any other encoding is refused.</li>
+ * <li><b>HTTP/1.1 only</b>, whose response headers OkHttp caps at 256 KB.</li>
  * </ul>
  *
  * <p>Fetches run on four threads of their own behind a short queue, never on the
@@ -104,39 +84,26 @@ public class IcsFetcher implements DisposableBean {
 	private static final Set<Integer> PORTS = Set.of(443, 8443);
 	private static final List<String> WEBCAL = List.of("webcal://", "webcals://");
 
-	/** OkHttp's own test for "this host is an address"; such a host never reaches the Dns hook. */
-	private static final Pattern ADDRESS_LITERAL = Pattern.compile("([0-9a-fA-F]*:[0-9a-fA-F:.]*)|([\\d.]+)");
-
 	private final List<String> allowedHosts;
 	private final List<String> deniedHosts;
-	private final Resolver resolver;
-	private final Duration timeout;
 	private final ExecutorService fetches;
-	private final ExecutorService lookups = pool("ics-lookup", THREADS, QUEUE);
+	private final PublicDns dns;
 	private final OkHttpClient client;
 
 	@Autowired
 	public IcsFetcher(HinataProperties properties) {
-		this(properties.getIcs(), InetAddress::getAllByName, Transport.SYSTEM, TIMEOUT,
+		this(properties.getIcs(), PublicDns.Resolver.SYSTEM, Transport.SYSTEM, TIMEOUT,
 				pool("ics-fetch", THREADS, QUEUE));
 	}
 
-	IcsFetcher(HinataProperties.Ics config, Resolver resolver, Transport transport, Duration timeout,
+	IcsFetcher(HinataProperties.Ics config, PublicDns.Resolver resolver, Transport transport, Duration timeout,
 			ExecutorService fetches) {
 		this.allowedHosts = hostPatterns("allowed-hosts", config.getAllowedHosts());
 		this.deniedHosts = hostPatterns("denied-hosts", config.getDeniedHosts());
-		this.resolver = resolver;
-		this.timeout = timeout;
 		this.fetches = fetches;
-		OkHttpClient.Builder builder = new OkHttpClient.Builder()
-				.dns(this::lookup)
-				.proxy(Proxy.NO_PROXY)
-				.protocols(List.of(Protocol.HTTP_1_1))
-				.followRedirects(false)
-				.followSslRedirects(false)
-				.retryOnConnectionFailure(false)
-				// Nothing is kept for reuse: a pooled connection would skip the lookup.
-				.connectionPool(new ConnectionPool(0, 1, TimeUnit.SECONDS))
+		// The lookup is bounded by the fetch's time too: the call timeout cannot interrupt it.
+		this.dns = new PublicDns("ics-lookup", resolver, timeout);
+		OkHttpClient.Builder builder = dns.clientBuilder()
 				.callTimeout(timeout)
 				.connectTimeout(timeout)
 				.readTimeout(timeout)
@@ -155,6 +122,10 @@ public class IcsFetcher implements DisposableBean {
 	 * [lastModified] are what the previous fetch returned, or null; with either, an
 	 * unchanged calendar comes back as {@link IcsFetchResult.Outcome#NOT_MODIFIED}.
 	 * The future always completes normally.
+	 *
+	 * <p>The future can take longer than the fetch itself while other fetches wait in the
+	 * queue. Never {@code join()} it on a request or scheduler thread, and parse what it
+	 * brings on an executor of your own, not on the fetcher's threads.
 	 */
 	public CompletableFuture<IcsFetchResult> fetch(String url, String etag, String lastModified) {
 		try {
@@ -183,7 +154,7 @@ public class IcsFetcher implements DisposableBean {
 	@Override
 	public void destroy() {
 		fetches.shutdownNow();
-		lookups.shutdownNow();
+		dns.shutdown();
 		client.connectionPool().evictAll();
 	}
 
@@ -217,7 +188,7 @@ public class IcsFetcher implements DisposableBean {
 			return read(response, url, etag, lastModified);
 		}
 		catch (UnknownHostException ex) {
-			return IcsFetchResult.failed(ex instanceof SlowLookup ? IcsFetchError.TIMEOUT : IcsFetchError.HOST_NOT_ALLOWED);
+			return IcsFetchResult.failed(ex instanceof PublicDns.SlowLookup ? IcsFetchError.TIMEOUT : IcsFetchError.HOST_NOT_ALLOWED);
 		}
 		catch (IOException ex) {
 			if (call.isCanceled() || ex instanceof InterruptedIOException) {
@@ -247,60 +218,25 @@ public class IcsFetcher implements DisposableBean {
 		if (status != 200) {
 			return IcsFetchResult.failed(IcsFetchError.HTTP_STATUS, status);
 		}
-		String encoding = response.header("Content-Encoding");
-		String coding = encoding == null ? "" : encoding.strip().toLowerCase(Locale.ROOT);
-		boolean gzip = coding.equals("gzip") || coding.equals("x-gzip");
-		if (!gzip && !coding.isEmpty() && !coding.equals("identity")) {
-			return IcsFetchResult.failed(IcsFetchError.ENCODING, status);
-		}
-		ResponseBody body = response.body();
-		if (body == null || !isCalendar(response.header("Content-Type"), url)) {
+		if (!isCalendar(response.header("Content-Type"), url)) {
 			return IcsFetchResult.failed(IcsFetchError.NOT_A_CALENDAR, status);
 		}
-		if (body.contentLength() > IcsLexer.MAX_BYTES) {
-			return IcsFetchResult.failed(IcsFetchError.TOO_LARGE, status);
+		byte[] calendar;
+		try {
+			calendar = CappedBody.read(response, IcsLexer.MAX_BYTES);
 		}
-		if (gzip && !looksLikeGzip(body.source())) {
-			return IcsFetchResult.failed(IcsFetchError.ENCODING, status);
-		}
-		byte[] calendar = readCapped(body.source(), gzip);
-		if (calendar == null) {
+		catch (CappedBody.TooLarge ex) {
 			// Closing the response on the way out drops the connection mid-body.
 			return IcsFetchResult.failed(IcsFetchError.TOO_LARGE, status);
+		}
+		catch (CappedBody.Unreadable ex) {
+			return IcsFetchResult.failed(IcsFetchError.ENCODING, status);
 		}
 		if (calendar.length == 0) {
 			return IcsFetchResult.failed(IcsFetchError.NOT_A_CALENDAR, status);
 		}
 		return IcsFetchResult.fetched(calendar, validator(response.header("ETag")),
 				validator(response.header("Last-Modified")));
-	}
-
-	/**
-	 * The body, or null as soon as more than {@link IcsLexer#MAX_BYTES} have come in.
-	 * With gzip the packed and the unpacked bytes are both counted, so neither a long
-	 * download nor a short one that unpacks into something large gets past the cap.
-	 */
-	private static byte[] readCapped(BufferedSource wire, boolean gzip) throws IOException {
-		CountingSource packed = new CountingSource(wire);
-		BufferedSource source = Okio.buffer(gzip ? new GzipSource(packed) : packed);
-		Buffer buffer = new Buffer();
-		try {
-			while (source.read(buffer, 8192) != -1) {
-				if (buffer.size() > IcsLexer.MAX_BYTES) {
-					return null;
-				}
-			}
-		}
-		catch (TooLarge ex) {
-			return null;
-		}
-		return buffer.readByteArray();
-	}
-
-	/** Every gzip stream starts with 1f 8b; a body labelled gzip that does not was never packed. */
-	private static boolean looksLikeGzip(BufferedSource source) throws IOException {
-		return source.request(2) && source.getBuffer().getByte(0) == (byte) 0x1f
-				&& source.getBuffer().getByte(1) == (byte) 0x8b;
 	}
 
 	/** Labelled as a calendar, or named like one by a server that labels everything text/plain. */
@@ -338,7 +274,7 @@ public class IcsFetcher implements DisposableBean {
 		// The literal test runs on the host exactly as OkHttp will see it: stripping the
 		// trailing dot first would let "." through, which OkHttp resolves without the hook.
 		String host = url.host();
-		if (host.isEmpty() || ADDRESS_LITERAL.matcher(host).matches() || !hostAllowed(withoutTrailingDot(host))) {
+		if (host.isEmpty() || PublicDns.looksLikeAddress(host) || !hostAllowed(withoutTrailingDot(host))) {
 			throw new Refused(IcsFetchError.HOST_NOT_ALLOWED);
 		}
 		return url;
@@ -377,7 +313,7 @@ public class IcsFetcher implements DisposableBean {
 			boolean plainName = !name.isEmpty() && name.chars().noneMatch(c -> "*/:@?#[]\\ ".indexOf(c) >= 0);
 			HttpUrl parsed = plainName ? HttpUrl.parse("https://" + name + "/") : null;
 			String host = parsed == null ? "" : withoutTrailingDot(parsed.host());
-			if (host.isEmpty() || ADDRESS_LITERAL.matcher(host).matches()) {
+			if (host.isEmpty() || PublicDns.looksLikeAddress(host)) {
 				throw new IllegalStateException("hinata.ics." + property + "[" + index + "] is neither a host name "
 						+ "nor *. followed by one: " + value);
 			}
@@ -404,62 +340,11 @@ public class IcsFetcher implements DisposableBean {
 		return value;
 	}
 
-	/**
-	 * OkHttp's only way from a host name to a socket: one lookup, every answer
-	 * checked, exactly the checked addresses returned. The wait is bounded by the
-	 * fetch's timeout, because the call timeout cannot interrupt a JDK lookup.
-	 */
-	private List<InetAddress> lookup(String host) throws UnknownHostException {
-		Future<InetAddress[]> answer;
-		try {
-			answer = lookups.submit(() -> resolver.resolve(host));
-		}
-		catch (RejectedExecutionException ex) {
-			throw new SlowLookup();
-		}
-		InetAddress[] addresses;
-		try {
-			addresses = answer.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-		}
-		catch (TimeoutException ex) {
-			answer.cancel(true);
-			throw new SlowLookup();
-		}
-		catch (InterruptedException ex) {
-			answer.cancel(true);
-			Thread.currentThread().interrupt();
-			throw new SlowLookup();
-		}
-		catch (ExecutionException ex) {
-			throw new UnknownHostException();
-		}
-		if (addresses == null || addresses.length == 0) {
-			throw new UnknownHostException();
-		}
-		for (InetAddress address : addresses) {
-			if (!PublicAddresses.isPublic(address)) {
-				throw new UnknownHostException();
-			}
-		}
-		return List.of(addresses);
-	}
-
 	static ThreadPoolExecutor pool(String name, int threads, int queue) {
-		AtomicInteger count = new AtomicInteger();
 		ThreadPoolExecutor pool = new ThreadPoolExecutor(threads, threads, 30, TimeUnit.SECONDS,
-				new ArrayBlockingQueue<>(queue), runnable -> {
-					Thread thread = new Thread(runnable, name + "-" + count.incrementAndGet());
-					thread.setDaemon(true);
-					return thread;
-				});
+				new ArrayBlockingQueue<>(queue), Thread.ofPlatform().name(name + "-", 1).daemon().factory());
 		pool.allowCoreThreadTimeOut(true);
 		return pool;
-	}
-
-	/** How host names become addresses: the JDK's resolver, outside tests. */
-	@FunctionalInterface
-	interface Resolver {
-		InetAddress[] resolve(String host) throws UnknownHostException;
 	}
 
 	/** The sockets and the trust a connection is made with; a null part means the platform's default. */
@@ -478,44 +363,5 @@ public class IcsFetcher implements DisposableBean {
 			super(null, null, false, false);
 			this.error = error;
 		}
-	}
-
-	/** The lookup did not answer within the fetch's time. */
-	private static final class SlowLookup extends UnknownHostException {
-		@Serial
-		private static final long serialVersionUID = 1L;
-	}
-
-	/**
-	 * Counts the bytes as they come off the wire and stops at the cap inside the very
-	 * read that crosses it. Counting outside is too late for gzip: okio's inflater keeps
-	 * reading until it has output, and empty deflate blocks give it none, so one read
-	 * could swallow the whole stream.
-	 */
-	private static final class CountingSource extends ForwardingSource {
-
-		private long count;
-
-		CountingSource(Source delegate) {
-			super(delegate);
-		}
-
-		@Override
-		public long read(Buffer sink, long byteCount) throws IOException {
-			long read = super.read(sink, byteCount);
-			if (read > 0) {
-				count += read;
-				if (count > IcsLexer.MAX_BYTES) {
-					throw new TooLarge();
-				}
-			}
-			return read;
-		}
-	}
-
-	/** More than the cap came off the wire; an IOException, because that is all a Source may throw. */
-	private static final class TooLarge extends IOException {
-		@Serial
-		private static final long serialVersionUID = 1L;
 	}
 }
