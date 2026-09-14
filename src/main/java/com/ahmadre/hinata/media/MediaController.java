@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.media;
 
-import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.storage.StorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -21,10 +20,10 @@ import org.springframework.web.multipart.MultipartFile;
 import java.time.Duration;
 
 /**
- * Inline Markdown media: upload an image while authoring, and read it (or a
- * proxied external image) back as bytes through our own origin so it renders on
- * Flutter web without CORS problems. Every route is authenticated — media is
- * readable by any signed-in user but never anonymously.
+ * Inline Markdown media: upload an image while authoring, and read it back as bytes
+ * through our own origin so it renders on Flutter web without CORS problems. Every
+ * route is authenticated — media is readable by any signed-in user but never
+ * anonymously.
  */
 @Tag(name = "Media")
 @RestController
@@ -33,8 +32,6 @@ import java.time.Duration;
 public class MediaController {
 
 	private final MediaService media;
-	private final ExternalImageFetcher fetcher;
-	private final CurrentUser currentUser;
 
 	@Operation(summary = "Upload an inline Markdown image")
 	@PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -59,18 +56,6 @@ public class MediaController {
 		// Immutable: an id addresses one set of bytes for its whole lifetime.
 		return inline(media.loadThumbnail(id),
 				CacheControl.maxAge(Duration.ofDays(30)).cachePrivate().immutable());
-	}
-
-	/**
-	 * An external image through our own origin, fetched for the person asking. While
-	 * they, or everybody, already have as many images loading as the fetcher allows,
-	 * the answer is 429 at once.
-	 */
-	@Operation(summary = "Proxy an external image URL server-side (bypasses CORS)")
-	@GetMapping("/proxy")
-	public ResponseEntity<byte[]> proxy(@RequestParam("url") String url) {
-		return inline(fetcher.fetch(url, currentUser.requireId()),
-				CacheControl.maxAge(Duration.ofDays(1)).cachePrivate());
 	}
 
 	/**

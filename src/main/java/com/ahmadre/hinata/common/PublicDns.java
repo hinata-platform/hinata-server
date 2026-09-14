@@ -11,14 +11,10 @@ import java.net.InetAddress;
 import java.net.Proxy;
 import java.net.UnknownHostException;
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -48,23 +44,14 @@ import java.util.regex.Pattern;
  *
  * <p>OkHttp's call timeout cannot interrupt a JDK lookup, so lookups run on threads of
  * their own and are given up after the timeout, or sooner when the request's own time
- * runs out ({@link #within}). A thread whose lookup was given up on stays busy until the
- * operating system answers. So that somebody's silent name server cannot take those
- * threads from everybody else:
- *
- * <ul>
- * <li>there is no queue, and at most {@value #MAX_LOOKUPS} threads;</li>
- * <li>one requester has at most {@value #MAX_LOOKUPS_PER_REQUESTER} lookups running,
- * given-up ones included;</li>
- * <li>a name whose lookup timed out is refused at once for a minute.</li>
- * </ul>
+ * runs out ({@link #within}). There is no queue, and at most {@value #MAX_LOOKUPS}
+ * threads: a lookup that hangs on a silent name server keeps its thread until the
+ * operating system gives up, and a queue behind a few of those would make every other
+ * request wait for them.
  */
 public final class PublicDns implements Dns {
 
 	private static final int MAX_LOOKUPS = 32;
-	private static final int MAX_LOOKUPS_PER_REQUESTER = 4;
-	private static final Duration PAUSE_AFTER_TIMEOUT = Duration.ofMinutes(1);
-	private static final int MAX_PAUSED_NAMES = 1_024;
 
 	/** OkHttp's own test for "this host is an address"; such a host never reaches the hook. */
 	private static final Pattern ADDRESS_LITERAL = Pattern.compile("([0-9a-fA-F]*:[0-9a-fA-F:.]*)|([\\d.]+)");
@@ -73,18 +60,12 @@ public final class PublicDns implements Dns {
 	private static final Pattern DOTTED_QUAD =
 			Pattern.compile("(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}");
 
-	/** Who the request on this thread is for, and when its time is up; see {@link #within}. */
-	private static final ThreadLocal<Scope> SCOPE = new ThreadLocal<>();
+	/** When the request on this thread has to be done, as a {@link System#nanoTime()} value; see {@link #within}. */
+	private static final ThreadLocal<Long> DEADLINE = new ThreadLocal<>();
 
 	private final Resolver resolver;
 	private final Duration timeout;
 	private final ThreadPoolExecutor lookups;
-
-	/** Lookups still running, by requester. Guarded by itself. */
-	private final Map<String, Integer> running = new HashMap<>();
-
-	/** Names whose lookup timed out, with the {@link System#nanoTime()} they are refused until. Guarded by itself, oldest first. */
-	private final Map<String, Long> paused = new LinkedHashMap<>();
 
 	/**
 	 * @param name     the name of the lookup threads
@@ -99,23 +80,22 @@ public final class PublicDns implements Dns {
 	}
 
 	/**
-	 * Runs [attempt] with every lookup it causes on this thread counted for [requester]
-	 * and given up at [deadline], a {@link System#nanoTime()} value. OkHttp resolves on
-	 * the thread that executes a call, so wrapping {@code call.execute()} is enough. A
-	 * null [requester] counts for nobody.
+	 * Runs [attempt] with every lookup it causes on this thread given up at [deadline], a
+	 * {@link System#nanoTime()} value. OkHttp resolves on the thread that executes a call,
+	 * so wrapping {@code call.execute()} is enough.
 	 */
-	public <T> T within(String requester, long deadline, Attempt<T> attempt) throws IOException {
-		Scope outer = SCOPE.get();
-		SCOPE.set(new Scope(requester, deadline));
+	public <T> T within(long deadline, Attempt<T> attempt) throws IOException {
+		Long outer = DEADLINE.get();
+		DEADLINE.set(deadline);
 		try {
 			return attempt.run();
 		}
 		finally {
 			if (outer == null) {
-				SCOPE.remove();
+				DEADLINE.remove();
 			}
 			else {
-				SCOPE.set(outer);
+				DEADLINE.set(outer);
 			}
 		}
 	}
@@ -123,40 +103,23 @@ public final class PublicDns implements Dns {
 	/**
 	 * The addresses of [host], every one of them public.
 	 *
-	 * @throws SlowLookup           when the lookup takes longer than it may, the name timed
-	 *                              out a moment ago, or no thread is free for it
+	 * @throws SlowLookup           when the lookup takes longer than it may, or
+	 *                              {@value #MAX_LOOKUPS} lookups are still running
 	 * @throws NotPublic            when any answer is off the public internet
 	 * @throws UnknownHostException when the name has no address
 	 */
 	@Override
 	public List<InetAddress> lookup(String host) throws UnknownHostException {
-		Scope scope = SCOPE.get();
-		String requester = scope == null ? null : scope.requester();
-		long wait = timeout.toNanos();
-		boolean cutShort = false;
-		if (scope != null && scope.deadline() - System.nanoTime() < wait) {
-			wait = scope.deadline() - System.nanoTime();
-			cutShort = true;
-		}
-		if (wait <= 0 || isPaused(host) || !start(requester)) {
+		Long deadline = DEADLINE.get();
+		long wait = deadline == null ? timeout.toNanos() : Math.min(timeout.toNanos(), deadline - System.nanoTime());
+		if (wait <= 0) {
 			throw new SlowLookup();
 		}
-		CompletableFuture<InetAddress[]> answer = new CompletableFuture<>();
+		Future<InetAddress[]> answer;
 		try {
-			lookups.execute(() -> {
-				try {
-					answer.complete(resolver.resolve(host));
-				}
-				catch (Exception ex) {
-					answer.completeExceptionally(ex);
-				}
-				finally {
-					end(requester);
-				}
-			});
+			answer = lookups.submit(() -> resolver.resolve(host));
 		}
 		catch (RejectedExecutionException ex) {
-			end(requester);
 			throw new SlowLookup();
 		}
 		InetAddress[] addresses;
@@ -164,13 +127,11 @@ public final class PublicDns implements Dns {
 			addresses = answer.get(wait, TimeUnit.NANOSECONDS);
 		}
 		catch (TimeoutException ex) {
-			// A request that simply ran out of time says nothing about the name.
-			if (!cutShort) {
-				pause(host);
-			}
+			answer.cancel(true);
 			throw new SlowLookup();
 		}
 		catch (InterruptedException ex) {
+			answer.cancel(true);
 			Thread.currentThread().interrupt();
 			throw new SlowLookup();
 		}
@@ -237,56 +198,6 @@ public final class PublicDns implements Dns {
 		}
 	}
 
-	/** Counts a lookup for [requester], unless it already has as many running as it may. */
-	private boolean start(String requester) {
-		if (requester == null) {
-			return true;
-		}
-		synchronized (running) {
-			int count = running.getOrDefault(requester, 0);
-			if (count >= MAX_LOOKUPS_PER_REQUESTER) {
-				return false;
-			}
-			running.put(requester, count + 1);
-			return true;
-		}
-	}
-
-	private void end(String requester) {
-		if (requester == null) {
-			return;
-		}
-		synchronized (running) {
-			running.computeIfPresent(requester, (key, count) -> count == 1 ? null : count - 1);
-		}
-	}
-
-	private boolean isPaused(String host) {
-		synchronized (paused) {
-			Long until = paused.get(host);
-			if (until == null) {
-				return false;
-			}
-			if (until - System.nanoTime() > 0) {
-				return true;
-			}
-			paused.remove(host);
-			return false;
-		}
-	}
-
-	private void pause(String host) {
-		synchronized (paused) {
-			paused.remove(host);
-			paused.put(host, System.nanoTime() + PAUSE_AFTER_TIMEOUT.toNanos());
-			if (paused.size() > MAX_PAUSED_NAMES) {
-				Iterator<String> oldest = paused.keySet().iterator();
-				oldest.next();
-				oldest.remove();
-			}
-		}
-	}
-
 	/** How host names become addresses. */
 	@FunctionalInterface
 	public interface Resolver {
@@ -303,10 +214,7 @@ public final class PublicDns implements Dns {
 		T run() throws IOException;
 	}
 
-	private record Scope(String requester, long deadline) {
-	}
-
-	/** The lookup took longer than it may, or could not start, see {@link #lookup}. */
+	/** The lookup took longer than it may, or could not start because too many are still running. */
 	public static final class SlowLookup extends UnknownHostException {
 		@Serial
 		private static final long serialVersionUID = 1L;
