@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.media;
 
+import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.storage.StorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -33,6 +34,7 @@ public class MediaController {
 
 	private final MediaService media;
 	private final ExternalImageFetcher fetcher;
+	private final CurrentUser currentUser;
 
 	@Operation(summary = "Upload an inline Markdown image")
 	@PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -59,10 +61,16 @@ public class MediaController {
 				CacheControl.maxAge(Duration.ofDays(30)).cachePrivate().immutable());
 	}
 
+	/**
+	 * An external image through our own origin, fetched for the person asking. While
+	 * they, or everybody, already have as many images loading as the fetcher allows,
+	 * the answer is 429 at once.
+	 */
 	@Operation(summary = "Proxy an external image URL server-side (bypasses CORS)")
 	@GetMapping("/proxy")
 	public ResponseEntity<byte[]> proxy(@RequestParam("url") String url) {
-		return inline(fetcher.fetch(url), CacheControl.maxAge(Duration.ofDays(1)).cachePrivate());
+		return inline(fetcher.fetch(url, currentUser.requireId()),
+				CacheControl.maxAge(Duration.ofDays(1)).cachePrivate());
 	}
 
 	/**

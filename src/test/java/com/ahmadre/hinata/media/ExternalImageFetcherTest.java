@@ -2,8 +2,10 @@ package com.ahmadre.hinata.media;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.PreparedAnswers;
+import com.ahmadre.hinata.common.PublicDns;
 import com.ahmadre.hinata.common.RemappedSockets;
 import com.ahmadre.hinata.storage.StorageService;
+import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpStatus;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -22,6 +25,10 @@ import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +46,7 @@ class ExternalImageFetcherTest {
 
 	private static final String HOST = "images.test";
 	private static final String LOGO = "http://" + HOST + "/logo.png";
+	private static final String ADA = "ada";
 	private static final byte[] PNG = { (byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
 
 	private static final InetAddress PUBLIC = literal("93.184.215.14");
@@ -49,6 +57,7 @@ class ExternalImageFetcherTest {
 	private MockWebServer server;
 	private RemappedSockets sockets;
 	private PreparedAnswers answers;
+	private ExternalImageFetcher fetcher;
 
 	@BeforeEach
 	void startServer() throws IOException {
@@ -103,6 +112,18 @@ class ExternalImageFetcherTest {
 	}
 
 	@Test
+	void refusesEveryPortButTheWebsOwn() {
+		server.enqueue(new MockResponse().setResponseCode(302).setHeader("Location", "http://images.test:2375/containers/json"));
+
+		assertRefused(() -> fetch("http://images.test:8080/logo.png"), "error.media.urlNotAllowed");
+		assertRefused(() -> fetch("https://images.test:9000/logo.png"), "error.media.urlNotAllowed");
+		assertThat(answers.calls()).isZero();
+		// Nor may a redirect lead there.
+		assertRefused(() -> fetch(LOGO), "error.media.urlNotAllowed");
+		assertThat(server.getRequestCount()).isEqualTo(1);
+	}
+
+	@Test
 	void takesAPublicAddressWrittenPlainlyWithoutALookup() {
 		server.enqueue(image());
 
@@ -133,37 +154,167 @@ class ExternalImageFetcherTest {
 	}
 
 	@Test
-	void stopsAtTenMegabytes() {
-		server.enqueue(image().setChunkedBody(new Buffer().write(new byte[11 * 1024 * 1024]), 64 * 1024));
+	void stopsAtFiveMegabytes() {
+		server.enqueue(image().setChunkedBody(new Buffer().write(new byte[6 * 1024 * 1024]), 64 * 1024));
 
 		assertRefused(() -> fetch(LOGO), "error.media.tooLarge");
 	}
 
 	@Test
-	void givesUpOnABodyThatTrickles() {
-		server.enqueue(image().throttleBody(1, 1, TimeUnit.SECONDS));
-		ExternalImageFetcher impatient = fetcher(Duration.ofSeconds(1));
+	void takesOnlyTheImageTypesTheCallerAllows() {
+		server.enqueue(image().setHeader("Content-Type", "image/svg+xml"));
+		server.enqueue(image().setHeader("Content-Type", "image/svg+xml; charset=utf-8"));
+		server.enqueue(new MockResponse().setHeader("Content-Type", "text/html").setBody("<html></html>"));
+
+		// No decoder here ever sees an SVG; the logo goes to a browser and may be one.
+		assertRefused(() -> fetch(LOGO), "error.media.notAnImage");
+		assertThat(fetcher().fetchLogo(LOGO).contentType()).isEqualTo("image/svg+xml");
+		assertRefused(() -> fetcher().fetchLogo(LOGO), "error.media.notAnImage");
+	}
+
+	@Test
+	void takesAnErrorStatusOrAnEmptyBodyForNoImage() {
+		server.enqueue(image().setResponseCode(404));
+		server.enqueue(new MockResponse().setHeader("Content-Type", "image/png"));
+
+		assertRefused(() -> fetch(LOGO), "error.media.fetchFailed");
+		assertRefused(() -> fetch(LOGO), "error.media.fetchFailed");
+	}
+
+	@Test
+	void givesTheWholeFetchOneDeadlineAcrossRedirects() {
+		// Each hop alone answers well within the time, all of them together do not.
+		for (int i = 0; i < 3; i++) {
+			server.enqueue(new MockResponse().setResponseCode(302).setHeader("Location", "/logo.png")
+					.setHeadersDelay(600, TimeUnit.MILLISECONDS));
+		}
+		server.enqueue(image());
+		ExternalImageFetcher impatient = fetcher(answers, Duration.ofSeconds(1));
+
+		assertRefused(() -> impatient.fetch(LOGO, ADA), "error.media.fetchFailed");
+	}
+
+	@Test
+	void endsALookupWithTheFetchsTime() {
+		CountDownLatch never = new CountDownLatch(1);
+		ExternalImageFetcher impatient = fetcher(host -> {
+			await(never);
+			return new InetAddress[] { PUBLIC };
+		}, Duration.ofSeconds(1));
 		long started = System.nanoTime();
 
-		assertRefused(() -> impatient.fetch(LOGO), "error.media.fetchFailed");
+		// A lookup may take five seconds, this fetch has one.
+		assertRefused(() -> impatient.fetch(LOGO, ADA), "error.media.fetchFailed");
+
+		never.countDown();
+		assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+	}
+
+	@Test
+	void givesUpOnABodyThatTrickles() {
+		server.enqueue(image().throttleBody(1, 1, TimeUnit.SECONDS));
+		ExternalImageFetcher impatient = fetcher(answers, Duration.ofSeconds(1));
+		long started = System.nanoTime();
+
+		assertRefused(() -> impatient.fetch(LOGO, ADA), "error.media.fetchFailed");
 		assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+	}
+
+	@Test
+	void servesAnImageFetchedAMomentAgoFromTheCache() {
+		server.enqueue(image());
+
+		StorageService.StoredObject first = fetcher().fetch(LOGO, ADA);
+		StorageService.StoredObject again = fetcher().fetch(LOGO, "bea");
+
+		assertThat(again.data()).isEqualTo(first.data());
+		assertThat(server.getRequestCount()).isEqualTo(1);
+	}
+
+	@Test
+	void refusesAtOnceWhatWouldHoldMoreRequestThreads() throws Exception {
+		CountDownLatch release = new CountDownLatch(1);
+		server.setDispatcher(new Dispatcher() {
+			@Override
+			public MockResponse dispatch(RecordedRequest request) throws InterruptedException {
+				if (request.getPath() != null && request.getPath().startsWith("/slow")) {
+					release.await(30, TimeUnit.SECONDS);
+				}
+				return image();
+			}
+		});
+		ExternalImageFetcher shared = fetcher();
+		ExecutorService loading = Executors.newFixedThreadPool(8);
+		try {
+			List<Future<StorageService.StoredObject>> held = new ArrayList<>();
+			held.add(loading.submit(() -> shared.fetch("http://images.test/slow-1.png", ADA)));
+			held.add(loading.submit(() -> shared.fetch("http://images.test/slow-2.png", ADA)));
+			awaitRequests(2);
+
+			// Two images at a time for one person; everybody else still gets theirs.
+			assertBusy(() -> shared.fetch("http://images.test/third.png", ADA));
+			assertThat(shared.fetch("http://images.test/fast.png", "bea").data()).isEqualTo(PNG);
+
+			for (int i = 3; i <= 8; i++) {
+				String url = "http://images.test/slow-" + i + ".png";
+				String person = "person-" + i;
+				held.add(loading.submit(() -> shared.fetch(url, person)));
+			}
+			awaitRequests(9);
+
+			// Eight at a time for everybody, and the logo has a lane of its own.
+			assertBusy(() -> shared.fetch("http://images.test/ninth.png", "cy"));
+			assertThat(shared.fetchLogo(LOGO).data()).isEqualTo(PNG);
+
+			release.countDown();
+			for (Future<StorageService.StoredObject> image : held) {
+				assertThat(image.get(10, TimeUnit.SECONDS).data()).isEqualTo(PNG);
+			}
+		}
+		finally {
+			release.countDown();
+			loading.shutdownNow();
+		}
 	}
 
 	// --- helpers --------------------------------------------------------------------
 
 	private StorageService.StoredObject fetch(String url) {
-		return fetcher(ExternalImageFetcher.TIMEOUT).fetch(url);
+		return fetcher().fetch(url, ADA);
 	}
 
-	private ExternalImageFetcher fetcher(Duration timeout) {
-		ExternalImageFetcher fetcher = new ExternalImageFetcher(answers, sockets, timeout);
-		fetchers.add(fetcher);
+	/** The test's fetcher, built with the answers in place when it is first used. */
+	private ExternalImageFetcher fetcher() {
+		if (fetcher == null) {
+			fetcher = fetcher(answers, ExternalImageFetcher.TIMEOUT);
+		}
 		return fetcher;
+	}
+
+	private ExternalImageFetcher fetcher(PublicDns.Resolver resolver, Duration timeout) {
+		ExternalImageFetcher created = new ExternalImageFetcher(resolver, sockets, timeout);
+		fetchers.add(created);
+		return created;
+	}
+
+	private void awaitRequests(int count) throws InterruptedException {
+		long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+		while (server.getRequestCount() < count && System.nanoTime() - until < 0) {
+			Thread.sleep(10);
+		}
+		assertThat(server.getRequestCount()).isEqualTo(count);
 	}
 
 	private static void assertRefused(ThrowingCallable fetch, String messageKey) {
 		assertThatThrownBy(fetch).isInstanceOfSatisfying(ApiException.class,
 				ex -> assertThat(ex.getMessageKey()).isEqualTo(messageKey));
+	}
+
+	private static void assertBusy(ThrowingCallable fetch) {
+		assertThatThrownBy(fetch).isInstanceOfSatisfying(ApiException.class, ex -> {
+			assertThat(ex.getStatus()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+			assertThat(ex.getMessageKey()).isEqualTo("error.media.busy");
+		});
 	}
 
 	private static MockResponse image() {
@@ -176,6 +327,15 @@ class ExternalImageFetcherTest {
 		}
 		catch (UnknownHostException ex) {
 			throw new IllegalStateException(ex);
+		}
+	}
+
+	private static void await(CountDownLatch latch) {
+		try {
+			latch.await(30, TimeUnit.SECONDS);
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
 		}
 	}
 }
