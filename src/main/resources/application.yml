@@ -255,6 +255,16 @@ hinata:
     bitbucket-client-secret: ${HINATA_GIT_BITBUCKET_CLIENT_SECRET:}
     webhook-base-url: ${HINATA_GIT_WEBHOOK_BASE_URL:}
     token-secret: ${HINATA_GIT_TOKEN_SECRET:change-me-change-me-change-me-git-tokens}
+  ics:
+    # Key for the calendar subscription URLs stored at rest: Base64, at least 32
+    # bytes (openssl rand -base64 32). Empty on purpose. Without it the server
+    # refuses to store a subscription instead of encrypting it under a default
+    # everyone knows.
+    secret: ${HINATA_ICS_SECRET:}
+    # Optional, comma-separated: a host name or *.domain. Neither list can open a
+    # private or loopback address.
+    allowed-hosts: ${HINATA_ICS_ALLOWED_HOSTS:}
+    denied-hosts: ${HINATA_ICS_DENIED_HOSTS:}
 
 springdoc:
   api-docs:
@@ -273,3 +283,7 @@ scalar:
 logging:
   level:
     org.springframework.security: ${HINATA_LOG_SECURITY:WARN}
+    # ical4j logs the dates it computes at DEBUG and raw property values at WARN
+    # in parts the ics package does not use. A calendar is somebody's schedule, so
+    # this stays off even when the rest of the server is turned up.
+    net.fortuna.ical4j: ERROR
