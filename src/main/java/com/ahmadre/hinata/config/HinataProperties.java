@@ -78,6 +78,7 @@ public class HinataProperties {
 	@Valid
 	private TimeTracking timeTracking = new TimeTracking();
 	private Notification notification = new Notification();
+	private Ics ics = new Ics();
 
 	/** Tuning for the notification fan-out that is not a per-user preference. */
 	@Getter
@@ -146,6 +147,35 @@ public class HinataProperties {
 		private String webhookBaseUrl = "";
 		/** Key used to encrypt stored provider access tokens at rest (>= 16 chars). */
 		private String tokenSecret = "change-me-change-me-change-me-git-tokens";
+	}
+
+	/**
+	 * External calendars read over ICS: holiday calendars an administrator imports
+	 * and calendar subscriptions a person adds. Both make this server connect to a
+	 * host somebody else named, so how that happens is fixed in
+	 * {@code ics.IcsFetcher} and not configurable. What an operator sets here is
+	 * the key stored addresses are encrypted with, and which hosts to allow or
+	 * refuse.
+	 */
+	@Getter
+	@Setter
+	public static class Ics {
+		/**
+		 * Base64 key of at least 32 bytes that subscription URLs are encrypted with
+		 * ({@code HINATA_ICS_SECRET}). There is deliberately no default: without a
+		 * key the server refuses to store a subscription rather than encrypting it
+		 * under a secret anyone who reads this file knows.
+		 */
+		private String secret = "";
+		/**
+		 * Hosts calendars may be fetched from; empty means any public host. An entry
+		 * is a host name ({@code calendar.google.com}) or a wildcard for the
+		 * subdomains of one ({@code *.example.org}). It never opens a private or
+		 * loopback address: that refusal does not consult this list.
+		 */
+		private List<String> allowedHosts = List.of();
+		/** Hosts calendars are never fetched from, in the same notation; checked before the allow list. */
+		private List<String> deniedHosts = List.of();
 	}
 
 	/**

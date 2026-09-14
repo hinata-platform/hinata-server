@@ -164,6 +164,31 @@ class ModuleBoundaryTest {
 	}
 
 	@Test
+	void theCalendarPackageKnowsNothingOfTheModulesThatReadThroughIt() {
+		// ics is shared: holiday imports (stage 10) and calendar subscriptions
+		// (stage 13) read through it, and shift planning puts a writer beside it
+		// (HIN-47). A parser that knew about time entries could not be handed on.
+		noClasses()
+				.that().resideInAPackage("..ics..")
+				.should().dependOnClassesThat().resideInAnyPackage(MODULE_PACKAGES)
+				.because("ics serves time tracking, availability and shift planning alike")
+				.check(PRODUCTION);
+	}
+
+	@Test
+	void readingACalendarNeedsNoApplicationContext() {
+		// The parser is a pure function, like TeamAccess. Spring and the
+		// configuration come in at the fetcher and the cipher, and nowhere else.
+		noClasses()
+				.that().resideInAPackage("..ics..")
+				.and().doNotHaveSimpleName("IcsFetcher")
+				.and().doNotHaveSimpleName("IcsUrlCipher")
+				.should().dependOnClassesThat().resideInAnyPackage("org.springframework..", "com.ahmadre.hinata.config..")
+				.because("the parser must run without an application context")
+				.check(PRODUCTION);
+	}
+
+	@Test
 	void theWireContractsCarryNamesAndNothingElse() {
 		// AuditAction has TIME_ENTRY_*, Scopes has worklog:read/write, and
 		// Notification.Type will gain the approval events in stage 7. Constants

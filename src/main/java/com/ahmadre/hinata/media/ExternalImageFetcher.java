@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.media;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.PublicAddresses;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -32,9 +33,10 @@ import java.util.concurrent.TimeUnit;
  * A10), so this is deliberately locked down:
  * <ul>
  *   <li>only {@code http}/{@code https} schemes;</li>
- *   <li>every resolved IP (all A/AAAA records) must be a public unicast address
- *       — loopback, link-local, site-local/private, CGNAT, unique-local IPv6,
- *       multicast, wildcard and the cloud metadata IP are all rejected;</li>
+ *   <li>every resolved IP (all A/AAAA records) must be on the public internet as
+ *       {@link PublicAddresses} defines it: loopback, link-local and the cloud
+ *       metadata IP, private and CGNAT ranges, unique-local IPv6, multicast,
+ *       wildcard and the IPv6 forms that wrap one of them are all rejected;</li>
  *   <li>redirects are followed manually (max {@value #MAX_REDIRECTS}) so each
  *       hop's host is re-validated — an allowed host can't 302 to an internal
  *       one;</li>
@@ -183,36 +185,12 @@ public class ExternalImageFetcher {
 			throw ApiException.badRequest("error.media.urlNotAllowed");
 		}
 		for (InetAddress address : addresses) {
-			if (isBlocked(address)) {
+			if (!PublicAddresses.isPublic(address)) {
 				log.warn("Blocked SSRF-prone image proxy target: {} -> {}", uri.getHost(),
 						address.getHostAddress());
 				throw ApiException.badRequest("error.media.urlNotAllowed");
 			}
 		}
-	}
-
-	private static boolean isBlocked(InetAddress address) {
-		if (address.isAnyLocalAddress() || address.isLoopbackAddress()
-				|| address.isLinkLocalAddress() || address.isSiteLocalAddress()
-				|| address.isMulticastAddress()) {
-			return true;
-		}
-		byte[] b = address.getAddress();
-		if (b.length == 4) {
-			int first = b[0] & 0xFF;
-			int second = b[1] & 0xFF;
-			// 169.254.0.0/16 (link-local, incl. 169.254.169.254 cloud metadata).
-			if (first == 169 && second == 254) {
-				return true;
-			}
-			// 100.64.0.0/10 — carrier-grade NAT, also used by Tailscale.
-			return first == 100 && second >= 64 && second <= 127;
-		}
-		if (b.length == 16) {
-			// fc00::/7 — IPv6 unique-local addresses (not covered by isSiteLocal).
-			return (b[0] & 0xFE) == 0xFC;
-		}
-		return false;
 	}
 
 	/**
