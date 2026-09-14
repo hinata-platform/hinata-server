@@ -20,16 +20,19 @@ public enum IcsFetchError {
 	 */
 	HOST_NOT_ALLOWED("error.ics.hostNotAllowed"),
 
-	/** Any 3xx except a 304 to a conditional request. Redirects are never followed. */
+	/** Any 3xx other than 304. Redirects are never followed. */
 	REDIRECT("error.ics.redirect"),
 
-	/** Any other status than 200; the result carries it, and the message takes it as {0}. */
+	/** Any other status than 200, including a 304 nobody asked for; the result carries it, the message takes it as {0}. */
 	HTTP_STATUS("error.ics.httpStatus"),
 
 	/** Neither labelled {@code text/calendar} nor named {@code .ics}, or empty. */
 	NOT_A_CALENDAR("error.ics.notACalendar"),
 
-	/** A {@code Content-Encoding} other than gzip, which is unpacked because iCloud sends it whatever is asked for. */
+	/**
+	 * A {@code Content-Encoding} other than gzip, or a body labelled gzip that is not.
+	 * gzip itself is unpacked, because iCloud sends it whatever is asked for.
+	 */
 	ENCODING("error.ics.encoding"),
 
 	/** More than 2 MB, declared or read. */

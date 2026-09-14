@@ -49,8 +49,11 @@ public class IcsParseException extends RuntimeException {
 		return line;
 	}
 
-	/** Key into {@code messages*.properties}; {@link Reason#MALFORMED} takes the line as {0}. */
+	/**
+	 * Key into {@code messages*.properties}. {@link Reason#MALFORMED} takes the line as
+	 * {0}; without a line it has a sentence of its own, since "line 0" helps nobody.
+	 */
 	public String messageKey() {
-		return reason.messageKey;
+		return reason == Reason.MALFORMED && line == 0 ? "error.ics.unreadable" : reason.messageKey;
 	}
 }

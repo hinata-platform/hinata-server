@@ -104,6 +104,11 @@ services:
       # Frontend (Flutter web) base URL — email deep links point here.
       HINATA_WEB_BASE_URL: ${HINATA_WEB_BASE_URL:-}
       HINATA_JWT_SECRET: ${HINATA_JWT_SECRET:?set in .env}
+      # Key for the stored calendar subscription URLs (Base64, at least 32 bytes).
+      # Empty keeps calendar subscriptions off; see HinataProperties.Ics.
+      HINATA_ICS_SECRET: ${HINATA_ICS_SECRET:-}
+      HINATA_ICS_ALLOWED_HOSTS: ${HINATA_ICS_ALLOWED_HOSTS:-}
+      HINATA_ICS_DENIED_HOSTS: ${HINATA_ICS_DENIED_HOSTS:-}
       # X.509 client auth over TLS (no password in the URI). The app presents the
       # client certificate from HINATA_MONGO_TLS_KEYSTORE; register its subject DN
       # as the $external user via deploy/x509/init-prod-user.sh.
