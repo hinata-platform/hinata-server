@@ -217,23 +217,23 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 
 	/**
 	 * The candidates every period of the rule is sure to hold, for the rules BYSETPOS is
-	 * written with: weekdays within a week, a month or a year, and times of day; 0 for any
-	 * other shape, where no position is risked. Every month has each weekday at least four
-	 * times and every year at least 52 times. A BYSETPOS up to this number finds a
-	 * candidate in every period; one beyond it may find none in any, and the engine builds
-	 * a thousand empty periods in one step before it gives up.
+	 * written with: times of day on a day or a week, and weekdays within a week, a month or
+	 * a year; 0 for any other shape, where no position is risked. Every month has each
+	 * weekday at least four times and every year at least 52 times. A BYSETPOS up to this
+	 * number finds a candidate in every period; one beyond it may find none in any, and the
+	 * engine builds a thousand empty periods in one step before it gives up.
 	 */
 	private static long leastPerPeriod(String frequency, Map<String, Integer> sizes, Weekdays weekdays) {
-		boolean onlyWeekdays = weekdays.count() > 0 && !sizes.containsKey("BYWEEKNO")
-				&& !sizes.containsKey("BYYEARDAY") && !sizes.containsKey("BYMONTHDAY");
-		if (!onlyWeekdays) {
+		if (sizes.containsKey("BYWEEKNO") || sizes.containsKey("BYYEARDAY") || sizes.containsKey("BYMONTHDAY")) {
 			return 0;
 		}
 		long perMonth = 4L * weekdays.plain() + weekdays.surelyNamed(4);
 		long least = switch (frequency) {
-			case "WEEKLY" -> weekdays.plain();
-			case "MONTHLY" -> perMonth;
-			case "YEARLY" -> sizes.containsKey("BYMONTH")
+			// Without BYDAY a daily period is its day and a weekly one the weekday of DTSTART.
+			case "DAILY" -> weekdays.count() == 0 ? 1 : 0;
+			case "WEEKLY" -> weekdays.count() == 0 ? 1 : weekdays.plain();
+			case "MONTHLY" -> weekdays.count() == 0 ? 0 : perMonth;
+			case "YEARLY" -> weekdays.count() == 0 ? 0 : sizes.containsKey("BYMONTH")
 					? sizes.get("BYMONTH") * perMonth
 					: 52L * weekdays.plain() + weekdays.surelyNamed(52);
 			default -> 0;
@@ -368,24 +368,30 @@ record IcsRule(String forRecur, Until until, boolean expandable, boolean shorten
 		}
 
 		/**
-		 * The days the positions are sure to name in a period that has every weekday at
-		 * least [occurrences] times. A position counted from the start and one counted from
-		 * the end may name the same day, so for each weekday only the larger of the two
-		 * groups counts, and a weekday that is also named plainly counts there already.
+		 * The days the positions are sure to name in periods that have every weekday [fewest]
+		 * or [fewest] + 1 times, as months have four or five and years 52 or 53. For each
+		 * weekday the positions are placed in both kinds of period, where one counted from the
+		 * start and one counted from the end may land on the same day, and the smaller count
+		 * holds. A weekday that is also named plainly is counted there already.
 		 */
-		long surelyNamed(long occurrences) {
+		long surelyNamed(long fewest) {
 			long days = 0;
 			for (String day : WEEK_DAYS) {
 				if (plainDays.contains(day)) {
 					continue;
 				}
-				long fromStart = ordinals.stream()
-						.filter(ordinal -> ordinal.day().equals(day) && ordinal.position() > 0 && ordinal.position() <= occurrences)
-						.count();
-				long fromEnd = ordinals.stream()
-						.filter(ordinal -> ordinal.day().equals(day) && ordinal.position() < 0 && -ordinal.position() <= occurrences)
-						.count();
-				days += Math.max(fromStart, fromEnd);
+				long least = Long.MAX_VALUE;
+				for (long occurrences = fewest; occurrences <= fewest + 1; occurrences++) {
+					Set<Long> named = new LinkedHashSet<>();
+					for (Ordinal ordinal : ordinals) {
+						long position = ordinal.position();
+						if (ordinal.day().equals(day) && Math.abs(position) <= occurrences) {
+							named.add(position > 0 ? position : occurrences + 1 + position);
+						}
+					}
+					least = Math.min(least, named.size());
+				}
+				days += least;
 			}
 			return days;
 		}

@@ -117,6 +117,14 @@ class IcsRuleTest {
 		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=6MO", false).expandable()).isFalse();
 		assertThat(IcsRule.read("FREQ=YEARLY;BYMONTH=1;BYDAY=6MO", false).expandable()).isFalse();
 		assertThat(IcsRule.read("FREQ=YEARLY;BYDAY=53MO", false).expandable()).isTrue();
+		// The first and the last Monday are always two days; the first and the fourth from the
+		// end are one day in a month with four Mondays.
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=1MO,-1MO;BYSETPOS=2", false).expandable()).isTrue();
+		assertThat(IcsRule.read("FREQ=MONTHLY;BYDAY=1MO,-4MO;BYSETPOS=2", false).expandable()).isFalse();
+		// Times of day on every day or every week.
+		assertThat(IcsRule.read("FREQ=DAILY;BYHOUR=9,17;BYSETPOS=2", false).expandable()).isTrue();
+		assertThat(IcsRule.read("FREQ=DAILY;BYHOUR=9,17;BYSETPOS=3", false).expandable()).isFalse();
+		assertThat(IcsRule.read("FREQ=WEEKLY;BYHOUR=9,17;BYSETPOS=-1", false).expandable()).isTrue();
 		// Beside other lists a position is not risked.
 		assertThat(IcsRule.read("FREQ=MONTHLY;BYMONTHDAY=1,15;BYSETPOS=-1", false).expandable()).isFalse();
 	}
