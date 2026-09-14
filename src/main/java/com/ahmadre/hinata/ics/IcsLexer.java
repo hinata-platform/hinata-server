@@ -42,6 +42,9 @@ final class IcsLexer {
 	private static final int MAX_TIMEZONES = 100;
 	private static final int MAX_OBSERVANCES = 50;
 
+	/** Some exporters put one in front of the calendar; it is not part of the first line. */
+	private static final char BYTE_ORDER_MARK = 0xFEFF;
+
 	/** The properties kept, by component. A component that is not here is read past. */
 	private static final Map<String, Set<String>> KEEP = Map.of(
 			"VCALENDAR", Set.of("X-WR-CALNAME"),
@@ -120,7 +123,7 @@ final class IcsLexer {
 		Reader(String text, int maxEvents) {
 			this.text = text;
 			this.maxEvents = maxEvents;
-			this.position = text.startsWith("﻿") ? 1 : 0;
+			this.position = !text.isEmpty() && text.charAt(0) == BYTE_ORDER_MARK ? 1 : 0;
 		}
 
 		Result read() {

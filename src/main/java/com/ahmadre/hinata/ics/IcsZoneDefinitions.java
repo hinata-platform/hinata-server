@@ -115,6 +115,10 @@ final class IcsZoneDefinitions {
 			return Optional.empty();
 		}
 		int ordinal = Integer.parseInt(weekday.group(1));
+		if (ordinal <= -5) {
+			// Five weekdays back from the end of a month is further than java.time counts.
+			return Optional.empty();
+		}
 		// java.time counts "on or after" a day of the month, or "on or before" one counted
 		// from its end. A fifth weekday is how Windows says "the last one".
 		int dayIndicator = ordinal >= 5 ? -1 : ordinal > 0 ? 1 + (ordinal - 1) * 7 : -1 + (ordinal + 1) * 7;

@@ -95,7 +95,6 @@ import java.util.regex.Pattern;
 @Component
 public class IcsFetcher implements DisposableBean {
 
-	static final long MAX_BYTES = 2L * 1024 * 1024;
 	static final Duration TIMEOUT = Duration.ofSeconds(10);
 
 	private static final int THREADS = 4;
@@ -258,8 +257,11 @@ public class IcsFetcher implements DisposableBean {
 		if (body == null || !isCalendar(response.header("Content-Type"), url)) {
 			return IcsFetchResult.failed(IcsFetchError.NOT_A_CALENDAR, status);
 		}
-		if (body.contentLength() > MAX_BYTES) {
+		if (body.contentLength() > IcsLexer.MAX_BYTES) {
 			return IcsFetchResult.failed(IcsFetchError.TOO_LARGE, status);
+		}
+		if (gzip && !looksLikeGzip(body.source())) {
+			return IcsFetchResult.failed(IcsFetchError.ENCODING, status);
 		}
 		byte[] calendar = readCapped(body.source(), gzip);
 		if (calendar == null) {
@@ -274,8 +276,8 @@ public class IcsFetcher implements DisposableBean {
 	}
 
 	/**
-	 * The body, or null as soon as more than {@link #MAX_BYTES} have come in. With
-	 * gzip the packed and the unpacked bytes are both counted, so neither a long
+	 * The body, or null as soon as more than {@link IcsLexer#MAX_BYTES} have come in.
+	 * With gzip the packed and the unpacked bytes are both counted, so neither a long
 	 * download nor a short one that unpacks into something large gets past the cap.
 	 */
 	private static byte[] readCapped(BufferedSource wire, boolean gzip) throws IOException {
@@ -283,11 +285,17 @@ public class IcsFetcher implements DisposableBean {
 		BufferedSource source = Okio.buffer(gzip ? new GzipSource(packed) : packed);
 		Buffer buffer = new Buffer();
 		while (source.read(buffer, 8192) != -1) {
-			if (buffer.size() > MAX_BYTES || packed.count > MAX_BYTES) {
+			if (buffer.size() > IcsLexer.MAX_BYTES || packed.count > IcsLexer.MAX_BYTES) {
 				return null;
 			}
 		}
 		return buffer.readByteArray();
+	}
+
+	/** Every gzip stream starts with 1f 8b; a body labelled gzip that does not was never packed. */
+	private static boolean looksLikeGzip(BufferedSource source) throws IOException {
+		return source.request(2) && source.getBuffer().getByte(0) == (byte) 0x1f
+				&& source.getBuffer().getByte(1) == (byte) 0x8b;
 	}
 
 	/** Labelled as a calendar, or named like one by a server that labels everything text/plain. */

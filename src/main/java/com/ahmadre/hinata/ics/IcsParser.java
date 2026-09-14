@@ -63,15 +63,15 @@ import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_LARGE;
  */
 public final class IcsParser {
 
-	static final int MAX_EVENTS = 5_000;
-	static final int MAX_OCCURRENCES = 5_000;
-	static final int MAX_PER_SERIES = 500;
+	private static final int MAX_EVENTS = 5_000;
+	private static final int MAX_OCCURRENCES = 5_000;
+	private static final int MAX_PER_SERIES = 500;
 
-	static final int MAX_SUMMARY = 500;
-	static final int MAX_LOCATION = 500;
+	private static final int MAX_SUMMARY = 500;
+	private static final int MAX_LOCATION = 500;
 
 	/** As long as the description of a time entry may be, so a taken-over event fits whole. */
-	static final int MAX_DESCRIPTION = 2_000;
+	private static final int MAX_DESCRIPTION = 2_000;
 
 	private static final int MAX_CALENDAR_NAME = 200;
 	private static final int MAX_UID = 1_000;

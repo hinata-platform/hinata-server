@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.text.MessageFormat;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -13,7 +14,9 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
+import java.util.ResourceBundle;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -21,6 +24,7 @@ import java.util.stream.IntStream;
 import static com.ahmadre.hinata.ics.IcsParseException.Reason.MALFORMED;
 import static com.ahmadre.hinata.ics.IcsParseException.Reason.NOT_A_CALENDAR;
 import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_LARGE;
+import static com.ahmadre.hinata.ics.IcsParseException.Reason.TOO_MANY_COMPONENTS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
@@ -37,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 class IcsParserTest {
 
 	private static final ZoneId BERLIN = ZoneId.of("Europe/Berlin");
+	private static final char NO_BREAK_SPACE = 0xA0;
 
 	// --- what providers export ---------------------------------------------------------
 
@@ -57,7 +62,7 @@ class IcsParserTest {
 		assertThat(epiphany.recurrenceId()).isNull();
 		// Google folds this line in the middle of a word, and writes a no-break space before the ">".
 		assertThat(calendar.events().get(1).description()).isEqualTo("Gedenktag\nWenn Sie Gedenktage ausblenden "
-				+ "möchten, rufen Sie die Google Kalender-Einstellungen auf > Feiertage in Deutschland");
+				+ "möchten, rufen Sie die Google Kalender-Einstellungen auf" + NO_BREAK_SPACE + "> Feiertage in Deutschland");
 	}
 
 	@Test
@@ -285,6 +290,57 @@ class IcsParserTest {
 	}
 
 	@Test
+	void stopsASeriesWithoutACountAtFiveHundredOccurrences() {
+		// No COUNT to cut, so the only thing that can mark the result is the series cap itself.
+		String ics = calendar(event("daily", "DTSTART:20260101T090000Z", "DTEND:20260101T093000Z", "RRULE:FREQ=DAILY"));
+
+		IcsCalendar calendar = parse(ics, "2026-01-01T00:00:00Z", "2028-01-01T00:00:00Z");
+
+		assertThat(calendar.events()).hasSize(500);
+		assertThat(calendar.truncated()).isTrue();
+	}
+
+	@Test
+	void keepsTheEarliestFiveThousandOccurrencesOfACalendar() {
+		// Eleven series of 500 a day apart by an hour each: no series is cut, the calendar is.
+		CharSequence[] series = new CharSequence[11];
+		for (int hour = 0; hour < series.length; hour++) {
+			series[hour] = event("hour" + hour, "DTSTART:20260101T%02d0000Z".formatted(hour), "RRULE:FREQ=DAILY;COUNT=500");
+		}
+
+		IcsCalendar calendar = parse(calendar(series), "2026-01-01T00:00:00Z", "2028-01-01T00:00:00Z");
+
+		assertThat(calendar.events()).hasSize(5000);
+		assertThat(calendar.truncated()).isTrue();
+		// 454 whole days of eleven, then six more: the last one kept is 05:00 on the 455th day.
+		assertThat(((IcsEvent.Timed) calendar.events().get(4999)).start()).isEqualTo(Instant.parse("2027-03-31T05:00:00Z"));
+	}
+
+	@Test
+	void stopsExpandingOnceTheCalendarHasSpentItsBudget() {
+		// A series with COUNT is walked from its start. Fifty of 5,000 steps are what one calendar may cost.
+		CharSequence[] series = new CharSequence[51];
+		for (int i = 0; i < series.length; i++) {
+			series[i] = event("walk" + i, "DTSTART:19900101T090000Z", "RRULE:FREQ=DAILY;COUNT=5000");
+		}
+
+		IcsCalendar calendar = assertTimeoutPreemptively(Duration.ofSeconds(30),
+				() -> parse(calendar(series), "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z"));
+
+		assertThat(calendar.events()).isEmpty();
+		assertThat(calendar.truncated()).isTrue();
+	}
+
+	@Test
+	void refusesMoreComponentsThanAnyCalendarHas() {
+		String ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + "BEGIN:X-C\r\nEND:X-C\r\n".repeat(20_000) + "END:VCALENDAR\r\n";
+
+		assertThatThrownBy(() -> parse(ics, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z"))
+				.isInstanceOfSatisfying(IcsParseException.class,
+						ex -> assertThat(ex.reason()).isEqualTo(TOO_MANY_COMPONENTS));
+	}
+
+	@Test
 	void aDailySeriesFromTheYearOneReachesTheWindowAtOnce() {
 		String ics = calendar(event("ancient", "DTSTART:00010101T090000Z", "DTEND:00010101T100000Z", "RRULE:FREQ=DAILY"));
 
@@ -417,6 +473,18 @@ class IcsParserTest {
 			}
 			readOrRefuse(damaged);
 		}
+	}
+
+	@Test
+	void aRefusalNamesTheLineTheWayAPersonWritesIt() {
+		ResourceBundle german = ResourceBundle.getBundle("messages", Locale.GERMAN);
+
+		String sentence = new MessageFormat(german.getString(new IcsParseException(MALFORMED, 12_345).messageKey()),
+				Locale.GERMAN).format(new Object[] { 12_345 });
+
+		assertThat(sentence).isEqualTo("Die Kalenderdatei ist fehlerhaft (Zeile 12345).");
+		// Without a line there is no "line 0" to show.
+		assertThat(new IcsParseException(MALFORMED, 0).messageKey()).isEqualTo("error.ics.unreadable");
 	}
 
 	@Test

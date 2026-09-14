@@ -282,6 +282,13 @@ class IcsFetcherTest {
 	}
 
 	@Test
+	void refusesABodyLabelledGzipThatIsNot() {
+		server.enqueue(calendar().setHeader("Content-Encoding", "gzip"));
+
+		assertThat(fetch(FEED).error()).isEqualTo(ENCODING);
+	}
+
+	@Test
 	void sendsTheValidatorsBackAndReportsAnUnchangedCalendar() throws InterruptedException {
 		server.enqueue(new MockResponse().setResponseCode(304));
 

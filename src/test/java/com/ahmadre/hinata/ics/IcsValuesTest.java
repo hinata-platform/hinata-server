@@ -76,6 +76,6 @@ class IcsValuesTest {
 		assertThat(IcsValues.text("  ", 500)).isNull();
 		assertThat(IcsValues.text(null, 500)).isNull();
 		// Cut between the two halves of an emoji, the half is dropped rather than kept broken.
-		assertThat(IcsValues.text("ab😀", 3)).isEqualTo("ab");
+		assertThat(IcsValues.text("ab" + new String(Character.toChars(0x1F600)), 3)).isEqualTo("ab");
 	}
 }

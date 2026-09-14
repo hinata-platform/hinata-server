@@ -98,6 +98,17 @@ class IcsZoneDefinitionsTest {
 	}
 
 	@Test
+	void aWeekdayCountedTooFarFromTheEndFallsBackInsteadOfFailingTheCalendar() {
+		ZoneRules rules = IcsZoneDefinitions.rules(List.of(
+				new Observance(false, "20001029T030000", "+0200", "+0100", "FREQ=YEARLY;BYMONTH=10;BYDAY=-5SU"),
+				new Observance(true, "20000326T020000", "+0100", "+0200", "FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU")))
+				.orElseThrow();
+
+		assertThat(rules.isFixedOffset()).isTrue();
+		assertThat(rules.getOffset(Instant.parse("2026-07-01T00:00:00Z"))).isEqualTo(ZoneOffset.ofHours(1));
+	}
+
+	@Test
 	void describesNothingWhenNoBlockCanBeRead() {
 		assertThat(IcsZoneDefinitions.rules(List.of(
 				new Observance(false, "someday", "+0100", "+0100", null),

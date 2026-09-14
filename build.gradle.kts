@@ -63,8 +63,9 @@ val bouncyCastleVersion = "1.84"
 // the same stable OkHttp API MinIO uses.
 val okhttpVersion = "4.12.0"
 // iCalendar (RFC 5545) for the shared ics package: holiday imports and calendar
-// subscriptions read external calendars through it. Only the parser and the
-// recurrence engine are used; the library's own network features stay off.
+// subscriptions read external calendars through it. Only its recurrence engine
+// (Recur) is used; the package documentation of com.ahmadre.hinata.ics says why
+// its builder and model are not.
 val ical4jVersion = "4.3.0"
 
 java {
@@ -120,13 +121,10 @@ dependencies {
     // Word + Excel generation: the single-issue export (XWPF / XSSF)
     implementation("org.apache.poi:poi-ooxml:$poiVersion")
 
-    // External calendars (ics package): RFC 5545 parsing and recurrence expansion.
-    // Groovy (a builder DSL) and jparsec (filter expressions) serve features the
-    // package never calls, so they stay off the runtime classpath.
-    implementation("org.mnode.ical4j:ical4j:$ical4jVersion") {
-        exclude(group = "org.codehaus.groovy")
-        exclude(group = "org.jparsec")
-    }
+    // External calendars (ics package): the recurrence engine that expands the
+    // RRULEs the package has checked. Groovy, jparsec and Caffeine are optional
+    // feature variants in ical4j's Gradle metadata and are not pulled in.
+    implementation("org.mnode.ical4j:ical4j:$ical4jVersion")
     // The ics fetcher's HTTP client. MinIO brings it anyway; it is declared here
     // because the fetcher depends on it directly: its Dns hook lets a request
     // connect to exactly the address that was checked, which the JDK client
