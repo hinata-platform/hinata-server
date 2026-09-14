@@ -22,12 +22,15 @@ class IcsUrlCipherTest {
 
 	private static final String SECRET = base64("0123456789abcdef0123456789abcdef");
 
+	/** The record a value is stored in; any string the caller chooses. */
+	private static final String ADA = "subscription-of-ada";
+
 	@Test
 	void withoutASecretNothingIsConfiguredAndNothingIsEncrypted() {
 		for (String secret : new String[] { null, "", "   " }) {
 			IcsUrlCipher cipher = new IcsUrlCipher(secret);
 			assertThat(cipher.isConfigured()).isFalse();
-			assertThatThrownBy(() -> cipher.encrypt(URL)).isInstanceOf(IllegalStateException.class);
+			assertThatThrownBy(() -> cipher.encrypt(URL, ADA)).isInstanceOf(IllegalStateException.class);
 		}
 		// The property's own default is no secret. An instance that never set one
 		// must not quietly encrypt under a key from this repository.
@@ -44,22 +47,33 @@ class IcsUrlCipherTest {
 	void anAddressSurvivesTheRoundTripAndCannotBeReadAtRest() {
 		IcsUrlCipher cipher = new IcsUrlCipher(SECRET);
 
-		String stored = cipher.encrypt(URL);
+		String stored = cipher.encrypt(URL, ADA);
 
 		assertThat(stored).startsWith("v1:").doesNotContain("calendar.google.com").doesNotContain("5ecr3t70k3n");
-		assertThat(cipher.decrypt(stored)).isEqualTo(URL);
+		assertThat(cipher.decrypt(stored, ADA)).isEqualTo(URL);
+	}
+
+	@Test
+	void aValueCopiedIntoSomebodyElsesRecordDoesNotDecryptThere() {
+		IcsUrlCipher cipher = new IcsUrlCipher(SECRET);
+
+		String stored = cipher.encrypt(URL, ADA);
+
+		assertThatThrownBy(() -> cipher.decrypt(stored, "subscription-of-grace"))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasNoCause();
 	}
 
 	@Test
 	void everyValueGetsItsOwnNonce() {
 		IcsUrlCipher cipher = new IcsUrlCipher(SECRET);
 
-		String first = cipher.encrypt(URL);
-		String second = cipher.encrypt(URL);
+		String first = cipher.encrypt(URL, ADA);
+		String second = cipher.encrypt(URL, ADA);
 
 		assertThat(Arrays.copyOf(sealed(first), 12)).isNotEqualTo(Arrays.copyOf(sealed(second), 12));
-		assertThat(cipher.decrypt(first)).isEqualTo(URL);
-		assertThat(cipher.decrypt(second)).isEqualTo(URL);
+		assertThat(cipher.decrypt(first, ADA)).isEqualTo(URL);
+		assertThat(cipher.decrypt(second, ADA)).isEqualTo(URL);
 	}
 
 	@Test
@@ -71,20 +85,20 @@ class IcsUrlCipherTest {
 		IcsUrlCipher cipher = new IcsUrlCipher(wrapped);
 
 		assertThat(cipher.isConfigured()).isTrue();
-		assertThat(cipher.decrypt(cipher.encrypt(URL))).isEqualTo(URL);
+		assertThat(cipher.decrypt(cipher.encrypt(URL, ADA), ADA)).isEqualTo(URL);
 	}
 
 	@Test
 	void aValueThatWasTamperedWithOrWrittenUnderAnotherKeyIsRefusedWithoutQuotingIt() {
 		IcsUrlCipher cipher = new IcsUrlCipher(SECRET);
-		String stored = cipher.encrypt(URL);
+		String stored = cipher.encrypt(URL, ADA);
 		byte[] flipped = sealed(stored);
 		flipped[flipped.length - 1] ^= 1;
 		String tampered = "v1:" + Base64.getEncoder().encodeToString(flipped);
-		String foreign = new IcsUrlCipher(base64("fedcba9876543210fedcba9876543210")).encrypt(URL);
+		String foreign = new IcsUrlCipher(base64("fedcba9876543210fedcba9876543210")).encrypt(URL, ADA);
 
 		for (String unreadable : List.of(tampered, foreign, "v2:" + stored.substring(3), "v1:###", "v1:", URL)) {
-			assertThatThrownBy(() -> cipher.decrypt(unreadable))
+			assertThatThrownBy(() -> cipher.decrypt(unreadable, ADA))
 					.isInstanceOf(IllegalArgumentException.class)
 					.hasNoCause()
 					.satisfies(ex -> assertThat(ex.getMessage())

@@ -56,6 +56,12 @@ public sealed interface IcsEvent permits IcsEvent.Timed, IcsEvent.AllDay {
 	record Timed(String uid, String recurrenceId, Instant start, Instant end, ZoneId zone, boolean floating,
 			String summary, String location, String description, Status status, boolean transparent)
 			implements IcsEvent {
+
+		/** The kind of event only. What it says, where and when it is, is somebody's schedule. */
+		@Override
+		public String toString() {
+			return recurrenceId == null ? "IcsEvent.Timed[single]" : "IcsEvent.Timed[occurrence of a series]";
+		}
 	}
 
 	/**
@@ -66,5 +72,11 @@ public sealed interface IcsEvent permits IcsEvent.Timed, IcsEvent.AllDay {
 	record AllDay(String uid, String recurrenceId, LocalDate start, LocalDate end,
 			String summary, String location, String description, Status status, boolean transparent)
 			implements IcsEvent {
+
+		/** The kind of event only. What it says, where and when it is, is somebody's schedule. */
+		@Override
+		public String toString() {
+			return recurrenceId == null ? "IcsEvent.AllDay[single]" : "IcsEvent.AllDay[occurrence of a series]";
+		}
 	}
 }
