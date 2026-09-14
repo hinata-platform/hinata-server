@@ -1,4 +1,4 @@
-package com.ahmadre.hinata.media;
+package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.PreparedAnswers;
@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * it opens to that address is connected to the local server underneath. Which address
  * the fetcher asked for is recorded.
  */
-class ExternalImageFetcherTest {
+class LogoFetcherTest {
 
 	private static final String HOST = "images.test";
 	private static final String LOGO = "http://" + HOST + "/logo.png";
@@ -47,7 +47,7 @@ class ExternalImageFetcherTest {
 	private static final InetAddress PRIVATE = literal("10.0.0.7");
 	private static final InetAddress LOOPBACK = literal("127.0.0.1");
 
-	private final List<ExternalImageFetcher> fetchers = new ArrayList<>();
+	private final List<LogoFetcher> fetchers = new ArrayList<>();
 	private MockWebServer server;
 	private RemappedSockets sockets;
 	private PreparedAnswers answers;
@@ -62,7 +62,7 @@ class ExternalImageFetcherTest {
 
 	@AfterEach
 	void stopServer() throws IOException {
-		fetchers.forEach(ExternalImageFetcher::destroy);
+		fetchers.forEach(LogoFetcher::destroy);
 		server.shutdown();
 	}
 
@@ -90,8 +90,7 @@ class ExternalImageFetcherTest {
 			"http://[::ffff:169.254.169.254]/logo.png",
 			"http://[fd00::1]/logo.png",
 			// The NAT64 spelling of the metadata address. The JDK's own address
-			// predicates see an ordinary IPv6 address here, and so did this class
-			// until it asked PublicAddresses.
+			// predicates see an ordinary IPv6 address here.
 			"http://[64:ff9b::a9fe:a9fe]/logo.png",
 			// Spellings OkHttp connects to without a lookup, whatever they point at.
 			"http://127.1/logo.png",
@@ -179,7 +178,7 @@ class ExternalImageFetcherTest {
 					.setHeadersDelay(600, TimeUnit.MILLISECONDS));
 		}
 		server.enqueue(image());
-		ExternalImageFetcher impatient = fetcher(answers, Duration.ofSeconds(1));
+		LogoFetcher impatient = fetcher(answers, Duration.ofSeconds(1));
 
 		assertRefused(() -> impatient.fetchLogo(LOGO), "error.media.fetchFailed");
 	}
@@ -187,7 +186,7 @@ class ExternalImageFetcherTest {
 	@Test
 	void endsALookupWithTheFetchsTime() {
 		CountDownLatch never = new CountDownLatch(1);
-		ExternalImageFetcher impatient = fetcher(host -> {
+		LogoFetcher impatient = fetcher(host -> {
 			await(never);
 			return new InetAddress[] { PUBLIC };
 		}, Duration.ofSeconds(1));
@@ -203,7 +202,7 @@ class ExternalImageFetcherTest {
 	@Test
 	void givesUpOnABodyThatTrickles() {
 		server.enqueue(image().throttleBody(1, 1, TimeUnit.SECONDS));
-		ExternalImageFetcher impatient = fetcher(answers, Duration.ofSeconds(1));
+		LogoFetcher impatient = fetcher(answers, Duration.ofSeconds(1));
 		long started = System.nanoTime();
 
 		assertRefused(() -> impatient.fetchLogo(LOGO), "error.media.fetchFailed");
@@ -213,11 +212,11 @@ class ExternalImageFetcherTest {
 	// --- helpers --------------------------------------------------------------------
 
 	private StorageService.StoredObject fetch(String url) {
-		return fetcher(answers, ExternalImageFetcher.TIMEOUT).fetchLogo(url);
+		return fetcher(answers, LogoFetcher.TIMEOUT).fetchLogo(url);
 	}
 
-	private ExternalImageFetcher fetcher(PublicDns.Resolver resolver, Duration timeout) {
-		ExternalImageFetcher created = new ExternalImageFetcher(resolver, sockets, timeout);
+	private LogoFetcher fetcher(PublicDns.Resolver resolver, Duration timeout) {
+		LogoFetcher created = new LogoFetcher(resolver, sockets, timeout);
 		fetchers.add(created);
 		return created;
 	}

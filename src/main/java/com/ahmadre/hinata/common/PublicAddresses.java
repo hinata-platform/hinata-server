@@ -6,9 +6,9 @@ import java.net.InetAddress;
  * Whether an address lies on the public internet: the question every server-side
  * fetch of a URL somebody else typed has to answer before it connects.
  *
- * <p>Shared because two fetchers ask it, the image proxy behind pasted images and
- * the organization logo, and the calendar fetcher of the {@code ics} package. A
- * rule like this is only as good as its least careful copy, so there is one.
+ * <p>Shared because two fetchers ask it, the one for the organization logo and the
+ * calendar fetcher of the {@code ics} package. A rule like this is only as good as
+ * its least careful copy, so there is one.
  *
  * <p>The IPv4 side names every range IANA's special-purpose registry marks as not
  * globally reachable. The IPv6 side goes the other way round and admits only

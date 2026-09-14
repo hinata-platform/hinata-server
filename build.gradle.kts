@@ -126,7 +126,7 @@ dependencies {
     // feature variants in ical4j's Gradle metadata and are not pulled in.
     implementation("org.mnode.ical4j:ical4j:$ical4jVersion")
     // The HTTP client for requests to addresses somebody else chose: the calendar
-    // fetcher and the image proxy, both through common/PublicDns. MinIO brings it
+    // fetcher and the logo fetcher, both through common/PublicDns. MinIO brings it
     // anyway; it is declared here because they depend on it directly: its Dns hook
     // lets a request connect to exactly the address that was checked, which the
     // JDK client cannot do.

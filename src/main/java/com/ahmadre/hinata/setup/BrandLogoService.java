@@ -1,14 +1,15 @@
 package com.ahmadre.hinata.setup;
 
-import com.ahmadre.hinata.media.ExternalImageFetcher;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -62,7 +63,8 @@ public class BrandLogoService {
 
 	private final SettingsService settings;
 	private final OrganizationLogoService logoService;
-	private final ExternalImageFetcher fetcher;
+	private final LogoFetcher fetcher;
+	private final Clock clock;
 
 	/**
 	 * Everything derived from one {@code logoUrl}, swapped atomically. Fields are
@@ -195,7 +197,7 @@ public class BrandLogoService {
 				// The host did not answer this time. Serving nothing would take the logo out
 				// of the app, the mails and the exports for a whole TTL, so the last bytes
 				// stay and the next attempt comes after RETRY_AFTER.
-				derived = current.refreshingAt(Instant.now().plus(RETRY_AFTER));
+				derived = current.refreshingAt(clock.instant().plus(RETRY_AFTER));
 			}
 			cache = derived;
 			return derived;
@@ -206,7 +208,7 @@ public class BrandLogoService {
 	}
 
 	private boolean isStale(Snapshot snap) {
-		return snap.refreshAt() != null && snap.refreshAt().isBefore(Instant.now());
+		return snap.refreshAt() != null && snap.refreshAt().isBefore(clock.instant());
 	}
 
 	private static java.util.Map<String, java.util.Optional<byte[]>> bandCache() {
@@ -226,7 +228,7 @@ public class BrandLogoService {
 	}
 
 	private Snapshot derive(String key) {
-		Instant refreshAt = key != null && OrganizationLogoService.isInternal(key) ? null : Instant.now().plus(EXTERNAL_TTL);
+		Instant refreshAt = key != null && OrganizationLogoService.isInternal(key) ? null : clock.instant().plus(EXTERNAL_TTL);
 		String organization = organizationName();
 		if (key == null || key.isBlank()) {
 			return new Snapshot(key, organization, null, null, bandCache(), refreshAt);
@@ -265,8 +267,8 @@ public class BrandLogoService {
 
 	/** Normalized PNG for anything we draw ourselves, or null for a vector. */
 	private byte[] toRaster(BrandAsset asset) {
-		String type = asset.contentType() == null ? "" : asset.contentType().toLowerCase();
-		if (!ExternalImageFetcher.RASTER_TYPES.contains(type)) {
+		String type = asset.contentType() == null ? "" : asset.contentType().toLowerCase(Locale.ROOT);
+		if (!LogoFetcher.RASTER_TYPES.contains(type)) {
 			return null;
 		}
 		try {
