@@ -464,11 +464,16 @@ class BoardReaderIntegrationTest {
 		issue(hinata, "Spelled otherwise", i -> i.state("in PROGRESS"));
 		when(currentUser.require()).thenReturn(member);
 
-		BoardController.BoardView view = controller.view(board.getId(), null);
+		List<BoardController.BoardView> views = new ArrayList<>();
+		List<Document> read = profiled(() -> views.add(controller.view(board.getId(), null)));
 
-		assertThat(view.columns()).filteredOn(column -> column.name().equals("In Progress")).singleElement()
+		assertThat(views.getFirst().columns()).filteredOn(column -> column.name().equals("In Progress")).singleElement()
 				.satisfies(column -> assertThat(column.issues()).extracting(Issue::getTitle)
 						.containsExactly("Spelled otherwise"));
+		// The old view reads within the time of its request too, each project's cards off a board index.
+		assertThat(read).isNotEmpty()
+				.allSatisfy(op -> assertThat(limited(op)).as("time limit of %s", sent(op)).isTrue());
+		assertThat(hinted(read, "find", "board_by_state")).isNotEmpty();
 	}
 
 	@Test

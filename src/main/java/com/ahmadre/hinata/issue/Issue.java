@@ -346,6 +346,14 @@ public class Issue {
 	}
 
 	/**
+	 * Sets the labels without the blank ones, each once, in the order they were first written: a label sent
+	 * again and again is one label, see {@link IssueLabels}.
+	 */
+	public void setTags(List<String> tags) {
+		this.tags = IssueLabels.distinct(tags);
+	}
+
+	/**
 	 * Sets the single (primary) assignee, replacing any others — used in
 	 * single-assignee mode and by the legacy {@code assigneeId} API field.
 	 */

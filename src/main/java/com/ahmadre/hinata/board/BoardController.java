@@ -5,7 +5,6 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.deletion.DeletionService;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
-import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.User;
@@ -39,7 +38,6 @@ public class BoardController {
 
 	private final AgileBoardRepository boards;
 	private final SprintRepository sprints;
-	private final IssueRepository issues;
 	private final IssueService issueService;
 	private final ProjectService projects;
 	private final DeletionService deletion;
@@ -97,9 +95,7 @@ public class BoardController {
 	private static final int LIST_CAP = 500;
 
 	/** What the old board view reads per project: at most 500 active issues, lowest rank first. */
-	private static final org.springframework.data.domain.Pageable OLD_VIEW_CARDS =
-			org.springframework.data.domain.PageRequest.of(0, 500,
-					org.springframework.data.domain.Sort.by("rank", "id"));
+	private static final int OLD_VIEW_CARDS = 500;
 
 	/** Ids of the projects the user may see (deduped, archived excluded). */
 	private Set<String> visibleProjectIds(User user) {
@@ -206,12 +202,7 @@ public class BoardController {
 		// the query leaves them out.
 		Set<String> columnStates = reader.spellings(scope, scope.columns().stream()
 				.flatMap(column -> column.getStates().stream()).toList());
-		List<Issue> candidates = new ArrayList<>();
-		for (Project project : scope.projects()) {
-			candidates.addAll(effectiveSprint != null
-					? issues.findByProjectIdAndSprintIdAndArchivedFalse(project.getId(), effectiveSprint, OLD_VIEW_CARDS)
-					: issues.findByProjectIdAndArchivedFalseAndStateIn(project.getId(), columnStates, OLD_VIEW_CARDS));
-		}
+		List<Issue> candidates = reader.wholeCards(scope, effectiveSprint, columnStates, OLD_VIEW_CARDS);
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
 		// Stamp each card with its direct-child (sub-task) count/progress so the
 		// board can show the indicator + expander without a per-card lookup. The

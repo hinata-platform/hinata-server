@@ -158,6 +158,7 @@ public class IssueService {
 		// The builder sets the list field directly; normalise so the primary
 		// assigneeId is in sync and the list is de-duped/blank-stripped.
 		issue.setAssigneeIds(issue.getAssigneeIds());
+		issue.setTags(issue.getTags());
 		if (author != null) {
 			projects.assertMember(project, author); // only project members may add issues (A01)
 		}

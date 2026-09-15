@@ -2,11 +2,9 @@ package com.ahmadre.hinata.issue;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.mongodb.repository.Meta;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,20 +29,6 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 	List<Issue> findByAssigneeIdsContainsOrderByCreatedAtDesc(String assigneeId);
 
 	Page<Issue> findByProjectId(String projectId, Pageable pageable);
-
-	/**
-	 * A project's active issues in [states], as many and in the order [pageable] says, without counting them.
-	 * The old board view reads them, and like every read of a board it gives up after five seconds.
-	 */
-	@Meta(maxExecutionTimeMs = 5_000)
-	List<Issue> findByProjectIdAndArchivedFalseAndStateIn(String projectId, Collection<String> states, Pageable pageable);
-
-	/**
-	 * A project's active issues in one sprint, as many and in the order [pageable] says, without counting them.
-	 * The old board view reads them, and like every read of a board it gives up after five seconds.
-	 */
-	@Meta(maxExecutionTimeMs = 5_000)
-	List<Issue> findByProjectIdAndSprintIdAndArchivedFalse(String projectId, String sprintId, Pageable pageable);
 
 	List<Issue> findBySprintId(String sprintId);
 

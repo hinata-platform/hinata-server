@@ -327,6 +327,19 @@ public class BoardReader {
 		return issues.lookupFor(scope.projectIds()).spellings(states);
 	}
 
+	/**
+	 * Up to [perProject] active issues of each of [scope]'s projects, whole and each project's in board
+	 * order: of the sprint [sprintId], or else in [states]. What the board view before the paged wall
+	 * reads, every read within the time of its request.
+	 */
+	List<Issue> wholeCards(BoardScope scope, String sprintId, Collection<String> states, int perProject) {
+		List<Issue> cards = new ArrayList<>();
+		for (Project project : scope.projects()) {
+			cards.addAll(issues.wholeCards(project.getId(), sprintId, states, perProject));
+		}
+		return cards;
+	}
+
 	/** Whether a page from [offset] of [total] cards holds any, within the reach of a page. */
 	static boolean readsPage(long offset, long total, int pageSize) {
 		return pageSize > 0 && offset < total && offset <= MAX_OFFSET;

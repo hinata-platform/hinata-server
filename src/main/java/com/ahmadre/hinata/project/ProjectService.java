@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.project;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.issue.IssueLabels;
 import com.ahmadre.hinata.issue.IssueSearchText;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.TeamAccess;
@@ -555,7 +556,6 @@ public class ProjectService {
 		Set<String> newNames = new HashSet<>();
 		// A rename writes the name onto the project's issues, so a new or renamed label holds to the length
 		// an issue takes. A label the project carries already stays, whatever its length.
-		int longest = com.ahmadre.hinata.issue.IssueLabels.MAX_LENGTH;
 		for (Project.Label l : incoming) {
 			if (l.getName() == null || l.getName().isBlank()) {
 				throw ApiException.badRequest("error.project.labelNameRequired");
@@ -564,8 +564,8 @@ public class ProjectService {
 			if (!seen.add(l.getName().toLowerCase(Locale.ROOT))) {
 				throw ApiException.badRequest("error.project.duplicateLabel", l.getName());
 			}
-			if (l.getName().length() > longest && !oldNames.contains(l.getName())) {
-				throw ApiException.badRequest("error.project.labelTooLong", longest);
+			if (IssueLabels.tooLong(l.getName()) && !oldNames.contains(l.getName())) {
+				throw ApiException.badRequest("error.project.labelTooLong", IssueLabels.MAX_LENGTH);
 			}
 			newNames.add(l.getName());
 			if (l.getId() == null || l.getId().isBlank()) {

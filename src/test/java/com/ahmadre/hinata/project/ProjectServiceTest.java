@@ -26,6 +26,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.ahmadre.hinata.user.UserRepository;
+import com.ahmadre.hinata.issue.IssueLabels;
 import com.ahmadre.hinata.issue.IssueWatcherCleanup;
 
 class ProjectServiceTest {
@@ -202,7 +203,7 @@ class ProjectServiceTest {
 	@Test
 	void holdsNewAndRenamedLabelsToWhatAnIssueTakesAndKeepsWhatTheProjectCarries() {
 		Project project = sampleProject();
-		String longName = "x".repeat(com.ahmadre.hinata.issue.IssueLabels.MAX_LENGTH + 1);
+		String longName = "x".repeat(IssueLabels.MAX_LENGTH + 1);
 		project.getLabels().add(Project.Label.builder().id("lb1").name(longName).hue(20).build());
 
 		// A label the project carries already stays, whatever its length.
