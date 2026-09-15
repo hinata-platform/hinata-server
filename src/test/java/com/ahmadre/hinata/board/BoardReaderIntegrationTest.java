@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.board;
 
+import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueLink;
@@ -22,6 +23,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -39,6 +41,7 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.when;
 
 /**
  * A board read in pages against a real MongoDB.
@@ -79,6 +82,12 @@ class BoardReaderIntegrationTest {
 	private SprintRepository sprints;
 	@Autowired
 	private IssueLinkRepository links;
+	@Autowired
+	private BoardIssueReads issueReads;
+	@Autowired
+	private BoardController controller;
+	@MockitoBean
+	private CurrentUser currentUser;
 
 	private User member;
 	private User outsider;
@@ -303,9 +312,9 @@ class BoardReaderIntegrationTest {
 	void offersTheTypesAShapeListsAndEveryPriority() {
 		issue(hinata, "Task", i -> { });
 
-		BoardReader.BoardFacets wall = reader.facets(board.getId(), BoardQuery.Shape.WALL, member);
-		BoardReader.BoardFacets timeline = reader.facets(board.getId(), BoardQuery.Shape.TIMELINE, member);
-		BoardReader.BoardFacets planning = reader.facets(board.getId(), BoardQuery.Shape.PLANNING, member);
+		BoardFacets wall = reader.facets(board.getId(), BoardQuery.Shape.WALL, member);
+		BoardFacets timeline = reader.facets(board.getId(), BoardQuery.Shape.TIMELINE, member);
+		BoardFacets planning = reader.facets(board.getId(), BoardQuery.Shape.PLANNING, member);
 
 		assertThat(wall.types()).containsExactly("TASK", "BUG", "FEATURE", "STORY");
 		assertThat(timeline.types()).containsExactly("TASK", "BUG", "FEATURE", "STORY", "EPIC");
@@ -373,9 +382,9 @@ class BoardReaderIntegrationTest {
 		assertThat(page.content()).hasSize(10);
 		assertThat(page.totalElements()).isEqualTo(42);
 		assertThat(page.summary()).containsExactly(
-				new BoardReader.StateSummary("Done", true, 1, 5),
-				new BoardReader.StateSummary("In Review", false, 1, 0),
-				new BoardReader.StateSummary("Open", false, 40, 80));
+				new BoardStateSummary("Done", true, 1, 5),
+				new BoardStateSummary("In Review", false, 1, 0),
+				new BoardStateSummary("Open", false, 40, 80));
 		// Only a sprint has a head to count for.
 		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource(null, null, true, null),
 				BoardQuery.ALL, 0, 10, true, member), "error.validationFailed");
@@ -394,7 +403,7 @@ class BoardReaderIntegrationTest {
 		issue(secret, "Elsewhere", i -> i.reporterId(admin.getId()).tags(new ArrayList<>(List.of("secret"))));
 		Issue epic = issue(hinata, "Epic", i -> i.type(Issue.Type.EPIC));
 
-		BoardReader.BoardFacets facets = reader.facets(board.getId(), BoardQuery.Shape.WALL, member);
+		BoardFacets facets = reader.facets(board.getId(), BoardQuery.Shape.WALL, member);
 
 		// A further assignee counts as well as the first.
 		assertThat(facets.assigneeIds()).containsExactlyInAnyOrder(member.getId(), admin.getId());
@@ -424,8 +433,10 @@ class BoardReaderIntegrationTest {
 		assertThat(hinted(gathered, "find", "board_by_assignee")).hasSize(3);
 		assertThat(hinted(gathered, "find", "board_by_label")).hasSize(4);
 		assertThat(hinted(gathered, "distinct", "board_by_reporter")).hasSize(1);
-		assertThat(hinted(gathered, "find", "board_by_state")).singleElement()
-				.satisfies(epics -> assertThat(examined(epics)).isEqualTo(1));
+		assertThat(hinted(gathered, "find", "board_epics")).singleElement().satisfies(epics -> {
+			assertThat(examined(epics)).isEqualTo(1);
+			assertThat(epics.getBoolean("hasSortStage", false)).isFalse();
+		});
 	}
 
 	@Test
@@ -443,6 +454,51 @@ class BoardReaderIntegrationTest {
 				BoardQuery.ALL, 0, 30, false, member))).containsExactlyInAnyOrder("Spelled otherwise", "Spelled as named");
 		assertThat(titles(filtered(BoardQuery.of(null, List.of("in progress"), null, null, null, null, null, null, null,
 				null)))).containsExactlyInAnyOrder("Spelled otherwise", "Spelled as named");
+	}
+
+	@Test
+	void theOldBoardViewPutsACardInTheColumnOfItsStateHoweverTheStateIsSpelled() {
+		issue(hinata, "Spelled otherwise", i -> i.state("in PROGRESS"));
+		when(currentUser.require()).thenReturn(member);
+
+		BoardController.BoardView view = controller.view(board.getId(), null);
+
+		assertThat(view.columns()).filteredOn(column -> column.name().equals("In Progress")).singleElement()
+				.satisfies(column -> assertThat(column.issues()).extracting(Issue::getTitle)
+						.containsExactly("Spelled otherwise"));
+	}
+
+	@Test
+	void readsTheValuesOffTheIssuesOnceTheStepsRunOut() {
+		for (String label : List.of("api", "ui", "web")) {
+			issue(hinata, "Tagged " + label, i -> i.tags(new ArrayList<>(List.of(label))));
+		}
+
+		List<Document> read = profiled(() -> assertThat(issueReads.keysOf("tags", List.of(hinata.getId()),
+				"board_by_label", 500, new BoardIssueReads.Steps(2))).containsExactly("api", "ui", "web"));
+
+		assertThat(hinted(read, "find", "board_by_label")).hasSize(2);
+		assertThat(read).filteredOn(op -> sent(op).containsKey("distinct")).singleElement();
+	}
+
+	@Test
+	void readsTheSubTasksOfASprintWithoutTheBoardsOtherCardsInTheirState() {
+		Sprint sprint = sprints.save(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
+		for (int i = 0; i < 200; i++) {
+			issue(hinata, "Done elsewhere " + i, b -> b.state("Done"));
+		}
+		Issue story = issue(hinata, "Story", b -> b.type(Issue.Type.STORY).sprintId(sprint.getId()).state("Done"));
+		for (int i = 0; i < 5; i++) {
+			issue(hinata, "Child " + i, b -> b.type(Issue.Type.SUBTASK).parentId(story.getId()).state("Done"));
+		}
+		BoardQuery subtasks = BoardQuery.of(null, null, null, null, null, null, null, null, null, "subtasks");
+
+		List<Document> read = profiled(() -> assertThat(column(reader.wall(board.getId(), sprint.getId(), subtasks, 30,
+				member), "Done").issues()).hasSize(6));
+
+		// The planner combines the sprint's work and the sub-tasks under it: no read walks the two
+		// hundred other cards in the same state.
+		assertThat(read).isNotEmpty().allSatisfy(op -> assertThat(examined(op)).isLessThanOrEqualTo(12));
 	}
 
 	@Test
@@ -478,6 +534,11 @@ class BoardReaderIntegrationTest {
 				30, false, member))).containsExactly("Deadline", "Sooner epic", "Later");
 		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, false), timeline,
 				0, 30, false, member))).containsExactly("Undated");
+		// Page by page the order holds across the cards with a due date alone and those with a start date.
+		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, true), timeline, 0,
+				2, false, member))).containsExactly("Deadline", "Sooner epic");
+		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, true), timeline, 1,
+				2, false, member))).containsExactly("Later");
 	}
 
 	@Test
@@ -506,6 +567,9 @@ class BoardReaderIntegrationTest {
 				BoardQuery.ALL, 0, 30, false, member), "error.validationFailed");
 		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource("Nowhere", null, false, null),
 				BoardQuery.ALL, 0, 30, false, member), "error.board.unknownColumn");
+		// The timeline has no columns.
+		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource("Open", null, false, true),
+				BoardQuery.ALL, 0, 30, false, member), "error.validationFailed");
 		assertRefused(() -> reader.wall("missing", null, BoardQuery.ALL, 30, member), "error.notFound");
 	}
 
@@ -529,7 +593,7 @@ class BoardReaderIntegrationTest {
 			assertThat(titles(filtered(BoardQuery.of(null, List.of("In Progress"), null, null, List.of(member.getId()),
 					null, null, null, null, null)))).containsExactly("Still there");
 
-			BoardReader.BoardFacets facets = reader.facets(board.getId(), BoardQuery.Shape.WALL, member);
+			BoardFacets facets = reader.facets(board.getId(), BoardQuery.Shape.WALL, member);
 			assertThat(facets.assigneeIds()).containsExactly(member.getId());
 			assertThat(facets.labels()).containsExactly("ui");
 		}
@@ -540,14 +604,22 @@ class BoardReaderIntegrationTest {
 
 	@Test
 	void readsEveryPageAndCountOffTheIndexItNames() {
+		// Two projects: a page in board order merges one scan per project instead of sorting.
+		Project other = projects.save(Project.builder().key("OTH").name("Other").leadId(member.getId())
+				.leadIds(new ArrayList<>(List.of(member.getId())))
+				.memberIds(new ArrayList<>(List.of(member.getId()))).build());
+		board.setProjectIds(new ArrayList<>(List.of(hinata.getId(), other.getId())));
+		boards.save(board);
 		Sprint sprint = sprints.save(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
 		for (int i = 0; i < 90; i++) {
 			int at = i;
-			issue(hinata, "Card " + i, b -> b.state(at % 3 == 0 ? "Done" : "Open")
-					.startDate(at % 2 == 0 ? LocalDate.parse("2026-09-01").plusDays(at) : null));
+			LocalDate day = LocalDate.parse("2026-09-01").plusDays(at);
+			issue(at / 2 % 2 == 0 ? hinata : other, "Card " + i, b -> b.state(at % 3 == 0 ? "Done" : "Open")
+					.startDate(at % 2 == 0 ? day : null)
+					.dueDate(at % 2 == 1 && at % 3 == 1 ? day : null));
 		}
 		for (int i = 0; i < 30; i++) {
-			issue(hinata, "Sprint card " + i, b -> b.sprintId(sprint.getId()));
+			issue(i % 2 == 0 ? hinata : other, "Sprint card " + i, b -> b.sprintId(sprint.getId()));
 		}
 		issue(hinata, "Kryptonite in the title", b -> { });
 
@@ -586,11 +658,22 @@ class BoardReaderIntegrationTest {
 		List<Document> timeline = profiled(() -> reader.cards(board.getId(),
 				new BoardReader.CardSource(null, null, false, true), BoardQuery.all(BoardQuery.Shape.TIMELINE), 0, 10,
 				false, member));
-		assertThat(hinted(timeline, "aggregate", "board_by_dates")).singleElement()
-				.satisfies(count -> assertThat(examined(count)).isZero());
-		assertThat(hinted(timeline, "find", "board_by_dates")).singleElement().satisfies(page -> {
+		// The cards with a due date alone and those with a start date are counted off the keys, and each
+		// part comes off the index in its order, merged across both projects without a sort.
+		assertThat(hinted(timeline, "aggregate", "board_by_dates")).hasSize(2)
+				.allSatisfy(count -> assertThat(examined(count)).isZero());
+		assertThat(hinted(timeline, "find", "board_by_dates")).isNotEmpty().allSatisfy(page -> {
 			assertThat(page.getString("planSummary")).contains("startDate: 1, dueDate: 1");
 			assertThat(page.getBoolean("hasSortStage", false)).isFalse();
+			assertThat(examined(page)).isLessThanOrEqualTo(10);
+		});
+
+		List<Document> undated = profiled(() -> reader.cards(board.getId(),
+				new BoardReader.CardSource(null, null, false, false), BoardQuery.all(BoardQuery.Shape.TIMELINE), 0, 10,
+				false, member));
+		assertThat(hinted(undated, "find", "board_by_dates")).singleElement().satisfies(page -> {
+			assertThat(page.getBoolean("hasSortStage", false)).isFalse();
+			assertThat(examined(page)).isLessThanOrEqualTo(10);
 		});
 	}
 

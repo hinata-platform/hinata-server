@@ -16,7 +16,6 @@ import org.springframework.core.annotation.Order;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -61,10 +60,11 @@ public class ArticleIssueKeysBackfill implements ApplicationRunner {
 
 	private final MongoTemplate mongo;
 	private final RichTextService richText;
+	private final MigrationMarkers markers;
 
 	@Override
 	public void run(ApplicationArguments args) {
-		if (alreadyDone()) return;
+		if (markers.done(MARKER_ID)) return;
 		MongoCollection<Document> articles = mongo.getCollection(ARTICLES);
 		Bson filter = Filters.and(Filters.exists(DOC), Filters.ne(DOC, null), Filters.ne(DOC, ""));
 
@@ -100,7 +100,7 @@ public class ArticleIssueKeysBackfill implements ApplicationRunner {
 			log.info("ArticleIssueKeysBackfill: re-derived the issue backlinks of {} article(s)", updated);
 		}
 		if (complete) {
-			markDone(updated);
+			markers.markDone(MARKER_ID, new Document("updated", updated));
 		}
 		else {
 			log.warn("ArticleIssueKeysBackfill: a batch failed to write; leaving the migration "
@@ -158,29 +158,6 @@ public class ArticleIssueKeysBackfill implements ApplicationRunner {
 		}
 		finally {
 			batch.clear();
-		}
-	}
-
-	private boolean alreadyDone() {
-		try {
-			return mongo.getCollection(MarkdownToLexicalBackfill.MIGRATIONS)
-					.find(new Document("_id", MARKER_ID)).limit(1).first() != null;
-		}
-		catch (RuntimeException ex) {
-			log.warn("ArticleIssueKeysBackfill: could not read the completion marker", ex);
-			return false;
-		}
-	}
-
-	private void markDone(long updated) {
-		try {
-			mongo.getCollection(MarkdownToLexicalBackfill.MIGRATIONS).insertOne(new Document("_id", MARKER_ID)
-					.append("completedAt", Instant.now())
-					.append("updated", updated));
-		}
-		catch (RuntimeException ex) {
-			log.warn("ArticleIssueKeysBackfill: could not write the completion marker; the next "
-					+ "boot will scan again", ex);
 		}
 	}
 }

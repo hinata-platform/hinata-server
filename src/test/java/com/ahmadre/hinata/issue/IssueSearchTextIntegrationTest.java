@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.migration.MigrationMarkers;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
@@ -138,7 +139,7 @@ class IssueSearchTextIntegrationTest {
 	}
 
 	private void forgetTheBackfill() {
-		mongo.getCollection(IssueSearchTextBackfill.MIGRATIONS)
+		mongo.getCollection(MigrationMarkers.COLLECTION)
 				.deleteOne(new Document("_id", IssueSearchTextBackfill.MARKER_ID));
 	}
 

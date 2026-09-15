@@ -45,6 +45,9 @@ final class BoardCriteria {
 	/** An epic filter's: equality on the parent, see {@link Issue}'s {@code parent_number}. */
 	static final String BY_PARENT = "parent_number";
 
+	/** The epics of the board's projects, the oldest first, off an index of epics alone. */
+	static final String EPICS = "board_epics";
+
 	/** Issues an epic filter, or the sub-tasks of a sprint, may reach through. */
 	static final int MAX_LINKED = 10_000;
 
@@ -54,11 +57,14 @@ final class BoardCriteria {
 	private BoardCriteria() {
 	}
 
-	/** Looks up the ids of the issues a criteria matches, off the index it names. */
-	@FunctionalInterface
-	interface IdLookup {
+	/** What a read looks up about the board's issues before it can say which of them it takes. */
+	interface Lookup {
 
+		/** The ids of the issues [criteria] matches, off the index it names. */
 		List<String> idsOf(Criteria criteria, String index);
+
+		/** The spellings [states] are matched in, see {@link BoardCriteria#spellings}. */
+		Set<String> spellings(Collection<String> states);
 	}
 
 	/** Which issues of the board a read starts from: all of them, one sprint's, or the backlog. */
@@ -78,10 +84,10 @@ final class BoardCriteria {
 
 	/**
 	 * The issues of [place] in [scope] that [query] keeps, or empty when the query names only states
-	 * the board's projects do not have and so keeps nothing. [lookup] finds the ids of the issues a
-	 * criteria matches: the work items of a sprint, the children of epics.
+	 * the board's projects do not have and so keeps nothing. [lookup] finds what the criteria need of the
+	 * issues: the work items of a sprint, the children of epics, the spellings of states.
 	 */
-	static Optional<Criteria> of(BoardScope scope, Place place, BoardQuery query, IdLookup lookup) {
+	static Optional<Criteria> of(BoardScope scope, Place place, BoardQuery query, Lookup lookup) {
 		List<String> projectIds = scope.projectIds();
 		List<Criteria> parts = new ArrayList<>();
 		parts.add(Criteria.where("projectId").in(projectIds));
@@ -120,7 +126,7 @@ final class BoardCriteria {
 			if (named.isEmpty()) {
 				return Optional.empty();
 			}
-			parts.add(stateIn(scope.spellings(named)));
+			parts.add(stateIn(lookup.spellings(named)));
 		}
 		if (!query.types().isEmpty()) {
 			parts.add(Criteria.where("type").in(names(query.types())));
@@ -162,20 +168,21 @@ final class BoardCriteria {
 
 	/**
 	 * The index that serves a read of [place] by [query], with [dated] set for the timeline's two
-	 * lists: the one that bounds the read to the fewest cards. The children of a few epics and the
-	 * cards of a sprint are few; one person's, one reporter's or one label's cards are a share of the
-	 * board; the dates, the backlog, a sprint filter and the columns hold the board in the order they
-	 * read it. Null for the sub-tasks of a sprint, which come in by two ways the planner combines.
+	 * lists: the one that bounds the read to the fewest cards. The cards of a sprint are few, and so
+	 * are the children of a few epics, whose trees may span many sprints; one person's, one
+	 * reporter's or one label's cards are a share of the board; the dates, the backlog, a sprint
+	 * filter and the columns hold the board in the order they read it. Null for the sub-tasks of a
+	 * sprint, which come in by two ways the planner combines.
 	 */
 	static String index(Place place, BoardQuery query, Boolean dated) {
 		if (subTasksOfASprint(place, query)) {
 			return null;
 		}
-		if (!query.epicIds().isEmpty()) {
-			return BY_PARENT;
-		}
 		if (place.inSprint()) {
 			return BY_SPRINT;
+		}
+		if (!query.epicIds().isEmpty()) {
+			return BY_PARENT;
 		}
 		if (!query.assigneeIds().isEmpty()) {
 			return BY_ASSIGNEE;
@@ -195,11 +202,19 @@ final class BoardCriteria {
 		return BY_STATE;
 	}
 
-	/** Cards with a date, in two branches without overlap that the timeline index bounds. */
+	/** Cards with a date: those with a start date and those with a due date alone, without overlap. */
 	static Criteria dated() {
-		return new Criteria().orOperator(
-				Criteria.where("startDate").ne(null),
-				Criteria.where("startDate").is(null).and("dueDate").ne(null));
+		return new Criteria().orOperator(started(), startless());
+	}
+
+	/** The timeline's cards with a start date. */
+	static Criteria started() {
+		return Criteria.where("startDate").ne(null);
+	}
+
+	/** The timeline's cards with a due date alone, which come before those with a start date. */
+	static Criteria startless() {
+		return Criteria.where("startDate").is(null).and("dueDate").ne(null);
 	}
 
 	static Criteria undated() {
@@ -208,6 +223,28 @@ final class BoardCriteria {
 
 	static Criteria stateIn(Collection<String> spellings) {
 		return Criteria.where("state").in(spellings);
+	}
+
+	/**
+	 * The spellings [states] are matched in: each state as named, and each spelling of [stored] that
+	 * names one of them, ignoring case. The board has always put an issue into the column of its state
+	 * ignoring case. Matching the spellings the issues store keeps that for every spelling in use and
+	 * still leaves the state an equality the index can bound.
+	 */
+	static Set<String> spellings(Collection<String> states, Collection<String> stored) {
+		Set<String> spellings = new LinkedHashSet<>();
+		for (String state : states) {
+			if (state == null) {
+				continue;
+			}
+			spellings.add(state);
+			for (String spelling : stored) {
+				if (spelling.equalsIgnoreCase(state)) {
+					spellings.add(spelling);
+				}
+			}
+		}
+		return spellings;
 	}
 
 	static Criteria and(Criteria first, Criteria second) {

@@ -13,9 +13,9 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.util.function.SingletonSupplier;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,8 +49,16 @@ public class BoardReader {
 	static final int MAX_LINK_CARDS = 1_000;
 
 	private static final Sort BOARD_ORDER = Sort.by(Sort.Order.asc("rank"), Sort.Order.asc("_id"));
-	private static final Sort TIMELINE_ORDER =
+
+	/** The timeline's cards with a start date, by start date. */
+	private static final Sort STARTED_ORDER =
 			Sort.by(Sort.Order.asc("startDate"), Sort.Order.asc("dueDate"), Sort.Order.asc("_id"));
+
+	/** The timeline's cards with a due date alone: every start date is empty, so the due dates order them. */
+	private static final Sort STARTLESS_ORDER = Sort.by(Sort.Order.asc("dueDate"), Sort.Order.asc("_id"));
+
+	/** The timeline's cards without a date: with no date to order them by, their ids do. */
+	private static final Sort UNDATED_ORDER = Sort.by(Sort.Order.asc("_id"));
 
 	private final AgileBoardRepository boards;
 	private final SprintRepository sprints;
@@ -78,7 +86,8 @@ public class BoardReader {
 
 	/**
 	 * Where a page of cards comes from: the column of that name, the sprint, the backlog, or with
-	 * [dated] the timeline's cards with a date or those without. A column may lie in a sprint.
+	 * [dated] the timeline's cards with a date or those without. A column may lie in a sprint; the
+	 * timeline has no columns.
 	 */
 	public record CardSource(String column, String sprintId, boolean backlog, Boolean dated) {
 
@@ -88,20 +97,10 @@ public class BoardReader {
 		}
 	}
 
-	/** The cards of one workflow state: how many, whether resolved, and their story points. */
-	public record StateSummary(String state, boolean resolved, long count, long points) {
-	}
-
 	/** One page of cards, with the people and references on it, and on request a summary by state. */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record BoardCardPage(List<BoardCard> content, long totalElements, int page, int size,
-			List<DirectoryUser> users, List<BoardRef> refs, List<StateSummary> summary) {
-	}
-
-	/** What a board's filter and its row of faces can offer, over every card of the board. */
-	public record BoardFacets(List<String> assigneeIds, List<String> reporterIds, List<String> labels,
-			List<String> states, List<String> types, List<String> priorities, List<BoardRef> epics,
-			List<DirectoryUser> users) {
+			List<DirectoryUser> users, List<BoardRef> refs, List<BoardStateSummary> summary) {
 	}
 
 	/**
@@ -127,7 +126,7 @@ public class BoardReader {
 			return new BoardWall(scope.board(), boardSprints, sprint, bare, List.of(), List.of());
 		}
 		BoardCriteria.Place place = sprint == null ? BoardCriteria.Place.BOARD : BoardCriteria.Place.sprint(sprint);
-		Optional<Criteria> criteria = BoardCriteria.of(scope, place, query, issues::idsOf);
+		Optional<Criteria> criteria = BoardCriteria.of(scope, place, query, issues.lookupFor(scope.projectIds()));
 		String index = BoardCriteria.index(place, query, null);
 		Map<String, Long> byState = criteria.map(found -> issues.countByState(found, index)).orElse(Map.of());
 		List<List<Issue>> pages = new ArrayList<>();
@@ -167,7 +166,8 @@ public class BoardReader {
 		boolean ofSprint = present(source.sprintId());
 		// Every read names where its cards come from: the whole board in board order has no index to
 		// come off, and no view reads it.
-		if (page < 0 || source.backlog() && ofSprint || !source.named() || summary && !ofSprint) {
+		if (page < 0 || source.backlog() && ofSprint || !source.named() || summary && !ofSprint
+				|| present(source.column()) && source.dated() != null) {
 			throw invalid();
 		}
 		BoardScope scope = scope(boardId, user);
@@ -180,35 +180,69 @@ public class BoardReader {
 		}
 		BoardCriteria.Place place = source.backlog() ? BoardCriteria.Place.BACKLOG
 				: ofSprint ? BoardCriteria.Place.sprint(source.sprintId()) : BoardCriteria.Place.BOARD;
-		Optional<Criteria> found = BoardCriteria.of(scope, place, query, issues::idsOf);
+		BoardCriteria.Lookup lookup = issues.lookupFor(scope.projectIds());
+		Optional<Criteria> found = BoardCriteria.of(scope, place, query, lookup);
 		if (found.isEmpty()) {
 			return new BoardCardPage(List.of(), 0, page, pageSize, List.of(), List.of(),
 					summary ? List.of() : null);
 		}
 		String index = BoardCriteria.index(place, query, source.dated());
 		Criteria criteria = found.get();
-		if (source.dated() != null) {
-			criteria = BoardCriteria.and(criteria, source.dated() ? BoardCriteria.dated() : BoardCriteria.undated());
+		boolean dated = Boolean.TRUE.equals(source.dated());
+		if (Boolean.FALSE.equals(source.dated())) {
+			criteria = BoardCriteria.and(criteria, BoardCriteria.undated());
 		}
-		Criteria scoped = criteria;
+		Criteria scoped = dated ? BoardCriteria.and(criteria, BoardCriteria.dated()) : criteria;
 		long total;
+		long startless = 0;
 		if (column != null) {
 			Map<String, Long> counted = counted(issues.countByState(BoardCriteria.and(criteria,
-					BoardCriteria.stateIn(scope.spellings(column.getStates()))), index), column);
+					BoardCriteria.stateIn(lookup.spellings(column.getStates()))), index), column);
 			total = sum(counted);
 			criteria = BoardCriteria.and(criteria, BoardCriteria.stateIn(counted.keySet()));
+		}
+		else if (dated) {
+			startless = issues.count(BoardCriteria.and(criteria, BoardCriteria.startless()), index);
+			total = startless + issues.count(BoardCriteria.and(criteria, BoardCriteria.started()), index);
 		}
 		else {
 			total = issues.count(criteria, index);
 		}
 		long offset = (long) page * pageSize;
-		Sort order = source.dated() != null ? TIMELINE_ORDER : BOARD_ORDER;
-		List<Issue> content = readsPage(offset, total, pageSize)
-				? issues.find(criteria, order, offset, pageSize, index, BoardCard.FIELDS)
-				: List.of();
+		List<Issue> content;
+		if (!readsPage(offset, total, pageSize)) {
+			content = List.of();
+		}
+		else if (dated) {
+			content = datedPage(criteria, index, offset, pageSize, startless);
+		}
+		else {
+			Sort order = source.dated() != null ? UNDATED_ORDER : BOARD_ORDER;
+			content = issues.find(criteria, order, offset, pageSize, index, BoardCard.FIELDS);
+		}
 		BoardCardAssembler.Cards cards = assembler.cards(scope, content);
 		return new BoardCardPage(cards.of(content), total, page, pageSize, cards.users(), cards.refs(),
 				summary ? issues.summarize(scoped, index) : null);
+	}
+
+	/**
+	 * A page of the timeline's cards with a date: those with a due date alone first, by due date, then
+	 * those with a start date, by start date, which is the order one sort over all of them gives.
+	 * [startless] counts the first part. Each part comes off the timeline index in its own order, which
+	 * the index keeps across the scans of several projects; one read of both parts would have to sort
+	 * every dated card of the board for a page.
+	 */
+	private List<Issue> datedPage(Criteria criteria, String index, long offset, int pageSize, long startless) {
+		List<Issue> page = new ArrayList<>();
+		if (offset < startless) {
+			page.addAll(issues.find(BoardCriteria.and(criteria, BoardCriteria.startless()), STARTLESS_ORDER, offset,
+					pageSize, index, BoardCard.FIELDS));
+		}
+		if (page.size() < pageSize) {
+			page.addAll(issues.find(BoardCriteria.and(criteria, BoardCriteria.started()), STARTED_ORDER,
+					Math.max(0, offset - startless), pageSize - page.size(), index, BoardCard.FIELDS));
+		}
+		return page;
 	}
 
 	/**
@@ -242,8 +276,7 @@ public class BoardReader {
 
 	/**
 	 * The board as [user] may read it: the projects of it the viewer may see, active ones only, in the
-	 * board's order, the columns built from them, and the spellings their active issues store the
-	 * states in, asked of the database only once a read matches states.
+	 * board's order, and the columns built from them.
 	 *
 	 * @throws ApiException 404 for a board that does not exist, 403 when the viewer may see none of its
 	 *                      projects. An admin reads such a board as empty.
@@ -254,10 +287,12 @@ public class BoardReader {
 		List<AgileBoard.Column> columns = board.hasCustomColumns()
 				? BoardColumns.reconcile(board.getColumns(), spanned)
 				: BoardColumns.merge(spanned);
-		List<String> projectIds = spanned.stream().map(Project::getId).toList();
-		Supplier<Set<String>> storedStates = SingletonSupplier.of(
-				() -> Set.copyOf(issues.distinct("state", projectIds, BoardCriteria.BY_STATE)));
-		return new BoardScope(board, spanned, columns, BoardColumns.hues(columns, spanned), storedStates);
+		return new BoardScope(board, spanned, columns, BoardColumns.hues(columns, spanned));
+	}
+
+	/** The spellings the active issues of [scope] store [states] in, see {@link BoardCriteria#spellings}. */
+	Set<String> spellings(BoardScope scope, Collection<String> states) {
+		return issues.lookupFor(scope.projectIds()).spellings(states);
 	}
 
 	/**
