@@ -54,6 +54,7 @@ public class TimeTrackingErasure {
 	private final DepartedTimeUserRepository departed;
 	private final TimeCorrectionRequestRepository corrections;
 	private final TimeBackfillGrantRepository grants;
+	private final TimeMarks marks;
 	private final Clock clock;
 
 	@EventListener
@@ -69,6 +70,7 @@ public class TimeTrackingErasure {
 				TimesheetApproval.Status.APPROVED));
 		step("correction request(s)", userId, () -> corrections.deleteByUserId(userId));
 		step("backfill grant(s)", userId, () -> grants.deleteByUserId(userId));
+		step("reminder mark(s)", userId, () -> marks.forget(userId));
 		step("pseudonym record", userId, () -> recordDeparture(userId));
 	}
 

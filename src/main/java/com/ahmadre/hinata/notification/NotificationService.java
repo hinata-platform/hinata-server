@@ -475,6 +475,62 @@ public class NotificationService {
 				link, null, Routing.of(Notification.Type.TIME_BACKFILL_REQUESTED));
 	}
 
+	/**
+	 * Reminds somebody of the target they set themselves (HIN-92), and nobody else.
+	 *
+	 * <p>The bell and the mail say how much is missing, because the person opens those. The push
+	 * says only that it is time to record, R7: a lock screen is read by whoever holds the phone.
+	 * Nothing says why a day counts; a day off is no reminder day and never a sentence.
+	 */
+	public void notifyTimeTargetReminder(User person, boolean weekly, int recordedMinutes, int targetMinutes) {
+		if (person == null || !person.isActive()) return;
+		Locale locale = words.localeOf(person);
+		String period = weekly ? "week" : "day";
+		String title = words.of(person, "notify.timeTarget.title");
+		String body = recordedMinutes <= 0
+				? words.of(person, "notify.timeTarget." + period + ".none", hours(locale, targetMinutes))
+				: words.of(person, "notify.timeTarget." + period + ".missing",
+						hours(locale, targetMinutes - recordedMinutes), hours(locale, targetMinutes));
+		deliverGated(person, Notification.Type.TIME_TARGET_REMINDER, title, body,
+				words.of(person, "notify.timeTarget.push"), "/time");
+	}
+
+	/**
+	 * Tells a project's leads that its recorded time reached a threshold of its budget, or of the
+	 * sum of its estimates (HIN-92). Names the project and the sums, never who recorded them; the
+	 * push names neither.
+	 */
+	public void notifyTimeBudgetAlert(Set<String> leadIds, String projectId, String projectName,
+			boolean estimates, int percent, long recordedMinutes, long limitMinutes) {
+		if (leadIds == null || leadIds.isEmpty()) return;
+		deliver(leadIds, Notification.Type.TIME_BUDGET_ALERT,
+				locale -> words.in(locale, "notify.timeBudget.title"),
+				locale -> words.in(locale, estimates ? "notify.timeBudget.estimates" : "notify.timeBudget.budget",
+						projectName, percent, hours(locale, recordedMinutes), hours(locale, limitMinutes)),
+				locale -> words.in(locale, "notify.timeBudget.push"),
+				projectLink(projectId), projectId, Routing.of(Notification.Type.TIME_BUDGET_ALERT));
+	}
+
+	/**
+	 * Tells an issue's assignees that the time recorded on it reached a threshold of its estimate
+	 * (HIN-92). Names the issue and the sums, never who recorded them.
+	 */
+	public void notifyTimeEstimateReached(Set<String> assigneeIds, String readableId, String projectId,
+			int percent, long recordedMinutes, long estimateMinutes) {
+		if (assigneeIds == null || assigneeIds.isEmpty()) return;
+		deliver(assigneeIds, Notification.Type.TIME_ESTIMATE_EXCEEDED,
+				locale -> words.in(locale, "notify.timeEstimate.title"),
+				locale -> words.in(locale, "notify.timeEstimate.body", readableId, percent,
+						hours(locale, recordedMinutes), hours(locale, estimateMinutes)),
+				locale -> words.in(locale, "notify.timeEstimate.push"),
+				"/issues/" + readableId, projectId, Routing.of(Notification.Type.TIME_ESTIMATE_EXCEEDED));
+	}
+
+	/** Minutes as hours with one decimal in the reader's language, "6,5 h". */
+	private String hours(Locale locale, long minutes) {
+		return words.in(locale, "notify.time.hours", minutes / 60.0);
+	}
+
 	private void deliverOne(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
@@ -1000,7 +1056,8 @@ public class NotificationService {
 			case DIGEST -> "digest";
 			case TIME_TIMER_AUTO_STOPPED, TIMESHEET_SUBMITTED, TIMESHEET_APPROVED,
 					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED,
-					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED -> "time";
+					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED, TIME_TARGET_REMINDER,
+					TIME_BUDGET_ALERT, TIME_ESTIMATE_EXCEEDED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

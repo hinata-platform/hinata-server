@@ -90,6 +90,11 @@ import java.util.List;
 // differ in nothing but their filter.
 @CompoundIndex(name = "user_date_described", def = "{'userId': 1, 'date': 1, '_id': 1}",
 		partialFilter = "{'description': {'$gt': ''}}")
+// The alert scan (HIN-92) asks which projects and issues had time recorded or changed
+// since its last run, once an hour: an $or over these two, each a bounded range walk.
+// updatedAt is sparse because most entries are never edited.
+@CompoundIndex(name = "created_at", def = "{'createdAt': 1}")
+@CompoundIndex(name = "updated_at", def = "{'updatedAt': 1}", sparse = true)
 public class WorkItem {
 
 	/**

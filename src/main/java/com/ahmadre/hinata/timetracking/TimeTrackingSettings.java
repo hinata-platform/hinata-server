@@ -220,6 +220,24 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 		return override != null ? override : env().isTargetRemindersEnabled();
 	}
 
+	/**
+	 * The daily target a person is offered to take over, or null for none. A stored
+	 * {@code 0} switches off a suggestion the environment made.
+	 */
+	public Integer suggestedDailyTargetMinutes() {
+		return suggestion(db().getSuggestedDailyTargetMinutes(), env().getSuggestedDailyTargetMinutes());
+	}
+
+	/** The weekly target a person is offered to take over, or null for none. */
+	public Integer suggestedWeeklyTargetMinutes() {
+		return suggestion(db().getSuggestedWeeklyTargetMinutes(), env().getSuggestedWeeklyTargetMinutes());
+	}
+
+	private static Integer suggestion(Integer override, Integer fallback) {
+		Integer minutes = override != null ? override : fallback;
+		return minutes == null || minutes <= 0 ? null : minutes;
+	}
+
 	/** Whether working-hours-act self-hints are shown to the person themselves. */
 	public boolean arbzgHintsEnabled() {
 		Boolean override = db().getArbzgHintsEnabled();

@@ -84,6 +84,9 @@ public class TimeTrackingAdminPrefill implements SettingsPrefill {
 		view.setWorkloadReportsEnabled(settings.workloadReportsEnabled());
 		view.setAlertsEnabled(settings.alertsEnabled());
 		view.setTargetRemindersEnabled(settings.targetRemindersEnabled());
+		// Null here is an answer, not a gap: nothing is suggested.
+		view.setSuggestedDailyTargetMinutes(settings.suggestedDailyTargetMinutes());
+		view.setSuggestedWeeklyTargetMinutes(settings.suggestedWeeklyTargetMinutes());
 		view.setArbzgHintsEnabled(settings.arbzgHintsEnabled());
 
 		TimeTrackingSettings.Retention retention = settings.retention();

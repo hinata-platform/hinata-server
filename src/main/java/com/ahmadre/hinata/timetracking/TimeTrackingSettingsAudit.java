@@ -103,6 +103,10 @@ public class TimeTrackingSettingsAudit implements SettingsAudit {
 		compare(changes, "alertsEnabled", was, now, ServerSettings.TimeTracking::getAlertsEnabled);
 		compare(changes, "targetRemindersEnabled", was, now,
 				ServerSettings.TimeTracking::getTargetRemindersEnabled);
+		compare(changes, "suggestedDailyTargetMinutes", was, now,
+				ServerSettings.TimeTracking::getSuggestedDailyTargetMinutes);
+		compare(changes, "suggestedWeeklyTargetMinutes", was, now,
+				ServerSettings.TimeTracking::getSuggestedWeeklyTargetMinutes);
 		compare(changes, "arbzgHintsEnabled", was, now,
 				ServerSettings.TimeTracking::getArbzgHintsEnabled);
 		compare(changes, "icsImportEnabled", was, now,

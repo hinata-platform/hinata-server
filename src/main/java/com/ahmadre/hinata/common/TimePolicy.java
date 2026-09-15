@@ -87,6 +87,12 @@ public final class TimePolicy {
 	 */
 	public static final int LATE_ENTRY_HINT_MAX_DAYS = 365;
 
+	/** A suggested daily target is at most the day (HIN-92). */
+	public static final int MAX_DAILY_TARGET_MINUTES = 24 * 60;
+
+	/** A suggested weekly target is at most the week (HIN-92). */
+	public static final int MAX_WEEKLY_TARGET_MINUTES = 7 * 24 * 60;
+
 	/** How often a timesheet is submitted for approval. */
 	public enum ApprovalPeriod {
 		/** Calendar weeks, starting on the configured {@code weekStartsOn}. */

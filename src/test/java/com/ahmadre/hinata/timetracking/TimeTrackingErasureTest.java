@@ -27,9 +27,10 @@ class TimeTrackingErasureTest {
 	private final TimeCorrectionRequestRepository corrections =
 			mock(TimeCorrectionRequestRepository.class);
 	private final TimeBackfillGrantRepository grants = mock(TimeBackfillGrantRepository.class);
+	private final TimeMarks marks = mock(TimeMarks.class);
 
 	private final TimeTrackingErasure erasure = new TimeTrackingErasure(timers, approvals, departed,
-			corrections, grants, Clock.fixed(Instant.parse("2026-09-13T10:00:00Z"), ZoneOffset.UTC));
+			corrections, grants, marks, Clock.fixed(Instant.parse("2026-09-13T10:00:00Z"), ZoneOffset.UTC));
 
 	@Test
 	void aPseudonymRecordThatFailsOnceIsWrittenOnTheNextTry() {
@@ -51,6 +52,7 @@ class TimeTrackingErasureTest {
 		verify(approvals).deleteByUserIdAndStatusNot("u-gone", TimesheetApproval.Status.APPROVED);
 		verify(corrections).deleteByUserId("u-gone");
 		verify(grants).deleteByUserId("u-gone");
+		verify(marks).forget("u-gone");
 		verify(departed).save(any(DepartedTimeUser.class));
 	}
 }

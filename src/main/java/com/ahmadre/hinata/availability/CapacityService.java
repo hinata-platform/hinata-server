@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -116,6 +117,72 @@ public class CapacityService {
 			}
 		}
 		return dates;
+	}
+
+	/**
+	 * Who of [userIds] has capacity left on [day]: a planned day that neither a whole holiday nor a
+	 * whole absence takes. Half a holiday or half a vacation day still counts, a day without planned
+	 * minutes never does. The same arithmetic as {@link #window}, in {@link Capacity}.
+	 *
+	 * <p>For a job asking about many people at once (the reminders of HIN-92, shift planning in
+	 * HIN-43): a fixed number of queries whatever the size of the set — patterns, the default
+	 * calendar, the holidays of the calendars they follow on that day, and the absences touching it —
+	 * where a {@link #window} per person would be four each.
+	 *
+	 * <p>Answers only a yes or no per person. Why somebody is not working stays here: a caller that
+	 * learnt "vacation" or "sick" could carry it into a channel other people read.
+	 */
+	public Set<String> workingOn(Collection<String> userIds, LocalDate day) {
+		if (userIds == null || userIds.isEmpty()) {
+			return Set.of();
+		}
+		assertWindow(day, day);
+		Map<String, WorkingSchedule> patterns = new HashMap<>();
+		// Newest first within each person, in the order of user_valid_from, so the first one seen
+		// for a person is the one that applies and the sort needs no memory.
+		mongo.find(Query.query(Criteria.where("userId").in(userIds).and("validFrom").lte(day))
+						.with(Sort.by(Sort.Order.asc("userId"), Sort.Order.desc("validFrom"))),
+				WorkingSchedule.class).forEach(pattern -> patterns.putIfAbsent(pattern.getUserId(), pattern));
+		String defaultCalendarId = defaultCalendarId();
+
+		Set<String> calendarIds = new HashSet<>();
+		if (defaultCalendarId != null) {
+			calendarIds.add(defaultCalendarId);
+		}
+		patterns.values().stream().map(WorkingSchedule::getHolidayCalendarId).filter(java.util.Objects::nonNull)
+				.forEach(calendarIds::add);
+		Map<String, Holiday> holidayByCalendar = new HashMap<>();
+		if (!calendarIds.isEmpty()) {
+			mongo.find(Query.query(Criteria.where("calendarId").in(calendarIds).and("date").is(day)), Holiday.class)
+					.forEach(holiday -> holidayByCalendar.put(holiday.getCalendarId(), holiday));
+		}
+
+		Map<String, List<Capacity.Absence>> absences = new HashMap<>();
+		mongo.find(Query.query(Criteria.where("userId").in(userIds).and("to").gte(day).and("from").lte(day)),
+						TimeOff.class)
+				.forEach(off -> absences.computeIfAbsent(off.getUserId(), id -> new ArrayList<>())
+						.add(new Capacity.Absence(off.getFrom(), off.getTo(), off.isHalfDay())));
+
+		Set<String> working = new HashSet<>();
+		for (String userId : new HashSet<>(userIds)) {
+			WorkingSchedule pattern = patterns.get(userId);
+			String calendarId = pattern != null && pattern.getHolidayCalendarId() != null
+					? pattern.getHolidayCalendarId() : defaultCalendarId;
+			if (capacityLeft(day, pattern, calendarId == null ? null : holidayByCalendar.get(calendarId),
+					absences.getOrDefault(userId, List.of())) > 0) {
+				working.add(userId);
+			}
+		}
+		return working;
+	}
+
+	/** The minutes left of [day] under [pattern], or the instance default without one. */
+	private int capacityLeft(LocalDate day, WorkingSchedule pattern, Holiday holiday, List<Capacity.Absence> absences) {
+		int minutes = pattern == null
+				? WorkingSchedule.minutesOn(properties.getAvailability().getDefaultWeekdayMinutes(), day.getDayOfWeek())
+				: pattern.minutesOn(day.getDayOfWeek());
+		Map<LocalDate, Boolean> holidays = holiday == null ? Map.of() : Map.of(day, holiday.isHalfDay());
+		return Capacity.of(day, day, ignored -> minutes, holidays, absences).capacityMinutes();
 	}
 
 	/** The window rule every availability route shares: in order, at most a year, in storable years. */
