@@ -187,7 +187,7 @@ public class BoardController {
 		User user = currentUser.require();
 		// Within the time of a board request, like the paged reads: a read the
 		// database gives up on ends in a 503 the app can explain.
-		return BoardReader.timed(() -> readView(id, sprintId, user));
+		return BoardTime.request(() -> readView(id, sprintId, user));
 	}
 
 	private BoardView readView(String id, String sprintId, User user) {
@@ -216,7 +216,7 @@ public class BoardController {
 		// Stamp each card with its direct-child (sub-task) count/progress so the
 		// board can show the indicator + expander without a per-card lookup. The
 		// column views below hold the same Issue instances, so this reaches them.
-		issueService.enrichSubtaskCounts(candidates);
+		issueService.enrichSubtaskCounts(candidates, scope.resolvedStates(), BoardTime.left());
 
 		// The columns with their limits and colours are the scope's, the ones the
 		// paged wall has: see BoardReader#scope.

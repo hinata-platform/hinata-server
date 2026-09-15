@@ -233,10 +233,10 @@ class BoardIssueReads {
 	}
 
 	/**
-	 * The first [limit] distinct texts of [field] among the active issues of [projectIds], in one read of
-	 * the issues. The read takes every issue of the projects, one key of the state index each, and
-	 * answers with no more than [limit] values: all of them could outgrow what the database answers at
-	 * once, however long the labels people write.
+	 * The first [limit] distinct texts of [field] among the active issues of [projectIds], in one read.
+	 * The values of a list come only from the issues themselves, so the read loads every active issue of
+	 * the projects, found through the state index, and answers with no more than [limit] values: all of
+	 * them could outgrow what the database answers at once, however long the labels people write.
 	 */
 	private List<String> valuesOf(String field, List<String> projectIds, int limit) {
 		Aggregation values = Aggregation.newAggregation(

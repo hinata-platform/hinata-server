@@ -128,6 +128,8 @@ public class IssueCloneService {
 	 */
 	public Issue clone(String idOrReadableId, Options options, User user) {
 		Issue original = issues.getForUser(idOrReadableId, user);
+		// The copy is a new issue and holds to the label limits: asked before any file is copied.
+		IssueLabels.check(List.of(), original.getTags());
 		String title = requireTitle(options.title());
 		// Both hoisted out of the builder below, and in this order. The files are
 		// duplicated before the issue is saved so the copy is never briefly visible

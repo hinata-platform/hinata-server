@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.board;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.mongodb.MongoExecutionTimeoutException;
 import org.springframework.http.HttpStatus;
 
 import java.time.Duration;
@@ -11,7 +12,8 @@ import java.util.function.Supplier;
  * How long the reads behind a board may take: each read at most {@link #MAX_READ_TIME}, and the reads of
  * one request together at most {@link #MAX_REQUEST_TIME}. A request runs its reads {@link #within} its
  * time, and every read takes {@link #left} as its limit, so a request of many reads cannot hold a thread
- * for as long as all of them together could take.
+ * for as long as all of them together could take. A {@link #request} says the server is busy once its
+ * time runs out or the database gives up on one of its reads.
  *
  * <p>The time lives on the thread that runs the request, and a read takes it only there: a read handed to
  * another thread would take {@link #MAX_READ_TIME} alone. The reads of this package ask {@link #left}
@@ -29,6 +31,25 @@ final class BoardTime {
 	private static final ThreadLocal<Instant> DEADLINE = new ThreadLocal<>();
 
 	private BoardTime() {
+	}
+
+	/**
+	 * Runs the reads of a board request [reads] within its time, and says the server is busy when the
+	 * database gave up on one of them: a read that took too long ends in a 503 the app can explain rather
+	 * than in a 500.
+	 */
+	static <T> T request(Supplier<T> reads) {
+		try {
+			return within(reads);
+		}
+		catch (RuntimeException ex) {
+			for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+				if (cause instanceof MongoExecutionTimeoutException) {
+					throw busy();
+				}
+			}
+			throw ex;
+		}
 	}
 
 	/** Runs [reads] within {@link #MAX_REQUEST_TIME}, or within the time of the request they are part of. */

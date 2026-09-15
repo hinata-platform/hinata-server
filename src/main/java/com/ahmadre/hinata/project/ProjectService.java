@@ -553,6 +553,9 @@ public class ProjectService {
 		}
 		Set<String> seen = new HashSet<>();
 		Set<String> newNames = new HashSet<>();
+		// A rename writes the name onto the project's issues, so a new or renamed label holds to the length
+		// an issue takes. A label the project carries already stays, whatever its length.
+		int longest = com.ahmadre.hinata.issue.IssueLabels.MAX_LENGTH;
 		for (Project.Label l : incoming) {
 			if (l.getName() == null || l.getName().isBlank()) {
 				throw ApiException.badRequest("error.project.labelNameRequired");
@@ -560,6 +563,9 @@ public class ProjectService {
 			l.setName(l.getName().trim());
 			if (!seen.add(l.getName().toLowerCase(Locale.ROOT))) {
 				throw ApiException.badRequest("error.project.duplicateLabel", l.getName());
+			}
+			if (l.getName().length() > longest && !oldNames.contains(l.getName())) {
+				throw ApiException.badRequest("error.project.labelTooLong", longest);
 			}
 			newNames.add(l.getName());
 			if (l.getId() == null || l.getId().isBlank()) {
@@ -570,6 +576,9 @@ public class ProjectService {
 					renames.add(new RenameOp(oldName, l.getName()));
 				}
 			}
+		}
+		if (incoming.size() > Project.MAX_LABELS && !oldNames.containsAll(newNames)) {
+			throw ApiException.badRequest("error.project.tooManyLabels", Project.MAX_LABELS);
 		}
 		project.setLabels(incoming);
 		// Labels removed entirely (not renamed) get pulled from issues.

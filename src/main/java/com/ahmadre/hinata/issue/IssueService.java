@@ -161,6 +161,8 @@ public class IssueService {
 		if (author != null) {
 			projects.assertMember(project, author); // only project members may add issues (A01)
 		}
+		// A new issue holds to the label limits, a copy as much as one written by hand.
+		IssueLabels.check(List.of(), issue.getTags());
 		assignIssueNumber(issue, project);
 		if (issue.getState() == null || !project.workflowStateNames().contains(issue.getState())) {
 			issue.setState(project.workflowStateNames().get(0));
@@ -548,7 +550,20 @@ public class IssueService {
 	 */
 	public void enrichSubtaskCounts(List<Issue> parents) {
 		if (parents == null || parents.isEmpty()) return;
-		Map<String, SubtaskTally> tallies = subtaskTallies(parents, Map.of());
+		stamp(parents, subtaskTallies(parents, Map.of()));
+	}
+
+	/**
+	 * {@link #enrichSubtaskCounts(List)} within [maxTime], after which the database gives up on the read,
+	 * with the [resolvedStates] of the projects a caller holds already.
+	 */
+	public void enrichSubtaskCounts(List<Issue> parents, Map<String, ? extends Collection<String>> resolvedStates,
+			Duration maxTime) {
+		if (parents == null || parents.isEmpty()) return;
+		stamp(parents, subtaskTallies(parents, resolvedStates, maxTime));
+	}
+
+	private static void stamp(List<Issue> parents, Map<String, SubtaskTally> tallies) {
 		for (Issue parent : parents) {
 			SubtaskTally tally = tallies.getOrDefault(parent.getId(), SubtaskTally.NONE);
 			parent.setSubtaskCount(tally.total());
@@ -764,30 +779,32 @@ public class IssueService {
 		IssueSearchText.refresh(mongo, Criteria.where("_id").in(ids));
 	}
 
-	/** Adds any new issue tags to the project's reusable label vocabulary so
-	 * they can be suggested when tagging other issues in the same project.
-	 * Public because a cross-project move carries an issue's tags into the target
-	 * project's vocabulary too (see {@link IssueMoveService}). */
+	/**
+	 * Adds any new issue tags to the project's reusable label vocabulary so they can be suggested when
+	 * tagging other issues in the same project, up to {@link Project#MAX_LABELS} labels: past that a tag
+	 * stays on its issue and no longer joins the vocabulary. Each new label is pushed onto the project on
+	 * its own, and only while the project lacks a label of that name and has room, so a busy project
+	 * neither rewrites its whole document for a label nor loses one that another save added meanwhile.
+	 * Public because a cross-project move carries an issue's tags into the target project's vocabulary
+	 * too (see {@link IssueMoveService}).
+	 */
 	public void mergeProjectLabels(Project project, List<String> tags) {
 		if (tags == null || tags.isEmpty()) return;
+		if (project.getLabels() == null) project.setLabels(new ArrayList<>());
 		List<Project.Label> labels = project.getLabels();
-		if (labels == null) {
-			labels = new ArrayList<>();
-			project.setLabels(labels);
-		}
-		java.util.Set<String> existing = new java.util.HashSet<>(project.labelNames());
-		boolean changed = false;
+		Set<String> existing = new HashSet<>(project.labelNames());
 		for (String tag : tags) {
-			if (tag != null && !tag.isBlank() && existing.add(tag)) {
-				labels.add(Project.Label.builder()
-						.id(Project.newId())
-						.name(tag)
-						.hue(Project.labelHueAt(labels.size()))
-						.build());
-				changed = true;
-			}
+			if (tag == null || tag.isBlank() || !existing.add(tag) || labels.size() >= Project.MAX_LABELS) continue;
+			Project.Label label = Project.Label.builder()
+					.id(Project.newId())
+					.name(tag)
+					.hue(Project.labelHueAt(labels.size()))
+					.build();
+			Query room = Query.query(Criteria.where("_id").is(project.getId()).and("labels.name").ne(tag)
+					.and("labels." + (Project.MAX_LABELS - 1)).exists(false));
+			mongo.updateFirst(room, new Update().push("labels", label), Project.class);
+			labels.add(label);
 		}
-		if (changed) projects.save(project);
 	}
 
 	public Page<IssueActivity> activityOf(String issueId, int page, int size, User user) {
