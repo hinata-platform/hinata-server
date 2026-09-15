@@ -170,10 +170,40 @@ class ModuleBoundaryTest {
 				.that().resideInAPackage("..availability..")
 				.should().dependOnClassesThat().resideInAnyPackage("..timetracking..", "..billing..")
 				.because("timetracking -> availability is the one direction that is allowed")
-				// There is no availability package until stage 10, and ArchUnit
-				// treats "nothing matched" as a mistake by default. Here it is the
-				// expected state, and the rule is in place before the first class is.
-				.allowEmptyShould(true)
+				.check(PRODUCTION);
+	}
+
+	/** The classes of the module that read availability, each for display only. */
+	private static final Set<String> AVAILABILITY_READERS = Set.of(
+			// The absences, holidays and planned minutes the calendar draws.
+			TIME + ".TimeCalendarLayers",
+			// The holidays a working-time hint names.
+			TIME + ".TimeHintsService",
+			// Tells availability whether leads see absences; reads a policy, not availability.
+			TIME + ".TimeAvailabilityPolicy");
+
+	/** The services that write an entry, a timer, a submission or a correction. */
+	private static final Set<String> WRITE_PATHS = Set.of(
+			TIME + ".TimeTrackingService", TIME + ".TimerService", TIME + ".TimeLocks",
+			TIME + ".TimesheetApprovalService", TIME + ".TimeCorrectionService",
+			TIME + ".TimeTagService");
+
+	@Test
+	void recordingTimeNeverAsksAvailability() {
+		// R9 (HIN-91): a holiday, an absence or a day without planned hours is marked,
+		// never refused. § 9 ArbZG forbids the work, not recording it, and § 16 Abs. 2
+		// ArbZG wants Sunday and holiday work recorded. So availability is known only
+		// by the named readers, and no write path may reach those readers.
+		noClasses()
+				.that().resideInAPackage("..timetracking..")
+				.and(not(named(AVAILABILITY_READERS, "a read of availability for display")))
+				.should().dependOnClassesThat().resideInAnyPackage("..availability..")
+				.because("a marking must never turn into a refusal to record time (R9)")
+				.check(PRODUCTION);
+		noClasses()
+				.that(named(WRITE_PATHS, "a write path of the module"))
+				.should().dependOnClassesThat(named(AVAILABILITY_READERS, "a read of availability"))
+				.because("a write path that knew a holiday could refuse one (R9)")
 				.check(PRODUCTION);
 	}
 

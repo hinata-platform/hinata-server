@@ -79,6 +79,8 @@ public class HinataProperties {
 	private TimeTracking timeTracking = new TimeTracking();
 	private Notification notification = new Notification();
 	private Ics ics = new Ics();
+	@Valid
+	private Availability availability = new Availability();
 
 	/** Tuning for the notification fan-out that is not a per-user preference. */
 	@Getter
@@ -176,6 +178,18 @@ public class HinataProperties {
 		private List<String> allowedHosts = List.of();
 		/** Hosts calendars are never fetched from, in the same notation; checked before the allow list. */
 		private List<String> deniedHosts = List.of();
+	}
+
+	/** Defaults for capacity planning: working-time patterns, absences and holidays (HIN-91). */
+	@Getter
+	@Setter
+	public static class Availability {
+		/**
+		 * The planned minutes per weekday, Monday first, for everybody without a pattern of their
+		 * own ({@code HINATA_AVAILABILITY_DEFAULT_WEEKDAY_MINUTES=480,480,480,480,480,0,0}).
+		 */
+		@Size(min = 7, max = 7)
+		private List<@Min(0) @Max(1440) Integer> defaultWeekdayMinutes = List.of(480, 480, 480, 480, 480, 0, 0);
 	}
 
 	/**

@@ -112,6 +112,9 @@ class AdvancedTimeTrackingGateIntegrationTest {
 			new Gated("/api/v1/time/probe", 200),
 			new Gated("/api/v1/me/timer", 204),
 			new Gated("/api/v1/availability/probe", 200),
+			// The real routes since stage 10: the admin's own patterns, and the calendars.
+			new Gated("/api/v1/availability/schedule", 200),
+			new Gated("/api/v1/availability/holidays/calendars", 200),
 			new Gated("/api/v1/billing/probe", 200),
 			new Gated("/api/v1/me/calendar-subscriptions", 200));
 

@@ -54,6 +54,7 @@ public class TimeEntryController {
 	private final TimeTrackingService timeTracking;
 	private final TimerService timers;
 	private final TimeCorrectionService corrections;
+	private final TimeCalendarLayers layers;
 	private final CurrentUser currentUser;
 
 	// --- DTOs -----------------------------------------------------------------
@@ -103,20 +104,24 @@ public class TimeEntryController {
 	 * held more than the server hands out, and the grid says so rather than
 	 * quietly drawing a partial week.
 	 *
-	 * <p>The later layers this view grows — external events (stage 13), absences
-	 * and holidays (stage 10) — are deliberately <em>not</em> here yet as empty
-	 * arrays. An array whose element type is nothing documents nothing and pins
-	 * no shape; the client reads a missing layer as an empty one, so the day
-	 * those stages land they add a field and nothing else has to move.
+	 * <p>Absences, holidays and the planned minutes of each day arrived with stage
+	 * 10 as fields of their own ({@link TimeCalendarLayers}); external events
+	 * (stage 13) will do the same. A client reads a missing layer as an empty
+	 * one, so the published app, which knows none of them, is unaffected. They
+	 * mark days and never decide anything about the entries (R9).
 	 */
 	public record CalendarResponse(LocalDate from, LocalDate to,
-			List<TimeTrackingController.WorkItemResponse> entries, boolean truncated) {
+			List<TimeTrackingController.WorkItemResponse> entries, boolean truncated,
+			List<TimeCalendarLayers.Absence> absences, List<TimeCalendarLayers.HolidayDay> holidays,
+			Map<LocalDate, Integer> scheduledMinutes) {
 
-		static CalendarResponse from(TimeTrackingService.CalendarWindow window) {
+		static CalendarResponse from(TimeTrackingService.CalendarWindow window,
+				TimeCalendarLayers.Layers layers) {
 			return new CalendarResponse(window.from(), window.to(),
 					window.entries().stream()
 							.map(TimeTrackingController.WorkItemResponse::from).toList(),
-					window.truncated());
+					window.truncated(), layers.absences(), layers.holidays(),
+					layers.scheduledMinutes());
 		}
 	}
 
@@ -217,7 +222,8 @@ public class TimeEntryController {
 	public CalendarResponse calendar(
 			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
 			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-		return CalendarResponse.from(timeTracking.calendar(from, to, currentUser.require()));
+		User user = currentUser.require();
+		return CalendarResponse.from(timeTracking.calendar(from, to, user), layers.of(user, from, to));
 	}
 
 	// --- one entry -------------------------------------------------------------
