@@ -99,10 +99,11 @@ public class HolidayService implements DisposableBean {
 	private final ExecutorService imports = importPool();
 
 	/**
-	 * Imports admitted from the claim until the calendar carries the outcome: as many as the pool has
-	 * threads and queue slots.
+	 * Imports admitted from the claim until the calendar carries the outcome: as many as the queue
+	 * holds, which leaves the pool's threads as margin, so a run that is just releasing its place
+	 * never meets a full pool.
 	 */
-	private final Semaphore admitted = new Semaphore(IMPORT_THREADS + IMPORT_QUEUE);
+	private final Semaphore admitted = new Semaphore(IMPORT_QUEUE);
 
 	public record CalendarDraft(String name, String region, String icsUrl, Boolean defaultCalendar) {
 	}
@@ -320,7 +321,8 @@ public class HolidayService implements DisposableBean {
 			return fetcher.fetch(url, sameYear ? claimed.getEtag() : null,
 							sameYear ? claimed.getLastModified() : null)
 					.thenApplyAsync(result -> finish(admin, claimed, wanted, zone, result), imports)
-					// A fetch the fetcher itself refused: one short write on its thread.
+					// The pool shut down with the application, or finish failed beyond a RuntimeException:
+					// one short write on whichever thread got here.
 					.exceptionally(rejected -> fail(admin, claimed, wanted, IcsFetchError.BUSY.messageKey(), null))
 					.whenComplete((outcome, error) -> admitted.release());
 		}
