@@ -176,6 +176,18 @@ class BoardIssueReads {
 	}
 
 	/**
+	 * Up to [limit] active issues of [projectId] in board order, whole, of the sprint [sprintId] or else in
+	 * [states]: what the board view before the paged wall reads of a project, off the index of its place.
+	 */
+	List<Issue> wholeCards(String projectId, String sprintId, Collection<String> states, int limit) {
+		Criteria active = Criteria.where("projectId").is(projectId).and("archived").is(false);
+		Criteria criteria = sprintId != null ? active.and("sprintId").is(sprintId) : active.and("state").in(states);
+		String index = sprintId != null ? BoardCriteria.BY_SPRINT : BoardCriteria.BY_STATE;
+		return withIndex(index, hint -> mongo.find(limited(Query.query(criteria)
+				.with(Sort.by(Sort.Order.asc("rank"), Sort.Order.asc("_id"))).limit(limit), hint), Issue.class));
+	}
+
+	/**
 	 * The distinct texts of [field] among the active issues of [projectIds]. Off [index], which starts
 	 * with projectId, archived and [field], a field of one value is read by a distinct scan: one key
 	 * per value, however many issues hold it.

@@ -4,6 +4,8 @@ import com.ahmadre.hinata.common.ApiException;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -20,6 +22,12 @@ class IssueLabelsTest {
 			.mapToObj(i -> "label-" + i)
 			.toList();
 
+	/** An emoji of one face: one character, two UTF-16 units. */
+	private static final String FACE = "😀";
+
+	/** An emoji of a family: one character, eleven UTF-16 units. */
+	private static final String FAMILY = "👨‍👩‍👧‍👦";
+
 	@Test
 	void refusesMoreLabelsThanAnIssueCarriesAndLabelsTooLongToWrite() {
 		assertThatThrownBy(() -> IssueLabels.check(List.of(), TOO_MANY))
@@ -29,6 +37,16 @@ class IssueLabelsTest {
 				.isInstanceOf(ApiException.class);
 		assertThatCode(() -> IssueLabels.check(null, TOO_MANY.subList(0, IssueLabels.MAX_LABELS)))
 				.doesNotThrowAnyException();
+	}
+
+	@Test
+	void countsALabelInTheCharactersSomeoneReads() {
+		// Fifty emoji fit the app's field, and they fit here, though each takes two UTF-16 units.
+		assertThatCode(() -> IssueLabels.check(List.of(), List.of(FACE.repeat(IssueLabels.MAX_LENGTH))))
+				.doesNotThrowAnyException();
+		// Twenty emoji of a family are twenty characters, but more units than the search text should hold.
+		assertThatThrownBy(() -> IssueLabels.check(List.of(), List.of(FAMILY.repeat(20))))
+				.isInstanceOf(ApiException.class);
 	}
 
 	@Test
@@ -44,5 +62,14 @@ class IssueLabelsTest {
 		List<String> swapped = new ArrayList<>(TOO_MANY);
 		swapped.set(0, "new");
 		assertThatThrownBy(() -> IssueLabels.check(TOO_MANY, swapped)).isInstanceOf(ApiException.class);
+	}
+
+	@Test
+	void countsEachLabelOnceHoweverOftenItIsWritten() {
+		List<String> repeated = new ArrayList<>(Collections.nCopies(10_000, "api"));
+		repeated.addAll(Arrays.asList(" ", null, "ui", "api"));
+
+		assertThat(IssueLabels.distinct(repeated)).containsExactly("api", "ui");
+		assertThatCode(() -> IssueLabels.check(List.of("api"), repeated)).doesNotThrowAnyException();
 	}
 }

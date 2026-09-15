@@ -1,9 +1,13 @@
 package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.Characters;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -17,17 +21,41 @@ public final class IssueLabels {
 	/** The most labels one issue carries. */
 	public static final int MAX_LABELS = 20;
 
-	/** The longest label a person may write. */
+	/** The longest label a person may write, in characters as someone reads them, as the app's field counts. */
 	public static final int MAX_LENGTH = 50;
+
+	/**
+	 * The most UTF-16 units a label takes however few characters they make. One character can take many, as
+	 * an emoji of a family takes eleven, and the search text holds every one of them.
+	 */
+	public static final int MAX_UNITS = 200;
 
 	private IssueLabels() {
 	}
 
+	/** [labels] without the blank ones, each once, in the order they were first written. */
+	public static List<String> distinct(Collection<String> labels) {
+		Set<String> distinct = new LinkedHashSet<>();
+		if (labels != null) {
+			for (String label : labels) {
+				if (label != null && !label.isBlank()) {
+					distinct.add(label);
+				}
+			}
+		}
+		return new ArrayList<>(distinct);
+	}
+
+	/** Whether [label] is longer than a person may write a label. */
+	public static boolean tooLong(String label) {
+		return label.length() > MAX_UNITS || Characters.count(label) > MAX_LENGTH;
+	}
+
 	/**
 	 * Refuses [written] when it gains a label [carried] did not hold while it holds more than
-	 * {@link #MAX_LABELS}, or when it gains a label longer than {@link #MAX_LENGTH}. What an issue carries
-	 * already stays, so an issue written before these limits can still be edited and trimmed, but gains
-	 * nothing past them.
+	 * {@link #MAX_LABELS} different ones, or when it gains a label that is {@link #tooLong}. A label counts
+	 * once however often it is written. What an issue carries already stays, so an issue written before
+	 * these limits can still be edited and trimmed, but gains nothing past them.
 	 *
 	 * @throws ApiException 400 {@code error.issue.labels}
 	 */
@@ -36,10 +64,9 @@ public final class IssueLabels {
 			return;
 		}
 		Set<String> before = carried == null ? Set.of() : new HashSet<>(carried);
-		boolean tooMany = written.size() > MAX_LABELS && written.stream().anyMatch(label -> !before.contains(label));
-		boolean tooLong = written.stream()
-				.anyMatch(label -> label != null && label.length() > MAX_LENGTH && !before.contains(label));
-		if (tooMany || tooLong) {
+		List<String> labels = distinct(written);
+		if (labels.size() > MAX_LABELS && labels.stream().anyMatch(label -> !before.contains(label))
+				|| labels.stream().anyMatch(label -> !before.contains(label) && tooLong(label))) {
 			throw ApiException.badRequest("error.issue.labels", MAX_LABELS, MAX_LENGTH);
 		}
 	}

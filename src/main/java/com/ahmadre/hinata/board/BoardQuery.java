@@ -1,9 +1,9 @@
 package com.ahmadre.hinata.board;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.Characters;
 import com.ahmadre.hinata.issue.Issue;
 
-import java.text.BreakIterator;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
@@ -102,7 +102,7 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 			List<String> assigneeIds, List<String> reporterIds, List<String> labels, List<String> sprints,
 			List<String> epicIds, String shape) {
 		String stripped = text == null ? "" : text.strip();
-		if (stripped.length() > MAX_TEXT_UNITS || characters(stripped) > MAX_TEXT || hasControl(stripped)) {
+		if (stripped.length() > MAX_TEXT_UNITS || Characters.count(stripped) > MAX_TEXT || hasControl(stripped)) {
 			throw invalid();
 		}
 		Set<String> sprintIds = values(sprints);
@@ -120,20 +120,6 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 
 	boolean hasText() {
 		return !text.isEmpty();
-	}
-
-	/**
-	 * How many characters [text] holds as someone reads them: a letter with its accents, or an emoji
-	 * made of several code points, counts once.
-	 */
-	static int characters(String text) {
-		BreakIterator boundaries = BreakIterator.getCharacterInstance(Locale.ROOT);
-		boundaries.setText(text);
-		int characters = 0;
-		while (boundaries.next() != BreakIterator.DONE) {
-			characters++;
-		}
-		return characters;
 	}
 
 	private static Set<String> values(List<String> raw) {

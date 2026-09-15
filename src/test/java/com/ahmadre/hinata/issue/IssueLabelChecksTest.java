@@ -20,6 +20,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.UpdateDefinition;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -69,6 +70,16 @@ class IssueLabelChecksTest {
 				ex -> assertThat(ex.getMessageKey()).isEqualTo("error.issue.labels"));
 		verify(projects, never()).nextIssueNumber(any());
 		verify(issues, never()).save(any());
+	}
+
+	@Test
+	void keepsEachLabelOnceHoweverOftenItIsSent() {
+		when(issues.save(any(Issue.class))).thenAnswer(saved -> saved.getArgument(0));
+		List<String> repeated = new ArrayList<>(Collections.nCopies(IssueLabels.MAX_LABELS * 50, "api"));
+		repeated.add(" ");
+		Issue issue = Issue.builder().projectId("p1").title("Repeated").tags(repeated).build();
+
+		assertThat(service.create(issue, user).getTags()).containsExactly("api");
 	}
 
 	@Test
