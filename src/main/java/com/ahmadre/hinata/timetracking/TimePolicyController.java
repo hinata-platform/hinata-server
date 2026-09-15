@@ -102,7 +102,17 @@ public class TimePolicyController {
 			boolean limitTagAccess, boolean defaultBillable, boolean approvalsEnabled,
 			ApprovalPeriodResponse approvalPeriod, boolean leadsSeeMemberEntries, int maxDaysBack,
 			boolean arbzgHintsEnabled, Integer lateEntryHintDays,
-			List<BackfillGrantResponse> myBackfillGrants) {
+			List<BackfillGrantResponse> myBackfillGrants, TargetRemindersResponse targetReminders,
+			boolean alertsEnabled) {
+	}
+
+	/**
+	 * Whether a person can set targets and be reminded of them, and what the operator
+	 * suggests (HIN-92). Joined additively, like the HIN-89 fields: the reminders panel
+	 * is shown only where it would be answered, and a suggestion is offered, never set.
+	 */
+	public record TargetRemindersResponse(boolean enabled, Integer suggestedDailyTargetMinutes,
+			Integer suggestedWeeklyTargetMinutes) {
 	}
 
 	@GetMapping
@@ -133,6 +143,9 @@ public class TimePolicyController {
 				grants.findByUserIdAndExpiresAtAfter(me, clock.instant()).stream()
 						.map(grant -> new BackfillGrantResponse(grant.getFrom(), grant.getTo(),
 								grant.getExpiresAt()))
-						.toList());
+						.toList(),
+				new TargetRemindersResponse(settings.targetRemindersEnabled(),
+						settings.suggestedDailyTargetMinutes(), settings.suggestedWeeklyTargetMinutes()),
+				settings.alertsEnabled());
 	}
 }

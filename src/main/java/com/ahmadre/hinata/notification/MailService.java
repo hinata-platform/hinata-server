@@ -69,7 +69,7 @@ public class MailService {
 		JavaMailSender sender = smtp.sender();
 		if (sender == null) sender = mailSender.getIfAvailable();
 		if (sender == null) {
-			log.warn("No SMTP server configured; cannot send e-mail reply to {}", to);
+			log.warn("No SMTP server configured; cannot send an e-mail reply");
 			return SendResult.NO_SMTP;
 		}
 		try {
@@ -96,11 +96,11 @@ public class MailService {
 				}
 			}
 			sender.send(message);
-			log.info("E-mail reply sent to {} (subject: {})", to, subject);
+			log.info("E-mail reply sent");
 			return SendResult.SENT;
 		}
 		catch (Exception ex) {
-			log.warn("Sending e-mail reply to {} failed: {}", to, ex.getMessage());
+			log.warn("Sending an e-mail reply failed: {}", ex.getMessage());
 			return SendResult.SEND_FAILED;
 		}
 	}
@@ -158,7 +158,7 @@ public class MailService {
 	public boolean sendTemplateSync(String to, String subject, String template, Map<String, Object> model) {
 		SpringTemplateEngine engine = templateEngine.getIfAvailable();
 		if (engine == null) {
-			log.warn("No template engine available; cannot send mail to {}", to);
+			log.warn("No template engine available; cannot send mail");
 			return false;
 		}
 		// Each mail gets the illustration that belongs to it, carrying whichever
@@ -272,7 +272,7 @@ public class MailService {
 		JavaMailSender sender = smtp.sender();
 		if (sender == null) sender = mailSender.getIfAvailable();
 		if (sender == null) {
-			log.warn("No SMTP server configured; cannot send mail to {}", to);
+			log.warn("No SMTP server configured; cannot send mail");
 			return false;
 		}
 		try {
@@ -301,11 +301,13 @@ public class MailService {
 				}
 			}
 			sender.send(message);
-			log.info("Mail sent to {} (subject: {})", to, subject);
+			// Neither the address nor the subject: together they are a dated record of who was sent
+			// what, and for a target reminder that is a list of who fell short (HIN-92, R7).
+			log.info("Mail sent");
 			return true;
 		}
 		catch (Exception ex) {
-			log.warn("Sending mail to {} failed: {}", to, ex.getMessage());
+			log.warn("Sending a mail failed: {}", ex.getMessage());
 			return false;
 		}
 	}

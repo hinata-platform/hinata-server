@@ -475,6 +475,77 @@ public class NotificationService {
 				link, null, Routing.of(Notification.Type.TIME_BACKFILL_REQUESTED));
 	}
 
+	/** Which of a person's own targets a reminder is about. */
+	public enum TargetPeriod { DAY, WEEK }
+
+	/** What a project's recorded time is measured against. */
+	public enum TimeLimit { BUDGET, ESTIMATES }
+
+	/**
+	 * Reminds somebody of the target they set themselves (HIN-92), and nobody else.
+	 *
+	 * <p>The bell and the mail say how much is missing, because the person opens those. The push
+	 * says neither that nor that it is a reminder, only that there is something new in the time
+	 * tracking (R7): a lock screen is read by whoever holds the phone. Its type stays the real one,
+	 * as for every notice a client routes by, so the push services that carry it (Hinata Connect,
+	 * Apple, Google) can see that a reminder was delivered, never what it says; the privacy page
+	 * tells operators so. Nothing says why a day counts; a day off is no reminder day.
+	 *
+	 * <p>Only the latest reminder stays in the bell. Kept, they would add up to a history of the
+	 * days somebody fell short, which is the record the reminder job itself never keeps.
+	 */
+	public void notifyTimeTargetReminder(User person, TargetPeriod period, int recordedMinutes,
+			int targetMinutes) {
+		if (person == null || !person.isActive()) return;
+		Locale locale = words.localeOf(person);
+		String key = "notify.timeTarget." + period.name().toLowerCase(Locale.ROOT);
+		String title = words.of(person, "notify.timeTarget.title");
+		String body = recordedMinutes <= 0
+				? words.of(person, key + ".none", hours(locale, targetMinutes))
+				: words.of(person, key + ".missing",
+						hours(locale, targetMinutes - recordedMinutes), hours(locale, targetMinutes));
+		notifications.deleteByUserIdAndType(person.getId(), Notification.Type.TIME_TARGET_REMINDER);
+		deliverGated(person, Notification.Type.TIME_TARGET_REMINDER, title, body,
+				words.of(person, "notify.time.pushTitle"), words.of(person, "notify.timeTarget.push"), "/time");
+	}
+
+	/**
+	 * Tells a project's leads that its recorded time reached a threshold of its budget, or of the
+	 * sum of its estimates (HIN-92). Names the project and the sums, never who recorded them; the
+	 * push names neither.
+	 */
+	public void notifyTimeBudgetAlert(Set<String> leadIds, String projectId, String projectName,
+			TimeLimit limit, int percent, long recordedMinutes, long limitMinutes) {
+		if (leadIds == null || leadIds.isEmpty()) return;
+		String bodyKey = limit == TimeLimit.ESTIMATES ? "notify.timeBudget.estimates" : "notify.timeBudget.budget";
+		deliver(leadIds, Notification.Type.TIME_BUDGET_ALERT,
+				locale -> words.in(locale, "notify.timeBudget.title"),
+				locale -> words.in(locale, bodyKey,
+						projectName, percent, hours(locale, recordedMinutes), hours(locale, limitMinutes)),
+				locale -> words.in(locale, "notify.timeBudget.push"),
+				projectLink(projectId), projectId, Routing.of(Notification.Type.TIME_BUDGET_ALERT));
+	}
+
+	/**
+	 * Tells an issue's assignees that the time recorded on it reached a threshold of its estimate
+	 * (HIN-92). Names the issue and the sums, never who recorded them.
+	 */
+	public void notifyTimeEstimateReached(Set<String> assigneeIds, String readableId, String projectId,
+			int percent, long recordedMinutes, long estimateMinutes) {
+		if (assigneeIds == null || assigneeIds.isEmpty()) return;
+		deliver(assigneeIds, Notification.Type.TIME_ESTIMATE_REACHED,
+				locale -> words.in(locale, "notify.timeEstimate.title"),
+				locale -> words.in(locale, "notify.timeEstimate.body", readableId, percent,
+						hours(locale, recordedMinutes), hours(locale, estimateMinutes)),
+				locale -> words.in(locale, "notify.timeEstimate.push"),
+				"/issues/" + readableId, projectId, Routing.of(Notification.Type.TIME_ESTIMATE_REACHED));
+	}
+
+	/** Minutes as hours with one decimal in the reader's language, "6,5 h". */
+	private String hours(Locale locale, long minutes) {
+		return words.in(locale, "notify.time.hours", minutes / 60.0);
+	}
+
 	private void deliverOne(User user, Notification.Type type, String title, String body, String link) {
 		notifications.save(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
@@ -502,6 +573,12 @@ public class NotificationService {
 	 */
 	private void deliverGated(User user, Notification.Type type, String title, String body,
 			String pushBody, String link) {
+		deliverGated(user, type, title, body, title, pushBody, link);
+	}
+
+	/** As above, with a push that says less than the bell in its title as well. */
+	private void deliverGated(User user, Notification.Type type, String title, String body,
+			String pushTitle, String pushBody, String link) {
 		if (user == null || !user.isActive()) return;
 		String eventId = eventId(type);
 		notifications.save(Notification.builder()
@@ -512,7 +589,7 @@ public class NotificationService {
 					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		}
 		if (prefs.deliversPush(eventId)) {
-			push.sendToUser(user.getId(), title, pushBody, link, Map.of("type", type.name()));
+			push.sendToUser(user.getId(), pushTitle, pushBody, link, Map.of("type", type.name()));
 		}
 	}
 
@@ -1000,7 +1077,8 @@ public class NotificationService {
 			case DIGEST -> "digest";
 			case TIME_TIMER_AUTO_STOPPED, TIMESHEET_SUBMITTED, TIMESHEET_APPROVED,
 					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED,
-					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED -> "time";
+					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED, TIME_TARGET_REMINDER,
+					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

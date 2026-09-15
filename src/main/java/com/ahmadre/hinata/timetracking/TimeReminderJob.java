@@ -1,0 +1,35 @@
+package com.ahmadre.hinata.timetracking;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/**
+ * The schedule of {@link TimeReminders}; the rules, the claim and the budget are there.
+ *
+ * <p>Every quarter hour rather than hourly: a reminder set for 17:30 should not arrive at 18:05.
+ * A run that finds nobody due costs one index read per 500 people with a target. Offset from
+ * the timer sweep at :20 and the alert scan at :35.
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class TimeReminderJob {
+
+	private final TimeReminders reminders;
+
+	@Scheduled(cron = "0 10/15 * * * *")
+	public void remind() {
+		try {
+			// Not logged at info: people pick their own reminder times, a run often finds one or two
+			// of them due, and "sent 1" at 17:40 would tell a log reader who fell short that day.
+			log.debug("[time] target reminder run sent {}", reminders.run());
+		}
+		catch (RuntimeException ex) {
+			// A scheduled method that throws is silently unscheduled by some pools and noisily
+			// retried by others; neither is how to find out that reminders stopped.
+			log.warn("[time] target reminder run failed: {}", ex.toString(), ex);
+		}
+	}
+}

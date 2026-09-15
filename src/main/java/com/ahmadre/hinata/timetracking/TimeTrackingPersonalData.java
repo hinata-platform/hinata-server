@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
 
+import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -148,6 +149,17 @@ public class TimeTrackingPersonalData implements PersonalDataExport {
 								String.valueOf(prefs.getCountdownMinutes())),
 						List.of(t(locale, "export.pdf.time.pref.sound"),
 								t(locale, prefs.isSound() ? "export.pdf.yes" : "export.pdf.no")),
+						List.of(t(locale, "export.pdf.time.pref.dailyTarget"),
+								prefs.getDailyTargetMinutes() == null ? "—"
+										: String.valueOf(prefs.getDailyTargetMinutes())),
+						List.of(t(locale, "export.pdf.time.pref.dailyReminderAt"),
+								clock(prefs.getDailyReminderAt())),
+						List.of(t(locale, "export.pdf.time.pref.weeklyTarget"),
+								prefs.getWeeklyTargetMinutes() == null ? "—"
+										: String.valueOf(prefs.getWeeklyTargetMinutes())),
+						List.of(t(locale, "export.pdf.time.pref.weeklyReminderAt"),
+								prefs.getWeeklyReminderDay().getDisplayName(TextStyle.FULL, locale) + " "
+								+ clock(prefs.getWeeklyReminderAt())),
 						List.of(t(locale, "export.pdf.time.acknowledged"),
 								PersonalDataExport.instant(user.getTimePrivacyAcknowledgedAt()))),
 				null));
@@ -184,6 +196,11 @@ public class TimeTrackingPersonalData implements PersonalDataExport {
 	private static TimePreferences preferencesOf(User user) {
 		TimePreferences stored = user.getTimePreferences();
 		return stored == null ? TimePreferences.defaults() : stored.sanitized();
+	}
+
+	/** A minute of the day as a clock reads it, "17:00". */
+	private static String clock(int minuteOfDay) {
+		return String.format(Locale.ROOT, "%02d:%02d", minuteOfDay / 60, minuteOfDay % 60);
 	}
 
 	// --- shapes ------------------------------------------------------------------

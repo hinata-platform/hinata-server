@@ -27,6 +27,11 @@ import java.util.Set;
 // issue open; this compound serves the common empty-query path as a pre-sorted
 // IXSCAN instead of a COLLSCAN + in-memory sort.
 @CompoundIndex(name = "active_displayName", def = "{'active': 1, 'displayName': 1}")
+// The people with a time target of their own, walked by _id in batches by the
+// reminder job (HIN-92) four times an hour. Partial, so it holds those few
+// accounts and nobody else; the flag is the equality, _id the cursor.
+@CompoundIndex(name = "time_targets_id", def = "{'timePreferences.targetsSet': 1, '_id': 1}",
+		partialFilter = "{'timePreferences.targetsSet': true}")
 public class User {
 
 	public enum Origin { LOCAL, OIDC, SAML, LDAP }

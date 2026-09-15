@@ -2,6 +2,7 @@ package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -22,6 +23,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.time.DayOfWeek;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -130,18 +132,37 @@ public class MeController {
 			@Min(TimePreferences.MIN_CYCLES) @Max(TimePreferences.MAX_CYCLES) Integer pomodoroCycles,
 			@Min(TimePreferences.MIN_COUNTDOWN) @Max(TimePreferences.MAX_COUNTDOWN)
 			Integer countdownMinutes,
-			Boolean sound) {
+			Boolean sound,
+			// A target of 0 removes it: absent already means "leave it alone".
+			@Min(0) @Max(TimePolicy.MAX_DAILY_TARGET_MINUTES) Integer dailyTargetMinutes,
+			@Min(0) @Max(TimePolicy.MAX_WEEKLY_TARGET_MINUTES) Integer weeklyTargetMinutes,
+			@Min(0) @Max(TimePreferences.LAST_MINUTE_OF_DAY) Integer dailyReminderAt,
+			@Min(0) @Max(TimePreferences.LAST_MINUTE_OF_DAY) Integer weeklyReminderAt,
+			DayOfWeek weeklyReminderDay) {
 
 		/** Merged onto {@code current}, so a field this request omits keeps its value. */
 		TimePreferences merge(TimePreferences current) {
 			TimePreferences base = current == null ? TimePreferences.defaults() : current;
-			return new TimePreferences(
-					pomodoroWork != null ? pomodoroWork : base.getPomodoroWork(),
-					pomodoroShortBreak != null ? pomodoroShortBreak : base.getPomodoroShortBreak(),
-					pomodoroLongBreak != null ? pomodoroLongBreak : base.getPomodoroLongBreak(),
-					pomodoroCycles != null ? pomodoroCycles : base.getPomodoroCycles(),
-					countdownMinutes != null ? countdownMinutes : base.getCountdownMinutes(),
-					sound != null ? sound : base.isSound()).sanitized();
+			TimePreferences next = new TimePreferences();
+			next.setPomodoroWork(pomodoroWork != null ? pomodoroWork : base.getPomodoroWork());
+			next.setPomodoroShortBreak(pomodoroShortBreak != null ? pomodoroShortBreak
+					: base.getPomodoroShortBreak());
+			next.setPomodoroLongBreak(pomodoroLongBreak != null ? pomodoroLongBreak
+					: base.getPomodoroLongBreak());
+			next.setPomodoroCycles(pomodoroCycles != null ? pomodoroCycles : base.getPomodoroCycles());
+			next.setCountdownMinutes(countdownMinutes != null ? countdownMinutes
+					: base.getCountdownMinutes());
+			next.setSound(sound != null ? sound : base.isSound());
+			next.setDailyTargetMinutes(dailyTargetMinutes != null ? dailyTargetMinutes
+					: base.getDailyTargetMinutes());
+			next.setWeeklyTargetMinutes(weeklyTargetMinutes != null ? weeklyTargetMinutes
+					: base.getWeeklyTargetMinutes());
+			next.setDailyReminderAt(dailyReminderAt != null ? dailyReminderAt : base.getDailyReminderAt());
+			next.setWeeklyReminderAt(weeklyReminderAt != null ? weeklyReminderAt
+					: base.getWeeklyReminderAt());
+			next.setWeeklyReminderDay(weeklyReminderDay != null ? weeklyReminderDay
+					: base.getWeeklyReminderDay());
+			return next.sanitized();
 		}
 	}
 

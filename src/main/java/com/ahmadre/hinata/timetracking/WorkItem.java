@@ -90,7 +90,19 @@ import java.util.List;
 // differ in nothing but their filter.
 @CompoundIndex(name = "user_date_described", def = "{'userId': 1, 'date': 1, '_id': 1}",
 		partialFilter = "{'description': {'$gt': ''}}")
+// The alert scan (HIN-92) asks which projects and issues had time recorded or changed in an
+// hour: an $or over these two, each a bounded range walk answered from its keys, since
+// projectId and issueId follow. The second is partial because most entries are never edited.
+@CompoundIndex(name = "created_project_issue", def = "{'createdAt': 1, 'projectId': 1, 'issueId': 1}")
+@CompoundIndex(name = "updated_project_issue", def = "{'updatedAt': 1, 'projectId': 1, 'issueId': 1}",
+		partialFilter = "{'updatedAt': {'$exists': true}}")
+// A project's recorded minutes summed from the keys alone, for the budget alerts. Without
+// durationMinutes in an index every entry of the project would be read to add one integer.
+@CompoundIndex(name = WorkItem.PROJECT_DURATION_INDEX, def = "{'projectId': 1, 'durationMinutes': 1}")
 public class WorkItem {
+
+	/** The index a project's recorded minutes are summed from; named once for the annotation and the hint. */
+	public static final String PROJECT_DURATION_INDEX = "project_duration";
 
 	/**
 	 * Where an entry came from. Absent on documents written before 2.0 — read as

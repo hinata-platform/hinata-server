@@ -184,6 +184,10 @@ hinata:
     workload-reports-enabled: ${HINATA_TIME_TRACKING_WORKLOAD_REPORTS_ENABLED:false}
     alerts-enabled: ${HINATA_TIME_TRACKING_ALERTS_ENABLED:false}
     target-reminders-enabled: ${HINATA_TIME_TRACKING_TARGET_REMINDERS_ENABLED:false}
+    # Targets offered to people in their reminder settings, in minutes; unset
+    # offers none. Only ever a suggestion: a target is the person's own.
+    suggested-daily-target-minutes: ${HINATA_TIME_TRACKING_SUGGESTED_DAILY_TARGET_MINUTES:}
+    suggested-weekly-target-minutes: ${HINATA_TIME_TRACKING_SUGGESTED_WEEKLY_TARGET_MINUTES:}
     arbzg-hints-enabled: ${HINATA_TIME_TRACKING_ARBZG_HINTS_ENABLED:false}
     retention:
       # Months from an entry's day; 0 keeps the data indefinitely, which is what
