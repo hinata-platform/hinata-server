@@ -7,6 +7,7 @@ import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueSearchText;
 import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueRepository;
@@ -428,6 +429,8 @@ public class DeletionService {
 					.set("projectId", target.getId())
 					.set("numberInProject", number)
 					.set("readableId", target.getKey() + "-" + number)
+					.set(IssueSearchText.FIELD, IssueSearchText.of(target.getKey() + "-" + number, issue.getTitle(),
+							issue.getTags()))
 					// Sprints belong to (soon-to-be-removed) boards of the old project.
 					.set("sprintId", null);
 			if (!targetStates.contains(issue.getState())) {

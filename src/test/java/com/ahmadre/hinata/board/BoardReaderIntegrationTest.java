@@ -2,12 +2,18 @@ package com.ahmadre.hinata.board;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueLink;
+import com.ahmadre.hinata.issue.IssueLinkGraphService;
+import com.ahmadre.hinata.issue.IssueLinkRepository;
+import com.ahmadre.hinata.issue.IssueLinkType;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
+import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.IndexOptions;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -35,9 +42,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * A board read in pages against a real MongoDB.
  *
  * <p>Everything here is a property of queries: which issues a column counts, in which order a page
- * comes, what a search or a filter keeps, and which projects a viewer's read reaches. None of that
- * can be observed against a stubbed template, and a filter that returns nothing would pass every
- * test that only checks what is absent, so each test also checks what must be there.
+ * comes, what a search or a filter keeps, which projects a viewer's read reaches, and which index the
+ * database reads it off. None of that can be observed against a stubbed template, and a filter that
+ * returns nothing would pass every test that only checks what is absent, so each test also checks
+ * what must be there.
  */
 @SpringBootTest(properties = {
 		"hinata.mongodb.tls.enabled=false",
@@ -67,6 +75,8 @@ class BoardReaderIntegrationTest {
 	private AgileBoardRepository boards;
 	@Autowired
 	private SprintRepository sprints;
+	@Autowired
+	private IssueLinkRepository links;
 
 	private User member;
 	private User outsider;
@@ -78,7 +88,7 @@ class BoardReaderIntegrationTest {
 
 	@BeforeEach
 	void seed() {
-		for (String collection : List.of("issues", "projects", "teams", "users", "agile_boards", "sprints")) {
+		for (String collection : List.of("issues", "projects", "teams", "users", "agile_boards", "sprints", "issue_links")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		member = users.save(User.builder().email("member@example.org").username("member").displayName("Member")
@@ -135,12 +145,14 @@ class BoardReaderIntegrationTest {
 		Issue labelled = issue(hinata, "Release notes", i -> i.tags(new ArrayList<>(List.of("Mobile"))));
 		Issue dotted = issue(hinata, "a.b rename", i -> { });
 		issue(hinata, "axb rename", i -> { });
+		Issue umlauts = issue(hinata, "Übersicht öffnen", i -> { });
 
 		assertThat(titles(search("LOGIN"))).containsExactly(login.getTitle());
 		assertThat(titles(search("mobile"))).containsExactly(labelled.getTitle());
 		assertThat(titles(search(login.getReadableId().toLowerCase()))).containsExactly(login.getTitle());
 		// The text is matched literally: a dot is a dot, not any character.
 		assertThat(titles(search("a.b"))).containsExactly(dotted.getTitle());
+		assertThat(titles(search("ÜBERSICHT"))).containsExactly(umlauts.getTitle());
 	}
 
 	@Test
@@ -159,8 +171,10 @@ class BoardReaderIntegrationTest {
 		assertThat(titles(filtered(BoardQuery.of(null, null, null, null, List.of("second"), null, List.of("ui"),
 				null, null, null)))).containsExactly(shared.getTitle());
 		// A state no project of the board has keeps nothing, and costs no query for cards.
-		assertThat(filtered(BoardQuery.of(null, List.of("NOPE"), null, null, null, null, null, null, null, null))
-				.totalElements()).isZero();
+		BoardQuery nowhere = BoardQuery.of(null, List.of("NOPE"), null, null, null, null, null, null, null, null);
+		assertThat(filtered(nowhere).totalElements()).isZero();
+		assertThat(reader.wall(board.getId(), null, nowhere, 30, member).columns())
+				.isNotEmpty().allSatisfy(column -> assertThat(column.total()).isZero());
 	}
 
 	@Test
@@ -173,8 +187,12 @@ class BoardReaderIntegrationTest {
 				BoardQuery.ALL, 0, 30, false, member))).containsExactly(planned.getTitle());
 		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, true, null),
 				BoardQuery.ALL, 0, 30, false, member))).containsExactly(waiting.getTitle());
-		assertThat(titles(filtered(BoardQuery.of(null, null, null, null, null, null, null,
-				List.of(BoardQuery.NO_SPRINT), null, null)))).containsExactly(waiting.getTitle());
+		// A column of a sprint wall reads its next page within the sprint.
+		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource("Open", sprint.getId(), false,
+				null), BoardQuery.ALL, 0, 30, false, member))).containsExactly(planned.getTitle());
+		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource("Open", null, false, null),
+				BoardQuery.of(null, null, null, null, null, null, null, List.of(BoardQuery.NO_SPRINT), null, null),
+				0, 30, false, member))).containsExactly(waiting.getTitle());
 
 		board.setActiveSprintId(sprint.getId());
 		boards.save(board);
@@ -184,6 +202,21 @@ class BoardReaderIntegrationTest {
 
 		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource(null, sprint.getId(), true, null),
 				BoardQuery.ALL, 0, 30, false, member), "error.validationFailed");
+	}
+
+	@Test
+	void showsAScrumBoardBetweenTwoSprintsWithoutCards() {
+		board.setType(AgileBoard.Type.SCRUM);
+		boards.save(board);
+		issue(hinata, "Waiting for a sprint", i -> { });
+
+		BoardReader.BoardWall wall = reader.wall(board.getId(), null, BoardQuery.ALL, 30, member);
+
+		assertThat(wall.sprintId()).isNull();
+		assertThat(wall.columns()).isNotEmpty().allSatisfy(column -> {
+			assertThat(column.total()).isNull();
+			assertThat(column.issues()).isEmpty();
+		});
 	}
 
 	@Test
@@ -211,11 +244,16 @@ class BoardReaderIntegrationTest {
 		issue(hinata, "Story in the sprint", i -> i.type(Issue.Type.STORY).sprintId(sprint.getId()));
 		issue(hinata, "Sub-task in the sprint", i -> i.type(Issue.Type.SUBTASK).parentId(epic.getId())
 				.sprintId(sprint.getId()));
+		Issue backlogEpic = issue(hinata, "Epic in the backlog", i -> i.type(Issue.Type.EPIC));
+		issue(hinata, "Sub-task in the backlog", i -> i.type(Issue.Type.SUBTASK).parentId(backlogEpic.getId()));
 		BoardQuery planning = BoardQuery.of(null, null, null, null, null, null, null, null, null, "planning");
 
 		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, sprint.getId(), false, null),
 				planning, 0, 30, false, member)))
 				.containsExactlyInAnyOrder("Epic in the sprint", "Story in the sprint", "Sub-task in the sprint");
+		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, true, null),
+				planning, 0, 30, false, member)))
+				.containsExactlyInAnyOrder("Epic in the backlog", "Sub-task in the backlog");
 	}
 
 	@Test
@@ -227,7 +265,7 @@ class BoardReaderIntegrationTest {
 		issue(hinata, "Second child", i -> i.type(Issue.Type.SUBTASK).parentId(story.getId()));
 		BoardQuery subtasks = BoardQuery.of(null, null, null, null, null, null, null, null, null, "subtasks");
 
-		BoardReader.BoardCardPage page = reader.cards(board.getId(), new BoardReader.CardSource(null, null, false,
+		BoardReader.BoardCardPage page = reader.cards(board.getId(), new BoardReader.CardSource(null, null, true,
 				null), subtasks, 0, 30, false, member);
 
 		BoardCard storyCard = card(page, story);
@@ -241,7 +279,7 @@ class BoardReaderIntegrationTest {
 		// The epic filter reaches the sub-task through its parent too.
 		BoardQuery underEpic = BoardQuery.of(null, null, null, null, null, null, null, null, List.of(epic.getId()),
 				"subtasks");
-		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, null), underEpic,
+		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, true, null), underEpic,
 				0, 30, false, member))).containsExactlyInAnyOrder("Story", "Child", "Second child");
 	}
 
@@ -294,15 +332,34 @@ class BoardReaderIntegrationTest {
 				.containsExactlyInAnyOrder("Own work", "Secret work");
 
 		assertRefused(() -> reader.wall(board.getId(), null, BoardQuery.ALL, 30, outsider), "error.accessDenied");
-		assertRefused(() -> reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, outsider), "error.accessDenied");
+		assertRefused(() -> reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, outsider),
+				"error.accessDenied");
 
+		board.setProjectIds(new ArrayList<>(List.of(hinata.getId())));
+		boards.save(board);
 		hinata.setArchived(true);
 		projects.save(hinata);
 		assertRefused(() -> reader.wall(board.getId(), null, BoardQuery.ALL, 30, member), "error.accessDenied");
+		// An admin reads a board of projects nobody may see as empty.
+		assertThat(reader.wall(board.getId(), null, BoardQuery.ALL, 30, admin).columns())
+				.allSatisfy(column -> assertThat(column.issues()).isEmpty());
 	}
 
 	@Test
-	void summarizesEveryCardOfTheQueryByStateAndResolution() {
+	void readsABoardSpanningMoreProjectsThanOneLookupNames() {
+		List<String> spanned = new ArrayList<>(IntStream.range(0, 120).mapToObj(i -> String.format("%024x", i)).toList());
+		spanned.add(hinata.getId());
+		board.setProjectIds(spanned);
+		boards.save(board);
+		Issue own = issue(hinata, "Own work", i -> { });
+
+		BoardReader.BoardWall wall = reader.wall(board.getId(), null, BoardQuery.ALL, 30, member);
+
+		assertThat(column(wall, "Open").issues()).extracting(BoardCard::title).containsExactly(own.getTitle());
+	}
+
+	@Test
+	void summarizesEveryCardOfTheSprintByStateAndResolution() {
 		Sprint sprint = sprints.save(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
 		for (int i = 0; i < 40; i++) {
 			issue(hinata, "Open " + i, b -> b.sprintId(sprint.getId()).storyPoints(2));
@@ -320,38 +377,80 @@ class BoardReaderIntegrationTest {
 				new BoardReader.StateSummary("Done", true, 1, 5),
 				new BoardReader.StateSummary("In Review", false, 1, 0),
 				new BoardReader.StateSummary("Open", false, 40, 80));
+		// Only a sprint has a head to count for.
+		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource(null, null, true, null),
+				BoardQuery.ALL, 0, 10, true, member), "error.validationFailed");
 	}
 
 	@Test
 	void gathersTheFacetsOverEveryCardOfTheBoard() {
+		Sprint sprint = sprints.save(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
 		issue(hinata, "One", i -> i.assigneeId(member.getId()).assigneeIds(new ArrayList<>(List.of(member.getId())))
 				.reporterId(outsider.getId()).tags(new ArrayList<>(List.of("ui", "api"))).type(Issue.Type.BUG));
 		issue(hinata, "Two", i -> i.state("Done").priority(Issue.Priority.MINOR).tags(new ArrayList<>(List.of("ui"))));
+		issue(hinata, "In the sprint", i -> i.sprintId(sprint.getId()).tags(new ArrayList<>(List.of("sprint-only"))));
 		Issue epic = issue(hinata, "Epic", i -> i.type(Issue.Type.EPIC));
 
 		BoardReader.BoardFacets facets = reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, member);
 
 		assertThat(facets.assigneeIds()).containsExactly(member.getId());
 		assertThat(facets.reporterIds()).containsExactly(outsider.getId());
-		assertThat(facets.labels()).containsExactly("api", "ui");
+		assertThat(facets.labels()).containsExactly("api", "sprint-only", "ui");
 		assertThat(facets.states()).containsExactly("Done", "Open");
 		assertThat(facets.types()).containsExactly("BUG", "TASK");
 		assertThat(facets.priorities()).containsExactly("MINOR", "NORMAL");
 		assertThat(facets.epics()).extracting(BoardRef::id).containsExactly(epic.getId());
 		assertThat(facets.users()).extracting(user -> user.id())
 				.containsExactlyInAnyOrder(member.getId(), outsider.getId());
+		assertThat(reader.facets(board.getId(), sprint.getId(), false, BoardQuery.Shape.WALL, member).labels())
+				.containsExactly("sprint-only");
+		assertThat(reader.facets(board.getId(), null, true, BoardQuery.Shape.WALL, member).labels())
+				.containsExactly("api", "ui");
+	}
+
+	@Test
+	void servesTheFacetsFromMemoryForAMoment() {
+		issue(hinata, "One", i -> i.tags(new ArrayList<>(List.of("ui"))));
+
+		List<Document> twice = profiled(() -> {
+			reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, member);
+			reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, member);
+		});
+
+		assertThat(twice.stream().filter(op -> sent(op).containsKey("aggregate"))).hasSize(1);
+	}
+
+	@Test
+	void drawsTheConnectorsBetweenTheCardsAViewHoldsOfProjectsTheViewerMaySee() {
+		board.setProjectIds(new ArrayList<>(List.of(hinata.getId(), secret.getId())));
+		boards.save(board);
+		Issue blocker = issue(hinata, "Blocker", i -> { });
+		Issue blocked = issue(hinata, "Blocked", i -> { });
+		Issue hidden = issue(secret, "Hidden", i -> { });
+		links.save(IssueLink.builder().type(IssueLinkType.BLOCKS).sourceId(blocker.getId()).targetId(blocked.getId())
+				.build());
+		links.save(IssueLink.builder().type(IssueLinkType.BLOCKS).sourceId(blocker.getId()).targetId(hidden.getId())
+				.build());
+
+		List<IssueLinkGraphService.LinkEdge> edges = reader.links(board.getId(),
+				List.of(blocker.getId(), blocked.getId(), hidden.getId()), member);
+
+		assertThat(edges).extracting(IssueLinkGraphService.LinkEdge::targetId).containsExactly(blocked.getId());
+		assertRefused(() -> reader.links(board.getId(), IntStream.range(0, BoardReader.MAX_LINK_CARDS + 1)
+				.mapToObj(String::valueOf).toList(), member), "error.validationFailed");
 	}
 
 	@Test
 	void putsEpicsOnTheTimelineAndSplitsItByDate() {
 		issue(hinata, "Later", i -> i.startDate(LocalDate.parse("2026-10-01")));
 		issue(hinata, "Sooner epic", i -> i.type(Issue.Type.EPIC).startDate(LocalDate.parse("2026-09-01")));
+		issue(hinata, "Deadline", i -> i.dueDate(LocalDate.parse("2026-09-20")));
 		issue(hinata, "Undated", i -> { });
 		issue(hinata, "Dated sub-task", i -> i.type(Issue.Type.SUBTASK).dueDate(LocalDate.parse("2026-09-10")));
 		BoardQuery timeline = BoardQuery.of(null, null, null, null, null, null, null, null, null, "timeline");
 
 		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, true), timeline, 0,
-				30, false, member))).containsExactly("Sooner epic", "Later");
+				30, false, member))).containsExactly("Deadline", "Sooner epic", "Later");
 		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, false), timeline,
 				0, 30, false, member))).containsExactly("Undated");
 	}
@@ -377,108 +476,114 @@ class BoardReaderIntegrationTest {
 
 		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource("Open", null, false, null),
 				BoardQuery.ALL, 0, -1, false, member), "error.validationFailed");
+		// A read names where its cards come from: the whole board in board order is no read.
+		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, null),
+				BoardQuery.ALL, 0, 30, false, member), "error.validationFailed");
 		assertRefused(() -> reader.cards(board.getId(), new BoardReader.CardSource("Nowhere", null, false, null),
 				BoardQuery.ALL, 0, 30, false, member), "error.board.unknownColumn");
 		assertRefused(() -> reader.wall("missing", null, BoardQuery.ALL, 30, member), "error.notFound");
 	}
 
 	@Test
-	void readsAColumnsPageAndCountOffTheBoardIndexes() {
-		Sprint sprint = sprints.save(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
-		for (int i = 0; i < 300; i++) {
-			int at = i;
-			issue(hinata, "Card " + i, b -> b.state(at % 3 == 0 ? "Done" : "Open"));
+	void readsWithoutAnIndexTheDatabaseLacks() {
+		issue(hinata, "Still there", i -> { });
+		Document keys = mongo.getCollection("issues").listIndexes().into(new ArrayList<>()).stream()
+				.filter(index -> "board_column".equals(index.getString("name"))).findFirst().orElseThrow()
+				.get("key", Document.class);
+		mongo.getCollection("issues").dropIndex("board_column");
+		try {
+			BoardReader.BoardWall wall = reader.wall(board.getId(), null, BoardQuery.ALL, 30, member);
+
+			assertThat(column(wall, "Open").issues()).extracting(BoardCard::title).containsExactly("Still there");
 		}
-		for (int i = 0; i < 60; i++) {
+		finally {
+			mongo.getCollection("issues").createIndex(keys, new IndexOptions().name("board_column"));
+		}
+	}
+
+	@Test
+	void readsEveryPageAndCountOffTheIndexItNames() {
+		Sprint sprint = sprints.save(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
+		for (int i = 0; i < 90; i++) {
+			int at = i;
+			issue(hinata, "Card " + i, b -> b.state(at % 3 == 0 ? "Done" : "Open")
+					.startDate(at % 2 == 0 ? LocalDate.parse("2026-09-01").plusDays(at) : null));
+		}
+		for (int i = 0; i < 30; i++) {
 			issue(hinata, "Sprint card " + i, b -> b.sprintId(sprint.getId()));
 		}
-		// The shape BoardReader asks in: the board's projects, active cards, the wall's types.
-		List<Document> wall = List.of(
-				new Document("projectId", new Document("$in", List.of(hinata.getId()))),
-				new Document("archived", false),
-				new Document("type", new Document("$nin", List.of("EPIC", "SUBTASK"))));
-		Document byRank = new Document("rank", 1).append("_id", 1);
+		issue(hinata, "Kryptonite in the title", b -> { });
 
-		Document columnPage = mongo.getCollection("issues")
-				.find(and(wall, new Document("state", new Document("$in", List.of("Open", "OPEN", "open")))))
-				.sort(byRank).limit(30).explain();
-		assertThat(indexesIn(columnPage)).containsOnly("board_column");
-		assertThat(stagesIn(columnPage)).doesNotContain("SORT", "COLLSCAN");
+		List<Document> wall = profiled(() -> reader.wall(board.getId(), null, BoardQuery.ALL, 30, member));
+		// The columns are counted off the index keys alone, and each page comes off the index in board order.
+		assertThat(hinted(wall, "aggregate", "board_column")).singleElement()
+				.satisfies(count -> assertThat(examined(count)).isZero());
+		assertThat(hinted(wall, "find", "board_column")).hasSize(2).allSatisfy(page -> {
+			assertThat(page.getString("planSummary")).contains("state: 1, rank: 1");
+			assertThat(page.getBoolean("hasSortStage", false)).isFalse();
+		});
 
-		Document sprintPage = mongo.getCollection("issues")
-				.find(and(wall, new Document("sprintId", sprint.getId())))
-				.sort(byRank).limit(30).explain();
-		assertThat(indexesIn(sprintPage)).containsOnly("board_sprint");
-		assertThat(stagesIn(sprintPage)).doesNotContain("SORT", "COLLSCAN");
+		List<Document> search = profiled(() -> reader.wall(board.getId(), null,
+				BoardQuery.of("KRYPTONITE", null, null, null, null, null, null, null, null, null), 30, member));
+		// A search reads the index keys and fetches the one card it keeps.
+		assertThat(hinted(search, "aggregate", "board_column")).singleElement()
+				.satisfies(count -> assertThat(examined(count)).isZero());
+		assertThat(hinted(search, "find", "board_column")).singleElement()
+				.satisfies(page -> assertThat(examined(page)).isEqualTo(1));
 
-		// Counting the columns reads the index alone, not one document.
-		Document counts = mongo.getCollection("issues").aggregate(List.of(
-				new Document("$match", and(wall)),
-				new Document("$group", new Document("_id", "$state").append("count", new Document("$sum", 1)))))
-				.explain();
-		assertThat(indexesIn(counts)).containsOnly("board_column");
-		assertThat(stagesIn(counts)).doesNotContain("FETCH", "COLLSCAN");
+		List<Document> sprintColumn = profiled(() -> reader.cards(board.getId(),
+				new BoardReader.CardSource("Open", sprint.getId(), false, null), BoardQuery.ALL, 0, 10, false, member));
+		assertThat(hinted(sprintColumn, "find", "board_sprint")).singleElement().satisfies(page -> {
+			assertThat(page.getString("planSummary")).contains("sprintId: 1, rank: 1");
+			assertThat(page.getBoolean("hasSortStage", false)).isFalse();
+		});
+
+		List<Document> backlog = profiled(() -> reader.cards(board.getId(),
+				new BoardReader.CardSource(null, null, true, null), BoardQuery.ALL, 0, 10, false, member));
+		assertThat(hinted(backlog, "aggregate", "board_sprint")).singleElement()
+				.satisfies(count -> assertThat(examined(count)).isZero());
+
+		List<Document> timeline = profiled(() -> reader.cards(board.getId(),
+				new BoardReader.CardSource(null, null, false, true), BoardQuery.all(BoardQuery.Shape.TIMELINE), 0, 10,
+				false, member));
+		assertThat(hinted(timeline, "find", "board_timeline")).singleElement().satisfies(page -> {
+			assertThat(page.getString("planSummary")).contains("startDate: 1, dueDate: 1");
+			assertThat(page.getBoolean("hasSortStage", false)).isFalse();
+		});
 	}
 
 	// --- helpers --------------------------------------------------------------------
 
-	private static Document and(List<Document> parts) {
-		return new Document("$and", parts);
-	}
-
-	private static Document and(List<Document> parts, Document more) {
-		List<Document> all = new ArrayList<>(parts);
-		all.add(more);
-		return and(all);
-	}
-
-	/** Every stage name of the winning plan, however the server nests it. */
-	private static List<String> stagesIn(Document explained) {
-		List<String> stages = new ArrayList<>();
-		walkPlan(winningPlan(explained), plan -> {
-			if (plan.getString("stage") != null) {
-				stages.add(plan.getString("stage"));
-			}
-		});
-		return stages;
-	}
-
-	private static List<String> indexesIn(Document explained) {
-		List<String> indexes = new ArrayList<>();
-		walkPlan(winningPlan(explained), plan -> {
-			if (plan.getString("indexName") != null) {
-				indexes.add(plan.getString("indexName"));
-			}
-		});
-		return indexes;
-	}
-
-	private static Document winningPlan(Document explained) {
-		Document planner = explained.get("queryPlanner", Document.class);
-		if (planner == null) {
-			// An aggregation explains its first stage, where the query runs.
-			for (Document stage : explained.getList("stages", Document.class, List.of())) {
-				Document cursor = stage.get("$cursor", Document.class);
-				if (cursor != null) {
-					planner = cursor.get("queryPlanner", Document.class);
-					break;
-				}
-			}
+	/** What the database did for [read]: every operation on the issues, as its profiler saw it. */
+	private List<Document> profiled(Runnable read) {
+		MongoDatabase database = mongo.getDb();
+		database.runCommand(new Document("profile", 0));
+		database.getCollection("system.profile").drop();
+		database.runCommand(new Document("profile", 2));
+		try {
+			read.run();
 		}
-		assertThat(planner).as("query planner in %s", explained.toJson()).isNotNull();
-		Document winning = planner.get("winningPlan", Document.class);
-		return winning.containsKey("queryPlan") ? winning.get("queryPlan", Document.class) : winning;
+		finally {
+			database.runCommand(new Document("profile", 0));
+		}
+		return database.getCollection("system.profile").find(new Document("ns", database.getName() + ".issues"))
+				.into(new ArrayList<>());
 	}
 
-	private static void walkPlan(Document plan, Consumer<Document> visit) {
-		visit.accept(plan);
-		Document input = plan.get("inputStage", Document.class);
-		if (input != null) {
-			walkPlan(input, visit);
-		}
-		for (Document each : plan.getList("inputStages", Document.class, List.of())) {
-			walkPlan(each, visit);
-		}
+	/** The operations of [command] that were sent with the hint [index]. */
+	private static List<Document> hinted(List<Document> profile, String command, String index) {
+		return profile.stream()
+				.filter(op -> sent(op).containsKey(command) && index.equals(String.valueOf(sent(op).get("hint"))))
+				.toList();
+	}
+
+	private static Document sent(Document op) {
+		Document command = op.get("command", Document.class);
+		return command == null ? new Document() : command;
+	}
+
+	private static long examined(Document op) {
+		return ((Number) op.get("docsExamined")).longValue();
 	}
 
 	private Issue issue(Project project, String title, Consumer<Issue.IssueBuilder> more) {
@@ -496,8 +601,9 @@ class BoardReaderIntegrationTest {
 		return filtered(BoardQuery.of(text, null, null, null, null, null, null, null, null, null));
 	}
 
+	/** The cards [query] keeps of a board whose cards are all in no sprint: its backlog. */
 	private BoardReader.BoardCardPage filtered(BoardQuery query) {
-		return reader.cards(board.getId(), new BoardReader.CardSource(null, null, false, null), query, 0, 30, false,
+		return reader.cards(board.getId(), new BoardReader.CardSource(null, null, true, null), query, 0, 30, false,
 				member);
 	}
 

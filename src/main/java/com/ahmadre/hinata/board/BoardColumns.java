@@ -38,6 +38,9 @@ public final class BoardColumns {
 	/** Ceiling on a hand-made layout — a wall nobody could scroll is a mistake. */
 	private static final int MAX_COLUMNS = 24;
 
+	/** The colour a column gets when none of its states names one. */
+	public static final int NEUTRAL_HUE = 250;
+
 	private BoardColumns() {
 	}
 
@@ -204,7 +207,7 @@ public final class BoardColumns {
 				}
 				if (hue != null) break;
 			}
-			byColumn.put(column.getName(), hue != null ? hue : 250);
+			byColumn.put(column.getName(), hue != null ? hue : NEUTRAL_HUE);
 		}
 		return byColumn;
 	}

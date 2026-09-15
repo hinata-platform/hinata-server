@@ -46,6 +46,7 @@ public class BoardController {
 	private final CurrentUser currentUser;
 	private final com.ahmadre.hinata.team.TeamRepository teams;
 	private final BoardReader reader;
+	private final BoardAccess access;
 
 	public record CreateBoardRequest(@NotBlank @Size(max = 120) String name,
 			@NotEmpty List<String> projectIds, AgileBoard.Type type) {
@@ -127,12 +128,9 @@ public class BoardController {
 		}
 	}
 
-	/** A board is accessible if it spans at least one project the user may see. */
+	/** A board is accessible if it spans at least one project the user may see, see {@link BoardAccess}. */
 	private void assertBoardAccess(AgileBoard board, User user) {
-		if (user.isAdmin()) return;
-		if (board.getProjectIds().stream().noneMatch(visibleProjectIds(user)::contains)) {
-			throw ApiException.forbidden("error.accessDenied");
-		}
+		access.assertReadable(board, user);
 	}
 
 	/**
@@ -196,13 +194,17 @@ public class BoardController {
 
 		// App versions before the paged wall (BoardWallController) read every card
 		// from here, so this keeps its shape. It reads at most OLD_VIEW_CARDS per
-		// project, in a sprint as on the whole board. Archived issues are
-		// soft-deleted, and the query leaves them out.
+		// project, in a sprint as on the whole board, off the board indexes in board
+		// order: a sprint's cards, or the cards in the states of the board's columns,
+		// the only ones this view ever showed. Archived issues are soft-deleted, and
+		// the query leaves them out.
+		Set<String> columnStates = BoardScope.spellings(scope.columns().stream()
+				.flatMap(column -> column.getStates().stream()).toList());
 		List<Issue> candidates = new ArrayList<>();
 		for (Project project : scope.projects()) {
 			candidates.addAll(effectiveSprint != null
 					? issues.findByProjectIdAndSprintIdAndArchivedFalse(project.getId(), effectiveSprint, OLD_VIEW_CARDS)
-					: issues.findByProjectIdAndArchivedFalse(project.getId(), OLD_VIEW_CARDS));
+					: issues.findByProjectIdAndArchivedFalseAndStateIn(project.getId(), columnStates, OLD_VIEW_CARDS));
 		}
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
 		// Stamp each card with its direct-child (sub-task) count/progress so the

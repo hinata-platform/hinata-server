@@ -239,15 +239,20 @@ class ApiE2EIntegrationTest {
 
 		// Lists bind from repeated parameters, and the search from q: the card is found by its own.
 		String state = URLEncoder.encode(card.path("state").asText(), StandardCharsets.UTF_8);
-		JsonNode filtered = getOk(boards + "/cards?states=" + state + "&states=NOPE&types=" + card.path("type").asText()
+		JsonNode filtered = getOk(boards + "/cards?column=" + column + "&states=" + state + "&states=NOPE&types=" + card.path("type").asText()
 				+ "&types=BUG&q=" + URLEncoder.encode(card.path("title").asText(), StandardCharsets.UTF_8) + "&size=100",
 				token);
 		assertThat(filtered.path("content").findValuesAsText("readableId")).contains(card.path("readableId").asText());
-		assertThat(getOk(boards + "/facets", token).path("states").findValuesAsText("state")).isEmpty();
-		JsonNode facetStates = getOk(boards + "/facets?shape=planning", token).path("states");
-		assertThat(facetStates.toString()).contains("\"" + card.path("state").asText() + "\"");
+		assertThat(getOk(boards + "/facets", token).path("states").toString())
+				.contains("\"" + card.path("state").asText() + "\"");
+		assertThat(getOk(boards + "/facets?shape=planning", token).path("types").toString())
+				.contains("\"" + card.path("type").asText() + "\"");
 		// An indexed name is an unknown parameter, not a path into a list.
-		assertThat(get(boards + "/cards?labels%5Bx%5D=1&labels%5B300%5D=1", token).statusCode()).isEqualTo(200);
+		assertThat(get(boards + "/cards?backlog=true&labels%5Bx%5D=1&labels%5B300%5D=1", token).statusCode()).isEqualTo(200);
+		// The connectors between cards come for the ids in the body.
+		HttpResponse<String> links = postJson(boards + "/links", "{\"ids\":[\"" + card.path("id").asText() + "\"]}", token);
+		assertThat(links.statusCode()).isEqualTo(200);
+		assertThat(parse(links.body()).isArray()).isTrue();
 
 		assertThat(get(boards + "/cards?shape=kanban", token).statusCode()).isEqualTo(400);
 		assertThat(get(boards + "/cards?column=Nowhere", token).statusCode()).isEqualTo(400);
