@@ -52,8 +52,7 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 	static final String NO_SPRINT = "__none__";
 
 	/** Every card of the wall. */
-	static final BoardQuery ALL = new BoardQuery("", Set.of(), Set.of(), Set.of(), Set.of(), Set.of(),
-			Set.of(), Set.of(), false, Set.of(), Shape.WALL);
+	static final BoardQuery ALL = all(Shape.WALL);
 
 	public BoardQuery {
 		states = Set.copyOf(states);
@@ -71,21 +70,27 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 	 *
 	 * @throws ApiException 400 for a text longer than {@value #MAX_TEXT} characters, a facet with
 	 *                      more than {@value #MAX_VALUES} values or a value longer than
-	 *                      {@value #MAX_VALUE_LENGTH}, and a type, priority or shape that does
-	 *                      not exist
+	 *                      {@value #MAX_VALUE_LENGTH}, a text or value with a control character,
+	 *                      and a type, priority or shape that does not exist
 	 */
 	public static BoardQuery of(String text, List<String> states, List<String> types, List<String> priorities,
 			List<String> assigneeIds, List<String> reporterIds, List<String> labels, List<String> sprints,
 			List<String> epicIds, String shape) {
 		String stripped = text == null ? "" : text.strip();
-		if (stripped.length() > MAX_TEXT) {
+		if (stripped.length() > MAX_TEXT || hasControl(stripped)) {
 			throw invalid();
 		}
 		Set<String> sprintIds = values(sprints);
 		boolean noSprint = sprintIds.remove(NO_SPRINT);
 		return new BoardQuery(stripped, values(states), enums(types, Issue.Type.class),
 				enums(priorities, Issue.Priority.class), values(assigneeIds), values(reporterIds), values(labels),
-				sprintIds, noSprint, values(epicIds), shape(shape));
+				sprintIds, noSprint, values(epicIds), shapeOf(shape));
+	}
+
+	/** Every card of [shape], narrowed by nothing. */
+	static BoardQuery all(Shape shape) {
+		return new BoardQuery("", Set.of(), Set.of(), Set.of(), Set.of(), Set.of(), Set.of(), Set.of(), false,
+				Set.of(), shape);
 	}
 
 	boolean hasText() {
@@ -102,7 +107,7 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 		}
 		for (String value : raw) {
 			String stripped = value == null ? "" : value.strip();
-			if (stripped.length() > MAX_VALUE_LENGTH) {
+			if (stripped.length() > MAX_VALUE_LENGTH || hasControl(stripped)) {
 				throw invalid();
 			}
 			if (!stripped.isEmpty()) {
@@ -125,7 +130,8 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 		return parsed;
 	}
 
-	private static Shape shape(String raw) {
+	/** The shape [raw] names, the wall when it names none. */
+	static Shape shapeOf(String raw) {
 		if (raw == null || raw.isBlank()) {
 			return Shape.WALL;
 		}
@@ -135,6 +141,11 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 		catch (IllegalArgumentException ex) {
 			throw invalid();
 		}
+	}
+
+	/** Whether [value] holds a control character: no board sends one, and a pattern must not carry a NUL. */
+	private static boolean hasControl(String value) {
+		return value.chars().anyMatch(Character::isISOControl);
 	}
 
 	private static ApiException invalid() {

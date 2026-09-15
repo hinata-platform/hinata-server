@@ -237,12 +237,17 @@ class ApiE2EIntegrationTest {
 		assertThat(page.path("totalElements").asLong()).isEqualTo(busiest.path("total").asLong());
 		assertThat(page.path("content").size()).isEqualTo(1);
 
-		// Lists bind from repeated parameters, and the search from q.
-		String state = URLEncoder.encode(busiest.path("states").get(0).asText(), StandardCharsets.UTF_8);
-		JsonNode filtered = getOk(boards + "/cards?states=" + state + "&states=NOPE&types=TASK&types=BUG"
-				+ "&q=" + URLEncoder.encode(card.path("title").asText(), StandardCharsets.UTF_8) + "&size=100", token);
-		assertThat(filtered.path("content").isArray()).isTrue();
-		assertThat(getOk(boards + "/facets", token).path("states").isArray()).isTrue();
+		// Lists bind from repeated parameters, and the search from q: the card is found by its own.
+		String state = URLEncoder.encode(card.path("state").asText(), StandardCharsets.UTF_8);
+		JsonNode filtered = getOk(boards + "/cards?states=" + state + "&states=NOPE&types=" + card.path("type").asText()
+				+ "&types=BUG&q=" + URLEncoder.encode(card.path("title").asText(), StandardCharsets.UTF_8) + "&size=100",
+				token);
+		assertThat(filtered.path("content").findValuesAsText("readableId")).contains(card.path("readableId").asText());
+		assertThat(getOk(boards + "/facets", token).path("states").findValuesAsText("state")).isEmpty();
+		JsonNode facetStates = getOk(boards + "/facets?shape=planning", token).path("states");
+		assertThat(facetStates.toString()).contains("\"" + card.path("state").asText() + "\"");
+		// An indexed name is an unknown parameter, not a path into a list.
+		assertThat(get(boards + "/cards?labels%5Bx%5D=1&labels%5B300%5D=1", token).statusCode()).isEqualTo(200);
 
 		assertThat(get(boards + "/cards?shape=kanban", token).statusCode()).isEqualTo(400);
 		assertThat(get(boards + "/cards?column=Nowhere", token).statusCode()).isEqualTo(400);

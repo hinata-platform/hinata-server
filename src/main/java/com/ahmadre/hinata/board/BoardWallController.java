@@ -16,6 +16,13 @@ import java.util.List;
  * A board read in pages: the wall, a page of cards, the facets of the filter. See
  * {@link BoardReader}. {@code GET /api/v1/boards/{id}} keeps answering in its old shape for app
  * versions that do not know these routes.
+ *
+ * <p>The search and the filter arrive as plain query parameters, every list as repeated values:
+ * {@code q} is matched against the key, the title and the labels ignoring case, {@code sprints}
+ * takes {@code __none__} for the cards in no sprint, and {@code shape} is {@code wall} (the
+ * default), {@code subtasks}, {@code timeline} or {@code planning}, see {@link BoardQuery.Shape}.
+ * They are bound one by one rather than into an object, so an indexed name such as
+ * {@code labels[3]} is an unknown parameter and never a path into a list.
  */
 @Tag(name = "Boards")
 @RestController
@@ -27,23 +34,6 @@ public class BoardWallController {
 	private final CurrentUser currentUser;
 
 	/**
-	 * The search and filter a board read narrows by, bound from the query string.
-	 *
-	 * @param q       matched against the key, the title and the labels, ignoring case
-	 * @param sprints sprint ids, {@code __none__} for the cards in no sprint
-	 * @param shape   {@code wall} (the default), {@code subtasks} or {@code timeline}
-	 */
-	public record Narrowing(String q, List<String> states, List<String> types, List<String> priorities,
-			List<String> assigneeIds, List<String> reporterIds, List<String> labels, List<String> sprints,
-			List<String> epicIds, String shape) {
-
-		BoardQuery query() {
-			return BoardQuery.of(q, states, types, priorities, assigneeIds, reporterIds, labels, sprints, epicIds,
-					shape);
-		}
-	}
-
-	/**
 	 * The wall: every column with its number of cards and the first [size] of them, and the people,
 	 * epics and parents those cards name. Without [sprintId] the board's active sprint applies.
 	 */
@@ -51,9 +41,20 @@ public class BoardWallController {
 	public BoardReader.BoardWall wall(@PathVariable String id,
 			@RequestParam(required = false) String sprintId,
 			@RequestParam(defaultValue = "30") int size,
-			Narrowing narrowing) {
+			@RequestParam(required = false) String q,
+			@RequestParam(required = false) List<String> states,
+			@RequestParam(required = false) List<String> types,
+			@RequestParam(required = false) List<String> priorities,
+			@RequestParam(required = false) List<String> assigneeIds,
+			@RequestParam(required = false) List<String> reporterIds,
+			@RequestParam(required = false) List<String> labels,
+			@RequestParam(required = false) List<String> sprints,
+			@RequestParam(required = false) List<String> epicIds,
+			@RequestParam(required = false) String shape) {
 		User user = currentUser.require();
-		return reader.wall(id, sprintId, narrowing.query(), size, user);
+		BoardQuery query = BoardQuery.of(q, states, types, priorities, assigneeIds, reporterIds, labels, sprints,
+				epicIds, shape);
+		return reader.wall(id, sprintId, query, size, user);
 	}
 
 	/**
@@ -69,18 +70,33 @@ public class BoardWallController {
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "30") int size,
 			@RequestParam(defaultValue = "false") boolean summary,
-			Narrowing narrowing) {
+			@RequestParam(required = false) String q,
+			@RequestParam(required = false) List<String> states,
+			@RequestParam(required = false) List<String> types,
+			@RequestParam(required = false) List<String> priorities,
+			@RequestParam(required = false) List<String> assigneeIds,
+			@RequestParam(required = false) List<String> reporterIds,
+			@RequestParam(required = false) List<String> labels,
+			@RequestParam(required = false) List<String> sprints,
+			@RequestParam(required = false) List<String> epicIds,
+			@RequestParam(required = false) String shape) {
 		User user = currentUser.require();
-		return reader.cards(id, new BoardReader.CardSource(column, sprintId, backlog, dated), narrowing.query(), page,
-				size, summary, user);
+		BoardQuery query = BoardQuery.of(q, states, types, priorities, assigneeIds, reporterIds, labels, sprints,
+				epicIds, shape);
+		return reader.cards(id, new BoardReader.CardSource(column, sprintId, backlog, dated), query, page, size,
+				summary, user);
 	}
 
-	/** What the filter and the row of faces can offer, over the board, a sprint or the backlog. */
+	/**
+	 * What the filter and the row of faces can offer over the board, a sprint or the backlog, for
+	 * the cards of [shape].
+	 */
 	@GetMapping("/facets")
 	public BoardReader.BoardFacets facets(@PathVariable String id,
 			@RequestParam(required = false) String sprintId,
-			@RequestParam(defaultValue = "false") boolean backlog) {
+			@RequestParam(defaultValue = "false") boolean backlog,
+			@RequestParam(required = false) String shape) {
 		User user = currentUser.require();
-		return reader.facets(id, sprintId, backlog, user);
+		return reader.facets(id, sprintId, backlog, BoardQuery.shapeOf(shape), user);
 	}
 }

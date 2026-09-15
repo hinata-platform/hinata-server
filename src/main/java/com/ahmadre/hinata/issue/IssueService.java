@@ -34,6 +34,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -544,7 +545,7 @@ public class IssueService {
 	 */
 	public void enrichSubtaskCounts(List<Issue> parents) {
 		if (parents == null || parents.isEmpty()) return;
-		Map<String, SubtaskTally> tallies = subtaskTallies(parents.stream().map(Issue::getId).toList());
+		Map<String, SubtaskTally> tallies = subtaskTallies(parents);
 		for (Issue parent : parents) {
 			SubtaskTally tally = tallies.getOrDefault(parent.getId(), SubtaskTally.NONE);
 			parent.setSubtaskCount(tally.total());
@@ -560,26 +561,37 @@ public class IssueService {
 	}
 
 	/**
-	 * The direct children of [parentIds], counted, in one index-backed {@code parentId $in}
-	 * query that reads only the four fields the count needs. A parent without children is
-	 * absent from the map. "Done" is defined as in {@link #enrichSubtaskCounts}, and like it
-	 * this performs no authorization.
+	 * The direct children of [parents], counted, in one index-backed {@code parentId $in} query
+	 * that reads only the four fields the count needs. A child counts while it is active and in its
+	 * parent's project: a hierarchy stays within one project, and a child left behind when its
+	 * parent moved belongs to a project a viewer of the parent may not see. A parent without
+	 * children is absent from the map. "Done" is defined as in {@link #enrichSubtaskCounts}, and
+	 * like it this performs no authorization.
 	 */
-	public Map<String, SubtaskTally> subtaskTallies(List<String> parentIds) {
-		List<String> ids = parentIds.stream().filter(Objects::nonNull).distinct().toList();
-		if (ids.isEmpty()) return Map.of();
+	public Map<String, SubtaskTally> subtaskTallies(Collection<Issue> parents) {
+		Map<String, String> projectOf = new HashMap<>();
+		for (Issue parent : parents) {
+			if (parent.getId() != null && parent.getProjectId() != null) {
+				projectOf.put(parent.getId(), parent.getProjectId());
+			}
+		}
+		if (projectOf.isEmpty()) return Map.of();
 
-		Query query = Query.query(Criteria.where("parentId").in(ids));
+		Query query = Query.query(Criteria.where("parentId").in(projectOf.keySet()).and("archived").ne(true));
 		query.fields().include("parentId", "projectId", "state", "resolvedAt");
 		Map<String, int[]> byParent = new HashMap<>(); // parentId -> [total, done]
 		Map<String, Set<String>> resolvedByProject = new HashMap<>();
 		// Read as plain documents: nothing here needs an Issue built, only four values.
 		for (org.bson.Document child : mongo.find(query, org.bson.Document.class,
 				mongo.getCollectionName(Issue.class))) {
-			int[] tally = byParent.computeIfAbsent(child.getString("parentId"), k -> new int[2]);
-			tally[0]++;
+			String parentId = child.getString("parentId");
 			String projectId = child.getString("projectId");
-			Set<String> resolved = projectId == null ? Set.of() : resolvedByProject.computeIfAbsent(
+			if (projectId == null || !projectId.equals(projectOf.get(parentId))) {
+				continue;
+			}
+			int[] tally = byParent.computeIfAbsent(parentId, k -> new int[2]);
+			tally[0]++;
+			Set<String> resolved = resolvedByProject.computeIfAbsent(
 					projectId,
 					pid -> projects.findOptional(pid)
 							.map(p -> new HashSet<>(p.getResolvedStates()))

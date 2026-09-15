@@ -31,6 +31,7 @@ class BoardQueryTest {
 		assertThat(query.noSprint()).isTrue();
 		assertThat(query.epicIds()).containsExactly("e1");
 		assertThat(query.shape()).isEqualTo(BoardQuery.Shape.SUBTASKS);
+		assertThat(BoardQuery.shapeOf(" Planning ")).isEqualTo(BoardQuery.Shape.PLANNING);
 	}
 
 	@Test
@@ -52,6 +53,11 @@ class BoardQueryTest {
 				null));
 		assertRefused(() -> BoardQuery.of(null, null, null, List.of("urgent"), null, null, null, null, null, null));
 		assertRefused(() -> BoardQuery.of(null, null, null, null, null, null, null, null, null, "kanban"));
+		// A pattern cannot carry a NUL, and a line break would write a line of its own into a log.
+		assertRefused(() -> BoardQuery.of("x\u0000y", null, null, null, null, null, null, null, null, null));
+		assertRefused(() -> BoardQuery.of("x\ny", null, null, null, null, null, null, null, null, null));
+		assertRefused(() -> BoardQuery.of(null, null, null, null, null, null, List.of("ui\u0007"), null, null,
+				null));
 	}
 
 	@Test
