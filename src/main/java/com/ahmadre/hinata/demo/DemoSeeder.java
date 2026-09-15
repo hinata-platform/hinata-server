@@ -1129,9 +1129,91 @@ public class DemoSeeder {
 		unfiled(admin, "Team retro", "Meeting", 1, 16, 0, 60, List.of("Meeting"));
 		timeTags();
 		timesheetApprovals(hin, mob, admin, lena);
+		availability(admin, tomas, lena);
 
 		syncSpent();
 		log.info("[demo] seeded {} work items", workItems.count());
+	}
+
+	/**
+	 * Working-time patterns, a holiday calendar and two absences, so the calendar and the
+	 * timesheet show what capacity looks like (HIN-91).
+	 *
+	 * <p>Raw documents, like {@link #timeTags()}: availability belongs to the extended module,
+	 * and the seeder may not reach into it. Days are stored as UTC midnight, like every day.
+	 *
+	 * <ul>
+	 * <li>Lena works Monday to Thursday. Her Friday, which carries entries above, is a day
+	 * without planned hours: the marking beside hours that still count.</li>
+	 * <li>Nobody picks a calendar, so the default one applies to everybody.</li>
+	 * <li>The calendar holds the fixed national holidays of this year and the next, Christmas
+	 * Eve as a half day.</li>
+	 * <li>Tomas is on vacation next Monday and Tuesday, Lena takes this Thursday afternoon
+	 * off.</li>
+	 * </ul>
+	 */
+	private void availability(User admin, User tomas, User lena) {
+		if (mongo.getCollection("holiday_calendars").countDocuments() > 0) {
+			return;
+		}
+		LocalDate monday = LocalDate.now(ZoneOffset.UTC).with(DayOfWeek.MONDAY);
+		java.util.Date now = java.util.Date.from(Instant.now());
+		org.bson.types.ObjectId calendarId = new org.bson.types.ObjectId();
+		mongo.getCollection("holiday_calendars").insertOne(new org.bson.Document()
+				.append("_id", calendarId)
+				.append("name", "Deutschland")
+				.append("region", "Bundesweit")
+				.append("defaultCalendar", true)
+				.append("createdBy", admin.getId())
+				.append("createdAt", now)
+				.append("updatedAt", now));
+		for (int year = monday.getYear(); year <= monday.getYear() + 1; year++) {
+			holiday(calendarId, LocalDate.of(year, 1, 1), "Neujahr", false, now);
+			holiday(calendarId, LocalDate.of(year, 5, 1), "Tag der Arbeit", false, now);
+			holiday(calendarId, LocalDate.of(year, 10, 3), "Tag der Deutschen Einheit", false, now);
+			holiday(calendarId, LocalDate.of(year, 12, 24), "Heiligabend", true, now);
+			holiday(calendarId, LocalDate.of(year, 12, 25), "1. Weihnachtstag", false, now);
+			holiday(calendarId, LocalDate.of(year, 12, 26), "2. Weihnachtstag", false, now);
+		}
+		mongo.getCollection("working_schedules").insertOne(new org.bson.Document()
+				.append("userId", lena.getId())
+				.append("validFrom", utcDay(monday.minusWeeks(4)))
+				.append("minutesPerWeekday", List.of(480, 480, 480, 480, 0, 0, 0))
+				.append("createdBy", lena.getId())
+				.append("createdAt", now));
+		mongo.getCollection("time_off").insertOne(new org.bson.Document()
+				.append("userId", tomas.getId())
+				.append("type", "VACATION")
+				.append("from", utcDay(monday.plusWeeks(1)))
+				.append("to", utcDay(monday.plusWeeks(1).plusDays(1)))
+				.append("createdBy", tomas.getId())
+				.append("createdAt", now));
+		mongo.getCollection("time_off").insertOne(new org.bson.Document()
+				.append("userId", lena.getId())
+				.append("type", "OTHER")
+				.append("from", utcDay(monday.plusDays(3)))
+				.append("to", utcDay(monday.plusDays(3)))
+				.append("halfDay", true)
+				.append("createdBy", lena.getId())
+				.append("createdAt", now));
+	}
+
+	private void holiday(org.bson.types.ObjectId calendarId, LocalDate date, String name, boolean halfDay,
+			java.util.Date now) {
+		org.bson.Document document = new org.bson.Document()
+				.append("calendarId", calendarId.toHexString())
+				.append("date", utcDay(date))
+				.append("name", name)
+				.append("source", "MANUAL")
+				.append("createdAt", now);
+		if (halfDay) {
+			document.append("halfDay", true);
+		}
+		mongo.getCollection("holidays").insertOne(document);
+	}
+
+	private static java.util.Date utcDay(LocalDate day) {
+		return java.util.Date.from(day.atStartOfDay().toInstant(ZoneOffset.UTC));
 	}
 
 	/**

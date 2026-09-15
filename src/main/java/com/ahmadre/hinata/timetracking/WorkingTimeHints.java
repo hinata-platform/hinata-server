@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -27,8 +28,10 @@ import java.util.TreeMap;
  * <li><b>Short rest</b> — less than eleven hours between the end of one working
  * day and the start of the next (§ 5 ArbZG). Only timed entries can say when work
  * began and ended, so a day typed as a bare duration answers nothing here.</li>
- * <li><b>Sunday work</b> — hours booked on a Sunday (§ 9 ArbZG). Public holidays
- * join when stage 10 brings a holiday source.</li>
+ * <li><b>Sunday work</b> — hours booked on a Sunday (§ 9 ArbZG).</li>
+ * <li><b>Holiday work</b> — hours booked on a public holiday of the calendar the
+ * person follows (§ 9 ArbZG, stage 10). A hint, like the Sunday one: § 16 Abs. 2
+ * ArbZG wants that work recorded, so the entry stands.</li>
  * <li><b>Late entry</b> — recorded more than N days after the day it describes
  * (R9). Measured from {@code createdAt}, so a later edit does not make an entry
  * late, and an entry without one (written before the field existed) never is.</li>
@@ -45,8 +48,9 @@ final class WorkingTimeHints {
 	private WorkingTimeHints() {
 	}
 
+	/** Wire names. {@code HOLIDAY_WORK} came last so that the order of the others stays. */
 	enum Kind {
-		DAILY_MAXIMUM, SHORT_REST, SUNDAY_WORK, LATE_ENTRY
+		DAILY_MAXIMUM, SHORT_REST, SUNDAY_WORK, LATE_ENTRY, HOLIDAY_WORK
 	}
 
 	/** The part of an entry the rules look at. */
@@ -66,6 +70,12 @@ final class WorkingTimeHints {
 			Integer daysLate) {
 	}
 
+	/** The hints without a holiday calendar. */
+	static List<Hint> of(List<Entry> entries, LocalDate from, LocalDate to, ZoneId zone,
+			Rules rules) {
+		return of(entries, from, to, zone, rules, Set.of());
+	}
+
 	/**
 	 * The hints for the days {@code from} to {@code to}, both included.
 	 *
@@ -74,11 +84,12 @@ final class WorkingTimeHints {
 	 * before it ended, and a window that cannot see that day would answer "fine" for
 	 * a reason that has nothing to do with the entries.
 	 *
-	 * @param zone the person's zone, which turns {@code createdAt} into the day it was
-	 *             recorded on
+	 * @param zone     the person's zone, which turns {@code createdAt} into the day it was
+	 *                 recorded on
+	 * @param holidays the public holidays in the window
 	 */
 	static List<Hint> of(List<Entry> entries, LocalDate from, LocalDate to, ZoneId zone,
-			Rules rules) {
+			Rules rules, Set<LocalDate> holidays) {
 		Map<LocalDate, List<Entry>> byDay = new TreeMap<>();
 		for (Entry entry : entries) {
 			if (entry.date() != null) {
@@ -87,7 +98,7 @@ final class WorkingTimeHints {
 		}
 		List<Hint> hints = new ArrayList<>();
 		if (rules.workingTimeAct()) {
-			workingTimeAct(byDay, from, to, hints);
+			workingTimeAct(byDay, from, to, holidays, hints);
 		}
 		if (rules.lateEntryHintDays() != null) {
 			lateEntries(byDay, from, to, zone, rules.lateEntryHintDays(), hints);
@@ -97,7 +108,7 @@ final class WorkingTimeHints {
 	}
 
 	private static void workingTimeAct(Map<LocalDate, List<Entry>> byDay, LocalDate from,
-			LocalDate to, List<Hint> hints) {
+			LocalDate to, Set<LocalDate> holidays, List<Hint> hints) {
 		for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
 			List<Entry> today = byDay.getOrDefault(day, List.of());
 			int total = today.stream().mapToInt(Entry::minutes).sum();
@@ -106,6 +117,9 @@ final class WorkingTimeHints {
 			}
 			if (total > 0 && day.getDayOfWeek() == DayOfWeek.SUNDAY) {
 				hints.add(new Hint(Kind.SUNDAY_WORK, day, null, total, null, null));
+			}
+			if (total > 0 && holidays.contains(day)) {
+				hints.add(new Hint(Kind.HOLIDAY_WORK, day, null, total, null, null));
 			}
 			Duration rest = restBefore(byDay.getOrDefault(day.minusDays(1), List.of()), today);
 			if (rest != null && rest.compareTo(MINIMUM_REST) < 0) {

@@ -136,6 +136,19 @@ public enum AuditAction {
 	TIME_LOCK_EXCEPTION_ADDED(CONFIGURATION, WARNING, true),
 	TIME_LOCK_EXCEPTION_REMOVED(CONFIGURATION, NOTICE, true),
 
+	// --- Availability (HIN-91) -------------------------------------------------
+	// An administrator keeping somebody else's working-time pattern or absences.
+	// A person keeping their own is ordinary use and not recorded, for the same
+	// reason TIME_ENTRY_CREATED is off: when somebody is away is theirs. The
+	// records name the type and the span of an absence, never its note.
+	AVAILABILITY_SCHEDULE_CHANGED(DATA, NOTICE, true),
+	AVAILABILITY_TIME_OFF_CHANGED(DATA, NOTICE, true),
+	// Holiday calendars are instance configuration. An import names the feed's
+	// host, never its address, which is a credential.
+	AVAILABILITY_CALENDAR_CHANGED(CONFIGURATION, NOTICE, true),
+	AVAILABILITY_HOLIDAYS_CHANGED(CONFIGURATION, INFO, true),
+	AVAILABILITY_HOLIDAYS_IMPORTED(CONFIGURATION, NOTICE, true),
+
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),
 	PAT_REVOKED(INTEGRATION, NOTICE, true),

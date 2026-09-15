@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.availability.CapacityService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +13,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * The Working Hours Act hints and the late-entry hint for one person's own entries.
@@ -19,6 +22,9 @@ import java.util.List;
  * <p>The rules are {@link WorkingTimeHints}; this reads what they need and nothing
  * more. Why nobody may ask it about somebody else is written on
  * {@link TimeHintsController}.
+ *
+ * <p>One of the two places in the module that read availability, for the holidays a
+ * hint names. A read for display: no write path may know it ({@code ModuleBoundaryTest}).
  */
 @Service
 @RequiredArgsConstructor
@@ -33,6 +39,7 @@ class TimeHintsService {
 	private final TimeTrackingSettings policy;
 	private final TimeTrackingService entries;
 	private final MongoTemplate mongo;
+	private final CapacityService capacity;
 
 	/**
 	 * The hints on {@code user}'s own entries from {@code from} to {@code to}.
@@ -60,6 +67,10 @@ class TimeHintsService {
 						WorkItemDocuments.instant(document, "endedAt"),
 						WorkItemDocuments.instant(document, "createdAt")))
 				.toList();
-		return WorkingTimeHints.of(own, from, to, entries.zoneOf(user), rules);
+		Set<LocalDate> holidays = rules.workingTimeAct()
+				? capacity.window(user.getId(), from, to).holidays().stream()
+						.map(CapacityService.HolidayMark::date).collect(Collectors.toSet())
+				: Set.of();
+		return WorkingTimeHints.of(own, from, to, entries.zoneOf(user), rules, holidays);
 	}
 }
