@@ -70,6 +70,21 @@ class BoardQueryTest {
 		assertThat(query.labels()).hasSize(1);
 	}
 
+	@Test
+	void countsTheCharactersOfASearchAsSomeoneReadsThem() {
+		String family = "👨‍👩‍👧‍👦";
+		assertThat(BoardQuery.characters(family)).isEqualTo(1);
+		assertThat(BoardQuery.characters("Übersicht")).isEqualTo(9);
+
+		// A hundred emoji are a hundred characters, as the app's search field counts them.
+		assertThat(BoardQuery.of(family.repeat(100), null, null, null, null, null, null, null, null, null).text())
+				.isEqualTo(family.repeat(100));
+		assertRefused(() -> BoardQuery.of(family.repeat(101), null, null, null, null, null, null, null, null, null));
+		// However few characters it makes, a search is no longer than a pattern should be.
+		assertRefused(() -> BoardQuery.of("e" + "́".repeat(BoardQuery.MAX_TEXT_UNITS), null, null, null, null,
+				null, null, null, null, null));
+	}
+
 	private static void assertRefused(ThrowingCallable read) {
 		assertThatThrownBy(read).isInstanceOfSatisfying(ApiException.class,
 				ex -> assertThat(ex.getMessageKey()).isEqualTo("error.validationFailed"));

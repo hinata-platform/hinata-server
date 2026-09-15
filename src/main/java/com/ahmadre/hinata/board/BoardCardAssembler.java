@@ -86,13 +86,11 @@ class BoardCardAssembler {
 		if (wanted.isEmpty()) {
 			return List.of();
 		}
-		Query query = Query.query(Criteria.where("_id").in(wanted)).maxTime(BoardReader.MAX_TIME);
-		query.fields().include("username", "displayName", "avatarUrl", "title", "pronouns", "active");
+		Query query = Query.query(Criteria.where("_id").in(wanted)).maxTime(BoardIssueReads.MAX_TIME);
+		query.fields().include(DirectoryUser.FIELDS).include("active");
 		return mongo.find(query, Document.class, "users").stream()
 				.filter(user -> !Boolean.FALSE.equals(user.getBoolean("active")))
-				.map(user -> new DirectoryUser(user.get("_id").toString(), user.getString("username"),
-						user.getString("displayName"), user.getString("avatarUrl"), user.getString("title"),
-						user.getString("pronouns")))
+				.map(DirectoryUser::from)
 				.toList();
 	}
 
@@ -119,7 +117,7 @@ class BoardCardAssembler {
 			return List.of();
 		}
 		Query query = Query.query(Criteria.where("_id").in(ids).and("projectId").in(scope.projectIds())
-				.and("archived").is(false)).maxTime(BoardReader.MAX_TIME);
+				.and("archived").is(false)).maxTime(BoardIssueReads.MAX_TIME);
 		query.fields().include(BoardRef.FIELDS).include(Issue.PROJECTION_REQUIRED);
 		return mongo.find(query, Issue.class);
 	}

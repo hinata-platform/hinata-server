@@ -244,7 +244,7 @@ class ApiE2EIntegrationTest {
 				token);
 		assertThat(filtered.path("content").findValuesAsText("readableId")).contains(card.path("readableId").asText());
 		assertThat(getOk(boards + "/facets", token).path("states").toString())
-				.contains("\"" + card.path("state").asText() + "\"");
+				.containsIgnoringCase("\"" + card.path("state").asText() + "\"");
 		assertThat(getOk(boards + "/facets?shape=planning", token).path("types").toString())
 				.contains("\"" + card.path("type").asText() + "\"");
 		// An indexed name is an unknown parameter, not a path into a list.

@@ -94,16 +94,14 @@ public class BoardWallController {
 	}
 
 	/**
-	 * What the filter and the row of faces can offer over the board, a sprint or the backlog, for
-	 * the cards of [shape].
+	 * What the filter and the row of faces can offer over every card of the board: the people, the
+	 * reporters, the labels and the epics on its cards, the states of its projects' workflows, and the
+	 * types and priorities a card of [shape] can have.
 	 */
 	@GetMapping("/facets")
-	public BoardReader.BoardFacets facets(@PathVariable String id,
-			@RequestParam(required = false) String sprintId,
-			@RequestParam(defaultValue = "false") boolean backlog,
-			@RequestParam(required = false) String shape) {
+	public BoardReader.BoardFacets facets(@PathVariable String id, @RequestParam(required = false) String shape) {
 		User user = currentUser.require();
-		return reader.facets(id, sprintId, backlog, BoardQuery.shapeOf(shape), user);
+		return reader.facets(id, BoardQuery.shapeOf(shape), user);
 	}
 
 	/** The ids of the cards a view holds. */
@@ -111,8 +109,14 @@ public class BoardWallController {
 	}
 
 	/**
-	 * The connectors between cards of the board a view holds, both ends among them. The ids travel in
-	 * the body, since a timeline holds more cards than a query string carries.
+	 * The connectors between cards of the board a view holds, both ends among them: what a timeline
+	 * draws between the cards it has loaded.
+	 *
+	 * <p>They are a read of their own rather than a part of each page, because a connector joins cards
+	 * of different pages, and of the dated and the undated list, which only the view holds together.
+	 * A page that carried them would have to read the links of cards it does not hold. The ids travel
+	 * in the body, since a timeline holds more cards than a query string carries, and the read changes
+	 * nothing.
 	 */
 	@PostMapping("/links")
 	public List<IssueLinkGraphService.LinkEdge> links(@PathVariable String id, @RequestBody @Valid CardIds cards) {

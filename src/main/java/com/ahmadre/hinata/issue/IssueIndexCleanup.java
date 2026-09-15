@@ -15,10 +15,11 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Drops the single-field indexes on {@code projectId} and {@code state} that older servers created.
- * Every query on a project goes through an index that starts with it, and no query asks for a state
- * without its project, so both only cost every write, a drag on the board most of all. Does nothing
- * once they are gone.
+ * Drops the indexes on the issues that no query reads any more and every write still pays for, a drag
+ * on the board most of all: the single-field indexes on {@code projectId} and {@code state} that older
+ * servers created, since every query on a project goes through an index that starts with it and no
+ * query asks for a state without its project, and the board indexes a pre-release build of the paged
+ * board created, which the {@code board_by_*} indexes replace. Does nothing once they are gone.
  */
 @Slf4j
 @Component
@@ -26,7 +27,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class IssueIndexCleanup implements ApplicationRunner {
 
-	static final List<String> REDUNDANT = List.of("projectId", "state");
+	static final List<String> REDUNDANT = List.of("projectId", "state", "board_column", "board_sprint", "board_timeline");
 
 	private final MongoTemplate mongo;
 
