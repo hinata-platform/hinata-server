@@ -26,9 +26,11 @@ public final class IssueLabels {
 
 	/**
 	 * The most UTF-16 units a label takes however few characters they make. One character can take many, as
-	 * an emoji of a family takes eleven, and the search text holds every one of them.
+	 * an emoji of a family takes eleven, and the search text holds every one of them: fifty emoji of two
+	 * units each still fit, twenty emoji of a family do not. The messages name the characters alone, which
+	 * is the limit anyone writing ordinary labels meets.
 	 */
-	public static final int MAX_UNITS = 200;
+	public static final int MAX_UNITS = 100;
 
 	private IssueLabels() {
 	}
@@ -65,8 +67,12 @@ public final class IssueLabels {
 		}
 		Set<String> before = carried == null ? Set.of() : new HashSet<>(carried);
 		List<String> labels = distinct(written);
-		if (labels.size() > MAX_LABELS && labels.stream().anyMatch(label -> !before.contains(label))
-				|| labels.stream().anyMatch(label -> !before.contains(label) && tooLong(label))) {
+		boolean gainsPastTheCount = labels.size() > MAX_LABELS
+				&& labels.stream().anyMatch(label -> !before.contains(label));
+		// Characters are counted only for the labels gained, and only once the count holds.
+		boolean gainsOneTooLong = !gainsPastTheCount
+				&& labels.stream().anyMatch(label -> !before.contains(label) && tooLong(label));
+		if (gainsPastTheCount || gainsOneTooLong) {
 			throw ApiException.badRequest("error.issue.labels", MAX_LABELS, MAX_LENGTH);
 		}
 	}
