@@ -205,6 +205,20 @@ class BoardReaderIntegrationTest {
 	}
 
 	@Test
+	void listsEveryIssueTypeForThePlanning() {
+		Sprint sprint = sprints.save(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
+		Issue epic = issue(hinata, "Epic in the sprint", i -> i.type(Issue.Type.EPIC).sprintId(sprint.getId()));
+		issue(hinata, "Story in the sprint", i -> i.type(Issue.Type.STORY).sprintId(sprint.getId()));
+		issue(hinata, "Sub-task in the sprint", i -> i.type(Issue.Type.SUBTASK).parentId(epic.getId())
+				.sprintId(sprint.getId()));
+		BoardQuery planning = BoardQuery.of(null, null, null, null, null, null, null, null, null, "planning");
+
+		assertThat(titles(reader.cards(board.getId(), new BoardReader.CardSource(null, sprint.getId(), false, null),
+				planning, 0, 30, false, member)))
+				.containsExactlyInAnyOrder("Epic in the sprint", "Story in the sprint", "Sub-task in the sprint");
+	}
+
+	@Test
 	void resolvesEachCardsEpicPeopleAndSubTasksForThePageAtOnce() {
 		Issue epic = issue(hinata, "Epic", i -> i.type(Issue.Type.EPIC));
 		Issue story = issue(hinata, "Story", i -> i.type(Issue.Type.STORY).parentId(epic.getId())
