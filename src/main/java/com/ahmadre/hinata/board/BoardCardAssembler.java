@@ -68,7 +68,8 @@ class BoardCardAssembler {
 				epicOf.put(card.getId(), epic);
 			}
 		}
-		Map<String, IssueService.SubtaskTally> tallies = issueService.subtaskTallies(cards, scope.resolvedStates());
+		Map<String, IssueService.SubtaskTally> tallies = issueService.subtaskTallies(cards, scope.resolvedStates(),
+				BoardTime.left());
 		List<DirectoryUser> people = people(cards.stream().flatMap(card -> Stream.concat(
 				Stream.of(card.getAssigneeId(), card.getReporterId()),
 				card.getAssigneeIds() == null ? Stream.empty() : card.getAssigneeIds().stream())));
@@ -86,7 +87,7 @@ class BoardCardAssembler {
 		if (wanted.isEmpty()) {
 			return List.of();
 		}
-		Query query = Query.query(Criteria.where("_id").in(wanted)).maxTime(BoardIssueReads.MAX_TIME);
+		Query query = Query.query(Criteria.where("_id").in(wanted)).maxTime(BoardTime.left());
 		query.fields().include(DirectoryUser.FIELDS).include("active");
 		return mongo.find(query, Document.class, "users").stream()
 				.filter(user -> !Boolean.FALSE.equals(user.getBoolean("active")))
@@ -111,13 +112,13 @@ class BoardCardAssembler {
 		return ids.filter(Objects::nonNull).filter(id -> !known.containsKey(id)).distinct().toList();
 	}
 
-	/** Issues named by id, as far as they belong to the board's projects this viewer may see. */
+	/** Issues named by id, as far as they belong to the board's projects this viewer may see, off their ids. */
 	private List<Issue> refs(BoardScope scope, Collection<String> ids) {
 		if (ids.isEmpty()) {
 			return List.of();
 		}
 		Query query = Query.query(Criteria.where("_id").in(ids).and("projectId").in(scope.projectIds())
-				.and("archived").is(false)).maxTime(BoardIssueReads.MAX_TIME);
+				.and("archived").is(false)).maxTime(BoardTime.left()).withHint(BoardCriteria.BY_ID);
 		query.fields().include(BoardRef.FIELDS).include(Issue.PROJECTION_REQUIRED);
 		return mongo.find(query, Issue.class);
 	}

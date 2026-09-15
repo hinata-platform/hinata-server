@@ -10,6 +10,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -36,7 +37,6 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class IssueLinkGraphService {
 
-	private final IssueLinkRepository links;
 	private final ProjectService projects;
 	private final MongoTemplate mongo;
 
@@ -50,9 +50,18 @@ public class IssueLinkGraphService {
 
 	/** Edges between the given issues — the exact set a chart is about to draw. */
 	public List<LinkEdge> among(Collection<Issue> scope) {
+		return among(scope, null);
+	}
+
+	/**
+	 * {@link #among(Collection)}, the read of the links given up once [maxTime] has passed, or run
+	 * without a limit when it is null: a board draws the connectors of its cards within the time of
+	 * its request.
+	 */
+	public List<LinkEdge> among(Collection<Issue> scope, Duration maxTime) {
 		Set<String> ids = new LinkedHashSet<>();
 		for (Issue issue : scope) ids.add(issue.getId());
-		return edges(ids, scope);
+		return edges(ids, scope, maxTime);
 	}
 
 	/**
@@ -81,20 +90,24 @@ public class IssueLinkGraphService {
 		}
 		// Only ids are loaded, so the legacy dependsOnIds edges can't be derived
 		// here — the board folds those in client-side from issues it already has.
-		return edges(ids, List.of());
+		return edges(ids, List.of(), null);
 	}
 
-	private List<LinkEdge> edges(Set<String> ids, Collection<Issue> withDependencies) {
+	private List<LinkEdge> edges(Set<String> ids, Collection<Issue> withDependencies, Duration maxTime) {
 		if (ids.isEmpty()) return List.of();
 		List<LinkEdge> out = new ArrayList<>();
 		Set<String> seen = new HashSet<>();
-		addStoredLinks(ids, out, seen);
+		addStoredLinks(ids, maxTime, out, seen);
 		addLegacyDependencies(ids, withDependencies, out, seen);
 		return out;
 	}
 
-	private void addStoredLinks(Set<String> ids, List<LinkEdge> out, Set<String> seen) {
-		for (IssueLink link : links.findBySourceIdInOrTargetIdIn(ids, ids)) {
+	/** Every link touching any issue of [ids], on either end, in one round trip. */
+	private void addStoredLinks(Set<String> ids, Duration maxTime, List<LinkEdge> out, Set<String> seen) {
+		Query query = Query.query(new Criteria().orOperator(Criteria.where("sourceId").in(ids),
+				Criteria.where("targetId").in(ids)));
+		if (maxTime != null) query.maxTime(maxTime);
+		for (IssueLink link : mongo.find(query, IssueLink.class)) {
 			boolean bothOnChart = ids.contains(link.getSourceId()) && ids.contains(link.getTargetId());
 			if (bothOnChart && seen.add(key(link.getType(), link.getSourceId(), link.getTargetId()))) {
 				out.add(new LinkEdge(link.getId(), link.getType(), link.getSourceId(),

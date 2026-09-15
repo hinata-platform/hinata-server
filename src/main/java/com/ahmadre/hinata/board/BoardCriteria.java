@@ -48,6 +48,12 @@ final class BoardCriteria {
 	/** The epics of the board's projects, the oldest first, off an index of epics alone. */
 	static final String EPICS = "board_epics";
 
+	/**
+	 * Cards named by their ids: one key per id. Left to itself, the planner may take an index of the
+	 * board's projects for such a read and step through every key of them.
+	 */
+	static final String BY_ID = "_id_";
+
 	/** Issues an epic filter, or the sub-tasks of a sprint, may reach through. */
 	static final int MAX_LINKED = 10_000;
 

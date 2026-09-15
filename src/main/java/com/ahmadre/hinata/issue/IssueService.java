@@ -33,6 +33,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.ArrayList;
@@ -571,6 +572,16 @@ public class IssueService {
 	 */
 	public Map<String, SubtaskTally> subtaskTallies(Collection<Issue> parents,
 			Map<String, ? extends Collection<String>> resolvedStates) {
+		return subtaskTallies(parents, resolvedStates, null);
+	}
+
+	/**
+	 * {@link #subtaskTallies(Collection, Map)}, the read given up once [maxTime] has passed, or run
+	 * without a limit when it is null: a board counts the children of its cards within the time of
+	 * its request.
+	 */
+	public Map<String, SubtaskTally> subtaskTallies(Collection<Issue> parents,
+			Map<String, ? extends Collection<String>> resolvedStates, Duration maxTime) {
 		Map<String, String> projectOf = new HashMap<>();
 		for (Issue parent : parents) {
 			if (parent.getId() != null && parent.getProjectId() != null) {
@@ -580,6 +591,7 @@ public class IssueService {
 		if (projectOf.isEmpty()) return Map.of();
 
 		Query query = Query.query(Criteria.where("parentId").in(projectOf.keySet()).and("archived").ne(true));
+		if (maxTime != null) query.maxTime(maxTime);
 		query.fields().include("parentId", "projectId", "state", "resolvedAt");
 		Map<String, int[]> byParent = new HashMap<>(); // parentId -> [total, done]
 		Map<String, Set<String>> resolvedByProject = new HashMap<>();

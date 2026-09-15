@@ -11,7 +11,6 @@ import com.mongodb.MongoExecutionTimeoutException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -34,7 +33,8 @@ import java.util.function.Supplier;
  * only, narrowed on the server by the board's search and filter ({@link BoardCriteria}), in pages of at
  * most {@value #MAX_PAGE_SIZE} cards. Each read comes off the index that bounds it to the fewest cards
  * ({@link BoardCriteria#index}, read by {@link BoardIssueReads}), a page reads only the state spellings
- * its column was counted in, and no read runs longer than {@link BoardIssueReads#MAX_TIME}.
+ * its column was counted in, and neither a read nor the reads of a request together run longer than
+ * {@link BoardTime} allows.
  */
 @Service
 @RequiredArgsConstructor
@@ -271,7 +271,7 @@ public class BoardReader {
 		if (wanted.isEmpty()) {
 			return List.of();
 		}
-		return graph.among(issues.dependencies(wanted, scope.projectIds()));
+		return graph.among(issues.dependencies(wanted, scope.projectIds()), BoardTime.left());
 	}
 
 	/**
@@ -296,18 +296,18 @@ public class BoardReader {
 	}
 
 	/**
-	 * Runs [read] and says the server is busy when the database gave up on it after
-	 * {@link BoardIssueReads#MAX_TIME}: a read that took too long ends in a 503 the app can explain
-	 * rather than in a 500.
+	 * Runs the reads of [request] within the time {@link BoardTime} gives a request, and says the server
+	 * is busy when the database gave up on one of them: a read that took too long ends in a 503 the app
+	 * can explain rather than in a 500.
 	 */
-	private static <T> T timed(Supplier<T> read) {
+	private static <T> T timed(Supplier<T> request) {
 		try {
-			return read.get();
+			return BoardTime.within(request);
 		}
 		catch (RuntimeException ex) {
 			for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
 				if (cause instanceof MongoExecutionTimeoutException) {
-					throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "error.board.busy");
+					throw BoardTime.busy();
 				}
 			}
 			throw ex;
