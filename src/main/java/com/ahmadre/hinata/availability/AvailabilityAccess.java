@@ -27,8 +27,9 @@ import java.util.Set;
  * <li>An administrator: everything, because an administrator also keeps absences for others.</li>
  * <li>A lead, while {@link AvailabilityPolicy} allows it: the type and the span of absences, never a
  * note, and a sick day only as an absence ({@link #typeFor}). Only for somebody who recorded time
- * within {@link #WORKED_ON} on a project the viewer leads and the person still belongs to:
- * membership alone is not enough, because whoever creates a project leads it and can add anybody.</li>
+ * themselves within {@link #WORKED_ON} on a project the viewer leads and the person still belongs
+ * to ({@link AvailabilityPolicy#projectsWorkedOn}): membership alone is not enough, because whoever
+ * creates a project leads it and can add anybody.</li>
  * <li>Everybody else: nothing, not even that there is anything.</li>
  * </ul>
  *

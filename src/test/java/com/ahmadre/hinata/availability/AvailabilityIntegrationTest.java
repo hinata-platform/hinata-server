@@ -6,6 +6,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.ics.IcsFetchResult;
 import com.ahmadre.hinata.ics.IcsFetcher;
+import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.me.MeService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
@@ -122,7 +123,7 @@ class AvailabilityIntegrationTest {
 
 	@BeforeEach
 	void seed() {
-		for (String collection : List.of("projects", "users", "teams", "work_items", "working_schedules", "time_off",
+		for (String collection : List.of("projects", "users", "teams", "issues", "work_items", "working_schedules", "time_off",
 				"holiday_calendars", "holidays", "audit_log", "server_settings")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
@@ -157,10 +158,22 @@ class AvailabilityIntegrationTest {
 		settings.save(current);
 	}
 
-	/** An hour [user] recorded on [on], the day given. */
+	/** An hour [user] recorded on [on] in the app, the day given, on no issue. */
 	private void worked(User user, Project on, LocalDate day) {
 		mongo.insert(WorkItem.builder().userId(user.getId()).projectId(on.getId()).date(day).durationMinutes(60)
 				.activityType("Development").build());
+	}
+
+	/** An hour on [issue] in its project, written the way [source] writes it. */
+	private void worked(User user, Issue issue, LocalDate day, WorkItem.Source source) {
+		mongo.insert(WorkItem.builder().userId(user.getId()).projectId(issue.getProjectId()).issueId(issue.getId())
+				.date(day).durationMinutes(60).activityType("Development").source(source).build());
+	}
+
+	private Issue issue(Project in, String readableId, List<String> formerReadableIds) {
+		int number = Integer.parseInt(readableId.substring(readableId.indexOf('-') + 1));
+		return mongo.insert(Issue.builder().projectId(in.getId()).numberInProject(number).readableId(readableId)
+				.title(readableId).formerReadableIds(new ArrayList<>(formerReadableIds)).build());
 	}
 
 	private void as(User user) {
@@ -242,7 +255,7 @@ class AvailabilityIntegrationTest {
 	// --- absences ---------------------------------------------------------------------
 
 	@Test
-	void anAbsenceNeedsNoReason_itsNoteIsShort_andAHalfDayIsOneDay() {
+	void anAbsenceNeedsNoReason_itsNoteIsShort_aHalfDayIsOneDay_andItLiesWithinTwoYears() {
 		as(member);
 
 		AvailabilityController.TimeOffResponse plain = availability.createTimeOff(
@@ -256,6 +269,10 @@ class AvailabilityIntegrationTest {
 		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(null,
 				TimeOff.Type.OTHER, day(12, 17), day(12, 18), true, null)))
 				.isInstanceOf(ApiException.class).hasMessage("error.availability.halfDaySingle");
+		// Today is 16 December 2026: two years ahead ends on 16 December 2028.
+		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(null,
+				TimeOff.Type.VACATION, LocalDate.of(2028, 12, 16), LocalDate.of(2028, 12, 17), null, null)))
+				.isInstanceOf(ApiException.class).hasMessage("error.availability.timeOffOutOfRange");
 	}
 
 	@Test
@@ -337,21 +354,29 @@ class AvailabilityIntegrationTest {
 		LocalDate to = day(12, 31);
 
 		// Anybody can create a project, lead it and add anybody to it. That alone shows nothing.
-		projects.save(Project.builder().key("MINE").name("Mine")
+		Project mine = projects.save(Project.builder().key("MINE").name("Mine")
 				.leadIds(new ArrayList<>(List.of(stranger.getId())))
 				.memberIds(new ArrayList<>(List.of(stranger.getId(), member.getId()))).build());
 		as(stranger);
 		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
 				.hasMessage("error.availability.forbidden");
 
-		// Nor does time on the lead's own project from more than a year ago.
+		// Nor does time the member did not put there themselves: a commit can name anybody as its
+		// author, and a member of another project can move an issue with their hours into this one.
+		worked(member, issue(mine, "MINE-1", List.of()), day(12, 2), WorkItem.Source.SMART_COMMIT);
+		worked(member, issue(mine, "MINE-2", List.of("HIN-7")), day(12, 3), WorkItem.Source.APP);
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+				.hasMessage("error.availability.forbidden");
+
+		// Nor time on the lead's own project from more than a year ago.
 		worked(member, project, NOW.atZone(ZoneOffset.UTC).toLocalDate().minusYears(1).minusDays(1));
 		as(lead);
 		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
 				.hasMessage("error.availability.forbidden");
 
-		// Recent time does, and the sick day reads as a day away.
-		worked(member, project, day(12, 1));
+		// Recent time the member recorded on an issue of the project does, and the sick day reads as a
+		// day away.
+		worked(member, issue(project, "HIN-1", List.of()), day(12, 1), WorkItem.Source.TIMER);
 		assertThat(availability.timeOff(from, to, member.getId(), 0, 50).getContent()).singleElement()
 				.extracting(AvailabilityController.TimeOffResponse::type).isEqualTo(TimeOff.Type.OTHER);
 	}

@@ -36,6 +36,13 @@ public class TimeOff {
 	 */
 	public static final int PER_YEAR_MAX = 100;
 
+	/**
+	 * How many years before or after today an absence may lie. Planning looks ahead and a little
+	 * back, and together with {@link #PER_YEAR_MAX} it bounds what one person keeps, so an export
+	 * of it stays whole.
+	 */
+	public static final int YEARS_AROUND_TODAY = 2;
+
 	public enum Type {
 		VACATION, SICK, OTHER
 	}

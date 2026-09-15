@@ -78,6 +78,7 @@ public class TimeOffService {
 		User person = access.requireKeeper(viewer, draft.userId());
 		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(viewer.getId()).build();
 		apply(item, draft.type(), draft.from(), draft.to(), draft.halfDay(), draft.note());
+		assertNearToday(item);
 		assertRoomIn(person.getId(), item.getFrom().getYear());
 		TimeOff saved = timeOff.save(item);
 		recordForOther(viewer, person, "created", saved);
@@ -86,14 +87,19 @@ public class TimeOffService {
 
 	public TimeOff update(User viewer, String id, Patch patch) {
 		TimeOff item = writable(viewer, id);
-		int yearBefore = item.getFrom().getYear();
+		LocalDate fromBefore = item.getFrom();
+		LocalDate toBefore = item.getTo();
 		apply(item,
 				patch.type() != null ? patch.type() : item.getType(),
 				patch.from() != null ? patch.from() : item.getFrom(),
 				patch.to() != null ? patch.to() : item.getTo(),
 				patch.halfDay() != null ? patch.halfDay() : item.getHalfDay(),
 				patch.note() != null ? patch.note() : item.getNote());
-		if (item.getFrom().getYear() != yearBefore) {
+		// Checked when the days change, so an old absence keeps its note editable once it drifted out.
+		if (!item.getFrom().equals(fromBefore) || !item.getTo().equals(toBefore)) {
+			assertNearToday(item);
+		}
+		if (item.getFrom().getYear() != fromBefore.getYear()) {
 			assertRoomIn(item.getUserId(), item.getFrom().getYear());
 		}
 		item.setUpdatedAt(clock.instant());
@@ -134,6 +140,15 @@ public class TimeOffService {
 				.and("from").gte(LocalDate.of(year, 1, 1)).lte(LocalDate.of(year, 12, 31)));
 		if (mongo.count(inYear, TimeOff.class) >= TimeOff.PER_YEAR_MAX) {
 			throw ApiException.badRequest("error.availability.timeOffPerYear", TimeOff.PER_YEAR_MAX);
+		}
+	}
+
+	/** Refuses an absence further than {@link TimeOff#YEARS_AROUND_TODAY} years from today. */
+	private void assertNearToday(TimeOff item) {
+		LocalDate today = LocalDate.now(clock);
+		if (item.getFrom().isBefore(today.minusYears(TimeOff.YEARS_AROUND_TODAY))
+				|| item.getTo().isAfter(today.plusYears(TimeOff.YEARS_AROUND_TODAY))) {
+			throw ApiException.badRequest("error.availability.timeOffOutOfRange", TimeOff.YEARS_AROUND_TODAY);
 		}
 	}
 
