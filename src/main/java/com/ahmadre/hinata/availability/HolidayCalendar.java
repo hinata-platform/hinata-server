@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -46,7 +47,11 @@ public class HolidayCalendar {
 	/** The host of {@link #source}, the only part of it anybody sees. */
 	private String sourceHost;
 
-	/** The calendar for everybody who did not pick one. At most one is. */
+	/**
+	 * The calendar for everybody who did not pick one. At most one is, and only that one carries the
+	 * field, so the sparse index is a single entry every capacity read finds it by.
+	 */
+	@Indexed(name = "default_calendar", sparse = true)
 	private Boolean defaultCalendar;
 
 	/** Validators from the last fetch, sent with the next one. */

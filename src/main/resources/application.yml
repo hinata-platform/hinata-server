@@ -265,6 +265,11 @@ hinata:
     # private or loopback address.
     allowed-hosts: ${HINATA_ICS_ALLOWED_HOSTS:}
     denied-hosts: ${HINATA_ICS_DENIED_HOSTS:}
+  availability:
+    # Planned minutes per weekday, Monday first, for everyone without hours of
+    # their own. Spelled out here because relaxed binding would only read the
+    # variable without the underscores inside the property name.
+    default-weekday-minutes: ${HINATA_AVAILABILITY_DEFAULT_WEEKDAY_MINUTES:480,480,480,480,480,0,0}
 
 springdoc:
   api-docs:

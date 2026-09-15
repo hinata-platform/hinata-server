@@ -1,7 +1,6 @@
 package com.ahmadre.hinata.availability;
 
 import com.ahmadre.hinata.auth.CurrentUser;
-import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -32,9 +31,9 @@ import java.util.List;
  * Working-time patterns, absences and capacity over HTTP.
  *
  * <p>Behind {@code AdvancedTimeTrackingGate}, which covers {@code /api/v1/availability/**}: with the
- * module off, none of this exists. Who may read and write what is decided in the services and
- * {@link AvailabilityAccess}; the one thing decided here is the shape a reader gets, and a lead
- * reading a member's absences gets no note and no id.
+ * module off, none of this exists. Who may read and keep what is decided by {@link AvailabilityAccess},
+ * which the services and the capacity route ask; the one thing decided here is the shape a reader
+ * gets, and a lead reading a member's absences gets no note, no id and no sick day.
  */
 @Tag(name = "Availability")
 @RestController
@@ -99,21 +98,24 @@ public class AvailabilityController {
 
 	// --- absences ---------------------------------------------------------------
 
-	/** An absence. For a lead's view {@code id} and {@code note} are always null. */
+	/**
+	 * An absence. For a lead's view {@code id} and {@code note} are always null, and a sick day reads
+	 * as {@code OTHER} ({@link AvailabilityAccess#typeFor}).
+	 */
 	public record TimeOffResponse(String id, String userId, TimeOff.Type type, LocalDate from, LocalDate to,
 			boolean halfDay, String note) {
 
 		static TimeOffResponse from(TimeOff item, AvailabilityAccess.Sight sight) {
 			boolean full = sight == AvailabilityAccess.Sight.FULL;
-			return new TimeOffResponse(full ? item.getId() : null, item.getUserId(), item.getType(), item.getFrom(),
-					item.getTo(), item.isHalfDay(), full ? item.getNote() : null);
+			return new TimeOffResponse(full ? item.getId() : null, item.getUserId(),
+					AvailabilityAccess.typeFor(item.getType(), sight), item.getFrom(), item.getTo(), item.isHalfDay(),
+					full ? item.getNote() : null);
 		}
 
-		static TimeOffResponse from(CapacityService.AbsenceMark mark, String userId,
-				AvailabilityAccess.Sight sight) {
-			boolean full = sight == AvailabilityAccess.Sight.FULL;
-			return new TimeOffResponse(full ? mark.id() : null, userId, mark.type(), mark.from(), mark.to(),
-					mark.halfDay(), full ? mark.note() : null);
+		/** An absence in a capacity, which only its owner and administrators read. */
+		static TimeOffResponse from(CapacityService.AbsenceMark mark, String userId) {
+			return new TimeOffResponse(mark.id(), userId, mark.type(), mark.from(), mark.to(), mark.halfDay(),
+					mark.note());
 		}
 	}
 
@@ -183,25 +185,24 @@ public class AvailabilityController {
 			List<HolidayMarkResponse> holidays, List<TimeOffResponse> absences) {
 	}
 
+	/**
+	 * One's own capacity, or anybody's for an administrator. Not a lead's to read: day by day it
+	 * spells out the planned hours and the holiday calendar, which a lead does not see either.
+	 */
 	@GetMapping("/capacity")
 	public CapacityResponse capacity(
 			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
 			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
 			@RequestParam(required = false) String userId) {
-		User viewer = currentUser.require();
-		String person = userId == null || userId.isBlank() ? viewer.getId() : userId;
-		AvailabilityAccess.Sight sight = access.of(viewer, person);
-		if (sight == AvailabilityAccess.Sight.NONE) {
-			throw ApiException.forbidden("error.availability.forbidden");
-		}
-		CapacityService.Window window = capacity.window(person, from, to);
+		User person = access.requireKeeper(currentUser.require(), userId);
+		CapacityService.Window window = capacity.window(person.getId(), from, to);
 		Capacity.Result result = window.capacity();
-		return new CapacityResponse(person, window.from(), window.to(), result.scheduledMinutes(),
+		return new CapacityResponse(person.getId(), window.from(), window.to(), result.scheduledMinutes(),
 				result.holidayMinutes(), result.absenceMinutes(), result.capacityMinutes(),
 				result.days().stream().map(day -> new DayResponse(day.date(), day.scheduledMinutes(),
 						day.holidayMinutes(), day.absenceMinutes(), day.capacityMinutes())).toList(),
 				window.holidays().stream()
 						.map(mark -> new HolidayMarkResponse(mark.date(), mark.name(), mark.halfDay())).toList(),
-				window.absences().stream().map(mark -> TimeOffResponse.from(mark, person, sight)).toList());
+				window.absences().stream().map(mark -> TimeOffResponse.from(mark, person.getId())).toList());
 	}
 }

@@ -30,6 +30,7 @@ public class ScheduleService {
 
 	private final WorkingScheduleRepository schedules;
 	private final HolidayCalendarRepository calendars;
+	private final AvailabilityAccess access;
 	private final UserRepository users;
 	private final SettingsService settings;
 	private final HinataProperties properties;
@@ -42,7 +43,7 @@ public class ScheduleService {
 	}
 
 	public Patterns of(User viewer, String userId) {
-		User person = target(viewer, userId);
+		User person = access.requireKeeper(viewer, userId);
 		LocalDate today = today(person);
 		List<WorkingSchedule> history = schedules.findByUserIdOrderByValidFromDesc(person.getId(),
 				PageRequest.of(0, WorkingSchedule.HISTORY_MAX));
@@ -59,7 +60,7 @@ public class ScheduleService {
 	 */
 	public WorkingSchedule save(User viewer, String userId, LocalDate validFrom, List<Integer> minutesPerWeekday,
 			String holidayCalendarId) {
-		User person = target(viewer, userId);
+		User person = access.requireKeeper(viewer, userId);
 		assertPattern(minutesPerWeekday);
 		if (holidayCalendarId != null && !calendars.existsById(holidayCalendarId)) {
 			throw ApiException.notFound("holidayCalendar");
@@ -107,17 +108,6 @@ public class ScheduleService {
 				.anyMatch(minutes -> minutes == null || minutes < 0 || minutes > WorkingSchedule.DAY_MINUTES_MAX)) {
 			throw ApiException.badRequest("error.availability.patternInvalid");
 		}
-	}
-
-	/** The person a request is about: oneself, or anybody for an administrator. */
-	private User target(User viewer, String userId) {
-		if (userId == null || userId.isBlank() || userId.equals(viewer.getId())) {
-			return viewer;
-		}
-		if (!viewer.isAdmin()) {
-			throw ApiException.forbidden("error.availability.forbidden");
-		}
-		return users.findById(userId).orElseThrow(() -> ApiException.notFound("user"));
 	}
 
 	private LocalDate today(User person) {

@@ -11,6 +11,7 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -57,8 +58,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * Stage 10 (HIN-91) against a real database: patterns with their history, capacity with holidays
- * and absences, who sees whose absences in both directions, the holiday import with its caps and
- * its address rules, and what an account deletion and a data export do.
+ * and absences, who sees and keeps whose absences, the holiday import with its caps and its
+ * address rules, and what an account deletion and a data export do.
  */
 @SpringBootTest(properties = {
 		"hinata.mongodb.tls.enabled=false",
@@ -121,7 +122,7 @@ class AvailabilityIntegrationTest {
 
 	@BeforeEach
 	void seed() {
-		for (String collection : List.of("projects", "users", "teams", "working_schedules", "time_off",
+		for (String collection : List.of("projects", "users", "teams", "work_items", "working_schedules", "time_off",
 				"holiday_calendars", "holidays", "audit_log", "server_settings")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
@@ -154,6 +155,12 @@ class AvailabilityIntegrationTest {
 		block.setLeadsSeeMemberEntries(leadsSeeMembers);
 		current.setTimeTracking(block);
 		settings.save(current);
+	}
+
+	/** An hour [user] recorded on [on], the day given. */
+	private void worked(User user, Project on, LocalDate day) {
+		mongo.insert(WorkItem.builder().userId(user.getId()).projectId(on.getId()).date(day).durationMinutes(60)
+				.activityType("Development").build());
 	}
 
 	private void as(User user) {
@@ -203,6 +210,35 @@ class AvailabilityIntegrationTest {
 				.containsExactly("Heiligabend", "1. Weihnachtstag");
 	}
 
+	@Test
+	void aNewDefaultReplacesTheOld_andDeletingACalendarSendsItsFollowersBackToTheDefault() {
+		as(admin);
+		HolidayController.CalendarResponse bavaria = holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Bayern", null, null, true));
+		HolidayController.CalendarResponse germany = holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Deutschland", null, null, true));
+		holidayApi.addHoliday(new HolidayController.HolidayRequest(bavaria.id(), day(12, 8), "Mariä Empfängnis", null));
+		holidayApi.addHoliday(new HolidayController.HolidayRequest(germany.id(), day(12, 25), "1. Weihnachtstag",
+				null));
+
+		assertThat(mongo.findById(bavaria.id(), HolidayCalendar.class).getDefaultCalendar()).isNull();
+		assertThat(mongo.findById(germany.id(), HolidayCalendar.class).getDefaultCalendar()).isTrue();
+
+		as(member);
+		availability.saveSchedule(null, new AvailabilityController.PatternRequest(day(12, 1),
+				List.of(480, 480, 480, 480, 480, 0, 0), bavaria.id()));
+		assertThat(availability.capacity(day(12, 1), day(12, 31), null).holidays())
+				.extracting(AvailabilityController.HolidayMarkResponse::name).containsExactly("Mariä Empfängnis");
+
+		as(admin);
+		holidayApi.deleteCalendar(bavaria.id());
+
+		as(member);
+		assertThat(availability.schedule(null).current().holidayCalendarId()).isNull();
+		assertThat(availability.capacity(day(12, 1), day(12, 31), null).holidays())
+				.extracting(AvailabilityController.HolidayMarkResponse::name).containsExactly("1. Weihnachtstag");
+	}
+
 	// --- absences ---------------------------------------------------------------------
 
 	@Test
@@ -223,10 +259,27 @@ class AvailabilityIntegrationTest {
 	}
 
 	@Test
+	void aYearHoldsAtMostAHundredAbsences_countedByTheirFirstDay() {
+		for (int index = 0; index < TimeOff.PER_YEAR_MAX; index++) {
+			LocalDate first = LocalDate.of(2027, 1, 1).plusDays(index);
+			mongo.insert(TimeOff.builder().userId(member.getId()).type(TimeOff.Type.OTHER).from(first).to(first).build());
+		}
+		as(member);
+
+		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(null,
+				TimeOff.Type.VACATION, LocalDate.of(2027, 6, 1), LocalDate.of(2027, 6, 1), null, null)))
+				.hasMessage("error.availability.timeOffPerYear");
+		// Starting in December, it belongs to the year before, which has room.
+		assertThat(availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION,
+				day(12, 30), LocalDate.of(2027, 1, 2), null, null)).id()).isNotNull();
+	}
+
+	@Test
 	void absencesAreSeenByTheOwnerAndAdmins_byLeadsOnlyWithThePolicyAndWithoutTheNote() {
 		as(member);
 		AvailabilityController.TimeOffResponse own = availability.createTimeOff(new AvailabilityController.TimeOffRequest(
 				null, TimeOff.Type.VACATION, day(12, 21), day(12, 23), null, "Familie"));
+		worked(member, project, day(12, 1));
 		LocalDate from = day(12, 1);
 		LocalDate to = day(12, 31);
 		assertThat(availability.timeOff(from, to, null, 0, 50).getContent())
@@ -254,11 +307,13 @@ class AvailabilityIntegrationTest {
 		assertThat(seen.to()).isEqualTo(day(12, 23));
 		assertThat(seen.note()).isNull();
 		assertThat(seen.id()).isNull();
-		assertThat(availability.capacity(from, to, member.getId()).absences()).singleElement()
-				.satisfies(absence -> assertThat(absence.note()).isNull());
 		assertThatThrownBy(() -> availability.timeOff(from, to, stranger.getId(), 0, 50))
 				.hasMessage("error.availability.forbidden");
-		// Reading is all a lead may do.
+		// Reading absences is all a lead may do: no hours, no writes.
+		assertThatThrownBy(() -> availability.capacity(from, to, member.getId()))
+				.hasMessage("error.availability.forbidden");
+		assertThatThrownBy(() -> availability.schedule(member.getId()))
+				.hasMessage("error.availability.forbidden");
 		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(member.getId(),
 				TimeOff.Type.OTHER, day(12, 28), day(12, 28), null, null)))
 				.hasMessage("error.availability.forbidden");
@@ -273,7 +328,36 @@ class AvailabilityIntegrationTest {
 	}
 
 	@Test
-	void anAdministratorKeepingSomebodysAbsenceIsRecorded_withoutItsNote() {
+	void aProjectSomebodyWasOnlyAddedToShowsItsLeadNothing_andALeadSeesASickDayAsAway() {
+		as(member);
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.SICK, day(12, 14),
+				day(12, 15), null, null));
+		policy(true);
+		LocalDate from = day(12, 1);
+		LocalDate to = day(12, 31);
+
+		// Anybody can create a project, lead it and add anybody to it. That alone shows nothing.
+		projects.save(Project.builder().key("MINE").name("Mine")
+				.leadIds(new ArrayList<>(List.of(stranger.getId())))
+				.memberIds(new ArrayList<>(List.of(stranger.getId(), member.getId()))).build());
+		as(stranger);
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+				.hasMessage("error.availability.forbidden");
+
+		// Nor does time on the lead's own project from more than a year ago.
+		worked(member, project, NOW.atZone(ZoneOffset.UTC).toLocalDate().minusYears(1).minusDays(1));
+		as(lead);
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+				.hasMessage("error.availability.forbidden");
+
+		// Recent time does, and the sick day reads as a day away.
+		worked(member, project, day(12, 1));
+		assertThat(availability.timeOff(from, to, member.getId(), 0, 50).getContent()).singleElement()
+				.extracting(AvailabilityController.TimeOffResponse::type).isEqualTo(TimeOff.Type.OTHER);
+	}
+
+	@Test
+	void anAdministratorKeepingSomebodysAbsenceIsRecorded_withoutItsTypeOrNote() {
 		as(member);
 		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, day(12, 14),
 				day(12, 14), null, "Eigene"));
@@ -285,9 +369,35 @@ class AvailabilityIntegrationTest {
 				.is(AuditAction.AVAILABILITY_TIME_OFF_CHANGED)), AuditLog.class);
 
 		assertThat(records).singleElement().satisfies(record -> {
-			assertThat(record.getMetadata()).containsEntry("type", "SICK").containsEntry("change", "created");
-			assertThat(record.getMetadata().values()).doesNotContain("Arzt");
+			assertThat(record.getMetadata()).containsEntry("change", "created").doesNotContainKey("type");
+			assertThat(record.getMetadata().values()).doesNotContain("Arzt", "SICK");
 		});
+	}
+
+	@Test
+	void patternsAndAbsencesAreDeletedByTheirOwnerOrAnAdministrator_andNobodyElseLearnsTheyExist() {
+		as(member);
+		AvailabilityController.PatternResponse pattern = availability.saveSchedule(null,
+				new AvailabilityController.PatternRequest(day(12, 1), List.of(480, 480, 480, 480, 480, 0, 0), null));
+		AvailabilityController.TimeOffResponse absence = availability.createTimeOff(
+				new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, day(12, 21), day(12, 21), null,
+						null));
+
+		as(stranger);
+		assertThatThrownBy(() -> availability.deleteSchedule(pattern.id())).hasMessage("error.notFound");
+		assertThatThrownBy(() -> availability.deleteTimeOff(absence.id())).hasMessage("error.notFound");
+
+		as(member);
+		availability.deleteSchedule(pattern.id());
+		as(admin);
+		availability.deleteTimeOff(absence.id());
+
+		Query ofMember = Query.query(Criteria.where("userId").is(member.getId()));
+		assertThat(mongo.count(ofMember, WorkingSchedule.class)).isZero();
+		assertThat(mongo.count(ofMember, TimeOff.class)).isZero();
+		// The administrator's delete is on record; the owner's own is not.
+		assertThat(mongo.count(Query.query(Criteria.where("action").is(AuditAction.AVAILABILITY_TIME_OFF_CHANGED)),
+				AuditLog.class)).isOne();
 	}
 
 	// --- holidays -----------------------------------------------------------------------
@@ -314,6 +424,25 @@ class AvailabilityIntegrationTest {
 		assertThat(holidayApi.holidays(created.id(), 2026)).hasSize(100);
 		assertThat(mongo.count(Query.query(Criteria.where("calendarId").is(created.id())), Holiday.class))
 				.isEqualTo(100);
+	}
+
+	@Test
+	void aDayRenamedByHandKeepsItsName_whenTheFeedIsImportedAgain() throws Exception {
+		doReturn(CompletableFuture.completedFuture(new IcsFetchResult(IcsFetchResult.Outcome.FETCHED,
+				feedOfDays(2026, 3), null, null, null, 200)))
+				.when(fetcher).fetch(eq(FEED), any(), any());
+		as(admin);
+		HolidayController.CalendarResponse created = holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Feed", null, FEED, false));
+		holidays.importYear(admin, created.id(), 2026).get(20, TimeUnit.SECONDS);
+		String newYear = holidayApi.holidays(created.id(), 2026).getFirst().id();
+		holidayApi.updateHoliday(newYear, new HolidayController.HolidayPatchRequest(null, "Neujahr", null));
+
+		HolidayCalendar again = holidays.importYear(admin, created.id(), 2026).get(20, TimeUnit.SECONDS);
+
+		assertThat(again.getLastImport()).isEqualTo(new HolidayCalendar.ImportSummary(2026, 0, 0, 3, 0, false));
+		assertThat(holidayApi.holidays(created.id(), 2026)).extracting(HolidayController.HolidayResponse::name)
+				.containsExactly("Neujahr", "Tag 1", "Tag 2");
 	}
 
 	@Test

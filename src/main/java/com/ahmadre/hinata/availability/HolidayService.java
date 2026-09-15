@@ -23,6 +23,8 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.BulkOperationException;
+import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -35,6 +37,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -42,7 +45,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -53,7 +55,8 @@ import java.util.concurrent.TimeUnit;
  * carries the outcome ({@link HolidayCalendar#getImportState()}): no request thread waits for a
  * server somebody else runs. The feed goes through {@link IcsFetcher} with its SSRF rules, is read
  * on this service's executor (never the fetcher's threads, never the common pool, see
- * {@link IcsParser}), and only all-day days land ({@link HolidayDays}).
+ * {@link IcsParser}), and only whole days land: all-day events, and events from midnight to
+ * midnight ({@link HolidayDays}).
  *
  * <p>The import switch for people's own subscriptions, {@code icsImportEnabled}, does not apply:
  * a holiday calendar is instance configuration an administrator maintains, gated by the module
@@ -72,6 +75,12 @@ public class HolidayService implements DisposableBean {
 
 	public static final int PAGE_MAX = 100;
 
+	/** The last page a listing reaches; there are at most {@link HolidayCalendar#COUNT_MAX} calendars. */
+	static final int PAGE_INDEX_MAX = HolidayCalendar.COUNT_MAX;
+
+	/** The server's code for a key that is already taken. */
+	private static final int DUPLICATE_KEY = 11_000;
+
 	private final HolidayCalendarRepository calendars;
 	private final HolidayRepository holidays;
 	private final MongoTemplate mongo;
@@ -81,7 +90,7 @@ public class HolidayService implements DisposableBean {
 	private final AuditService audit;
 	private final Clock clock;
 
-	private final ExecutorService imports = importPool();
+	private final ThreadPoolExecutor imports = importPool();
 
 	public record CalendarDraft(String name, String region, String icsUrl, Boolean defaultCalendar) {
 	}
@@ -102,7 +111,7 @@ public class HolidayService implements DisposableBean {
 	// --- calendars ------------------------------------------------------------
 
 	public Page<HolidayCalendar> calendars(int page, int size) {
-		return calendars.findAll(PageRequest.of(Math.clamp(page, 0, TimeOffService.PAGE_INDEX_MAX),
+		return calendars.findAll(PageRequest.of(Math.clamp(page, 0, PAGE_INDEX_MAX),
 				Math.clamp(size, 1, PAGE_MAX), Sort.by(Sort.Order.asc("name"), Sort.Order.asc("_id"))));
 	}
 
@@ -121,7 +130,7 @@ public class HolidayService implements DisposableBean {
 		HolidayCalendar saved = calendars.save(HolidayCalendar.builder()
 				.id(id)
 				.name(required(draft.name(), HolidayCalendar.NAME_MAX))
-				.region(optional(draft.region(), HolidayCalendar.REGION_MAX))
+				.region(optional(draft.region(), HolidayCalendar.REGION_MAX, "error.availability.regionTooLong"))
 				.source(feed.source())
 				.sourceHost(feed.host())
 				.createdBy(admin.getId())
@@ -148,7 +157,8 @@ public class HolidayService implements DisposableBean {
 			update.set("name", required(patch.name(), HolidayCalendar.NAME_MAX));
 		}
 		if (patch.region() != null) {
-			setOrUnset(update, "region", optional(patch.region(), HolidayCalendar.REGION_MAX));
+			setOrUnset(update, "region",
+					optional(patch.region(), HolidayCalendar.REGION_MAX, "error.availability.regionTooLong"));
 		}
 		if (patch.icsUrl() != null) {
 			Feed feed = feedOf(id, patch.icsUrl());
@@ -185,7 +195,7 @@ public class HolidayService implements DisposableBean {
 	/** A calendar's holidays in one year, in date order. */
 	public List<Holiday> holidaysOf(String calendarId, Integer year) {
 		requireCalendar(calendarId);
-		int wanted = year != null ? year : currentYear();
+		int wanted = year != null ? year : currentYear(instanceZone());
 		assertYear(wanted);
 		return mongo.find(Query.query(inYear(calendarId, wanted)).with(Sort.by("date")).limit(Holiday.PER_YEAR_MAX),
 				Holiday.class);
@@ -260,7 +270,8 @@ public class HolidayService implements DisposableBean {
 	 * Starts importing one year of the calendar's feed, the current year when [year] is null.
 	 *
 	 * <p>Answers once the calendar is claimed; the future completes with the calendar as the
-	 * import left it, always normally. A second import while one runs is a 409.
+	 * import left it, always normally. A second import while one runs is a 409, and so is one while
+	 * every import thread and queue slot is taken.
 	 */
 	public CompletableFuture<HolidayCalendar> importYear(User admin, String calendarId, Integer year) {
 		assertAdmin(admin);
@@ -272,7 +283,7 @@ public class HolidayService implements DisposableBean {
 			throw ApiException.badRequest("error.availability.icsSecretMissing");
 		}
 		ZoneId zone = instanceZone();
-		int wanted = year != null ? year : LocalDate.now(clock.withZone(zone)).getYear();
+		int wanted = year != null ? year : currentYear(zone);
 		assertYear(wanted);
 		String url;
 		try {
@@ -280,6 +291,11 @@ public class HolidayService implements DisposableBean {
 		}
 		catch (IllegalArgumentException unreadable) {
 			throw ApiException.badRequest("error.availability.feedUnreadable");
+		}
+		// Refused before the claim: an import the pool cannot take would hold the calendar until
+		// IMPORT_STALE and record its failure on the fetcher's thread.
+		if (imports.getQueue().remainingCapacity() == 0) {
+			throw ApiException.conflict(IcsFetchError.BUSY.messageKey());
 		}
 		HolidayCalendar claimed = claim(calendarId);
 		if (claimed == null) {
@@ -290,6 +306,8 @@ public class HolidayService implements DisposableBean {
 		boolean sameYear = claimed.getLastImport() != null && claimed.getLastImport().year() == wanted;
 		return fetcher.fetch(url, sameYear ? claimed.getEtag() : null, sameYear ? claimed.getLastModified() : null)
 				.thenApplyAsync(result -> finish(admin, claimed, wanted, zone, result), imports)
+				// A fetch the fetcher refused, or a hand-over the pool refused after the check above:
+				// one short write on whichever thread got here.
 				.exceptionally(rejected -> fail(admin, claimed, wanted, IcsFetchError.BUSY.messageKey(), null));
 	}
 
@@ -336,7 +354,8 @@ public class HolidayService implements DisposableBean {
 
 	/**
 	 * Adds the days that are not there yet, renames imported days whose name changed, and leaves
-	 * days kept by hand alone. A second import of the same feed changes nothing.
+	 * days kept by hand alone. A second import of the same feed changes nothing. Each kind of write
+	 * is one round trip.
 	 */
 	private HolidayCalendar.ImportSummary store(String calendarId, int year, HolidayDays.Result days,
 			boolean truncated) {
@@ -344,39 +363,59 @@ public class HolidayService implements DisposableBean {
 		mongo.find(Query.query(inYear(calendarId, year)), Holiday.class)
 				.forEach(holiday -> existing.put(holiday.getDate(), holiday));
 		int room = Holiday.PER_YEAR_MAX - existing.size();
-		int added = 0;
 		int updated = 0;
 		int unchanged = 0;
 		int capped = days.capped();
 		Instant now = clock.instant();
+		List<Holiday> fresh = new ArrayList<>();
+		BulkOperations renames = null;
 		for (HolidayDays.Day day : days.days()) {
 			Holiday present = existing.get(day.date());
 			if (present == null) {
-				if (room <= 0) {
+				if (fresh.size() >= room) {
 					capped++;
 					continue;
 				}
-				try {
-					holidays.insert(Holiday.builder().calendarId(calendarId).date(day.date()).name(day.name())
-							.source(Holiday.Source.IMPORT).updatedAt(now).build());
-					added++;
-					room--;
-				}
-				catch (DuplicateKeyException raced) {
-					// Added by hand, or by another import, since this one read the year.
-					unchanged++;
-				}
+				fresh.add(Holiday.builder().calendarId(calendarId).date(day.date()).name(day.name())
+						.source(Holiday.Source.IMPORT).updatedAt(now).build());
 			}
 			else if (present.getSource() == Holiday.Source.IMPORT && !day.name().equals(present.getName())) {
-				mongo.updateFirst(byId(present.getId()), new Update().set("name", day.name()).set("updatedAt", now),
-						Holiday.class);
+				if (renames == null) {
+					renames = mongo.bulkOps(BulkOperations.BulkMode.UNORDERED, Holiday.class);
+				}
+				renames.updateOne(byId(present.getId()), new Update().set("name", day.name()).set("updatedAt", now));
 				updated++;
 			}
 			else {
 				unchanged++;
 			}
 		}
-		return new HolidayCalendar.ImportSummary(year, added, updated, unchanged, capped, truncated);
+		if (renames != null) {
+			renames.execute();
+		}
+		int added = insert(fresh);
+		return new HolidayCalendar.ImportSummary(year, added, updated, unchanged + fresh.size() - added, capped,
+				truncated);
+	}
+
+	/**
+	 * Inserts new days in one round trip and answers how many landed. A day that is there already was
+	 * added by hand, or by another import, since this one read the year: it counts as unchanged.
+	 */
+	private int insert(List<Holiday> fresh) {
+		if (fresh.isEmpty()) {
+			return 0;
+		}
+		try {
+			return mongo.bulkOps(BulkOperations.BulkMode.UNORDERED, Holiday.class).insert(fresh).execute()
+					.getInsertedCount();
+		}
+		catch (BulkOperationException partly) {
+			if (partly.getErrors().stream().anyMatch(error -> error.getCode() != DUPLICATE_KEY)) {
+				throw partly;
+			}
+			return partly.getResult().getInsertedCount();
+		}
 	}
 
 	private HolidayCalendar done(User admin, HolidayCalendar calendar, IcsFetchResult result,
@@ -389,7 +428,7 @@ public class HolidayService implements DisposableBean {
 				.unset("lastImportErrorArg");
 		setOrUnset(update, "etag", result.etag());
 		setOrUnset(update, "lastModified", result.lastModified());
-		mongo.updateFirst(byId(calendar.getId()), update, HolidayCalendar.class);
+		recordState(calendar, update);
 		audit.event(AuditAction.AVAILABILITY_HOLIDAYS_IMPORTED).actor(admin)
 				.target(calendar.getId(), calendar.getName())
 				.meta("feedHost", Objects.toString(calendar.getSourceHost(), ""))
@@ -408,7 +447,7 @@ public class HolidayService implements DisposableBean {
 			Update update = new Update().set("importState", HolidayCalendar.ImportState.FAILED)
 					.set("lastImportError", messageKey);
 			setOrUnset(update, "lastImportErrorArg", arg);
-			mongo.updateFirst(byId(calendar.getId()), update, HolidayCalendar.class);
+			recordState(calendar, update);
 			audit.event(AuditAction.AVAILABILITY_HOLIDAYS_IMPORTED).actor(admin)
 					.target(calendar.getId(), calendar.getName())
 					.outcome(AuditLog.Outcome.FAILURE)
@@ -423,6 +462,20 @@ public class HolidayService implements DisposableBean {
 			log.warn("[availability] could not record the failed import of calendar {}: {}", calendar.getId(),
 					ex.getClass().getName());
 			return calendar;
+		}
+	}
+
+	/**
+	 * Writes an import's outcome onto the calendar, if that import still holds it. An import that ran
+	 * past {@link #IMPORT_STALE} may have been taken over, and its late outcome must not overwrite the
+	 * state, and the validators, of the one that runs now.
+	 */
+	private void recordState(HolidayCalendar claimed, Update update) {
+		Query stillHeld = Query.query(Criteria.where("_id").is(claimed.getId())
+				.and("importStartedAt").is(claimed.getImportStartedAt()));
+		if (mongo.updateFirst(stillHeld, update, HolidayCalendar.class).getMatchedCount() == 0) {
+			log.info("[availability] holiday import of calendar {} was taken over, so its outcome is not kept",
+					claimed.getId());
 		}
 	}
 
@@ -472,8 +525,8 @@ public class HolidayService implements DisposableBean {
 		}
 	}
 
-	public int currentYear() {
-		return LocalDate.now(clock.withZone(instanceZone())).getYear();
+	private int currentYear(ZoneId zone) {
+		return LocalDate.now(clock.withZone(zone)).getYear();
 	}
 
 	private ZoneId instanceZone() {
@@ -506,16 +559,16 @@ public class HolidayService implements DisposableBean {
 		if (text == null || text.isBlank()) {
 			throw ApiException.badRequest("error.availability.nameRequired");
 		}
-		return optional(text, max);
+		return optional(text, max, "error.availability.nameTooLong");
 	}
 
-	private static String optional(String text, int max) {
+	private static String optional(String text, int max, String tooLongKey) {
 		if (text == null || text.isBlank()) {
 			return null;
 		}
 		String clean = text.strip();
 		if (clean.length() > max) {
-			throw ApiException.badRequest("error.availability.nameTooLong", max);
+			throw ApiException.badRequest(tooLongKey, max);
 		}
 		return clean;
 	}
@@ -555,7 +608,7 @@ public class HolidayService implements DisposableBean {
 				.log();
 	}
 
-	private static ExecutorService importPool() {
+	private static ThreadPoolExecutor importPool() {
 		ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
 				Thread.ofPlatform().name("holiday-import-", 1).daemon().factory());
 		pool.allowCoreThreadTimeOut(true);

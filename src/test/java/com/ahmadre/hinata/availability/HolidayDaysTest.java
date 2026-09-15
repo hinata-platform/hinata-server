@@ -2,6 +2,7 @@ package com.ahmadre.hinata.availability;
 
 import com.ahmadre.hinata.ics.IcsEvent;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -97,5 +98,22 @@ class HolidayDaysTest {
 		assertThat(result.days()).hasSize(100);
 		assertThat(result.days().getLast().date()).isEqualTo(LocalDate.of(2026, 4, 10));
 		assertThat(result.capped()).isEqualTo(20);
+	}
+
+	@Test
+	@Timeout(5)
+	void eventsSpanningMillenniaAreWalkedOnlyThroughTheYear() {
+		// A feed of two megabytes can hold thousands of events from the year 1 on. Walked day by day
+		// from their start that was billions of steps after the parser's budget was spent.
+		List<IcsEvent> events = new ArrayList<>();
+		for (int index = 0; index < 2_000; index++) {
+			events.add(allDay("Forever " + index, LocalDate.of(1, 1, 1), LocalDate.of(9999, 12, 31)));
+		}
+
+		HolidayDays.Result result = HolidayDays.of(events, 2026);
+
+		assertThat(result.days()).hasSize(100);
+		assertThat(result.days().getFirst()).isEqualTo(new HolidayDays.Day(LocalDate.of(2026, 1, 1), "Forever 0"));
+		assertThat(result.capped()).isEqualTo(265);
 	}
 }

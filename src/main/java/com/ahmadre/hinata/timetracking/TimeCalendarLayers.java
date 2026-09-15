@@ -14,10 +14,10 @@ import java.util.Map;
  * The layers the calendar draws beside a person's own entries: their absences, the holidays of
  * the calendar they follow, and the minutes they planned for each day (HIN-91).
  *
- * <p>A read for display and nothing else. This class and {@link TimeHintsService} are the only
- * places in the module that know availability, and no write path may know them
- * ({@code ModuleBoundaryTest}): a holiday, an absence or a day without planned hours is marked in
- * the calendar, and an entry on it is recorded like any other (R9).
+ * <p>A read for display and nothing else. This class, {@link TimeHintsService} and
+ * {@link TimeAvailabilityPolicy} are the only places in the module that know availability, and no
+ * write path may reach them ({@code ModuleBoundaryTest}): a holiday, an absence or a day without
+ * planned hours is marked in the calendar, and an entry on it is recorded like any other (R9).
  *
  * <p>The shapes use plain values, so the controller that serves them does not depend on
  * availability either.

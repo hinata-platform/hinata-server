@@ -99,6 +99,8 @@ class AvailabilityMarkingIntegrationTest {
 	private AvailabilityController availability;
 	@Autowired
 	private HolidayController holidayApi;
+	@Autowired
+	private TimeHintsController hintsApi;
 	@MockitoBean
 	private CurrentUser currentUser;
 
@@ -200,6 +202,21 @@ class AvailabilityMarkingIntegrationTest {
 
 		assertThat(filed).extracting(WorkItem::getDate).containsExactlyInAnyOrderElementsOf(MARKED);
 		assertThat(filed).allSatisfy(item -> assertThat(item.getDurationMinutes()).isEqualTo(45));
+	}
+
+	@Test
+	void anEntryOnTheHolidayIsNamedInTheWorkingTimeHints() {
+		ServerSettings current = settings.get();
+		current.getTimeTracking().setArbzgHintsEnabled(true);
+		settings.save(current);
+		as(member);
+		entriesApi.create(new TimeEntryController.TimeEntryRequest(project.getId(), null, 60, HOLIDAY, null,
+				"worked on the holiday", null, null, List.of(), null));
+
+		assertThat(hintsApi.hints(NO_HOURS, NO_HOURS.plusDays(6)).hints()).singleElement().satisfies(hint -> {
+			assertThat(hint.kind()).isEqualTo(WorkingTimeHints.Kind.HOLIDAY_WORK);
+			assertThat(hint.date()).isEqualTo(HOLIDAY);
+		});
 	}
 
 	@Test
