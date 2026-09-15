@@ -158,12 +158,6 @@ class AvailabilityIntegrationTest {
 		settings.save(current);
 	}
 
-	/** An hour [user] recorded on [on] in the app, the day given, on no issue. */
-	private void worked(User user, Project on, LocalDate day) {
-		mongo.insert(WorkItem.builder().userId(user.getId()).projectId(on.getId()).date(day).durationMinutes(60)
-				.activityType("Development").build());
-	}
-
 	/** An hour on [issue] in its project, written the way [source] writes it. */
 	private void worked(User user, Issue issue, LocalDate day, WorkItem.Source source) {
 		mongo.insert(WorkItem.builder().userId(user.getId()).projectId(issue.getProjectId()).issueId(issue.getId())
@@ -296,7 +290,7 @@ class AvailabilityIntegrationTest {
 		as(member);
 		AvailabilityController.TimeOffResponse own = availability.createTimeOff(new AvailabilityController.TimeOffRequest(
 				null, TimeOff.Type.VACATION, day(12, 21), day(12, 23), null, "Familie"));
-		worked(member, project, day(12, 1));
+		worked(member, issue(project, "HIN-1", List.of()), day(12, 1), WorkItem.Source.APP);
 		LocalDate from = day(12, 1);
 		LocalDate to = day(12, 31);
 		assertThat(availability.timeOff(from, to, null, 0, 50).getContent())
@@ -362,14 +356,18 @@ class AvailabilityIntegrationTest {
 				.hasMessage("error.availability.forbidden");
 
 		// Nor does time the member did not put there themselves: a commit can name anybody as its
-		// author, and a member of another project can move an issue with their hours into this one.
+		// author, a member of another project can move an issue with their hours into this one, and an
+		// issue moved in and deleted leaves the hours on the project with no issue.
 		worked(member, issue(mine, "MINE-1", List.of()), day(12, 2), WorkItem.Source.SMART_COMMIT);
 		worked(member, issue(mine, "MINE-2", List.of("HIN-7")), day(12, 3), WorkItem.Source.APP);
+		mongo.insert(WorkItem.builder().userId(member.getId()).projectId(mine.getId()).date(day(12, 4))
+				.durationMinutes(60).activityType("Development").build());
 		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
 				.hasMessage("error.availability.forbidden");
 
 		// Nor time on the lead's own project from more than a year ago.
-		worked(member, project, NOW.atZone(ZoneOffset.UTC).toLocalDate().minusYears(1).minusDays(1));
+		worked(member, issue(project, "HIN-2", List.of()),
+				NOW.atZone(ZoneOffset.UTC).toLocalDate().minusYears(1).minusDays(1), WorkItem.Source.APP);
 		as(lead);
 		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
 				.hasMessage("error.availability.forbidden");
