@@ -18,9 +18,10 @@ public interface AvailabilityPolicy {
 	boolean leadsSeeMemberAbsences();
 
 	/**
-	 * The projects [userId] recorded time on from [since] on, counting only time nobody else could
-	 * have put there. A lead sees somebody's absences only through one of these: membership alone is
-	 * not enough, because whoever creates a project leads it and can add anybody to it.
+	 * The projects out of [among] that [userId] recorded time on from [since] on, counting only time
+	 * nobody else could have put there. A lead sees somebody's absences only through one of these:
+	 * membership alone is not enough, because whoever creates a project leads it and can add anybody
+	 * to it.
 	 */
-	Set<String> projectsWorkedOn(String userId, LocalDate since);
+	Set<String> projectsWorkedOn(String userId, Set<String> among, LocalDate since);
 }

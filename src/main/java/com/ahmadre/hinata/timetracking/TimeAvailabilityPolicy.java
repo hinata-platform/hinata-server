@@ -45,12 +45,17 @@ public class TimeAvailabilityPolicy implements AvailabilityPolicy {
 	}
 
 	@Override
-	public Set<String> projectsWorkedOn(String userId, LocalDate since) {
+	public Set<String> projectsWorkedOn(String userId, Set<String> among, LocalDate since) {
+		if (among.isEmpty()) {
+			return Set.of();
+		}
 		// Not a smart commit, which can name anybody as its author, nor a copy of somebody else's
 		// shared entry, nor whatever a later import writes: a list of who may count, not of who may not.
-		// Documents from before 2.0 carry no source and were written in the app.
+		// Documents from before 2.0 carry no source and were written in the app. Answered from
+		// user_project_date, and only for the projects the caller asks about.
 		Query own = Query.query(new Criteria().andOperator(
 				Criteria.where("userId").is(userId),
+				Criteria.where("projectId").in(among),
 				Criteria.where("date").gte(since),
 				Criteria.where("issueId").ne(null),
 				new Criteria().orOperator(
@@ -65,6 +70,7 @@ public class TimeAvailabilityPolicy implements AvailabilityPolicy {
 		// and by nothing else; a deleted issue is not found at all.
 		Query neverMoved = Query.query(new Criteria().andOperator(
 				Criteria.where("_id").in(issueIds),
+				Criteria.where("projectId").in(among),
 				new Criteria().orOperator(
 						Criteria.where("formerReadableIds").exists(false),
 						Criteria.where("formerReadableIds").size(0))));

@@ -140,7 +140,8 @@ public enum AuditAction {
 	// An administrator keeping somebody else's working-time pattern or absences.
 	// A person keeping their own is ordinary use and not recorded, for the same
 	// reason TIME_ENTRY_CREATED is off: when somebody is away is theirs. The
-	// records name the type and the span of an absence, never its note.
+	// records name the change and the span of an absence, never its type or note:
+	// a sick day is health data, and the log outlives the absence.
 	AVAILABILITY_SCHEDULE_CHANGED(DATA, NOTICE, true),
 	AVAILABILITY_TIME_OFF_CHANGED(DATA, NOTICE, true),
 	// Holiday calendars are instance configuration. An import names the feed's

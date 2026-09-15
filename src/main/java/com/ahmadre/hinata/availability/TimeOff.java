@@ -37,9 +37,9 @@ public class TimeOff {
 	public static final int PER_YEAR_MAX = 100;
 
 	/**
-	 * How many years before or after today an absence may lie. Planning looks ahead and a little
-	 * back, and together with {@link #PER_YEAR_MAX} it bounds what one person keeps, so an export
-	 * of it stays whole.
+	 * How many years before or after the person's today an absence may be set to. Planning looks
+	 * ahead and a little back, and together with {@link #PER_YEAR_MAX} it bounds how many absences
+	 * one person can file for the years around now. Absences already filed stay, however old.
 	 */
 	public static final int YEARS_AROUND_TODAY = 2;
 

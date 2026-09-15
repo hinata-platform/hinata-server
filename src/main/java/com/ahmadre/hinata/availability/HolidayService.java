@@ -45,6 +45,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -81,6 +83,10 @@ public class HolidayService implements DisposableBean {
 	/** The server's code for a key that is already taken. */
 	private static final int DUPLICATE_KEY = 11_000;
 
+	/** Threads that read feeds, and imports that wait for one. */
+	private static final int IMPORT_THREADS = 2;
+	private static final int IMPORT_QUEUE = 8;
+
 	private final HolidayCalendarRepository calendars;
 	private final HolidayRepository holidays;
 	private final MongoTemplate mongo;
@@ -90,7 +96,13 @@ public class HolidayService implements DisposableBean {
 	private final AuditService audit;
 	private final Clock clock;
 
-	private final ThreadPoolExecutor imports = importPool();
+	private final ExecutorService imports = importPool();
+
+	/**
+	 * Imports admitted from the claim until the calendar carries the outcome: as many as the pool has
+	 * threads and queue slots.
+	 */
+	private final Semaphore admitted = new Semaphore(IMPORT_THREADS + IMPORT_QUEUE);
 
 	public record CalendarDraft(String name, String region, String icsUrl, Boolean defaultCalendar) {
 	}
@@ -292,23 +304,30 @@ public class HolidayService implements DisposableBean {
 		catch (IllegalArgumentException unreadable) {
 			throw ApiException.badRequest("error.availability.feedUnreadable");
 		}
-		// Refused before the claim: an import the pool cannot take would hold the calendar until
-		// IMPORT_STALE and record its failure on the fetcher's thread.
-		if (imports.getQueue().remainingCapacity() == 0) {
+		// Admitted before the claim, and only as many as the pool can hold: a fetch that finishes then
+		// always finds room, and no import holds a calendar it cannot run.
+		if (!admitted.tryAcquire()) {
 			throw ApiException.conflict(IcsFetchError.BUSY.messageKey());
 		}
-		HolidayCalendar claimed = claim(calendarId);
-		if (claimed == null) {
-			throw ApiException.conflict("error.availability.importRunning");
+		try {
+			HolidayCalendar claimed = claim(calendarId);
+			if (claimed == null) {
+				throw ApiException.conflict("error.availability.importRunning");
+			}
+			// Validators only for the year they were earned on: a 304 says the feed is unchanged, not
+			// that another year was ever read from it.
+			boolean sameYear = claimed.getLastImport() != null && claimed.getLastImport().year() == wanted;
+			return fetcher.fetch(url, sameYear ? claimed.getEtag() : null,
+							sameYear ? claimed.getLastModified() : null)
+					.thenApplyAsync(result -> finish(admin, claimed, wanted, zone, result), imports)
+					// A fetch the fetcher itself refused: one short write on its thread.
+					.exceptionally(rejected -> fail(admin, claimed, wanted, IcsFetchError.BUSY.messageKey(), null))
+					.whenComplete((outcome, error) -> admitted.release());
 		}
-		// Validators only for the year they were earned on: a 304 says the feed is unchanged, not
-		// that another year was ever read from it.
-		boolean sameYear = claimed.getLastImport() != null && claimed.getLastImport().year() == wanted;
-		return fetcher.fetch(url, sameYear ? claimed.getEtag() : null, sameYear ? claimed.getLastModified() : null)
-				.thenApplyAsync(result -> finish(admin, claimed, wanted, zone, result), imports)
-				// A fetch the fetcher refused, or a hand-over the pool refused after the check above:
-				// one short write on whichever thread got here.
-				.exceptionally(rejected -> fail(admin, claimed, wanted, IcsFetchError.BUSY.messageKey(), null));
+		catch (RuntimeException refused) {
+			admitted.release();
+			throw refused;
+		}
 	}
 
 	private HolidayCalendar claim(String id) {
@@ -608,8 +627,9 @@ public class HolidayService implements DisposableBean {
 				.log();
 	}
 
-	private static ThreadPoolExecutor importPool() {
-		ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
+	private static ExecutorService importPool() {
+		ThreadPoolExecutor pool = new ThreadPoolExecutor(IMPORT_THREADS, IMPORT_THREADS, 30, TimeUnit.SECONDS,
+				new ArrayBlockingQueue<>(IMPORT_QUEUE),
 				Thread.ofPlatform().name("holiday-import-", 1).daemon().factory());
 		pool.allowCoreThreadTimeOut(true);
 		return pool;
