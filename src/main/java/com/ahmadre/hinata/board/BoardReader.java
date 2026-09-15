@@ -282,11 +282,12 @@ public class BoardReader {
 			if (place.backlog()) {
 				parts.add(Criteria.where("sprintId").is(null));
 			}
-			parts.add(switch (query.shape()) {
-				case WALL -> Criteria.where("type").nin(EPIC, SUBTASK);
-				case SUBTASKS -> Criteria.where("type").ne(EPIC);
-				case TIMELINE -> Criteria.where("type").ne(SUBTASK);
-			});
+			switch (query.shape()) {
+				case WALL -> parts.add(Criteria.where("type").nin(EPIC, SUBTASK));
+				case SUBTASKS -> parts.add(Criteria.where("type").ne(EPIC));
+				case TIMELINE -> parts.add(Criteria.where("type").ne(SUBTASK));
+				case PLANNING -> { }
+			}
 		}
 		if (query.hasText()) {
 			String quoted = Pattern.quote(query.text());

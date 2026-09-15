@@ -38,7 +38,10 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 		SUBTASKS,
 
 		/** Work items and epics, for the timeline. */
-		TIMELINE
+		TIMELINE,
+
+		/** Every issue type, as the sprint planning has always listed them. */
+		PLANNING
 	}
 
 	static final int MAX_TEXT = 100;
