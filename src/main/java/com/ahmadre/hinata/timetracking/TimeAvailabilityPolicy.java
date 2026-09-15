@@ -24,11 +24,17 @@ import java.util.Set;
  *
  * <p>The projects have to be ones nobody else could have put the person's time on, because a lead
  * relationship is cheap: anybody can create a project and add anybody to it. So only entries the
- * person recorded themselves count, and only on issues that never changed project.
+ * person recorded themselves count, and only through the project of an issue that never changed
+ * project. Time on no issue does not count: an issue moved into a project and deleted there leaves
+ * everybody's hours behind on it with no issue at all.
  */
 @Component
 @RequiredArgsConstructor
 public class TimeAvailabilityPolicy implements AvailabilityPolicy {
+
+	/** The writers of an entry that only the person can be: the app, their timer, their own token. */
+	private static final List<WorkItem.Source> OWN_SOURCES = List.of(WorkItem.Source.APP, WorkItem.Source.TIMER,
+			WorkItem.Source.MCP);
 
 	private final TimeTrackingSettings settings;
 	private final MongoTemplate mongo;
@@ -40,34 +46,30 @@ public class TimeAvailabilityPolicy implements AvailabilityPolicy {
 
 	@Override
 	public Set<String> projectsWorkedOn(String userId, LocalDate since) {
-		Set<String> projects = new HashSet<>(mongo.findDistinct(
-				Query.query(ownEntries(userId, since).and("issueId").is(null)), "projectId", WorkItem.class,
-				String.class));
-		List<String> issueIds = mongo.findDistinct(
-				Query.query(ownEntries(userId, since).and("issueId").ne(null)), "issueId", WorkItem.class,
-				String.class);
-		if (!issueIds.isEmpty()) {
-			// A move carries every entry on an issue into the project it lands in, whoever booked them,
-			// and a member of the old project may move it into one they lead. Former ids are written by
-			// a move and nothing else.
-			Query neverMoved = Query.query(new Criteria().andOperator(
-					Criteria.where("_id").in(issueIds),
-					new Criteria().orOperator(
-							Criteria.where("formerReadableIds").exists(false),
-							Criteria.where("formerReadableIds").size(0))));
-			projects.addAll(mongo.findDistinct(neverMoved, "projectId", Issue.class, String.class));
+		// Not a smart commit, which can name anybody as its author, nor a copy of somebody else's
+		// shared entry, nor whatever a later import writes: a list of who may count, not of who may not.
+		// Documents from before 2.0 carry no source and were written in the app.
+		Query own = Query.query(new Criteria().andOperator(
+				Criteria.where("userId").is(userId),
+				Criteria.where("date").gte(since),
+				Criteria.where("issueId").ne(null),
+				new Criteria().orOperator(
+						Criteria.where("source").in(OWN_SOURCES),
+						Criteria.where("source").exists(false))));
+		List<String> issueIds = mongo.findDistinct(own, "issueId", WorkItem.class, String.class);
+		if (issueIds.isEmpty()) {
+			return Set.of();
 		}
+		// A move carries every entry on an issue into the project it lands in, whoever booked them, and a
+		// member of the old project may move it into one they lead. Former ids are written by a move
+		// and by nothing else; a deleted issue is not found at all.
+		Query neverMoved = Query.query(new Criteria().andOperator(
+				Criteria.where("_id").in(issueIds),
+				new Criteria().orOperator(
+						Criteria.where("formerReadableIds").exists(false),
+						Criteria.where("formerReadableIds").size(0))));
+		Set<String> projects = new HashSet<>(mongo.findDistinct(neverMoved, "projectId", Issue.class, String.class));
 		projects.remove(null);
 		return Set.copyOf(projects);
-	}
-
-	/**
-	 * The person's entries from [since] that they recorded themselves: not a smart commit, which can
-	 * name anybody as its author, not a copy of somebody else's shared entry, and not the unattributed
-	 * remainder from before 2.0.
-	 */
-	private static Criteria ownEntries(String userId, LocalDate since) {
-		return Criteria.where("userId").is(userId).and("date").gte(since)
-				.and("source").nin(WorkItem.Source.SMART_COMMIT, WorkItem.Source.SHARED, WorkItem.Source.LEGACY);
 	}
 }
