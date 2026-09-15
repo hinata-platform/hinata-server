@@ -46,6 +46,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 
 @Service
@@ -248,6 +249,7 @@ public class IssueService {
 				issue.getAssigneeIds() != null ? issue.getAssigneeIds() : List.of());
 		String previousSprint = issue.getSprintId();
 		mutator.accept(issue);
+		IssueLabels.check(before.getTags(), issue.getTags());
 		validateHierarchy(issue);
 
 		Project project = projects.get(issue.getProjectId());
@@ -572,16 +574,21 @@ public class IssueService {
 	 */
 	public Map<String, SubtaskTally> subtaskTallies(Collection<Issue> parents,
 			Map<String, ? extends Collection<String>> resolvedStates) {
-		return subtaskTallies(parents, resolvedStates, null);
+		return countChildren(parents, resolvedStates, UnaryOperator.identity());
 	}
 
 	/**
-	 * {@link #subtaskTallies(Collection, Map)}, the read given up once [maxTime] has passed, or run
-	 * without a limit when it is null: a board counts the children of its cards within the time of
-	 * its request.
+	 * {@link #subtaskTallies(Collection, Map)} within [maxTime], after which the database gives up on
+	 * the read: a board counts the children of its cards within the time of its request.
 	 */
 	public Map<String, SubtaskTally> subtaskTallies(Collection<Issue> parents,
 			Map<String, ? extends Collection<String>> resolvedStates, Duration maxTime) {
+		return countChildren(parents, resolvedStates, query -> query.maxTime(maxTime));
+	}
+
+	/** The tallies of {@link #subtaskTallies(Collection, Map)}, their one read [limited] as the caller asks. */
+	private Map<String, SubtaskTally> countChildren(Collection<Issue> parents,
+			Map<String, ? extends Collection<String>> resolvedStates, UnaryOperator<Query> limited) {
 		Map<String, String> projectOf = new HashMap<>();
 		for (Issue parent : parents) {
 			if (parent.getId() != null && parent.getProjectId() != null) {
@@ -590,8 +597,8 @@ public class IssueService {
 		}
 		if (projectOf.isEmpty()) return Map.of();
 
-		Query query = Query.query(Criteria.where("parentId").in(projectOf.keySet()).and("archived").ne(true));
-		if (maxTime != null) query.maxTime(maxTime);
+		Query query = limited.apply(
+				Query.query(Criteria.where("parentId").in(projectOf.keySet()).and("archived").ne(true)));
 		query.fields().include("parentId", "projectId", "state", "resolvedAt");
 		Map<String, int[]> byParent = new HashMap<>(); // parentId -> [total, done]
 		Map<String, Set<String>> resolvedByProject = new HashMap<>();

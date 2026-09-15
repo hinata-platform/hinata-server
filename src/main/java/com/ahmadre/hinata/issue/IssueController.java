@@ -210,6 +210,7 @@ public class IssueController {
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public Issue create(@RequestBody @Valid CreateIssueRequest request) {
+		IssueLabels.check(List.of(), request.tags());
 		List<String> assigneeIds = request.assigneeIds();
 		if (assigneeIds == null) {
 			assigneeIds = (request.assigneeId() != null && !request.assigneeId().isBlank())

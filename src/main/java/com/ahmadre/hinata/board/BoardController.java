@@ -185,6 +185,12 @@ public class BoardController {
 	@GetMapping("/{id}")
 	public BoardView view(@PathVariable String id, @RequestParam(required = false) String sprintId) {
 		User user = currentUser.require();
+		// Within the time of a board request, like the paged reads: a read the
+		// database gives up on ends in a 503 the app can explain.
+		return BoardReader.timed(() -> readView(id, sprintId, user));
+	}
+
+	private BoardView readView(String id, String sprintId, User user) {
 		// Only the projects this viewer may actually work with: a shared
 		// cross-project board must never leak a foreign project's backlog.
 		BoardScope scope = reader.scope(id, user);

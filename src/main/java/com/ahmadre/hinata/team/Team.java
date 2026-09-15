@@ -5,6 +5,7 @@ import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -18,10 +19,14 @@ import java.util.List;
  * and grants them access to {@link com.ahmadre.hinata.project.Project}s. It is an
  * organizational layer over the Project → Issue → Board model: a member's
  * {@link ProjectAccess} contributes to what projects they can see app-wide.
+ *
+ * <p>The teams of a member are looked up on every read of a board by a viewer who is no
+ * admin, so they come off an index of the members rather than off every team.
  */
 @Data
 @Builder
 @Document("teams")
+@CompoundIndex(name = "members_user", def = "{'members.userId': 1}")
 public class Team {
 
 	@Id

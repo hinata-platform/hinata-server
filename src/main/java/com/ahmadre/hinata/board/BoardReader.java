@@ -161,25 +161,11 @@ public class BoardReader {
 	private BoardCardPage readCards(String boardId, CardSource source, BoardQuery query, int page, int size,
 			boolean summary, User user) {
 		int pageSize = pageSize(size);
-		checkId(source.sprintId());
-		checkId(source.column());
-		boolean ofSprint = present(source.sprintId());
-		// Every read names where its cards come from: the whole board in board order has no index to
-		// come off, and no view reads it.
-		if (page < 0 || source.backlog() && ofSprint || !source.named() || summary && !ofSprint
-				|| present(source.column()) && source.dated() != null) {
-			throw invalid();
-		}
+		checkSource(source, page, summary);
 		BoardScope scope = scope(boardId, user);
-		AgileBoard.Column column = null;
-		if (present(source.column())) {
-			column = scope.column(source.column());
-			if (column == null) {
-				throw ApiException.badRequest("error.board.unknownColumn", source.column());
-			}
-		}
+		AgileBoard.Column column = namedColumn(scope, source.column());
 		BoardCriteria.Place place = source.backlog() ? BoardCriteria.Place.BACKLOG
-				: ofSprint ? BoardCriteria.Place.sprint(source.sprintId()) : BoardCriteria.Place.BOARD;
+				: present(source.sprintId()) ? BoardCriteria.Place.sprint(source.sprintId()) : BoardCriteria.Place.BOARD;
 		BoardCriteria.Lookup lookup = issues.lookupFor(scope.projectIds());
 		Optional<Criteria> found = BoardCriteria.of(scope, place, query, lookup);
 		if (found.isEmpty()) {
@@ -187,42 +173,87 @@ public class BoardReader {
 					summary ? List.of() : null);
 		}
 		String index = BoardCriteria.index(place, query, source.dated());
-		Criteria criteria = found.get();
-		boolean dated = Boolean.TRUE.equals(source.dated());
-		if (Boolean.FALSE.equals(source.dated())) {
-			criteria = BoardCriteria.and(criteria, BoardCriteria.undated());
+		Criteria criteria = Boolean.FALSE.equals(source.dated())
+				? BoardCriteria.and(found.get(), BoardCriteria.undated()) : found.get();
+		Counted counted = count(criteria, index, column, source.dated(), lookup);
+		long offset = (long) page * pageSize;
+		List<Issue> content = readsPage(offset, counted.total(), pageSize)
+				? content(counted, index, source.dated(), offset, pageSize) : List.of();
+		// A sprint's summary counts the whole sprint, whatever column the page is of.
+		Criteria whole = Boolean.TRUE.equals(source.dated())
+				? BoardCriteria.and(criteria, BoardCriteria.dated()) : criteria;
+		List<BoardStateSummary> sprintSummary = summary ? issues.summarize(whole, index) : null;
+		if (source.dated() != null) {
+			// The timeline draws neither sub-tasks nor epics nor people, so its cards go without them.
+			return new BoardCardPage(content.stream().map(BoardCard::bare).toList(), counted.total(), page,
+					pageSize, List.of(), List.of(), sprintSummary);
 		}
-		Criteria scoped = dated ? BoardCriteria.and(criteria, BoardCriteria.dated()) : criteria;
-		long total;
-		long startless = 0;
+		BoardCardAssembler.Cards cards = assembler.cards(scope, content);
+		return new BoardCardPage(cards.of(content), counted.total(), page, pageSize, cards.users(), cards.refs(),
+				sprintSummary);
+	}
+
+	/**
+	 * Refuses a read that does not name where its cards come from, or that asks its source for what it
+	 * has not. The whole board in board order has no index to come off, and no view reads it; a read
+	 * names the backlog or a sprint, not both; only a sprint has a summary to show; the timeline has no
+	 * columns.
+	 */
+	private static void checkSource(CardSource source, int page, boolean summary) {
+		checkId(source.sprintId());
+		checkId(source.column());
+		boolean ofSprint = present(source.sprintId());
+		if (page < 0 || !source.named() || (source.backlog() && ofSprint) || (summary && !ofSprint)
+				|| (present(source.column()) && source.dated() != null)) {
+			throw invalid();
+		}
+	}
+
+	/** The column of [scope] called [name], or null when the read names no column. */
+	private static AgileBoard.Column namedColumn(BoardScope scope, String name) {
+		if (!present(name)) {
+			return null;
+		}
+		AgileBoard.Column column = scope.column(name);
+		if (column == null) {
+			throw ApiException.badRequest("error.board.unknownColumn", name);
+		}
+		return column;
+	}
+
+	/**
+	 * What a read counted: [total] cards, [startless] of them on the timeline with a due date alone, and
+	 * the [criteria] its page reads, for a column narrowed to the spellings its states were counted in.
+	 */
+	private record Counted(Criteria criteria, long total, long startless) {
+	}
+
+	/**
+	 * Counts the cards [criteria] matches off [index]: a column's by state, so that its page reads only
+	 * the spellings found; the timeline's with a date in its two parts; any other at once.
+	 */
+	private Counted count(Criteria criteria, String index, AgileBoard.Column column, Boolean dated,
+			BoardCriteria.Lookup lookup) {
 		if (column != null) {
 			Map<String, Long> counted = counted(issues.countByState(BoardCriteria.and(criteria,
 					BoardCriteria.stateIn(lookup.spellings(column.getStates()))), index), column);
-			total = sum(counted);
-			criteria = BoardCriteria.and(criteria, BoardCriteria.stateIn(counted.keySet()));
+			return new Counted(BoardCriteria.and(criteria, BoardCriteria.stateIn(counted.keySet())), sum(counted), 0);
 		}
-		else if (dated) {
-			startless = issues.count(BoardCriteria.and(criteria, BoardCriteria.startless()), index);
-			total = startless + issues.count(BoardCriteria.and(criteria, BoardCriteria.started()), index);
+		if (Boolean.TRUE.equals(dated)) {
+			long startless = issues.count(BoardCriteria.and(criteria, BoardCriteria.startless()), index);
+			long started = issues.count(BoardCriteria.and(criteria, BoardCriteria.started()), index);
+			return new Counted(criteria, startless + started, startless);
 		}
-		else {
-			total = issues.count(criteria, index);
+		return new Counted(criteria, issues.count(criteria, index), 0);
+	}
+
+	/** The page from [offset] of the cards [counted] counted, in the order of their source. */
+	private List<Issue> content(Counted counted, String index, Boolean dated, long offset, int pageSize) {
+		if (Boolean.TRUE.equals(dated)) {
+			return datedPage(counted.criteria(), index, offset, pageSize, counted.startless());
 		}
-		long offset = (long) page * pageSize;
-		List<Issue> content;
-		if (!readsPage(offset, total, pageSize)) {
-			content = List.of();
-		}
-		else if (dated) {
-			content = datedPage(criteria, index, offset, pageSize, startless);
-		}
-		else {
-			Sort order = source.dated() != null ? UNDATED_ORDER : BOARD_ORDER;
-			content = issues.find(criteria, order, offset, pageSize, index, BoardCard.FIELDS);
-		}
-		BoardCardAssembler.Cards cards = assembler.cards(scope, content);
-		return new BoardCardPage(cards.of(content), total, page, pageSize, cards.users(), cards.refs(),
-				summary ? issues.summarize(scoped, index) : null);
+		Sort order = dated != null ? UNDATED_ORDER : BOARD_ORDER;
+		return issues.find(counted.criteria(), order, offset, pageSize, index, BoardCard.FIELDS);
 	}
 
 	/**
@@ -298,9 +329,10 @@ public class BoardReader {
 	/**
 	 * Runs the reads of [request] within the time {@link BoardTime} gives a request, and says the server
 	 * is busy when the database gave up on one of them: a read that took too long ends in a 503 the app
-	 * can explain rather than in a 500.
+	 * can explain rather than in a 500. The old board view of {@link BoardController} runs its reads here
+	 * as well.
 	 */
-	private static <T> T timed(Supplier<T> request) {
+	static <T> T timed(Supplier<T> request) {
 		try {
 			return BoardTime.within(request);
 		}
