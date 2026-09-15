@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.bson.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -33,9 +34,19 @@ public class UserController {
 	public record DirectoryUser(String id, String username, String displayName, String avatarUrl,
 			String title, String pronouns) {
 
+		/** The fields of an account a summary is made of, for a read that takes nothing else of it. */
+		public static final String[] FIELDS = { "username", "displayName", "avatarUrl", "title", "pronouns" };
+
 		public static DirectoryUser from(User user) {
 			return new DirectoryUser(user.getId(), user.getUsername(), user.getDisplayName(),
 					user.getAvatarUrl(), user.getTitle(), user.getPronouns());
+		}
+
+		/** The summary of an account read as a plain document with {@link #FIELDS}. */
+		public static DirectoryUser from(Document user) {
+			return new DirectoryUser(user.get("_id").toString(), user.getString("username"),
+					user.getString("displayName"), user.getString("avatarUrl"), user.getString("title"),
+					user.getString("pronouns"));
 		}
 	}
 

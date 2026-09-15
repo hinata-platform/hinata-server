@@ -98,8 +98,8 @@ class IssueSearchTextIntegrationTest {
 	@Test
 	void theBackfillWritesWhatAnOlderServerSavedWithout() {
 		Issue issue = issues.save(issue(4, "HIN-4", "Saved before", "Api"));
-		mongo.getCollection("issues").updateOne(new Document("_id", new ObjectId(issue.getId())),
-				new Document("$unset", new Document(IssueSearchText.FIELD, "")));
+		withoutSearchText(issue);
+		forgetTheBackfill();
 
 		backfill.run(null);
 
@@ -107,14 +107,39 @@ class IssueSearchTextIntegrationTest {
 	}
 
 	@Test
+	void theBackfillAsksOnlyUntilItFilledEveryIssue() {
+		forgetTheBackfill();
+		backfill.run(null);
+		Issue issue = issues.save(issue(5, "HIN-5", "Saved after"));
+		withoutSearchText(issue);
+
+		backfill.run(null);
+
+		assertThat(stored(issue)).as("a start after a completed backfill reads no issue for it").isNull();
+	}
+
+	@Test
 	void dropsTheIndexesOnlyWritesPaidFor() {
 		mongo.indexOps(Issue.class).createIndex(new Index("state", Sort.Direction.ASC).named("state"));
+		mongo.indexOps(Issue.class).createIndex(new Index().on("projectId", Sort.Direction.ASC)
+				.on("rank", Sort.Direction.ASC).named("board_column"));
 
 		cleanup.run(null);
 
 		assertThat(mongo.indexOps(Issue.class).getIndexInfo()).extracting(IndexInfo::getName)
-				.doesNotContain("state", "projectId")
-				.contains("board_column", "board_sprint", "board_timeline");
+				.doesNotContain("state", "projectId", "board_column")
+				.contains("board_by_state", "board_by_sprint", "board_by_dates", "board_by_assignee", "board_by_reporter",
+						"board_by_label");
+	}
+
+	private void withoutSearchText(Issue issue) {
+		mongo.getCollection("issues").updateOne(new Document("_id", new ObjectId(issue.getId())),
+				new Document("$unset", new Document(IssueSearchText.FIELD, "")));
+	}
+
+	private void forgetTheBackfill() {
+		mongo.getCollection(IssueSearchTextBackfill.MIGRATIONS)
+				.deleteOne(new Document("_id", IssueSearchTextBackfill.MARKER_ID));
 	}
 
 	private Issue issue(long number, String readableId, String title, String... tags) {

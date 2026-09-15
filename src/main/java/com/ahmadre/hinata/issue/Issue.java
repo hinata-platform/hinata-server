@@ -53,23 +53,36 @@ import java.util.List;
 // narrowed to one person's watch list, which is a small set by construction.
 @CompoundIndex(name = "watchers_updated",
 		def = "{'watcherIds': 1, 'archived': 1, 'updatedAt': -1, '_id': -1}")
-// A board column's cards in board order (board/BoardReader). Equality on projectId,
-// archived and state, where a column names few states and each in few spellings, so the
-// planner merges one scan per combination and the page comes off the index already
-// sorted. type and searchText go last: the wall's "no epics, no sub-tasks" and a board
-// search then filter keys rather than documents, and counting a column, searched or not,
-// needs no document at all.
-@CompoundIndex(name = "board_column",
-		def = "{'projectId': 1, 'archived': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1, 'searchText': 1}")
-// The same for a sprint, and for the backlog as the sprint null: equality on the sprint
-// instead of the state. A sprint wall's column filters its state within the sprint.
-@CompoundIndex(name = "board_sprint",
-		def = "{'projectId': 1, 'archived': 1, 'sprintId': 1, 'rank': 1, '_id': 1, 'type': 1, 'searchText': 1}")
+// The board reads (board/BoardReader), each off the index that bounds it to the fewest cards
+// (board/BoardCriteria#index). Every one starts with equality on projectId and archived.
+//
+// A board column's cards in board order: equality on the state, where a column names few
+// states and each in few spellings, so the planner merges one scan per combination and the
+// page comes off the index already sorted. type, priority and searchText go last: the wall's
+// "no epics, no sub-tasks", a priority filter and a board search then filter keys rather than
+// documents, and counting a column, searched or not, needs no document at all.
+@CompoundIndex(name = "board_by_state",
+		def = "{'projectId': 1, 'archived': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1, 'priority': 1, 'searchText': 1}")
+// The same for a sprint, a sprint filter and the backlog as the sprint null: equality on the
+// sprint instead of the state, which a sprint wall's column then filters on the keys.
+@CompoundIndex(name = "board_by_sprint",
+		def = "{'projectId': 1, 'archived': 1, 'sprintId': 1, 'rank': 1, '_id': 1, 'type': 1, 'state': 1, 'priority': 1, 'searchText': 1}")
 // The board timeline in date order: the start date, then the due date, then _id. Its dated
 // branches (a start date, or none but a due date) and its undated list each bound the dates,
 // so a page comes off the index sorted.
-@CompoundIndex(name = "board_timeline",
-		def = "{'projectId': 1, 'archived': 1, 'startDate': 1, 'dueDate': 1, '_id': 1, 'type': 1, 'searchText': 1}")
+@CompoundIndex(name = "board_by_dates",
+		def = "{'projectId': 1, 'archived': 1, 'startDate': 1, 'dueDate': 1, '_id': 1, 'type': 1, 'state': 1, 'priority': 1, 'searchText': 1}")
+// A filter by assignee, reporter or label: equality on the value, then the state and board
+// order, so one person's or one label's cards are counted off the keys and paged without
+// reading anybody else's. They also hand the filter its values: the reporters by a distinct
+// scan, the people and labels, lists no distinct scan steps through, one step through the
+// keys per value (board/BoardIssueReads#keysOf).
+@CompoundIndex(name = "board_by_assignee",
+		def = "{'projectId': 1, 'archived': 1, 'assigneeIds': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1}")
+@CompoundIndex(name = "board_by_reporter",
+		def = "{'projectId': 1, 'archived': 1, 'reporterId': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1}")
+@CompoundIndex(name = "board_by_label",
+		def = "{'projectId': 1, 'archived': 1, 'tags': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1}")
 public class Issue {
 
 	public enum Type {

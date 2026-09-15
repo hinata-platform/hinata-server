@@ -198,7 +198,7 @@ public class BoardController {
 		// order: a sprint's cards, or the cards in the states of the board's columns,
 		// the only ones this view ever showed. Archived issues are soft-deleted, and
 		// the query leaves them out.
-		Set<String> columnStates = BoardScope.spellings(scope.columns().stream()
+		Set<String> columnStates = scope.spellings(scope.columns().stream()
 				.flatMap(column -> column.getStates().stream()).toList());
 		List<Issue> candidates = new ArrayList<>();
 		for (Project project : scope.projects()) {

@@ -3,6 +3,8 @@ package com.ahmadre.hinata.board;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 
+import java.text.BreakIterator;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -41,10 +43,32 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 		TIMELINE,
 
 		/** Every issue type, as the sprint planning has always listed them. */
-		PLANNING
+		PLANNING;
+
+		/** Whether an issue of [type] is a card of this shape. */
+		boolean lists(Issue.Type type) {
+			return switch (this) {
+				case WALL -> type.isStandard();
+				case SUBTASKS -> !type.isEpic();
+				case TIMELINE -> !type.isSubtask();
+				case PLANNING -> true;
+			};
+		}
+
+		/** The types of the cards of this shape, in the order the issue model names them. */
+		List<Issue.Type> types() {
+			return Arrays.stream(Issue.Type.values()).filter(this::lists).toList();
+		}
 	}
 
+	/** The most characters a search holds, counted as someone reads them, the way the app's field counts. */
 	static final int MAX_TEXT = 100;
+
+	/**
+	 * The most UTF-16 units a search takes however few characters they make. One character can take
+	 * many, as an emoji of a family takes eleven, and a pattern is built from every one of them.
+	 */
+	static final int MAX_TEXT_UNITS = 2_000;
 	static final int MAX_VALUES = 50;
 	static final int MAX_VALUE_LENGTH = 200;
 
@@ -68,7 +92,8 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 	/**
 	 * The query the request parameters describe.
 	 *
-	 * @throws ApiException 400 for a text longer than {@value #MAX_TEXT} characters, a facet with
+	 * @throws ApiException 400 for a text of more than {@value #MAX_TEXT} characters or
+	 *                      {@value #MAX_TEXT_UNITS} UTF-16 units, a facet with
 	 *                      more than {@value #MAX_VALUES} values or a value longer than
 	 *                      {@value #MAX_VALUE_LENGTH}, a text or value with a control character,
 	 *                      and a type, priority or shape that does not exist
@@ -77,7 +102,7 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 			List<String> assigneeIds, List<String> reporterIds, List<String> labels, List<String> sprints,
 			List<String> epicIds, String shape) {
 		String stripped = text == null ? "" : text.strip();
-		if (stripped.length() > MAX_TEXT || hasControl(stripped)) {
+		if (stripped.length() > MAX_TEXT_UNITS || characters(stripped) > MAX_TEXT || hasControl(stripped)) {
 			throw invalid();
 		}
 		Set<String> sprintIds = values(sprints);
@@ -95,6 +120,20 @@ public record BoardQuery(String text, Set<String> states, Set<Issue.Type> types,
 
 	boolean hasText() {
 		return !text.isEmpty();
+	}
+
+	/**
+	 * How many characters [text] holds as someone reads them: a letter with its accents, or an emoji
+	 * made of several code points, counts once.
+	 */
+	static int characters(String text) {
+		BreakIterator boundaries = BreakIterator.getCharacterInstance(Locale.ROOT);
+		boundaries.setText(text);
+		int characters = 0;
+		while (boundaries.next() != BreakIterator.DONE) {
+			characters++;
+		}
+		return characters;
 	}
 
 	private static Set<String> values(List<String> raw) {

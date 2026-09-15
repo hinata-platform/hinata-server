@@ -5,14 +5,10 @@ import com.ahmadre.hinata.issue.IssueLinkGraphService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.user.User;
 import com.mongodb.MongoExecutionTimeoutException;
-import org.bson.Document;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.http.HttpStatus;
 
-import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -20,8 +16,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -35,11 +29,11 @@ class BoardReaderTimeoutTest {
 				.projectIds(new ArrayList<>(List.of("p1"))).build()));
 		BoardAccess access = mock(BoardAccess.class);
 		when(access.assertReadable(any(), any())).thenReturn(List.of(Project.builder().id("p1").key("HIN").name("Hinata").build()));
-		MongoTemplate mongo = mock(MongoTemplate.class);
-		when(mongo.aggregate(any(Aggregation.class), anyString(), eq(Document.class))).thenThrow(new UncategorizedMongoDbException(
-				"gave up", new MongoExecutionTimeoutException(50, "operation exceeded time limit")));
+		BoardIssueReads issues = mock(BoardIssueReads.class);
+		when(issues.countByState(any(), any())).thenThrow(new UncategorizedMongoDbException("gave up",
+				new MongoExecutionTimeoutException(50, "operation exceeded time limit")));
 		BoardReader reader = new BoardReader(boards, mock(SprintRepository.class), access, mock(BoardCardAssembler.class),
-				mock(IssueLinkGraphService.class), mongo, Clock.systemUTC());
+				issues, mock(BoardFacetsReader.class), mock(IssueLinkGraphService.class));
 
 		assertThatThrownBy(() -> reader.wall("b1", null, BoardQuery.ALL, 30, User.builder().id("u1").build()))
 				.isInstanceOfSatisfying(ApiException.class, ex -> {
