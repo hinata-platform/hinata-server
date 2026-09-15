@@ -6,6 +6,7 @@ import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.bson.Document;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -42,6 +43,9 @@ public class AvailabilityAccess {
 
 	/** How far back recorded time ties a person to the leads of a project. */
 	static final Period WORKED_ON = Period.ofYears(1);
+
+	/** Most led projects one check looks at; beyond this the $in stops being cheap. */
+	static final int LED_PROJECTS_MAX = 500;
 
 	private final ObjectProvider<AvailabilityPolicy> policy;
 	private final MongoTemplate mongo;
@@ -99,29 +103,38 @@ public class AvailabilityAccess {
 	}
 
 	/**
-	 * Whether [viewer] leads a project [userId] recorded time on within {@link #WORKED_ON} and can
-	 * still see: as a direct member, or through a team.
+	 * Whether [viewer] leads a project [userId] can still see, as a direct member or through a team,
+	 * and recorded time on within {@link #WORKED_ON}. The led projects first: they are few and cheap
+	 * to find, and most readers lead none, so the entries are only read for a lead.
 	 */
 	private boolean leadsSomebodyWhoWorkedFor(User viewer, String userId, AvailabilityPolicy current) {
-		Set<String> worked = current.projectsWorkedOn(userId, LocalDate.now(clock).minus(WORKED_ON));
-		if (worked.isEmpty()) {
-			return false;
-		}
-		Criteria leads = new Criteria().orOperator(
-				Criteria.where("leadIds").is(viewer.getId()),
-				Criteria.where("leadId").is(viewer.getId()));
-		if (mongo.exists(Query.query(new Criteria().andOperator(leads, Criteria.where("_id").in(worked),
-				Criteria.where("memberIds").is(userId))), Project.class)) {
+		LocalDate since = LocalDate.now(clock).minus(WORKED_ON);
+		Set<String> direct = led(viewer, Criteria.where("memberIds").is(userId));
+		if (!direct.isEmpty() && !current.projectsWorkedOn(userId, direct, since).isEmpty()) {
 			return true;
 		}
 		User person = users.findById(userId).orElse(null);
 		if (person == null) {
 			return false;
 		}
-		Set<String> granted = new HashSet<>(reach.teamGrantedProjectIds(person));
-		granted.retainAll(worked);
-		return !granted.isEmpty()
-				&& mongo.exists(Query.query(new Criteria().andOperator(leads, Criteria.where("_id").in(granted))),
-						Project.class);
+		Set<String> granted = reach.teamGrantedProjectIds(person);
+		if (granted.isEmpty()) {
+			return false;
+		}
+		Set<String> throughTeams = led(viewer, Criteria.where("_id").in(granted));
+		return !throughTeams.isEmpty() && !current.projectsWorkedOn(userId, throughTeams, since).isEmpty();
+	}
+
+	/** The ids of the projects [viewer] leads that match [which], at most {@link #LED_PROJECTS_MAX}. */
+	private Set<String> led(User viewer, Criteria which) {
+		Criteria leads = new Criteria().orOperator(
+				Criteria.where("leadIds").is(viewer.getId()),
+				Criteria.where("leadId").is(viewer.getId()));
+		Query query = Query.query(new Criteria().andOperator(leads, which)).limit(LED_PROJECTS_MAX);
+		query.fields().include("_id");
+		Set<String> ids = new HashSet<>();
+		mongo.query(Project.class).as(Document.class).matching(query).all()
+				.forEach(project -> ids.add(String.valueOf(project.get("_id"))));
+		return ids;
 	}
 }

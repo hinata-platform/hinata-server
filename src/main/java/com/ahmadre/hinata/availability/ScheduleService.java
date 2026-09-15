@@ -30,6 +30,7 @@ public class ScheduleService {
 
 	private final WorkingScheduleRepository schedules;
 	private final HolidayCalendarRepository calendars;
+	private final CapacityService capacity;
 	private final AvailabilityAccess access;
 	private final UserRepository users;
 	private final SettingsService settings;
@@ -50,7 +51,7 @@ public class ScheduleService {
 		WorkingSchedule current = history.stream().filter(pattern -> !pattern.getValidFrom().isAfter(today))
 				.findFirst().orElse(null);
 		return new Patterns(person.getId(), properties.getAvailability().getDefaultWeekdayMinutes(),
-				calendars.findFirstByDefaultCalendarTrue().map(HolidayCalendar::getId).orElse(null), current,
+				capacity.defaultCalendarId(), current,
 				history);
 	}
 

@@ -149,8 +149,11 @@ public class CapacityService {
 		return new Plan(patterns, defaultCalendarId, holidaysOf(patterns, defaultCalendarId, from, to));
 	}
 
-	/** The id of the default calendar, from its index and without the rest of the document. */
-	private String defaultCalendarId() {
+	/**
+	 * The id of the default calendar, or null without one: from its sparse index and without the rest
+	 * of the document. The one way this package asks.
+	 */
+	String defaultCalendarId() {
 		Query query = Query.query(Criteria.where("defaultCalendar").is(true));
 		query.fields().include("_id");
 		Document found = mongo.query(HolidayCalendar.class).as(Document.class).matching(query).firstValue();

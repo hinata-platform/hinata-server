@@ -3,8 +3,10 @@ package com.ahmadre.hinata.availability;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
+import com.ahmadre.hinata.user.UserZones;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -39,6 +41,7 @@ public class TimeOffService {
 	private final MongoTemplate mongo;
 	private final AvailabilityAccess access;
 	private final UserRepository users;
+	private final SettingsService settings;
 	private final AuditService audit;
 	private final Clock clock;
 
@@ -78,7 +81,7 @@ public class TimeOffService {
 		User person = access.requireKeeper(viewer, draft.userId());
 		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(viewer.getId()).build();
 		apply(item, draft.type(), draft.from(), draft.to(), draft.halfDay(), draft.note());
-		assertNearToday(item);
+		assertNearToday(item, person);
 		assertRoomIn(person.getId(), item.getFrom().getYear());
 		TimeOff saved = timeOff.save(item);
 		recordForOther(viewer, person, "created", saved);
@@ -87,6 +90,7 @@ public class TimeOffService {
 
 	public TimeOff update(User viewer, String id, Patch patch) {
 		TimeOff item = writable(viewer, id);
+		User person = users.findById(item.getUserId()).orElse(null);
 		LocalDate fromBefore = item.getFrom();
 		LocalDate toBefore = item.getTo();
 		apply(item,
@@ -97,14 +101,16 @@ public class TimeOffService {
 				patch.note() != null ? patch.note() : item.getNote());
 		// Checked when the days change, so an old absence keeps its note editable once it drifted out.
 		if (!item.getFrom().equals(fromBefore) || !item.getTo().equals(toBefore)) {
-			assertNearToday(item);
+			assertNearToday(item, person);
 		}
 		if (item.getFrom().getYear() != fromBefore.getYear()) {
 			assertRoomIn(item.getUserId(), item.getFrom().getYear());
 		}
 		item.setUpdatedAt(clock.instant());
 		TimeOff saved = timeOff.save(item);
-		users.findById(saved.getUserId()).ifPresent(person -> recordForOther(viewer, person, "updated", saved));
+		if (person != null) {
+			recordForOther(viewer, person, "updated", saved);
+		}
 		return saved;
 	}
 
@@ -143,9 +149,12 @@ public class TimeOffService {
 		}
 	}
 
-	/** Refuses an absence further than {@link TimeOff#YEARS_AROUND_TODAY} years from today. */
-	private void assertNearToday(TimeOff item) {
-		LocalDate today = LocalDate.now(clock);
+	/**
+	 * Refuses an absence further than {@link TimeOff#YEARS_AROUND_TODAY} years from today, in the
+	 * person's zone like every other day of theirs; the instance's for a person that is gone.
+	 */
+	private void assertNearToday(TimeOff item, User person) {
+		LocalDate today = LocalDate.now(clock.withZone(UserZones.of(person, settings.get())));
 		if (item.getFrom().isBefore(today.minusYears(TimeOff.YEARS_AROUND_TODAY))
 				|| item.getTo().isAfter(today.plusYears(TimeOff.YEARS_AROUND_TODAY))) {
 			throw ApiException.badRequest("error.availability.timeOffOutOfRange", TimeOff.YEARS_AROUND_TODAY);
