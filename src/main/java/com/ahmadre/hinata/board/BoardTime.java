@@ -12,6 +12,10 @@ import java.util.function.Supplier;
  * one request together at most {@link #MAX_REQUEST_TIME}. A request runs its reads {@link #within} its
  * time, and every read takes {@link #left} as its limit, so a request of many reads cannot hold a thread
  * for as long as all of them together could take.
+ *
+ * <p>The time lives on the thread that runs the request, and a read takes it only there: a read handed to
+ * another thread would take {@link #MAX_READ_TIME} alone. The reads of this package ask {@link #left}
+ * themselves; a service of another package gets what is left passed as its limit.
  */
 final class BoardTime {
 

@@ -6,6 +6,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
+import com.ahmadre.hinata.issue.IssueLabels;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -57,6 +58,7 @@ public class IssueWriteTools {
 			@McpToolParam(required = false, description = "Story point estimate") Integer storyPoints) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
+		IssueLabels.check(List.of(), tags);
 		// An agent writes markdown; storage is Lexical. Converting here is what
 		// keeps the database holding exactly one representation.
 		RichText body = richText.fromMarkdown(description);

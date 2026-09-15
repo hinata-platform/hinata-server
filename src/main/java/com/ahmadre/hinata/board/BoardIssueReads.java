@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -206,7 +207,8 @@ class BoardIssueReads {
 	 * text order, for a field that holds a list, which no distinct scan steps through. Off [index],
 	 * which starts with projectId, archived and [field], the read steps from one value to the next: one
 	 * short read per value, however many issues hold it, where asking the issues would cost as much as
-	 * the board is large.
+	 * the board is large. Without that index, or once [steps] run out, the values come off the issues,
+	 * see {@link #valuesOf}.
 	 */
 	List<String> keysOf(String field, List<String> projectIds, String index, int limit, Steps steps) {
 		if (projectIds.isEmpty()) {
@@ -215,34 +217,59 @@ class BoardIssueReads {
 		List<String> keys = indexKeys(index);
 		if (keys == null) {
 			warnMissing(index);
-			return firstInOrder(distinct(field, projectIds, null), limit);
+			return firstInOrder(valuesOf(field, projectIds, limit), limit);
 		}
 		if (keys.size() < 3 || !keys.subList(0, 3).equals(List.of("projectId", "archived", field))) {
 			if (warnedIndexes.add(index)) {
 				log.warn("The index {} does not start with projectId, archived and {}; board reads go without it",
 						index, field);
 			}
-			return firstInOrder(distinct(field, projectIds, null), limit);
+			return firstInOrder(valuesOf(field, projectIds, limit), limit);
 		}
-		return firstInOrder(withIndex(index, hint -> {
-			Collection<String> stepped = hint == null ? null : stepThrough(field, projectIds, hint, keys, limit, steps);
-			return stepped != null ? stepped : distinct(field, projectIds, null);
-		}), limit);
+		return firstInOrder(withIndex(index, hint -> hint == null
+				? valuesOf(field, projectIds, limit)
+				: stepThrough(field, projectIds, hint, keys, limit, steps)
+						.orElseGet(() -> valuesOf(field, projectIds, limit))), limit);
+	}
+
+	/**
+	 * The first [limit] distinct texts of [field] among the active issues of [projectIds], in one read of
+	 * the issues. The read takes every issue of the projects, one key of the state index each, and
+	 * answers with no more than [limit] values: all of them could outgrow what the database answers at
+	 * once, however long the labels people write.
+	 */
+	private List<String> valuesOf(String field, List<String> projectIds, int limit) {
+		Aggregation values = Aggregation.newAggregation(
+				stage("$match", active(projectIds)),
+				stage("$unwind", "$" + field),
+				stage("$match", new Document(field, new Document("$type", "string"))),
+				stage("$group", new Document("_id", "$" + field)),
+				stage("$sort", new Document("_id", 1)),
+				stage("$limit", limit));
+		return withIndex(BoardCriteria.BY_STATE, hint -> mongo.aggregate(values.withOptions(options(hint)), ISSUES,
+				Document.class).getMappedResults().stream()
+				.map(row -> row.getString("_id"))
+				.filter(value -> !value.isBlank())
+				.toList());
+	}
+
+	private static AggregationOperation stage(String operator, Object value) {
+		return context -> new Document(operator, value);
 	}
 
 	/**
 	 * The values of [field] in [index], each project's read from the key past the last value to the
-	 * next value's first key, until there is none or [limit] are found; null once [steps] run out first.
+	 * next value's first key, until there is none or [limit] are found; nothing once [steps] run out first.
 	 */
-	private Collection<String> stepThrough(String field, List<String> projectIds, String index, List<String> keys,
-			int limit, Steps steps) {
-		Set<String> values = new LinkedHashSet<>();
+	private Optional<Collection<String>> stepThrough(String field, List<String> projectIds, String index,
+			List<String> keys, int limit, Steps steps) {
+		Collection<String> values = new LinkedHashSet<>();
 		return mongo.execute(ISSUES, collection -> {
 			for (String projectId : projectIds) {
 				String last = "";
 				while (values.size() < limit) {
 					if (!steps.take()) {
-						return null;
+						return Optional.empty();
 					}
 					Document next = collection.find()
 							.hintString(index)
@@ -259,7 +286,7 @@ class BoardIssueReads {
 					last = value;
 				}
 			}
-			return values;
+			return Optional.of(values);
 		});
 	}
 

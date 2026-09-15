@@ -18,17 +18,19 @@ import java.util.List;
  * client reads a card with the parser it already has for issues.
  *
  * @param epicId           the epic the issue rolls up to: its parent, or for a sub-task its
- *                         grandparent; null when there is none the viewer may see
- * @param subtaskCount     the issue's direct children
- * @param subtaskDoneCount of those, the ones in a resolved state or with a resolution date
+ *                         grandparent; null when there is none the viewer may see, and on the
+ *                         timeline, which draws no epic
+ * @param subtaskCount     the issue's direct children; null on the timeline, which draws no sub-task
+ * @param subtaskDoneCount of those, the ones in a resolved state or with a resolution date; null on
+ *                         the timeline
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record BoardCard(String id, String projectId, String readableId, String title, String state,
 		Issue.Type type, Issue.Priority priority, String assigneeId, List<String> assigneeIds,
 		String reporterId, List<String> tags, String parentId, String epicId, String sprintId,
 		LocalDate startDate, LocalDate dueDate, Integer estimateMinutes, Integer storyPoints,
-		int spentMinutes, double rank, Instant resolvedAt, List<String> dependsOnIds, int subtaskCount,
-		int subtaskDoneCount) {
+		int spentMinutes, double rank, Instant resolvedAt, List<String> dependsOnIds, Integer subtaskCount,
+		Integer subtaskDoneCount) {
 
 	/** What a card reads from an issue document, besides its id. */
 	static final String[] FIELDS = { "projectId", "readableId", "title", "state", "type", "priority",
@@ -36,7 +38,17 @@ public record BoardCard(String id, String projectId, String readableId, String t
 			"dueDate", "estimateMinutes", "storyPoints", "spentMinutes", "rank", "resolvedAt",
 			"dependsOnIds" };
 
+	/** A card of the wall or the planning, with its epic and its sub-tasks counted. */
 	static BoardCard of(Issue issue, String epicId, int subtaskCount, int subtaskDoneCount) {
+		return card(issue, epicId, subtaskCount, subtaskDoneCount);
+	}
+
+	/** A card of the timeline, without the epic and the sub-tasks the timeline does not draw. */
+	static BoardCard bare(Issue issue) {
+		return card(issue, null, null, null);
+	}
+
+	private static BoardCard card(Issue issue, String epicId, Integer subtaskCount, Integer subtaskDoneCount) {
 		return new BoardCard(issue.getId(), issue.getProjectId(), issue.getReadableId(), issue.getTitle(),
 				issue.getState(), issue.getType(), issue.getPriority(), issue.getAssigneeId(),
 				orEmpty(issue.getAssigneeIds()), issue.getReporterId(), orEmpty(issue.getTags()),

@@ -481,7 +481,10 @@ class BoardReaderIntegrationTest {
 				"board_by_label", 500, new BoardIssueReads.Steps(2))).containsExactly("api", "ui", "web"));
 
 		assertThat(hinted(read, "find", "board_by_label")).hasSize(2);
-		assertThat(read).filteredOn(op -> sent(op).containsKey("distinct")).singleElement();
+		// Then one read takes the values off the issues of the board's projects, no more of them than asked.
+		assertThat(hinted(read, "aggregate", "board_by_state")).singleElement();
+		assertThat(issueReads.keysOf("tags", List.of(hinata.getId()), "board_by_label", 2,
+				new BoardIssueReads.Steps(0))).containsExactly("api", "ui");
 	}
 
 	@Test
@@ -685,6 +688,10 @@ class BoardReaderIntegrationTest {
 			assertThat(page.getBoolean("hasSortStage", false)).isFalse();
 			assertThat(examined(page)).isLessThanOrEqualTo(10);
 		});
+		// The timeline draws neither sub-tasks nor epics nor people, so its reads take its cards and nothing else.
+		for (List<Document> read : List.of(timeline, undated)) {
+			assertThat(read).allSatisfy(op -> assertThat(sent(op).get("hint")).isEqualTo("board_by_dates"));
+		}
 
 		// Every read of a request runs within the request's time, the parents and sub-tasks of its cards included.
 		for (List<Document> read : List.of(wall, search, sprintColumn, backlog, timeline, undated)) {
