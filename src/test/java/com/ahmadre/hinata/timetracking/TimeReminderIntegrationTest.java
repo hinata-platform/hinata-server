@@ -228,9 +228,10 @@ class TimeReminderIntegrationTest {
 		assertThat(routes.getHandlerMethods().keySet())
 				.flatExtracting(info -> List.copyOf(info.getPatternValues()))
 				.noneMatch(pattern -> pattern.toLowerCase().contains("remind"));
-		// A mark holds its key and its time, and nothing about the day it was taken for.
+		// A mark holds its key and its time, and nothing about the day it was taken for. _class is the
+		// type hint Spring Data writes with an entity insert: the name TimeMark, the same on every mark.
 		assertThat(mongo.findAll(Document.class, "time_marks"))
-				.allSatisfy(mark -> assertThat(mark.keySet()).containsOnly("_id", "at"));
+				.allSatisfy(mark -> assertThat(mark.keySet()).isSubsetOf("_id", "at", "_class"));
 	}
 
 	private User person(String name, String zone, Integer daily, Integer weekly) {
