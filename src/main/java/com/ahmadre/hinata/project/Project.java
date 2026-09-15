@@ -28,6 +28,9 @@ import java.util.UUID;
 @CompoundIndex(name = "archived_idx", def = "{'archived': 1}")
 public class Project {
 
+	/** The most labels a project's vocabulary holds. */
+	public static final int MAX_LABELS = 1_000;
+
 	@Id
 	private String id;
 

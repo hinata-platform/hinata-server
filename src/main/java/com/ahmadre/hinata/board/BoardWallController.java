@@ -65,7 +65,9 @@ public class BoardWallController {
 
 	/**
 	 * One page of cards: of the column called [column], of the sprint [sprintId], of the [backlog],
-	 * or of the whole board. [dated] splits the timeline, [summary] adds the cards by state.
+	 * or of the whole board. [dated] splits the timeline, [summary] adds the cards by state. A page of
+	 * the timeline carries its cards alone, without the people, references, epics and sub-task counts
+	 * the timeline does not draw.
 	 */
 	@GetMapping("/cards")
 	public BoardReader.BoardCardPage cards(@PathVariable String id,

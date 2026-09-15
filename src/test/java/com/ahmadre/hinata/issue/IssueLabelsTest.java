@@ -3,6 +3,7 @@ package com.ahmadre.hinata.issue;
 import com.ahmadre.hinata.common.ApiException;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -32,9 +33,16 @@ class IssueLabelsTest {
 
 	@Test
 	void keepsWhatAnIssueCarriesAlready() {
-		// An issue written before the limits can still be edited, as long as it gains nothing past them.
+		// An issue written before the limits can still be edited and trimmed.
 		assertThatCode(() -> IssueLabels.check(List.of(TOO_LONG), List.of(TOO_LONG, "api"))).doesNotThrowAnyException();
 		assertThatCode(() -> IssueLabels.check(TOO_MANY, TOO_MANY)).doesNotThrowAnyException();
+		assertThatCode(() -> IssueLabels.check(TOO_MANY, TOO_MANY.subList(1, TOO_MANY.size())))
+				.doesNotThrowAnyException();
 		assertThatCode(() -> IssueLabels.check(List.of("api"), null)).doesNotThrowAnyException();
+
+		// But it gains no label while it carries more than it may, not even in exchange for one.
+		List<String> swapped = new ArrayList<>(TOO_MANY);
+		swapped.set(0, "new");
+		assertThatThrownBy(() -> IssueLabels.check(TOO_MANY, swapped)).isInstanceOf(ApiException.class);
 	}
 }

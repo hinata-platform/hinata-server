@@ -7,7 +7,6 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserController.DirectoryUser;
 import com.fasterxml.jackson.annotation.JsonInclude;
-import com.mongodb.MongoExecutionTimeoutException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -22,7 +21,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.function.Supplier;
 
 /**
  * Reads a board's cards page by page, for the wall, a sprint, the backlog and the timeline, and what
@@ -97,7 +95,10 @@ public class BoardReader {
 		}
 	}
 
-	/** One page of cards, with the people and references on it, and on request a summary by state. */
+	/**
+	 * One page of cards, with the people and references on it, and on request a summary by state. A page
+	 * of the timeline carries its cards alone, see {@link BoardCard#bare}: no people and no references.
+	 */
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	public record BoardCardPage(List<BoardCard> content, long totalElements, int page, int size,
 			List<DirectoryUser> users, List<BoardRef> refs, List<BoardStateSummary> summary) {
@@ -109,7 +110,7 @@ public class BoardReader {
 	 * between two sprints, which shows no wall.
 	 */
 	public BoardWall wall(String boardId, String sprintId, BoardQuery query, int size, User user) {
-		return timed(() -> readWall(boardId, sprintId, query, size, user));
+		return BoardTime.request(() -> readWall(boardId, sprintId, query, size, user));
 	}
 
 	private BoardWall readWall(String boardId, String sprintId, BoardQuery query, int size, User user) {
@@ -155,7 +156,7 @@ public class BoardReader {
 	 */
 	public BoardCardPage cards(String boardId, CardSource source, BoardQuery query, int page, int size,
 			boolean summary, User user) {
-		return timed(() -> readCards(boardId, source, query, page, size, summary, user));
+		return BoardTime.request(() -> readCards(boardId, source, query, page, size, summary, user));
 	}
 
 	private BoardCardPage readCards(String boardId, CardSource source, BoardQuery query, int page, int size,
@@ -281,7 +282,7 @@ public class BoardReader {
 	 * the viewer may see, for the cards of [shape]. See {@link BoardFacetsReader}.
 	 */
 	public BoardFacets facets(String boardId, BoardQuery.Shape shape, User user) {
-		return timed(() -> facetsReader.facets(scope(boardId, user), shape));
+		return BoardTime.request(() -> facetsReader.facets(scope(boardId, user), shape));
 	}
 
 	/**
@@ -289,7 +290,7 @@ public class BoardReader {
 	 * what a timeline draws. A card of a project the viewer may not see is no end of any.
 	 */
 	public List<IssueLinkGraphService.LinkEdge> links(String boardId, List<String> ids, User user) {
-		return timed(() -> readLinks(boardId, ids, user));
+		return BoardTime.request(() -> readLinks(boardId, ids, user));
 	}
 
 	private List<IssueLinkGraphService.LinkEdge> readLinks(String boardId, List<String> ids, User user) {
@@ -324,26 +325,6 @@ public class BoardReader {
 	/** The spellings the active issues of [scope] store [states] in, see {@link BoardCriteria#spellings}. */
 	Set<String> spellings(BoardScope scope, Collection<String> states) {
 		return issues.lookupFor(scope.projectIds()).spellings(states);
-	}
-
-	/**
-	 * Runs the reads of [request] within the time {@link BoardTime} gives a request, and says the server
-	 * is busy when the database gave up on one of them: a read that took too long ends in a 503 the app
-	 * can explain rather than in a 500. The old board view of {@link BoardController} runs its reads here
-	 * as well.
-	 */
-	static <T> T timed(Supplier<T> request) {
-		try {
-			return BoardTime.within(request);
-		}
-		catch (RuntimeException ex) {
-			for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
-				if (cause instanceof MongoExecutionTimeoutException) {
-					throw BoardTime.busy();
-				}
-			}
-			throw ex;
-		}
 	}
 
 	/** Whether a page from [offset] of [total] cards holds any, within the reach of a page. */

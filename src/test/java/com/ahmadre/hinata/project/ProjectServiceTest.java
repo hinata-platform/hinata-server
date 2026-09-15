@@ -200,6 +200,37 @@ class ProjectServiceTest {
 	}
 
 	@Test
+	void holdsNewAndRenamedLabelsToWhatAnIssueTakesAndKeepsWhatTheProjectCarries() {
+		Project project = sampleProject();
+		String longName = "x".repeat(com.ahmadre.hinata.issue.IssueLabels.MAX_LENGTH + 1);
+		project.getLabels().add(Project.Label.builder().id("lb1").name(longName).hue(20).build());
+
+		// A label the project carries already stays, whatever its length.
+		Project saved = service.applyUpdate("p1",
+				labels(Project.Label.builder().id("lb1").name(longName).hue(20).build()), user("u1"));
+		assertThat(saved.labelNames()).containsExactly(longName);
+
+		// A rename writes the name onto the project's issues, so a new or renamed label holds to their limit.
+		assertThatThrownBy(() -> service.applyUpdate("p1", labels(
+				Project.Label.builder().id("lb1").name(longName).hue(20).build(),
+				Project.Label.builder().name(longName + "y").hue(40).build()), user("u1")))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.project.labelTooLong");
+
+		List<Project.Label> tooMany = java.util.stream.IntStream.rangeClosed(0, Project.MAX_LABELS)
+				.mapToObj(i -> Project.Label.builder().name("label-" + i).hue(0).build())
+				.toList();
+		assertThatThrownBy(() -> service.applyUpdate("p1", labels(tooMany.toArray(Project.Label[]::new)), user("u1")))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.project.tooManyLabels");
+	}
+
+	private ProjectUpdateRequest labels(Project.Label... labels) {
+		return new ProjectUpdateRequest(
+				null, null, null, null, null, null, null, null, List.of(labels), null, null, null);
+	}
+
+	@Test
 	void defaultWorkflowMatchesSpec() {
 		List<Project.WorkflowState> wf = Project.defaultWorkflow();
 		assertThat(wf).extracting(Project.WorkflowState::getName)
