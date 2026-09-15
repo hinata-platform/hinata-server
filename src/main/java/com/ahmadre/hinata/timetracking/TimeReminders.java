@@ -3,6 +3,7 @@ package com.ahmadre.hinata.timetracking;
 import com.ahmadre.hinata.availability.CapacityService;
 import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.notification.NotificationService;
+import com.ahmadre.hinata.notification.NotificationService.TargetPeriod;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
@@ -43,7 +44,7 @@ import java.util.stream.Collectors;
  * <p>A reminder is due once the person's own clock has passed their reminder time on that day,
  * and a later run of the same day still sends it, so a restart or a busy instance delays a
  * reminder instead of dropping it. Its key is claimed before anything else is read
- * ({@link TimeReminderMark}); only then does the run ask whether the day is a working day and
+ * ({@link TimeMark}); only then does the run ask whether the day is a working day and
  * how much was recorded. A day that is not a working day, whatever the reason, is simply no
  * reminder day, and nothing says why.
  *
@@ -60,6 +61,10 @@ class TimeReminders {
 	/** How long one run may take before it leaves the rest to the next one. */
 	static final Duration RUN_BUDGET = Duration.ofMinutes(4);
 
+	/** What a reminder reads of a person: their clock, their targets and where to reach them. */
+	private static final String[] PERSON_FIELDS = { "active", "timezone", "locale", "email", "timePreferences",
+			"notificationPreferences" };
+
 	private final MongoTemplate mongo;
 	private final TimeTrackingSettings policy;
 	private final SettingsService serverSettings;
@@ -68,13 +73,11 @@ class TimeReminders {
 	private final NotificationService notifications;
 	private final Clock clock;
 
-	enum Kind { DAY, WEEK }
-
 	/** One reminder whose time has come, over the days from [from] to [to]. */
-	record Due(User person, Kind kind, LocalDate from, LocalDate to, int targetMinutes) {
+	record Due(User person, TargetPeriod period, LocalDate from, LocalDate to, int targetMinutes) {
 
 		String key() {
-			return TimeMarks.reminderKey(person.getId(), kind.name(), from);
+			return TimeMarks.reminderKey(person.getId(), period.name(), from);
 		}
 	}
 
@@ -96,7 +99,9 @@ class TimeReminders {
 			if (after != null) {
 				withTarget = withTarget.and("_id").gt(after);
 			}
-			List<User> batch = mongo.find(Query.query(withTarget).with(Sort.by("_id")).limit(BATCH), User.class);
+			Query query = Query.query(withTarget).with(Sort.by("_id")).limit(BATCH);
+			query.fields().include(PERSON_FIELDS);
+			List<User> batch = mongo.find(query, User.class);
 			if (batch.isEmpty()) {
 				break;
 			}
@@ -121,11 +126,8 @@ class TimeReminders {
 			return 0;
 		}
 		Set<String> taken = marks.existing(due.stream().map(Due::key).toList());
-		List<Due> claimed = due.stream()
-				.filter(reminder -> !taken.contains(reminder.key()))
-				.filter(reminder -> marks.claim(reminder.key()))
-				.toList();
-		List<Due> onWorkingDays = onWorkingDays(claimed);
+		Set<String> claimed = marks.claimAll(due.stream().map(Due::key).filter(key -> !taken.contains(key)).toList());
+		List<Due> onWorkingDays = onWorkingDays(due.stream().filter(reminder -> claimed.contains(reminder.key())).toList());
 		Map<String, Long> recorded = recordedMinutes(onWorkingDays);
 		int sent = 0;
 		for (Due reminder : onWorkingDays) {
@@ -134,8 +136,8 @@ class TimeReminders {
 				continue;
 			}
 			try {
-				notifications.notifyTimeTargetReminder(reminder.person(), reminder.kind() == Kind.WEEK,
-						(int) minutes, reminder.targetMinutes());
+				notifications.notifyTimeTargetReminder(reminder.person(), reminder.period(), (int) minutes,
+						reminder.targetMinutes());
 				sent++;
 			}
 			catch (RuntimeException ex) {
@@ -160,11 +162,11 @@ class TimeReminders {
 			LocalDate today = local.toLocalDate();
 			int minute = local.getHour() * 60 + local.getMinute();
 			if (prefs.getDailyTargetMinutes() != null && minute >= prefs.getDailyReminderAt()) {
-				due.add(new Due(person, Kind.DAY, today, today, prefs.getDailyTargetMinutes()));
+				due.add(new Due(person, TargetPeriod.DAY, today, today, prefs.getDailyTargetMinutes()));
 			}
 			if (prefs.getWeeklyTargetMinutes() != null && today.getDayOfWeek() == prefs.getWeeklyReminderDay()
 					&& minute >= prefs.getWeeklyReminderAt()) {
-				due.add(new Due(person, Kind.WEEK, today.with(TemporalAdjusters.previousOrSame(weekStartsOn)),
+				due.add(new Due(person, TargetPeriod.WEEK, today.with(TemporalAdjusters.previousOrSame(weekStartsOn)),
 						today, prefs.getWeeklyTargetMinutes()));
 			}
 		}

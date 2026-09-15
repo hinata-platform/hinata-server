@@ -90,11 +90,15 @@ import java.util.List;
 // differ in nothing but their filter.
 @CompoundIndex(name = "user_date_described", def = "{'userId': 1, 'date': 1, '_id': 1}",
 		partialFilter = "{'description': {'$gt': ''}}")
-// The alert scan (HIN-92) asks which projects and issues had time recorded or changed
-// since its last run, once an hour: an $or over these two, each a bounded range walk.
-// updatedAt is sparse because most entries are never edited.
-@CompoundIndex(name = "created_at", def = "{'createdAt': 1}")
-@CompoundIndex(name = "updated_at", def = "{'updatedAt': 1}", sparse = true)
+// The alert scan (HIN-92) asks which projects and issues had time recorded or changed in an
+// hour: an $or over these two, each a bounded range walk answered from its keys, since
+// projectId and issueId follow. The second is partial because most entries are never edited.
+@CompoundIndex(name = "created_project_issue", def = "{'createdAt': 1, 'projectId': 1, 'issueId': 1}")
+@CompoundIndex(name = "updated_project_issue", def = "{'updatedAt': 1, 'projectId': 1, 'issueId': 1}",
+		partialFilter = "{'updatedAt': {'$exists': true}}")
+// A project's recorded minutes summed from the keys alone, for the budget alerts. Without
+// durationMinutes in an index every entry of the project would be read to add one integer.
+@CompoundIndex(name = "project_duration", def = "{'projectId': 1, 'durationMinutes': 1}")
 public class WorkItem {
 
 	/**

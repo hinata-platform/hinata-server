@@ -75,12 +75,14 @@ public class ProjectTimeSettings {
 	 */
 	private LocalDate lockBefore;
 
-	/** When a lead is warned that the project is running out of budget (stage 11). */
+	/** When the leads, or an issue's assignees, hear that time is running out (HIN-92). */
 	private AlertThresholds alertThresholds;
 
 	@CreatedDate
 	private Instant createdAt;
 
+	/** Indexed for the alert scan, which measures a project again once its settings changed. */
+	@Indexed(name = "updated_at")
 	private Instant updatedAt;
 
 	/** Who last changed it — a lead or an administrator. */
@@ -100,13 +102,16 @@ public class ProjectTimeSettings {
 		private Integer days;
 	}
 
-	/** Percentages of the budget, or of an issue's estimate, at which a lead hears about it. */
+	/** Percentages at which the alerts of HIN-92 go out ({@code TimeAlerts}). */
 	@Data
 	@Builder(toBuilder = true)
 	public static class AlertThresholds {
-		/** Percent of {@link #budgetMinutes} that triggers a warning; null ⇒ none. */
+		/**
+		 * Percent of the budget, and of the sum of the estimates, at which the leads hear about it,
+		 * besides 100 %; null ⇒ 80 %.
+		 */
 		private Integer budgetPercent;
-		/** Percent of an issue's original estimate that triggers a warning; null ⇒ none. */
+		/** Percent of an issue's estimate at which its assignees hear about it; null ⇒ 100 %. */
 		private Integer estimatePercent;
 	}
 }

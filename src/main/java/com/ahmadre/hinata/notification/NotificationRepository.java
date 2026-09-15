@@ -9,4 +9,6 @@ public interface NotificationRepository extends MongoRepository<Notification, St
 	Page<Notification> findByUserIdOrderByCreatedAtDesc(String userId, Pageable pageable);
 
 	long countByUserIdAndReadFalse(String userId);
+
+	long deleteByUserIdAndType(String userId, Notification.Type type);
 }

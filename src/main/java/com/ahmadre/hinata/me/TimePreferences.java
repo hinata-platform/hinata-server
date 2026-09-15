@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.me;
 
+import com.ahmadre.hinata.common.TimePolicy;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -57,12 +58,6 @@ public class TimePreferences {
 	/** Minutes a countdown runs. Bounded by the timer ceiling, not by taste. */
 	public static final int MIN_COUNTDOWN = 1;
 	public static final int MAX_COUNTDOWN = 24 * 60;
-
-	/** A day's target can be the whole day and no more. */
-	public static final int MAX_DAILY_TARGET = 24 * 60;
-
-	/** A week's target can be the whole week and no more. */
-	public static final int MAX_WEEKLY_TARGET = 7 * 24 * 60;
 
 	/** A reminder time is a minute of the day, 0 to 1439. */
 	public static final int LAST_MINUTE_OF_DAY = 24 * 60 - 1;
@@ -143,8 +138,8 @@ public class TimePreferences {
 		copy.pomodoroCycles = clamp(pomodoroCycles, MIN_CYCLES, MAX_CYCLES, 4);
 		copy.countdownMinutes = clamp(countdownMinutes, MIN_COUNTDOWN, MAX_COUNTDOWN, 25);
 		copy.sound = sound;
-		copy.dailyTargetMinutes = target(dailyTargetMinutes, MAX_DAILY_TARGET);
-		copy.weeklyTargetMinutes = target(weeklyTargetMinutes, MAX_WEEKLY_TARGET);
+		copy.dailyTargetMinutes = target(dailyTargetMinutes, TimePolicy.MAX_DAILY_TARGET_MINUTES);
+		copy.weeklyTargetMinutes = target(weeklyTargetMinutes, TimePolicy.MAX_WEEKLY_TARGET_MINUTES);
 		copy.dailyReminderAt = minuteOfDay(dailyReminderAt);
 		copy.weeklyReminderAt = minuteOfDay(weeklyReminderAt);
 		copy.weeklyReminderDay = weeklyReminderDay;

@@ -77,8 +77,8 @@ class TimeReminderNotificationTest {
 	}
 
 	private void fireAllThree() {
-		service.notifyTimeTargetReminder(person, false, 300, 480);
-		service.notifyTimeBudgetAlert(Set.of(lead.getId()), "p-1", "Apollo", false, 80, 480, 600);
+		service.notifyTimeTargetReminder(person, NotificationService.TargetPeriod.DAY, 300, 480);
+		service.notifyTimeBudgetAlert(Set.of(lead.getId()), "p-1", "Apollo", NotificationService.TimeLimit.BUDGET, 80, 480, 600);
 		service.notifyTimeEstimateReached(Set.of(person.getId()), "APO-7", "p-1", 100, 90, 60);
 	}
 
@@ -115,8 +115,8 @@ class TimeReminderNotificationTest {
 	void theBellSaysHowMuchIsMissingInThePersonsLanguage() {
 		timeEvent(false, false);
 
-		service.notifyTimeTargetReminder(person, false, 300, 480);
-		service.notifyTimeTargetReminder(person, true, 0, 2400);
+		service.notifyTimeTargetReminder(person, NotificationService.TargetPeriod.DAY, 300, 480);
+		service.notifyTimeTargetReminder(person, NotificationService.TargetPeriod.WEEK, 0, 2400);
 
 		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
 		verify(notifications, times(2)).save(saved.capture());
@@ -128,10 +128,24 @@ class TimeReminderNotificationTest {
 	}
 
 	@Test
+	void onlyTheLatestReminderStaysInTheBellAndItsPushLooksLikeAnyTimeNotice() {
+		timeEvent(false, true);
+
+		service.notifyTimeTargetReminder(person, NotificationService.TargetPeriod.DAY, 300, 480);
+
+		// Kept, the reminders would add up to a history of the days somebody fell short.
+		verify(notifications).deleteByUserIdAndType(person.getId(), Notification.Type.TIME_TARGET_REMINDER);
+		Invocation sent = mockingDetails(push).getInvocations().iterator().next();
+		assertThat((String) sent.getArgument(1)).isEqualTo("Zeiterfassung");
+		java.util.Map<String, String> data = sent.getArgument(4);
+		assertThat(data).containsEntry("type", "TIME");
+	}
+
+	@Test
 	void anAlertNamesTheProjectAndTheSumsAndNobodyWhoRecordedThem() {
 		timeEvent(false, false);
 
-		service.notifyTimeBudgetAlert(Set.of(lead.getId()), "p-1", "Apollo", true, 100, 630, 600);
+		service.notifyTimeBudgetAlert(Set.of(lead.getId()), "p-1", "Apollo", NotificationService.TimeLimit.ESTIMATES, 100, 630, 600);
 
 		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
 		verify(notifications).save(saved.capture());

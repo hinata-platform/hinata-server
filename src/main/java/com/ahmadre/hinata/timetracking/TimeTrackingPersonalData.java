@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
 
+import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -149,15 +150,16 @@ public class TimeTrackingPersonalData implements PersonalDataExport {
 						List.of(t(locale, "export.pdf.time.pref.sound"),
 								t(locale, prefs.isSound() ? "export.pdf.yes" : "export.pdf.no")),
 						List.of(t(locale, "export.pdf.time.pref.dailyTarget"),
-								prefs.getDailyTargetMinutes() == null ? "–"
+								prefs.getDailyTargetMinutes() == null ? "—"
 										: String.valueOf(prefs.getDailyTargetMinutes())),
 						List.of(t(locale, "export.pdf.time.pref.dailyReminderAt"),
 								clock(prefs.getDailyReminderAt())),
 						List.of(t(locale, "export.pdf.time.pref.weeklyTarget"),
-								prefs.getWeeklyTargetMinutes() == null ? "–"
+								prefs.getWeeklyTargetMinutes() == null ? "—"
 										: String.valueOf(prefs.getWeeklyTargetMinutes())),
 						List.of(t(locale, "export.pdf.time.pref.weeklyReminderAt"),
-								prefs.getWeeklyReminderDay() + " " + clock(prefs.getWeeklyReminderAt())),
+								prefs.getWeeklyReminderDay().getDisplayName(TextStyle.FULL, locale) + " "
+								+ clock(prefs.getWeeklyReminderAt())),
 						List.of(t(locale, "export.pdf.time.acknowledged"),
 								PersonalDataExport.instant(user.getTimePrivacyAcknowledgedAt()))),
 				null));

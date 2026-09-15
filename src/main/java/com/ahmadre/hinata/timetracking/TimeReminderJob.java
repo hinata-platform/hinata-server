@@ -22,10 +22,9 @@ public class TimeReminderJob {
 	@Scheduled(cron = "0 10/15 * * * *")
 	public void remind() {
 		try {
-			int sent = reminders.run();
-			if (sent > 0) {
-				log.info("[time] sent {} target reminder(s)", sent);
-			}
+			// Not logged at info: people pick their own reminder times, a run often finds one or two
+			// of them due, and "sent 1" at 17:40 would tell a log reader who fell short that day.
+			log.debug("[time] target reminder run sent {}", reminders.run());
 		}
 		catch (RuntimeException ex) {
 			// A scheduled method that throws is silently unscheduled by some pools and noisily

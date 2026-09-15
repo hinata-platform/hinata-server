@@ -196,6 +196,19 @@ class ModuleBoundaryTest {
 			TIME + ".TimeReminders", TIME + ".TimeEntryController", TIME + ".TimeHintsController",
 			TIME + ".TimeReminderJob");
 
+	@Test
+	void nobodyOutsideTheNamedReadersAsksAvailability() {
+		// HIN-92 review: CapacityService.workingOn answers for any set of people. A caller in any
+		// other module could learn who is away on which day without AvailabilityAccess, so outside
+		// its own package only the readers named above may ask, each with its reason.
+		noClasses()
+				.that().resideOutsideOfPackage("..availability..")
+				.and(not(named(AVAILABILITY_READERS, "a named reader of availability")))
+				.should().dependOnClassesThat().resideInAnyPackage("..availability..")
+				.because("a view of other people's absences belongs in AvailabilityAccess (HIN-91)")
+				.check(PRODUCTION);
+	}
+
 	/** The services that write an entry, a timer, a submission or a correction. */
 	private static final Set<String> WRITE_PATHS = Set.of(
 			TIME + ".TimeTrackingService", TIME + ".TimerService", TIME + ".TimeLocks",
