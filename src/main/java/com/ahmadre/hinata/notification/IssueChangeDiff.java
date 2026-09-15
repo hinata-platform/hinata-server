@@ -80,6 +80,8 @@ public final class IssueChangeDiff {
 	 *       as a consequence of the real edit that is already reported.</li>
 	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount} — {@code @Transient},
 	 *       computed per response and never stored at all.</li>
+	 *   <li>{@code searchText}: derived from the key, the title and the labels, for
+	 *       the board search.</li>
 	 * </ul>
 	 */
 	public static final List<String> EXCLUDED = List.of(
@@ -87,7 +89,7 @@ public final class IssueChangeDiff {
 			"assigneeId", "reporterId", "reporterEmail", "inboundMessageId", "inboundSubject",
 			"ingestConnectionId", "watcherIds", "spentMinutes", "dueReminderFor", "attachments",
 			"rank", "resolvedAt", "archivedAt", "createdAt", "updatedAt",
-			"subtaskCount", "subtaskDoneCount");
+			"subtaskCount", "subtaskDoneCount", "searchText");
 
 	/**
 	 * One whitelisted field and how a change to it is read off two snapshots.

@@ -3,6 +3,7 @@ package com.ahmadre.hinata.board;
 import com.ahmadre.hinata.project.Project;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -17,11 +18,17 @@ import java.util.Set;
 record BoardScope(AgileBoard board, List<Project> projects, List<AgileBoard.Column> columns,
 		Map<String, Integer> hues) {
 
-	/** The colour a column gets when none of its states names one. */
-	private static final int NEUTRAL_HUE = 250;
-
 	List<String> projectIds() {
 		return projects.stream().map(Project::getId).toList();
+	}
+
+	/** The resolved states of each of the projects, by project id. */
+	Map<String, List<String>> resolvedStates() {
+		Map<String, List<String>> resolved = new HashMap<>();
+		for (Project project : projects) {
+			resolved.put(project.getId(), project.getResolvedStates() == null ? List.of() : project.getResolvedStates());
+		}
+		return resolved;
 	}
 
 	/** The column called [name], ignoring case as the layout check does, or null. */
@@ -46,7 +53,7 @@ record BoardScope(AgileBoard board, List<Project> projects, List<AgileBoard.Colu
 	}
 
 	int hue(String name) {
-		return hues.getOrDefault(name, NEUTRAL_HUE);
+		return hues.getOrDefault(name, BoardColumns.NEUTRAL_HUE);
 	}
 
 	/** The workflow states of the board's projects that [names] name, ignoring case. */

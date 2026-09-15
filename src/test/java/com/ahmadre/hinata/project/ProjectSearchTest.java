@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.project;
 
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.ProjectAccess;
 import com.ahmadre.hinata.team.Team;
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -164,6 +166,16 @@ class ProjectSearchTest {
 	@Test
 	void skipsTheQueryEntirelyWhenNoIdsAreHeld() {
 		assertThat(service.resolveVisible(member(), List.of())).isEmpty();
+
+		verify(mongo, never()).find(any(Query.class), eq(Project.class));
+	}
+
+	@Test
+	void refusesASearchWithAControlCharacter() {
+		// A pattern cannot carry a NUL, and a line break would write a line of its own into a log.
+		assertThatThrownBy(() -> service.searchVisible(member(), "a\u0000b", false, PageRequest.of(0, 10)))
+				.isInstanceOfSatisfying(ApiException.class,
+						ex -> assertThat(ex.getMessageKey()).isEqualTo("error.validationFailed"));
 
 		verify(mongo, never()).find(any(Query.class), eq(Project.class));
 	}

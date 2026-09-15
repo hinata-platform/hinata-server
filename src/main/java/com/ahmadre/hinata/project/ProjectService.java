@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.project;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.issue.IssueSearchText;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.team.TeamAccess;
 import com.ahmadre.hinata.team.TeamRepository;
@@ -38,9 +39,9 @@ import java.util.stream.Collectors;
 public class ProjectService {
 
 	/** Ceiling on a single {@link #resolveVisible} lookup — a picker labels a
-	 * handful of held ids, never an unbounded list handed in by a caller. A
-	 * caller with more ids than this asks {@link #visibleTo} instead. */
-	public static final int RESOLVE_CAP = 100;
+	 * handful of held ids, never an unbounded list handed in by a caller.
+	 * {@link #visibleAmong} goes through {@link #visibleTo} past it. */
+	private static final int RESOLVE_CAP = 100;
 
 	private static final String ISSUES = "issues";
 	private static final String GIT_DEV_INFO = "git_dev_info";
@@ -139,12 +140,29 @@ public class ProjectService {
 		return mongo.find(Query.query(criteria), Project.class);
 	}
 
+	/**
+	 * The projects among [ids] the user may see: named in one lookup while there are few enough to
+	 * name, and picked from everything the user may see beyond that. Archived projects come with
+	 * the lookup only, so a caller that wants the active ones filters them itself.
+	 */
+	public List<Project> visibleAmong(User user, List<String> ids) {
+		List<String> wanted = ids == null ? List.of() : ids.stream().filter(Objects::nonNull).distinct().toList();
+		if (wanted.isEmpty()) return List.of();
+		if (wanted.size() <= RESOLVE_CAP) return resolveVisible(user, wanted);
+		Set<String> named = Set.copyOf(wanted);
+		return visibleTo(user).stream().filter(project -> named.contains(project.getId())).toList();
+	}
+
 	private Criteria searchCriteria(User user, String query, boolean archived) {
 		List<Criteria> parts = new ArrayList<>();
 		parts.add(Criteria.where("archived").is(archived));
 		Criteria reach = reachOf(user);
 		if (reach != null) parts.add(reach);
 		String needle = query == null ? null : query.trim();
+		// A pattern cannot carry a NUL, and a line break would write a line of its own into a log.
+		if (needle != null && needle.chars().anyMatch(Character::isISOControl)) {
+			throw ApiException.badRequest("error.validationFailed");
+		}
 		if (needle != null && !needle.isEmpty()) {
 			String quoted = Pattern.quote(needle);
 			parts.add(new Criteria().orOperator(
@@ -583,7 +601,9 @@ public class ProjectService {
 			String readableId = key + "-" + number;
 			if (!readableId.equals(doc.getString(READABLE_ID))) {
 				issues.updateOne(new org.bson.Document("_id", doc.get("_id")),
-						new org.bson.Document("$set", new org.bson.Document(READABLE_ID, readableId)));
+						new org.bson.Document("$set", new org.bson.Document(READABLE_ID, readableId)
+								.append(IssueSearchText.FIELD, IssueSearchText.of(readableId, doc.getString("title"),
+										doc.getList("tags", String.class, List.of())))));
 				changed++;
 			}
 		}
@@ -631,12 +651,20 @@ public class ProjectService {
 		mongo.updateMulti(
 				new Query(Criteria.where(PROJECT_ID).is(projectId).and("tags").is(from)),
 				new Update().pull("tags", from), ISSUES);
+		// The new name reaches the search text of every issue that carries it now.
+		IssueSearchText.refresh(mongo, Criteria.where(PROJECT_ID).is(projectId).and("tags").is(to));
 	}
 
 	private void cascadeTagDelete(String projectId, String label) {
+		Query tagged = new Query(Criteria.where(PROJECT_ID).is(projectId).and("tags").is(label));
+		tagged.fields().include("_id");
+		List<Object> ids = mongo.find(tagged, org.bson.Document.class, ISSUES).stream()
+				.map(issue -> issue.get("_id")).toList();
 		mongo.updateMulti(
 				new Query(Criteria.where(PROJECT_ID).is(projectId).and("tags").is(label)),
 				new Update().pull("tags", label), ISSUES);
+		// The label leaves the search text of every issue it was pulled from.
+		IssueSearchText.refresh(mongo, Criteria.where("_id").in(ids));
 	}
 
 	private record RenameOp(String from, String to) {

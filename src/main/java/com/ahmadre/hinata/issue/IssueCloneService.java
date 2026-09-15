@@ -97,6 +97,8 @@ public class IssueCloneService {
 	 *       issue lands;
 	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount}: not stored at all,
 	 *       computed per request.
+	 *   <li>{@code searchText}: derived from the key, the title and the labels, so the
+	 *       copy computes its own when it is saved;
 	 * </ul>
 	 *
 	 * <p>Comments and the activity log are not fields and are equally not copied —
@@ -107,7 +109,7 @@ public class IssueCloneService {
 			"reporterEmail", "inboundMessageId", "inboundSubject", "ingestConnectionId",
 			"watcherIds", "spentMinutes", "rank", "resolvedAt", "archived",
 			"archivedAt", "dueReminderFor", "createdAt", "updatedAt",
-			"subtaskCount", "subtaskDoneCount");
+			"subtaskCount", "subtaskDoneCount", "searchText");
 
 	private final IssueService issues;
 	private final StorageService storage;

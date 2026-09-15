@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.issue;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AccessLevel;
@@ -55,14 +56,20 @@ import java.util.List;
 // A board column's cards in board order (board/BoardReader). Equality on projectId,
 // archived and state, where a column names few states and each in few spellings, so the
 // planner merges one scan per combination and the page comes off the index already
-// sorted. type goes last: the wall's "no epics, no sub-tasks" then filters keys rather
-// than documents, and counting a column needs no document at all.
+// sorted. type and searchText go last: the wall's "no epics, no sub-tasks" and a board
+// search then filter keys rather than documents, and counting a column, searched or not,
+// needs no document at all.
 @CompoundIndex(name = "board_column",
-		def = "{'projectId': 1, 'archived': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1}")
+		def = "{'projectId': 1, 'archived': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1, 'searchText': 1}")
 // The same for a sprint, and for the backlog as the sprint null: equality on the sprint
 // instead of the state. A sprint wall's column filters its state within the sprint.
 @CompoundIndex(name = "board_sprint",
-		def = "{'projectId': 1, 'archived': 1, 'sprintId': 1, 'rank': 1, '_id': 1, 'type': 1}")
+		def = "{'projectId': 1, 'archived': 1, 'sprintId': 1, 'rank': 1, '_id': 1, 'type': 1, 'searchText': 1}")
+// The board timeline in date order: the start date, then the due date, then _id. Its dated
+// branches (a start date, or none but a due date) and its undated list each bound the dates,
+// so a page comes off the index sorted.
+@CompoundIndex(name = "board_timeline",
+		def = "{'projectId': 1, 'archived': 1, 'startDate': 1, 'dueDate': 1, '_id': 1, 'type': 1, 'searchText': 1}")
 public class Issue {
 
 	public enum Type {
@@ -98,7 +105,6 @@ public class Issue {
 	@Id
 	private String id;
 
-	@Indexed
 	private String projectId;
 
 	/** Sequential number inside the project; readable id = "<KEY>-<number>". */
@@ -150,7 +156,6 @@ public class Issue {
 	private Priority priority = Priority.NORMAL;
 
 	/** One of the project's workflowStates. */
-	@Indexed
 	private String state;
 
 	/**
@@ -187,6 +192,14 @@ public class Issue {
 	@Builder.Default
 	@TextIndexed(weight = 5)
 	private List<String> tags = new ArrayList<>();
+
+	/**
+	 * The key, the title and the labels in lower case, one per line: what a board search matches,
+	 * off the board indexes. Computed on every save and refreshed by the writes that change those
+	 * fields past the entity, see {@link IssueSearchText}. Never sent to a client.
+	 */
+	@JsonIgnore
+	private String searchText;
 
 	/**
 	 * Everyone subscribed to this issue's changes. Written only by the dedicated

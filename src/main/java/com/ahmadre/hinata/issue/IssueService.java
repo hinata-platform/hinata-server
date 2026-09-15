@@ -545,7 +545,7 @@ public class IssueService {
 	 */
 	public void enrichSubtaskCounts(List<Issue> parents) {
 		if (parents == null || parents.isEmpty()) return;
-		Map<String, SubtaskTally> tallies = subtaskTallies(parents);
+		Map<String, SubtaskTally> tallies = subtaskTallies(parents, Map.of());
 		for (Issue parent : parents) {
 			SubtaskTally tally = tallies.getOrDefault(parent.getId(), SubtaskTally.NONE);
 			parent.setSubtaskCount(tally.total());
@@ -566,9 +566,11 @@ public class IssueService {
 	 * parent's project: a hierarchy stays within one project, and a child left behind when its
 	 * parent moved belongs to a project a viewer of the parent may not see. A parent without
 	 * children is absent from the map. "Done" is defined as in {@link #enrichSubtaskCounts}, and
-	 * like it this performs no authorization.
+	 * like it this performs no authorization. [resolvedStates] names the resolved states of the
+	 * projects a caller holds already; any other project is looked up.
 	 */
-	public Map<String, SubtaskTally> subtaskTallies(Collection<Issue> parents) {
+	public Map<String, SubtaskTally> subtaskTallies(Collection<Issue> parents,
+			Map<String, ? extends Collection<String>> resolvedStates) {
 		Map<String, String> projectOf = new HashMap<>();
 		for (Issue parent : parents) {
 			if (parent.getId() != null && parent.getProjectId() != null) {
@@ -591,11 +593,11 @@ public class IssueService {
 			}
 			int[] tally = byParent.computeIfAbsent(parentId, k -> new int[2]);
 			tally[0]++;
-			Set<String> resolved = resolvedByProject.computeIfAbsent(
-					projectId,
-					pid -> projects.findOptional(pid)
-							.map(p -> new HashSet<>(p.getResolvedStates()))
-							.orElseGet(HashSet::new));
+			Set<String> resolved = resolvedByProject.computeIfAbsent(projectId,
+					pid -> resolvedStates.containsKey(pid) ? new HashSet<>(resolvedStates.get(pid))
+							: projects.findOptional(pid)
+									.map(p -> new HashSet<>(p.getResolvedStates()))
+									.orElseGet(HashSet::new));
 			String state = child.getString("state");
 			boolean done = (state != null && resolved.contains(state))
 					|| child.get("resolvedAt") != null;
@@ -731,10 +733,16 @@ public class IssueService {
 				&& project.getLabels().removeIf(l -> l.getName().equals(label))) {
 			projects.save(project);
 		}
+		Query tagged = new Query(Criteria.where("projectId").is(projectId).and("tags").is(label));
+		tagged.fields().include("_id");
+		List<Object> ids = mongo.find(tagged, org.bson.Document.class, mongo.getCollectionName(Issue.class)).stream()
+				.map(issue -> issue.get("_id")).toList();
 		mongo.updateMulti(
 				new Query(Criteria.where("projectId").is(projectId).and("tags").is(label)),
 				new Update().pull("tags", label),
 				Issue.class);
+		// The label leaves the search text of every issue it was pulled from.
+		IssueSearchText.refresh(mongo, Criteria.where("_id").in(ids));
 	}
 
 	/** Adds any new issue tags to the project's reusable label vocabulary so

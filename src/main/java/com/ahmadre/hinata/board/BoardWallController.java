@@ -1,11 +1,17 @@
 package com.ahmadre.hinata.board;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.issue.IssueLinkGraphService;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -98,5 +104,18 @@ public class BoardWallController {
 			@RequestParam(required = false) String shape) {
 		User user = currentUser.require();
 		return reader.facets(id, sprintId, backlog, BoardQuery.shapeOf(shape), user);
+	}
+
+	/** The ids of the cards a view holds. */
+	public record CardIds(@NotNull @Size(max = BoardReader.MAX_LINK_CARDS) List<String> ids) {
+	}
+
+	/**
+	 * The connectors between cards of the board a view holds, both ends among them. The ids travel in
+	 * the body, since a timeline holds more cards than a query string carries.
+	 */
+	@PostMapping("/links")
+	public List<IssueLinkGraphService.LinkEdge> links(@PathVariable String id, @RequestBody @Valid CardIds cards) {
+		return reader.links(id, cards.ids(), currentUser.require());
 	}
 }
