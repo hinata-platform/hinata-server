@@ -9,16 +9,14 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Supplier;
 
 /**
  * One board as one viewer may read it, resolved once per request: the board, the projects of it
- * this viewer may see (active ones, in the board's order), the columns built from exactly those
- * projects, and the spellings the states of their active issues are stored in, read the first time
- * a read matches states.
+ * this viewer may see (active ones, in the board's order), and the columns built from exactly those
+ * projects.
  */
 record BoardScope(AgileBoard board, List<Project> projects, List<AgileBoard.Column> columns,
-		Map<String, Integer> hues, Supplier<Set<String>> storedStates) {
+		Map<String, Integer> hues) {
 
 	List<String> projectIds() {
 		return projects.stream().map(Project::getId).toList();
@@ -87,27 +85,5 @@ record BoardScope(AgileBoard board, List<Project> projects, List<AgileBoard.Colu
 			}
 		}
 		return states;
-	}
-
-	/**
-	 * The spellings [states] are matched in: each state as named, and every spelling the active issues
-	 * of the board's projects store it in, ignoring case. The board has always put an issue into the
-	 * column of its state ignoring case. Matching the stored spellings keeps that for every spelling
-	 * in use and still leaves the state an equality the index can bound.
-	 */
-	Set<String> spellings(Collection<String> states) {
-		Set<String> spellings = new LinkedHashSet<>();
-		for (String state : states) {
-			if (state == null) {
-				continue;
-			}
-			spellings.add(state);
-			for (String stored : storedStates.get()) {
-				if (stored.equalsIgnoreCase(state)) {
-					spellings.add(stored);
-				}
-			}
-		}
-		return spellings;
 	}
 }

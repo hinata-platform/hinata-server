@@ -99,7 +99,7 @@ public class BoardWallController {
 	 * types and priorities a card of [shape] can have.
 	 */
 	@GetMapping("/facets")
-	public BoardReader.BoardFacets facets(@PathVariable String id, @RequestParam(required = false) String shape) {
+	public BoardFacets facets(@PathVariable String id, @RequestParam(required = false) String shape) {
 		User user = currentUser.require();
 		return reader.facets(id, BoardQuery.shapeOf(shape), user);
 	}

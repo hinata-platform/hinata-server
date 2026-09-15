@@ -18,7 +18,6 @@ import org.springframework.core.annotation.Order;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -83,16 +82,18 @@ public class MarkdownToLexicalBackfill implements ApplicationRunner {
 	 */
 	private static final int MAX_DOC_CHARS = LexicalJson.MAX_JSON_CHARS;
 
-	/** Where completion markers live, and the id of this migration's marker. */
-	static final String MIGRATIONS = "migrations";
+	/** The id of this migration's completion marker, see {@link MigrationMarkers}. */
 	static final String MARKER_ID = "markdown-to-lexical";
 
 	private final MongoTemplate mongo;
 	private final RichTextService richText;
+	private final MigrationMarkers markers;
 
 	@Override
 	public void run(ApplicationArguments args) {
-		if (alreadyDone()) return;
+		// The filter below has no supporting index: without the marker every start would scan three
+		// collections before the server is ready, for the rest of the installation's life.
+		if (markers.done(MARKER_ID)) return;
 		boolean complete = true;
 		long converted = 0;
 		for (Target target : TARGETS) {
@@ -105,42 +106,11 @@ public class MarkdownToLexicalBackfill implements ApplicationRunner {
 			}
 		}
 		if (complete) {
-			markDone(converted);
+			markers.markDone(MARKER_ID, new Document("converted", converted));
 		}
 		else {
 			log.warn("MarkdownToLexicalBackfill: at least one batch failed to write; leaving the "
 					+ "migration unmarked so the next boot retries it");
-		}
-	}
-
-	/**
-	 * Whether a previous boot already completed the migration. This is the point of
-	 * the marker: the filter below has no supporting index, so without it every
-	 * boot pays a full scan of three collections before the server is ready, for
-	 * the rest of the installation's life.
-	 */
-	private boolean alreadyDone() {
-		try {
-			return mongo.getCollection(MIGRATIONS)
-					.find(new Document("_id", MARKER_ID)).limit(1).first() != null;
-		}
-		catch (RuntimeException ex) {
-			// A marker that cannot be read is not a reason to refuse to start; the
-			// migration is idempotent, so the worst case is running it again.
-			log.warn("MarkdownToLexicalBackfill: could not read the completion marker", ex);
-			return false;
-		}
-	}
-
-	private void markDone(long converted) {
-		try {
-			mongo.getCollection(MIGRATIONS).insertOne(new Document("_id", MARKER_ID)
-					.append("completedAt", Instant.now())
-					.append("converted", converted));
-		}
-		catch (RuntimeException ex) {
-			log.warn("MarkdownToLexicalBackfill: could not write the completion marker; the next "
-					+ "boot will scan again", ex);
 		}
 	}
 

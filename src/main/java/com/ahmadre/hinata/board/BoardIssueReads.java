@@ -60,8 +60,8 @@ class BoardIssueReads {
 	/** The key fields of the indexes the reads step through, by index name. */
 	private final Map<String, List<String>> indexKeys = new ConcurrentHashMap<>();
 
-	/** The indexes a read found missing, each warned about once. */
-	private final Set<String> missingIndexes = ConcurrentHashMap.newKeySet();
+	/** The indexes a read found missing or shaped otherwise, each warned about once. */
+	private final Set<String> warnedIndexes = ConcurrentHashMap.newKeySet();
 
 	/** Up to [limit] issues [criteria] matches, from [offset] in [order], with [fields] and nothing more. */
 	List<Issue> find(Criteria criteria, Sort order, long offset, int limit, String index, String... fields) {
@@ -90,16 +90,16 @@ class BoardIssueReads {
 	}
 
 	/** Count and story points of the issues [criteria] matches, per state and resolution. */
-	List<BoardReader.StateSummary> summarize(Criteria criteria, String index) {
-		List<BoardReader.StateSummary> summary = new ArrayList<>();
+	List<BoardStateSummary> summarize(Criteria criteria, String index) {
+		List<BoardStateSummary> summary = new ArrayList<>();
 		for (Document row : withIndex(index, hint -> mongo.aggregate(Aggregation.newAggregation(Aggregation.match(criteria),
 				SUMMARY).withOptions(options(hint)), ISSUES, Document.class))) {
 			Document key = row.get("_id", Document.class);
-			summary.add(new BoardReader.StateSummary(key.getString("state"), Boolean.TRUE.equals(key.getBoolean("resolved")),
+			summary.add(new BoardStateSummary(key.getString("state"), Boolean.TRUE.equals(key.getBoolean("resolved")),
 					((Number) row.get("count")).longValue(), ((Number) row.get("points")).longValue()));
 		}
-		summary.sort(Comparator.comparing(BoardReader.StateSummary::state, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER))
-				.thenComparing(BoardReader.StateSummary::resolved));
+		summary.sort(Comparator.comparing(BoardStateSummary::state, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER))
+				.thenComparing(BoardStateSummary::resolved));
 		return summary;
 	}
 
@@ -112,6 +112,62 @@ class BoardIssueReads {
 					.map(document -> document.get("_id").toString())
 					.toList();
 		});
+	}
+
+	/**
+	 * The steps through the indexes that the reads of values of one request may still take together.
+	 * Once they run out, a read of values takes them off the issues instead, in one read bounded by
+	 * {@link #MAX_TIME}: a board of many projects that share many people or labels costs that read,
+	 * not one short read per value per project, and no request sends more than its steps.
+	 */
+	static final class Steps {
+
+		private int left;
+
+		Steps(int left) {
+			this.left = left;
+		}
+
+		/** Takes a step, or says there is none left. */
+		boolean take() {
+			if (left == 0) {
+				return false;
+			}
+			left--;
+			return true;
+		}
+	}
+
+	/**
+	 * What one read over the issues of [projectIds] looks up. The spellings the issues store their
+	 * states in are asked for once, the first time the read matches states, and not at all by a read
+	 * that does not.
+	 */
+	BoardCriteria.Lookup lookupFor(List<String> projectIds) {
+		return new ReadLookup(projectIds);
+	}
+
+	private final class ReadLookup implements BoardCriteria.Lookup {
+
+		private final List<String> projectIds;
+		private Set<String> storedStates;
+
+		private ReadLookup(List<String> projectIds) {
+			this.projectIds = projectIds;
+		}
+
+		@Override
+		public List<String> idsOf(Criteria criteria, String index) {
+			return BoardIssueReads.this.idsOf(criteria, index);
+		}
+
+		@Override
+		public Set<String> spellings(Collection<String> states) {
+			if (storedStates == null) {
+				storedStates = Set.copyOf(distinct("state", projectIds, BoardCriteria.BY_STATE));
+			}
+			return BoardCriteria.spellings(states, storedStates);
+		}
 	}
 
 	/** The active issues among [ids] of [projectIds], each with the issues it depends on. */
@@ -156,31 +212,42 @@ class BoardIssueReads {
 	 * short read per value, however many issues hold it, where asking the issues would cost as much as
 	 * the board is large.
 	 */
-	List<String> keysOf(String field, List<String> projectIds, String index, int limit) {
+	List<String> keysOf(String field, List<String> projectIds, String index, int limit, Steps steps) {
 		if (projectIds.isEmpty()) {
 			return List.of();
 		}
 		List<String> keys = indexKeys(index);
-		if (keys == null || keys.size() < 3 || !keys.subList(0, 3).equals(List.of("projectId", "archived", field))) {
+		if (keys == null) {
 			warnMissing(index);
 			return firstInOrder(distinct(field, projectIds, null), limit);
 		}
-		return firstInOrder(withIndex(index, hint -> hint == null
-				? distinct(field, projectIds, null)
-				: stepThrough(field, projectIds, hint, keys, limit)), limit);
+		if (keys.size() < 3 || !keys.subList(0, 3).equals(List.of("projectId", "archived", field))) {
+			if (warnedIndexes.add(index)) {
+				log.warn("The index {} does not start with projectId, archived and {}; board reads go without it",
+						index, field);
+			}
+			return firstInOrder(distinct(field, projectIds, null), limit);
+		}
+		return firstInOrder(withIndex(index, hint -> {
+			Collection<String> stepped = hint == null ? null : stepThrough(field, projectIds, hint, keys, limit, steps);
+			return stepped != null ? stepped : distinct(field, projectIds, null);
+		}), limit);
 	}
 
 	/**
 	 * The values of [field] in [index], each project's read from the key past the last value to the
-	 * next value's first key, until there is none or [limit] are found.
+	 * next value's first key, until there is none or [limit] are found; null once [steps] run out first.
 	 */
 	private Collection<String> stepThrough(String field, List<String> projectIds, String index, List<String> keys,
-			int limit) {
+			int limit, Steps steps) {
 		Set<String> values = new LinkedHashSet<>();
 		return mongo.execute(ISSUES, collection -> {
 			for (String projectId : projectIds) {
 				String last = "";
 				while (values.size() < limit) {
+					if (!steps.take()) {
+						return null;
+					}
 					Document next = collection.find()
 							.hintString(index)
 							.min(bound(keys, projectId, last, new MaxKey()))
@@ -266,7 +333,7 @@ class BoardIssueReads {
 	}
 
 	private void warnMissing(String index) {
-		if (missingIndexes.add(index)) {
+		if (warnedIndexes.add(index)) {
 			log.warn("The issues have no index {}; board reads go without it", index);
 		}
 	}

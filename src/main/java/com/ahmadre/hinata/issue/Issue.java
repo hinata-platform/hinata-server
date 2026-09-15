@@ -83,6 +83,10 @@ import java.util.List;
 		def = "{'projectId': 1, 'archived': 1, 'reporterId': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1}")
 @CompoundIndex(name = "board_by_label",
 		def = "{'projectId': 1, 'archived': 1, 'tags': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1}")
+// The epics of a board's projects, the oldest first, for the board's filter. It holds the epics
+// alone, so reading them costs as much as there are epics, however many cards the board has.
+@CompoundIndex(name = "board_epics", def = "{'projectId': 1, 'archived': 1, 'numberInProject': 1, '_id': 1}",
+		partialFilter = "{'type': 'EPIC'}")
 public class Issue {
 
 	public enum Type {

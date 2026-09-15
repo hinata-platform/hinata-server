@@ -3,6 +3,7 @@ package com.ahmadre.hinata.timetracking;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.common.TimePolicy;
+import com.ahmadre.hinata.migration.MigrationMarkers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
@@ -15,7 +16,6 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -40,16 +40,15 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class TimeCorrectionRequestBackfill implements ApplicationRunner {
 
+	/** The id of this backfill's completion marker, see {@link MigrationMarkers}. */
 	static final String MARKER_ID = "time-correction-requests-from-audit";
 
-	/** The collection every backfill keeps its completion marker in. */
-	private static final String MIGRATIONS = "migrations";
-
 	private final MongoTemplate mongo;
+	private final MigrationMarkers markers;
 
 	@Override
 	public void run(ApplicationArguments args) {
-		if (alreadyDone()) {
+		if (markers.done(MARKER_ID)) {
 			return;
 		}
 		long moved = 0;
@@ -78,7 +77,7 @@ public class TimeCorrectionRequestBackfill implements ApplicationRunner {
 			log.info("TimeCorrectionRequestBackfill: moved {} correction request(s) into their own collection",
 					moved);
 		}
-		markDone(moved);
+		markers.markDone(MARKER_ID, new Document("moved", moved));
 	}
 
 	private static TimeCorrectionRequest requestOf(AuditLog record) {
@@ -106,29 +105,6 @@ public class TimeCorrectionRequestBackfill implements ApplicationRunner {
 			log.warn("TimeCorrectionRequestBackfill: skipped audit record {} (unreadable metadata)",
 					record.getId());
 			return null;
-		}
-	}
-
-	private boolean alreadyDone() {
-		try {
-			return mongo.getCollection(MIGRATIONS)
-					.find(new Document("_id", MARKER_ID)).limit(1).first() != null;
-		}
-		catch (RuntimeException ex) {
-			log.warn("TimeCorrectionRequestBackfill: could not read the completion marker", ex);
-			return false;
-		}
-	}
-
-	private void markDone(long moved) {
-		try {
-			mongo.getCollection(MIGRATIONS).insertOne(new Document("_id", MARKER_ID)
-					.append("completedAt", Instant.now())
-					.append("moved", moved));
-		}
-		catch (RuntimeException ex) {
-			log.warn("TimeCorrectionRequestBackfill: could not write the completion marker; the next "
-					+ "boot will move again (idempotently)", ex);
 		}
 	}
 }
