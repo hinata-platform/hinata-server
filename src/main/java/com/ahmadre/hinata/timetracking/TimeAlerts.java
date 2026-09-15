@@ -92,6 +92,9 @@ class TimeAlerts {
 		}
 	}
 
+	/** What a projected {@code Project} must carry: the primitives its constructor will not take as null. */
+	private static final String[] PROJECT_REQUIRED = { "archived", "issueCounter" };
+
 	/** The primary index, for the reads by id that must not wander onto another one. */
 	private static final String ID_INDEX = "_id_";
 
@@ -179,7 +182,7 @@ class TimeAlerts {
 			return 0;
 		}
 		Query query = Query.query(Criteria.where("_id").in(measurable).and("archived").ne(true)).withHint(ID_INDEX);
-		query.fields().include("name", "leadId", "leadIds");
+		query.fields().include("name", "leadId", "leadIds").include(PROJECT_REQUIRED);
 		Map<String, Project> projects = new HashMap<>();
 		Map<String, Set<String>> leads = new HashMap<>();
 		for (Project project : mongo.find(query, Project.class)) {
@@ -225,7 +228,8 @@ class TimeAlerts {
 	private int alertIssues(List<String> ids) {
 		Query query = Query.query(Criteria.where("_id").in(ids).and("archived").is(false)
 				.and("estimateMinutes").gt(0)).withHint(ID_INDEX);
-		query.fields().include("readableId", "projectId", "estimateMinutes", "spentMinutes", "assigneeIds");
+		query.fields().include("readableId", "projectId", "estimateMinutes", "assigneeIds")
+				.include(Issue.PROJECTION_REQUIRED);
 		Map<String, Issue> issues = new HashMap<>();
 		mongo.find(query, Issue.class).stream()
 				.filter(issue -> issue.getProjectId() != null && issue.getAssigneeIds() != null
@@ -272,7 +276,7 @@ class TimeAlerts {
 		Map<String, List<Issue>> byProject = issues.stream().collect(Collectors.groupingBy(Issue::getProjectId));
 		Query open = Query.query(Criteria.where("_id").in(byProject.keySet()).and("archived").ne(true))
 				.withHint(ID_INDEX);
-		open.fields().include("_id");
+		open.fields().include(PROJECT_REQUIRED);
 		Map<String, Set<String>> recipients = new HashMap<>();
 		for (Project project : mongo.find(open, Project.class)) {
 			List<Issue> ofProject = byProject.get(project.getId());

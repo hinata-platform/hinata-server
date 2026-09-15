@@ -61,9 +61,12 @@ class TimeReminders {
 	/** How long one run may take before it leaves the rest to the next one. */
 	static final Duration RUN_BUDGET = Duration.ofMinutes(4);
 
-	/** What a reminder reads of a person: their clock, their targets and where to reach them. */
+	/**
+	 * What a reminder reads of a person: their clock, their targets and where to reach them, and the
+	 * primitives the constructor Spring Data builds a {@code User} through refuses to take as null.
+	 */
 	private static final String[] PERSON_FIELDS = { "active", "timezone", "locale", "email", "timePreferences",
-			"notificationPreferences" };
+			"notificationPreferences", "emailVerified", "awaitingApproval", "totpEnabled" };
 
 	private final MongoTemplate mongo;
 	private final TimeTrackingSettings policy;
