@@ -19,7 +19,6 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -38,7 +37,7 @@ import java.util.function.Function;
  * state, a sprint's summary, the ids a criteria matches, and the distinct values an index holds.
  *
  * <p>A read names its index instead of leaving the choice to the planner, which chooses differently as
- * a board grows, and none runs longer than {@link #MAX_TIME}. A read whose index the database does not
+ * a board grows, and none runs longer than {@link BoardTime} allows. A read whose index the database does not
  * have, as a database restored without its indexes or one still building a new index after an
  * upgrade, goes without it: such a board reads slower, but it reads.
  */
@@ -46,9 +45,6 @@ import java.util.function.Function;
 @Component
 @RequiredArgsConstructor
 class BoardIssueReads {
-
-	/** How long a read may take before the server gives up on it and says it is busy. */
-	static final Duration MAX_TIME = Duration.ofSeconds(5);
 
 	private static final String ISSUES = "issues";
 
@@ -117,7 +113,7 @@ class BoardIssueReads {
 	/**
 	 * The steps through the indexes that the reads of values of one request may still take together.
 	 * Once they run out, a read of values takes them off the issues instead, in one read bounded by
-	 * {@link #MAX_TIME}: a board of many projects that share many people or labels costs that read,
+	 * {@link BoardTime}: a board of many projects that share many people or labels costs that read,
 	 * not one short read per value per project, and no request sends more than its steps.
 	 */
 	static final class Steps {
@@ -170,10 +166,10 @@ class BoardIssueReads {
 		}
 	}
 
-	/** The active issues among [ids] of [projectIds], each with the issues it depends on. */
+	/** The active issues among [ids] of [projectIds], each with the issues it depends on, off their ids. */
 	List<Issue> dependencies(Collection<String> ids, List<String> projectIds) {
-		Query query = Query.query(Criteria.where("_id").in(ids).and("projectId").in(projectIds)
-				.and("archived").is(false)).maxTime(MAX_TIME);
+		Query query = limited(Query.query(Criteria.where("_id").in(ids).and("projectId").in(projectIds)
+				.and("archived").is(false)), BoardCriteria.BY_ID);
 		query.fields().include("dependsOnIds").include(Issue.PROJECTION_REQUIRED);
 		return mongo.find(query, Issue.class);
 	}
@@ -190,7 +186,7 @@ class BoardIssueReads {
 		Document active = active(projectIds);
 		return withIndex(index, hint -> mongo.execute(ISSUES, collection -> {
 			DistinctIterable<BsonValue> values = collection.distinct(field, active, BsonValue.class)
-					.maxTime(MAX_TIME.toMillis(), TimeUnit.MILLISECONDS);
+					.maxTime(BoardTime.left().toMillis(), TimeUnit.MILLISECONDS);
 			if (hint != null) {
 				values.hintString(hint);
 			}
@@ -254,7 +250,7 @@ class BoardIssueReads {
 							.max(bound(keys, projectId, new Document(), new MinKey()))
 							.returnKey(true)
 							.limit(1)
-							.maxTime(MAX_TIME.toMillis(), TimeUnit.MILLISECONDS)
+							.maxTime(BoardTime.left().toMillis(), TimeUnit.MILLISECONDS)
 							.first();
 					if (next == null || !(next.get(field) instanceof String value)) {
 						break;
@@ -348,12 +344,12 @@ class BoardIssueReads {
 	}
 
 	private static Query limited(Query query, String index) {
-		query.maxTime(MAX_TIME);
+		query.maxTime(BoardTime.left());
 		return index == null ? query : query.withHint(index);
 	}
 
 	private static AggregationOptions options(String index) {
-		AggregationOptions.Builder options = AggregationOptions.builder().maxTime(MAX_TIME);
+		AggregationOptions.Builder options = AggregationOptions.builder().maxTime(BoardTime.left());
 		return (index == null ? options : options.hint(index)).build();
 	}
 

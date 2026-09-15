@@ -428,7 +428,10 @@ class BoardReaderIntegrationTest {
 
 		List<Document> gathered = profiled(() -> reader.facets(board.getId(), BoardQuery.Shape.WALL, member));
 
-		assertThat(gathered).isNotEmpty().allSatisfy(op -> assertThat(examined(op)).isLessThanOrEqualTo(1));
+		assertThat(gathered).isNotEmpty().allSatisfy(op -> {
+			assertThat(examined(op)).isLessThanOrEqualTo(1);
+			assertThat(limited(op)).as("time limit of %s", sent(op)).isTrue();
+		});
 		// One step through the keys per person and per label, and one that finds no further one.
 		assertThat(hinted(gathered, "find", "board_by_assignee")).hasSize(3);
 		assertThat(hinted(gathered, "find", "board_by_label")).hasSize(4);
@@ -513,10 +516,17 @@ class BoardReaderIntegrationTest {
 		links.save(IssueLink.builder().type(IssueLinkType.BLOCKS).sourceId(blocker.getId()).targetId(hidden.getId())
 				.build());
 
-		List<IssueLinkGraphService.LinkEdge> edges = reader.links(board.getId(),
-				List.of(blocker.getId(), blocked.getId(), hidden.getId()), member);
+		List<IssueLinkGraphService.LinkEdge> edges = new ArrayList<>();
+		List<Document> read = profiled(() -> edges.addAll(reader.links(board.getId(),
+				List.of(blocker.getId(), blocked.getId(), hidden.getId()), member)));
 
 		assertThat(edges).extracting(IssueLinkGraphService.LinkEdge::targetId).containsExactly(blocked.getId());
+		// The cards come off their ids, not off an index of the board's projects, and the cards and their
+		// links are read within the request's time.
+		assertThat(hinted(read, "find", BoardCriteria.BY_ID)).singleElement()
+				.satisfies(find -> assertThat(examined(find)).isEqualTo(3));
+		assertThat(read).anySatisfy(op -> assertThat(op.getString("ns")).endsWith(".issue_links"))
+				.allSatisfy(op -> assertThat(limited(op)).as("time limit of %s", sent(op)).isTrue());
 		assertRefused(() -> reader.links(board.getId(), IntStream.range(0, BoardReader.MAX_LINK_CARDS + 1)
 				.mapToObj(String::valueOf).toList(), member), "error.validationFailed");
 	}
@@ -675,6 +685,12 @@ class BoardReaderIntegrationTest {
 			assertThat(page.getBoolean("hasSortStage", false)).isFalse();
 			assertThat(examined(page)).isLessThanOrEqualTo(10);
 		});
+
+		// Every read of a request runs within the request's time, the parents and sub-tasks of its cards included.
+		for (List<Document> read : List.of(wall, search, sprintColumn, backlog, timeline, undated)) {
+			assertThat(read).isNotEmpty()
+					.allSatisfy(op -> assertThat(limited(op)).as("time limit of %s", sent(op)).isTrue());
+		}
 	}
 
 	@Test
@@ -735,7 +751,7 @@ class BoardReaderIntegrationTest {
 
 	// --- helpers --------------------------------------------------------------------
 
-	/** What the database did for [read]: every operation on the issues, as its profiler saw it. */
+	/** What the database did for [read]: every operation on the issues and their links, as its profiler saw it. */
 	private List<Document> profiled(Runnable read) {
 		MongoDatabase database = mongo.getDb();
 		database.runCommand(new Document("profile", 0));
@@ -747,8 +763,15 @@ class BoardReaderIntegrationTest {
 		finally {
 			database.runCommand(new Document("profile", 0));
 		}
-		return database.getCollection("system.profile").find(new Document("ns", database.getName() + ".issues"))
+		List<String> namespaces = List.of(database.getName() + ".issues", database.getName() + ".issue_links");
+		return database.getCollection("system.profile").find(new Document("ns", new Document("$in", namespaces)))
 				.into(new ArrayList<>());
+	}
+
+	/** Whether [op] ran within a time limit; a getMore runs within the limit of the read it continues. */
+	private static boolean limited(Document op) {
+		Document continued = op.get("originatingCommand", Document.class);
+		return (continued != null ? continued : sent(op)).containsKey("maxTimeMS");
 	}
 
 	/** The operations of [command] that were sent with the hint [index]. */
