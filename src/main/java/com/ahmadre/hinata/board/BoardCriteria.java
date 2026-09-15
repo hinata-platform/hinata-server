@@ -2,6 +2,7 @@ package com.ahmadre.hinata.board;
 
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueSearchText;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.query.Criteria;
 
 import java.util.ArrayList;
@@ -53,6 +54,9 @@ final class BoardCriteria {
 	 * board's projects for such a read and step through every key of them.
 	 */
 	static final String BY_ID = "_id_";
+
+	/** Board order: by rank, the ids keeping it strict, as every board index holds it after its equalities. */
+	static final Sort BOARD_ORDER = Sort.by(Sort.Order.asc("rank"), Sort.Order.asc("_id"));
 
 	/** Issues an epic filter, or the sub-tasks of a sprint, may reach through. */
 	static final int MAX_LINKED = 10_000;

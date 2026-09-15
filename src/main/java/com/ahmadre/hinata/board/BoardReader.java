@@ -46,8 +46,6 @@ public class BoardReader {
 	/** The most cards a view may ask the connectors between at once. */
 	static final int MAX_LINK_CARDS = 1_000;
 
-	private static final Sort BOARD_ORDER = Sort.by(Sort.Order.asc("rank"), Sort.Order.asc("_id"));
-
 	/** The timeline's cards with a start date, by start date. */
 	private static final Sort STARTED_ORDER =
 			Sort.by(Sort.Order.asc("startDate"), Sort.Order.asc("dueDate"), Sort.Order.asc("_id"));
@@ -137,7 +135,7 @@ public class BoardReader {
 			Map<String, Long> counted = counted(byState, column);
 			List<Issue> page = counted.isEmpty() ? List.of()
 					: issues.find(BoardCriteria.and(criteria.orElseThrow(), BoardCriteria.stateIn(counted.keySet())),
-							BOARD_ORDER, 0, pageSize, index, BoardCard.FIELDS);
+							BoardCriteria.BOARD_ORDER, 0, pageSize, index, BoardCard.FIELDS);
 			pages.add(page);
 			totals.add(sum(counted));
 			loaded.addAll(page);
@@ -253,7 +251,7 @@ public class BoardReader {
 		if (Boolean.TRUE.equals(dated)) {
 			return datedPage(counted.criteria(), index, offset, pageSize, counted.startless());
 		}
-		Sort order = dated != null ? UNDATED_ORDER : BOARD_ORDER;
+		Sort order = dated != null ? UNDATED_ORDER : BoardCriteria.BOARD_ORDER;
 		return issues.find(counted.criteria(), order, offset, pageSize, index, BoardCard.FIELDS);
 	}
 

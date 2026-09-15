@@ -184,7 +184,7 @@ class BoardIssueReads {
 		Criteria criteria = sprintId != null ? active.and("sprintId").is(sprintId) : active.and("state").in(states);
 		String index = sprintId != null ? BoardCriteria.BY_SPRINT : BoardCriteria.BY_STATE;
 		return withIndex(index, hint -> mongo.find(limited(Query.query(criteria)
-				.with(Sort.by(Sort.Order.asc("rank"), Sort.Order.asc("_id"))).limit(limit), hint), Issue.class));
+				.with(BoardCriteria.BOARD_ORDER).limit(limit), hint), Issue.class));
 	}
 
 	/**

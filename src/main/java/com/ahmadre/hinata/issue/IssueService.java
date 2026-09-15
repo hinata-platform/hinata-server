@@ -155,8 +155,8 @@ public class IssueService {
 	 */
 	public Issue create(Issue issue, User author, Mentions mentions) {
 		Project project = projects.get(issue.getProjectId());
-		// The builder sets the list field directly; normalise so the primary
-		// assigneeId is in sync and the list is de-duped/blank-stripped.
+		// The builder sets the list fields directly; normalise so the primary
+		// assigneeId is in sync and both lists are de-duped and blank-stripped.
 		issue.setAssigneeIds(issue.getAssigneeIds());
 		issue.setTags(issue.getTags());
 		if (author != null) {
