@@ -23,6 +23,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,8 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Budget and estimate alerts against a real database (HIN-92): once per crossing, re-armed when
  * the time falls under a threshold again, to leads for a project and to assignees for an issue.
  *
- * <p>The clock stands still; entries carry the wall-clock {@code createdAt} of auditing, which is
- * after it, so every entry recorded here counts as moved since the last run.
+ * <p>Entries and settings carry the test clock as the moment they changed, and every run first moves
+ * the clock on, so what a test records falls into the next slice the scan reads.
  */
 @SpringBootTest(properties = {
 		"hinata.mongodb.tls.enabled=false",
@@ -80,7 +81,7 @@ class TimeAlertIntegrationTest {
 	@BeforeEach
 	void seed() {
 		for (Class<?> type : List.of(User.class, Project.class, Issue.class, WorkItem.class, Notification.class,
-				TimeReminderMark.class, ProjectTimeSettings.class)) {
+				TimeMark.class, ProjectTimeSettings.class)) {
 			mongo.remove(new Query(), type);
 		}
 		settings.save(new ServerSettings());
@@ -97,14 +98,14 @@ class TimeAlertIntegrationTest {
 		budget(600);
 		record(480, null);
 
-		alerts.run();
-		alerts.run();
+		run();
+		run();
 		assertThat(alertsOf(lead, Notification.Type.TIME_BUDGET_ALERT)).singleElement()
 				.extracting(Notification::getBody).isEqualTo("Apollo has used 80 % of its time budget (8 h of 10 h).");
 		assertThat(alertsOf(member, Notification.Type.TIME_BUDGET_ALERT)).isEmpty();
 
 		record(120, null);
-		alerts.run();
+		run();
 		assertThat(alertsOf(lead, Notification.Type.TIME_BUDGET_ALERT)).hasSize(2)
 				.extracting(Notification::getBody).contains("Apollo has used 100 % of its time budget (10 h of 10 h).");
 	}
@@ -114,7 +115,7 @@ class TimeAlertIntegrationTest {
 		budget(600);
 		record(700, null);
 
-		alerts.run();
+		run();
 
 		assertThat(alertsOf(lead, Notification.Type.TIME_BUDGET_ALERT)).singleElement()
 				.extracting(Notification::getBody).asString().contains("100 %");
@@ -124,15 +125,15 @@ class TimeAlertIntegrationTest {
 	void raisingTheBudgetArmsTheThresholdsAgain() {
 		budget(600);
 		record(600, null);
-		alerts.run();
+		run();
 		assertThat(alertsOf(lead, Notification.Type.TIME_BUDGET_ALERT)).hasSize(1);
 
 		budget(1200);
-		alerts.run();
+		run();
 		assertThat(alertsOf(lead, Notification.Type.TIME_BUDGET_ALERT)).hasSize(1);
 
 		record(360, null);
-		alerts.run();
+		run();
 		assertThat(alertsOf(lead, Notification.Type.TIME_BUDGET_ALERT)).hasSize(2)
 				.extracting(Notification::getBody).contains("Apollo has used 80 % of its time budget (16 h of 20 h).");
 	}
@@ -143,7 +144,7 @@ class TimeAlertIntegrationTest {
 		issue("APO-2", 300, 0, null);
 		record(480, null);
 
-		alerts.run();
+		run();
 
 		assertThat(alertsOf(lead, Notification.Type.TIME_BUDGET_ALERT)).singleElement()
 				.extracting(Notification::getBody)
@@ -155,15 +156,15 @@ class TimeAlertIntegrationTest {
 		Issue issue = issue("APO-3", 60, 90, member);
 		record(90, issue.getId());
 
-		alerts.run();
-		alerts.run();
+		run();
+		run();
 
-		assertThat(alertsOf(member, Notification.Type.TIME_ESTIMATE_EXCEEDED)).singleElement()
+		assertThat(alertsOf(member, Notification.Type.TIME_ESTIMATE_REACHED)).singleElement()
 				.satisfies(sent -> {
 					assertThat(sent.getBody()).isEqualTo("APO-3 has reached 100 % of its estimate (1.5 h of 1 h).");
 					assertThat(sent.getBody()).doesNotContain("member", "lead");
 				});
-		assertThat(alertsOf(lead, Notification.Type.TIME_ESTIMATE_EXCEEDED)).isEmpty();
+		assertThat(alertsOf(lead, Notification.Type.TIME_ESTIMATE_REACHED)).isEmpty();
 	}
 
 	@Test
@@ -171,6 +172,7 @@ class TimeAlertIntegrationTest {
 		budget(600);
 		record(600, null);
 
+		clock.advance(Duration.ofMinutes(1));
 		CountDownLatch start = new CountDownLatch(1);
 		ExecutorService pool = Executors.newFixedThreadPool(2);
 		Callable<Integer> run = () -> {
@@ -193,9 +195,9 @@ class TimeAlertIntegrationTest {
 		off.getTimeTracking().setAlertsEnabled(false);
 		settings.save(off);
 
-		assertThat(alerts.run()).isZero();
+		assertThat(run()).isZero();
 		assertThat(notifications.count()).isZero();
-		assertThat(mongo.count(new Query(), TimeReminderMark.class)).isZero();
+		assertThat(mongo.count(new Query(), TimeMark.class)).isZero();
 	}
 
 	private User person(String name) {
@@ -217,8 +219,16 @@ class TimeAlertIntegrationTest {
 	}
 
 	private void record(int minutes, String issueId) {
-		workItems.save(WorkItem.builder().userId(member.getId()).projectId(project.getId()).issueId(issueId)
-				.date(LocalDate.of(2026, 9, 7)).durationMinutes(minutes).build());
+		WorkItem saved = workItems.save(WorkItem.builder().userId(member.getId()).projectId(project.getId())
+				.issueId(issueId).date(LocalDate.of(2026, 9, 7)).durationMinutes(minutes).build());
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(saved.getId())),
+				new Update().set("createdAt", clock.instant()), WorkItem.class);
+	}
+
+	/** A run a minute later, so everything recorded since the last one is in its slice. */
+	private int run() {
+		clock.advance(Duration.ofMinutes(1));
+		return alerts.run();
 	}
 
 	private List<Notification> alertsOf(User person, Notification.Type type) {

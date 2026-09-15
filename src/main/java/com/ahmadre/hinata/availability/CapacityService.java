@@ -7,6 +7,7 @@ import org.bson.Document;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -72,7 +74,6 @@ public class CapacityService {
 	public Window window(String userId, LocalDate from, LocalDate to) {
 		assertWindow(from, to);
 		Plan plan = planOf(userId, from, to);
-		List<Integer> defaults = properties.getAvailability().getDefaultWeekdayMinutes();
 
 		List<ScheduledDay> days = new ArrayList<>();
 		Map<LocalDate, Integer> minutesByDay = new HashMap<>();
@@ -80,8 +81,7 @@ public class CapacityService {
 		List<HolidayMark> holidayMarks = new ArrayList<>();
 		for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
 			WorkingSchedule pattern = patternOn(plan.patterns(), day);
-			int minutes = pattern == null ? WorkingSchedule.minutesOn(defaults, day.getDayOfWeek())
-					: pattern.minutesOn(day.getDayOfWeek());
+			int minutes = minutesOn(pattern, day);
 			days.add(new ScheduledDay(day, minutes));
 			minutesByDay.put(day, minutes);
 			Holiday holiday = plan.holidayOn(pattern, day);
@@ -137,19 +137,14 @@ public class CapacityService {
 			return Set.of();
 		}
 		assertWindow(day, day);
-		Map<String, WorkingSchedule> patterns = new HashMap<>();
-		// Newest first within each person, in the order of user_valid_from, so the first one seen
-		// for a person is the one that applies and the sort needs no memory.
-		mongo.find(Query.query(Criteria.where("userId").in(userIds).and("validFrom").lte(day))
-						.with(Sort.by(Sort.Order.asc("userId"), Sort.Order.desc("validFrom"))),
-				WorkingSchedule.class).forEach(pattern -> patterns.putIfAbsent(pattern.getUserId(), pattern));
+		Map<String, WorkingSchedule> patterns = latestPatterns(userIds, day);
 		String defaultCalendarId = defaultCalendarId();
 
 		Set<String> calendarIds = new HashSet<>();
 		if (defaultCalendarId != null) {
 			calendarIds.add(defaultCalendarId);
 		}
-		patterns.values().stream().map(WorkingSchedule::getHolidayCalendarId).filter(java.util.Objects::nonNull)
+		patterns.values().stream().map(WorkingSchedule::getHolidayCalendarId).filter(Objects::nonNull)
 				.forEach(calendarIds::add);
 		Map<String, Holiday> holidayByCalendar = new HashMap<>();
 		if (!calendarIds.isEmpty()) {
@@ -166,23 +161,49 @@ public class CapacityService {
 		Set<String> working = new HashSet<>();
 		for (String userId : new HashSet<>(userIds)) {
 			WorkingSchedule pattern = patterns.get(userId);
-			String calendarId = pattern != null && pattern.getHolidayCalendarId() != null
-					? pattern.getHolidayCalendarId() : defaultCalendarId;
-			if (capacityLeft(day, pattern, calendarId == null ? null : holidayByCalendar.get(calendarId),
-					absences.getOrDefault(userId, List.of())) > 0) {
+			String calendarId = calendarIdOf(pattern, defaultCalendarId);
+			Holiday holiday = calendarId == null ? null : holidayByCalendar.get(calendarId);
+			int minutes = minutesOn(pattern, day);
+			Map<LocalDate, Boolean> holidays = holiday == null ? Map.of() : Map.of(day, holiday.isHalfDay());
+			if (Capacity.of(day, day, ignored -> minutes, holidays, absences.getOrDefault(userId, List.of()))
+					.capacityMinutes() > 0) {
 				working.add(userId);
 			}
 		}
 		return working;
 	}
 
-	/** The minutes left of [day] under [pattern], or the instance default without one. */
-	private int capacityLeft(LocalDate day, WorkingSchedule pattern, Holiday holiday, List<Capacity.Absence> absences) {
-		int minutes = pattern == null
+	/**
+	 * The pattern that applies on [day] to each of [userIds], without the rest of their history: the
+	 * newest per person, taken first off user_valid_from, so a person with fifty past patterns costs
+	 * one document.
+	 */
+	private Map<String, WorkingSchedule> latestPatterns(Collection<String> userIds, LocalDate day) {
+		Map<String, WorkingSchedule> patterns = new HashMap<>();
+		mongo.aggregate(Aggregation.newAggregation(
+						Aggregation.match(Criteria.where("userId").in(userIds).and("validFrom").lte(day)),
+						Aggregation.sort(Sort.by(Sort.Order.asc("userId"), Sort.Order.desc("validFrom"))),
+						Aggregation.group("userId").first("minutesPerWeekday").as("minutesPerWeekday")
+								.first("holidayCalendarId").as("holidayCalendarId")),
+				WorkingSchedule.class, Document.class).forEach(row -> patterns.put(String.valueOf(row.get("_id")),
+						WorkingSchedule.builder()
+								.minutesPerWeekday(row.getList("minutesPerWeekday", Integer.class))
+								.holidayCalendarId(row.getString("holidayCalendarId"))
+								.build()));
+		return patterns;
+	}
+
+	/** The planned minutes of [day] under [pattern], or under the instance default without one. */
+	private int minutesOn(WorkingSchedule pattern, LocalDate day) {
+		return pattern == null
 				? WorkingSchedule.minutesOn(properties.getAvailability().getDefaultWeekdayMinutes(), day.getDayOfWeek())
 				: pattern.minutesOn(day.getDayOfWeek());
-		Map<LocalDate, Boolean> holidays = holiday == null ? Map.of() : Map.of(day, holiday.isHalfDay());
-		return Capacity.of(day, day, ignored -> minutes, holidays, absences).capacityMinutes();
+	}
+
+	/** The calendar [pattern] follows, or the default without one; null when there is neither. */
+	private static String calendarIdOf(WorkingSchedule pattern, String defaultCalendarId) {
+		return pattern != null && pattern.getHolidayCalendarId() != null ? pattern.getHolidayCalendarId()
+				: defaultCalendarId;
 	}
 
 	/** The window rule every availability route shares: in order, at most a year, in storable years. */
@@ -203,8 +224,7 @@ public class CapacityService {
 
 		/** The holiday on [day] of the calendar [pattern] names, or of the default without one. */
 		Holiday holidayOn(WorkingSchedule pattern, LocalDate day) {
-			String calendarId = pattern != null && pattern.getHolidayCalendarId() != null
-					? pattern.getHolidayCalendarId() : defaultCalendarId;
+			String calendarId = calendarIdOf(pattern, defaultCalendarId);
 			return calendarId == null ? null : holidays.get(key(calendarId, day));
 		}
 	}

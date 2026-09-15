@@ -22,6 +22,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.time.DayOfWeek;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -132,11 +133,11 @@ public class MeController {
 			Integer countdownMinutes,
 			Boolean sound,
 			// A target of 0 removes it: absent already means "leave it alone".
-			@Min(0) @Max(TimePreferences.MAX_DAILY_TARGET) Integer dailyTargetMinutes,
-			@Min(0) @Max(TimePreferences.MAX_WEEKLY_TARGET) Integer weeklyTargetMinutes,
+			@Min(0) @Max(com.ahmadre.hinata.common.TimePolicy.MAX_DAILY_TARGET_MINUTES) Integer dailyTargetMinutes,
+			@Min(0) @Max(com.ahmadre.hinata.common.TimePolicy.MAX_WEEKLY_TARGET_MINUTES) Integer weeklyTargetMinutes,
 			@Min(0) @Max(TimePreferences.LAST_MINUTE_OF_DAY) Integer dailyReminderAt,
 			@Min(0) @Max(TimePreferences.LAST_MINUTE_OF_DAY) Integer weeklyReminderAt,
-			java.time.DayOfWeek weeklyReminderDay) {
+			DayOfWeek weeklyReminderDay) {
 
 		/** Merged onto {@code current}, so a field this request omits keeps its value. */
 		TimePreferences merge(TimePreferences current) {

@@ -1,7 +1,9 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.mongodb.bulk.BulkWriteError;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.BulkOperationException;
+import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -13,21 +15,24 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * The claims behind reminders and alerts, in {@code time_reminder_marks}. See
- * {@link TimeReminderMark} for why a claim is an insert and nothing more.
- *
- * <p>Shift reminders (HIN-46) are meant to claim the same way, with a key of their own.
+ * The claims behind reminders and alerts, in {@code time_marks}. See {@link TimeMark} for why a
+ * claim is an insert and nothing more.
  */
 @Component
 @RequiredArgsConstructor
 class TimeMarks {
 
 	private static final String REMINDER = "reminder:";
+
+	/** The server's answer to an insert whose key is taken. */
+	private static final int DUPLICATE_KEY = 11000;
 
 	private final MongoTemplate mongo;
 	private final Clock clock;
@@ -50,41 +55,58 @@ class TimeMarks {
 		Query query = Query.query(Criteria.where("_id").in(ids));
 		query.fields().include("_id");
 		Set<String> taken = new HashSet<>();
-		mongo.find(query, TimeReminderMark.class).forEach(mark -> taken.add(mark.getId()));
+		mongo.find(query, TimeMark.class).forEach(mark -> taken.add(mark.getId()));
 		return taken;
 	}
 
-	/** Takes [id]; false when somebody took it first, here or on another instance. */
-	boolean claim(String id) {
-		try {
-			mongo.insert(new TimeReminderMark(id, clock.instant()));
-			return true;
+	/**
+	 * Takes every one of [ids] nobody holds yet, in one round trip, and returns those taken. A key
+	 * somebody took first, here or on another instance, is simply not among them.
+	 */
+	Set<String> claimAll(Collection<String> ids) {
+		if (ids.isEmpty()) {
+			return Set.of();
 		}
-		catch (DuplicateKeyException taken) {
-			return false;
+		List<String> ordered = List.copyOf(new LinkedHashSet<>(ids));
+		Instant now = clock.instant();
+		BulkOperations inserts = mongo.bulkOps(BulkOperations.BulkMode.UNORDERED, TimeMark.class);
+		ordered.forEach(id -> inserts.insert(new TimeMark(id, now)));
+		try {
+			inserts.execute();
+			return Set.copyOf(ordered);
+		}
+		catch (BulkOperationException refused) {
+			Set<String> taken = new LinkedHashSet<>(ordered);
+			for (BulkWriteError error : refused.getErrors()) {
+				if (error.getCode() != DUPLICATE_KEY) {
+					throw refused;
+				}
+				taken.remove(ordered.get(error.getIndex()));
+			}
+			return taken;
 		}
 	}
 
 	/** Gives [ids] back, so the moment they stood for can come again. */
 	void release(Collection<String> ids) {
 		if (!ids.isEmpty()) {
-			mongo.remove(Query.query(Criteria.where("_id").in(ids)), TimeReminderMark.class);
+			mongo.remove(Query.query(Criteria.where("_id").in(ids)), TimeMark.class);
 		}
 	}
 
 	/** Where a scan last finished, if it has. */
 	Optional<Instant> watermark(String id) {
-		return Optional.ofNullable(mongo.findById(id, TimeReminderMark.class)).map(TimeReminderMark::getAt);
+		return Optional.ofNullable(mongo.findById(id, TimeMark.class)).map(TimeMark::getAt);
 	}
 
 	void advance(String id, Instant at) {
-		mongo.upsert(Query.query(Criteria.where("_id").is(id)), new Update().set("at", at), TimeReminderMark.class);
+		mongo.upsert(Query.query(Criteria.where("_id").is(id)), new Update().set("at", at), TimeMark.class);
 	}
 
 	/** Every reminder mark of a deleted account. */
 	long forget(String userId) {
 		return mongo.remove(Query.query(Criteria.where("_id")
-						.regex("^" + Pattern.quote(REMINDER + userId + ':'))), TimeReminderMark.class)
+						.regex("^" + Pattern.quote(REMINDER + userId + ':'))), TimeMark.class)
 				.getDeletedCount();
 	}
 }

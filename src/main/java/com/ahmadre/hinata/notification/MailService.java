@@ -301,11 +301,13 @@ public class MailService {
 				}
 			}
 			sender.send(message);
-			log.info("Mail sent to {} (subject: {})", to, subject);
+			// Neither the address nor the subject: together they are a dated record of who was sent
+			// what, and for a target reminder that is a list of who fell short (HIN-92, R7).
+			log.info("Mail sent");
 			return true;
 		}
 		catch (Exception ex) {
-			log.warn("Sending mail to {} failed: {}", to, ex.getMessage());
+			log.warn("Sending a mail failed: {}", ex.getMessage());
 			return false;
 		}
 	}

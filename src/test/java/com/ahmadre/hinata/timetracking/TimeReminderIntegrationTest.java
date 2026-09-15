@@ -84,7 +84,7 @@ class TimeReminderIntegrationTest {
 
 	@BeforeEach
 	void clean() {
-		for (Class<?> type : List.of(User.class, WorkItem.class, Notification.class, TimeReminderMark.class,
+		for (Class<?> type : List.of(User.class, WorkItem.class, Notification.class, TimeMark.class,
 				WorkingSchedule.class, TimeOff.class, Holiday.class, HolidayCalendar.class)) {
 			mongo.remove(new Query(), type);
 		}
@@ -148,10 +148,10 @@ class TimeReminderIntegrationTest {
 		mongo.insert(WorkingSchedule.builder().userId(holiday.getId()).validFrom(LocalDate.of(2026, 1, 1))
 				.minutesPerWeekday(List.of(480, 480, 480, 480, 480, 0, 0)).holidayCalendarId(bavaria.getId()).build());
 		User absent = person("absent", "Europe/Berlin", 480, null);
-		mongo.insert(TimeOff.builder().userId(absent.getId()).type(TimeOff.Type.values()[0])
+		mongo.insert(TimeOff.builder().userId(absent.getId()).type(TimeOff.Type.VACATION)
 				.from(MONDAY).to(MONDAY).halfDay(false).build());
 		User half = person("half", "Europe/Berlin", 480, null);
-		mongo.insert(TimeOff.builder().userId(half.getId()).type(TimeOff.Type.values()[0])
+		mongo.insert(TimeOff.builder().userId(half.getId()).type(TimeOff.Type.VACATION)
 				.from(MONDAY).to(MONDAY).halfDay(true).build());
 		User noHours = person("noHours", "Europe/Berlin", 480, null);
 		mongo.insert(WorkingSchedule.builder().userId(noHours.getId()).validFrom(LocalDate.of(2026, 1, 1))
@@ -214,7 +214,7 @@ class TimeReminderIntegrationTest {
 		clock.set(Instant.parse("2026-09-07T15:10:00Z"));
 
 		assertThat(reminders.run()).isZero();
-		assertThat(mongo.count(new Query(), TimeReminderMark.class)).isZero();
+		assertThat(mongo.count(new Query(), TimeMark.class)).isZero();
 		assertThat(notifications.count()).isZero();
 	}
 
@@ -229,7 +229,7 @@ class TimeReminderIntegrationTest {
 				.flatExtracting(info -> List.copyOf(info.getPatternValues()))
 				.noneMatch(pattern -> pattern.toLowerCase().contains("remind"));
 		// A mark holds its key and its time, and nothing about the day it was taken for.
-		assertThat(mongo.findAll(Document.class, "time_reminder_marks"))
+		assertThat(mongo.findAll(Document.class, "time_marks"))
 				.allSatisfy(mark -> assertThat(mark.keySet()).containsOnly("_id", "at"));
 	}
 

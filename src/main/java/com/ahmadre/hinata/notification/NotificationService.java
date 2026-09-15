@@ -475,24 +475,38 @@ public class NotificationService {
 				link, null, Routing.of(Notification.Type.TIME_BACKFILL_REQUESTED));
 	}
 
+	/** Which of a person's own targets a reminder is about. */
+	public enum TargetPeriod { DAY, WEEK }
+
+	/** What a project's recorded time is measured against. */
+	public enum TimeLimit { BUDGET, ESTIMATES }
+
 	/**
 	 * Reminds somebody of the target they set themselves (HIN-92), and nobody else.
 	 *
-	 * <p>The bell and the mail say how much is missing, because the person opens those. The push
-	 * says only that it is time to record, R7: a lock screen is read by whoever holds the phone.
-	 * Nothing says why a day counts; a day off is no reminder day and never a sentence.
+	 * <p>The bell and the mail say how much is missing, because the person opens those. A reminder
+	 * only exists when something is missing, so everything that leaves the account is kept from
+	 * saying that it is one: the push, which Hinata Connect and the platform services carry, has
+	 * the title, text and type every time notice could have (R7). Nothing says why a day counts;
+	 * a day off is no reminder day and never a sentence.
+	 *
+	 * <p>Only the latest reminder stays in the bell. Kept, they would add up to a history of the
+	 * days somebody fell short, which is the record the reminder job itself never keeps.
 	 */
-	public void notifyTimeTargetReminder(User person, boolean weekly, int recordedMinutes, int targetMinutes) {
+	public void notifyTimeTargetReminder(User person, TargetPeriod period, int recordedMinutes,
+			int targetMinutes) {
 		if (person == null || !person.isActive()) return;
 		Locale locale = words.localeOf(person);
-		String period = weekly ? "week" : "day";
+		String key = "notify.timeTarget." + period.name().toLowerCase(Locale.ROOT);
 		String title = words.of(person, "notify.timeTarget.title");
 		String body = recordedMinutes <= 0
-				? words.of(person, "notify.timeTarget." + period + ".none", hours(locale, targetMinutes))
-				: words.of(person, "notify.timeTarget." + period + ".missing",
+				? words.of(person, key + ".none", hours(locale, targetMinutes))
+				: words.of(person, key + ".missing",
 						hours(locale, targetMinutes - recordedMinutes), hours(locale, targetMinutes));
+		notifications.deleteByUserIdAndType(person.getId(), Notification.Type.TIME_TARGET_REMINDER);
 		deliverGated(person, Notification.Type.TIME_TARGET_REMINDER, title, body,
-				words.of(person, "notify.timeTarget.push"), "/time");
+				words.of(person, "notify.time.pushTitle"), words.of(person, "notify.timeTarget.push"),
+				"TIME", "/time");
 	}
 
 	/**
@@ -501,11 +515,12 @@ public class NotificationService {
 	 * push names neither.
 	 */
 	public void notifyTimeBudgetAlert(Set<String> leadIds, String projectId, String projectName,
-			boolean estimates, int percent, long recordedMinutes, long limitMinutes) {
+			TimeLimit limit, int percent, long recordedMinutes, long limitMinutes) {
 		if (leadIds == null || leadIds.isEmpty()) return;
+		String bodyKey = limit == TimeLimit.ESTIMATES ? "notify.timeBudget.estimates" : "notify.timeBudget.budget";
 		deliver(leadIds, Notification.Type.TIME_BUDGET_ALERT,
 				locale -> words.in(locale, "notify.timeBudget.title"),
-				locale -> words.in(locale, estimates ? "notify.timeBudget.estimates" : "notify.timeBudget.budget",
+				locale -> words.in(locale, bodyKey,
 						projectName, percent, hours(locale, recordedMinutes), hours(locale, limitMinutes)),
 				locale -> words.in(locale, "notify.timeBudget.push"),
 				projectLink(projectId), projectId, Routing.of(Notification.Type.TIME_BUDGET_ALERT));
@@ -518,12 +533,12 @@ public class NotificationService {
 	public void notifyTimeEstimateReached(Set<String> assigneeIds, String readableId, String projectId,
 			int percent, long recordedMinutes, long estimateMinutes) {
 		if (assigneeIds == null || assigneeIds.isEmpty()) return;
-		deliver(assigneeIds, Notification.Type.TIME_ESTIMATE_EXCEEDED,
+		deliver(assigneeIds, Notification.Type.TIME_ESTIMATE_REACHED,
 				locale -> words.in(locale, "notify.timeEstimate.title"),
 				locale -> words.in(locale, "notify.timeEstimate.body", readableId, percent,
 						hours(locale, recordedMinutes), hours(locale, estimateMinutes)),
 				locale -> words.in(locale, "notify.timeEstimate.push"),
-				"/issues/" + readableId, projectId, Routing.of(Notification.Type.TIME_ESTIMATE_EXCEEDED));
+				"/issues/" + readableId, projectId, Routing.of(Notification.Type.TIME_ESTIMATE_REACHED));
 	}
 
 	/** Minutes as hours with one decimal in the reader's language, "6,5 h". */
@@ -558,6 +573,15 @@ public class NotificationService {
 	 */
 	private void deliverGated(User user, Notification.Type type, String title, String body,
 			String pushBody, String link) {
+		deliverGated(user, type, title, body, title, pushBody, type.name(), link);
+	}
+
+	/**
+	 * As above, with a push that can say less than the bell in its title and its type as well,
+	 * for the one notice whose mere existence says something about the person.
+	 */
+	private void deliverGated(User user, Notification.Type type, String title, String body,
+			String pushTitle, String pushBody, String pushType, String link) {
 		if (user == null || !user.isActive()) return;
 		String eventId = eventId(type);
 		notifications.save(Notification.builder()
@@ -568,7 +592,7 @@ public class NotificationService {
 					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		}
 		if (prefs.deliversPush(eventId)) {
-			push.sendToUser(user.getId(), title, pushBody, link, Map.of("type", type.name()));
+			push.sendToUser(user.getId(), pushTitle, pushBody, link, Map.of("type", pushType));
 		}
 	}
 
@@ -1057,7 +1081,7 @@ public class NotificationService {
 			case TIME_TIMER_AUTO_STOPPED, TIMESHEET_SUBMITTED, TIMESHEET_APPROVED,
 					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED,
 					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED, TIME_TARGET_REMINDER,
-					TIME_BUDGET_ALERT, TIME_ESTIMATE_EXCEEDED -> "time";
+					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}
