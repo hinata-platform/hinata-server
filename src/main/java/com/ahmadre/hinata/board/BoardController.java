@@ -195,12 +195,13 @@ public class BoardController {
 		String effectiveSprint = sprintId != null ? sprintId : board.getActiveSprintId();
 
 		// App versions before the paged wall (BoardWallController) read every card
-		// from here, so this keeps its shape and its cap. Archived issues are
+		// from here, so this keeps its shape. It reads at most OLD_VIEW_CARDS per
+		// project, in a sprint as on the whole board. Archived issues are
 		// soft-deleted, and the query leaves them out.
 		List<Issue> candidates = new ArrayList<>();
 		for (Project project : scope.projects()) {
 			candidates.addAll(effectiveSprint != null
-					? issues.findByProjectIdAndSprintIdAndArchivedFalse(project.getId(), effectiveSprint)
+					? issues.findByProjectIdAndSprintIdAndArchivedFalse(project.getId(), effectiveSprint, OLD_VIEW_CARDS)
 					: issues.findByProjectIdAndArchivedFalse(project.getId(), OLD_VIEW_CARDS));
 		}
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
@@ -209,27 +210,10 @@ public class BoardController {
 		// column views below hold the same Issue instances, so this reaches them.
 		issueService.enrichSubtaskCounts(candidates);
 
-		// Columns are derived live from the viewable projects' *current* workflow
-		// states — never the stale snapshot stored on the board — so renames /
-		// additions / deletions in project settings are always reflected here. For
-		// a single-project board this is one column per state, exactly as before;
-		// across projects, equivalent states are merged into one column so the
-		// board stays readable and a drop always has a state the card's own
-		// project knows. WIP limits are carried over from the stored columns by
-		// matching column name.
-		// …unless a manager arranged the columns by hand, in which case that layout
-		// is the truth and only gets narrowed to what this viewer may see, plus any
-		// state that has appeared since and would otherwise have no home.
-		List<AgileBoard.Column> columns = scope.columns();
-		Map<String, Integer> hueByColumn = scope.hues();
-
-		Map<String, Integer> wipByName = new HashMap<>();
-		for (AgileBoard.Column column : board.getColumns()) {
-			if (column.getWipLimit() != null) wipByName.put(column.getName(), column.getWipLimit());
-		}
-
+		// The columns with their limits and colours are the scope's, the ones the
+		// paged wall has: see BoardReader#scope.
 		List<BoardColumnView> columnViews = new ArrayList<>();
-		for (AgileBoard.Column column : columns) {
+		for (AgileBoard.Column column : scope.columns()) {
 			Set<String> states = column.getStates().stream()
 					.map(state -> state.toLowerCase(java.util.Locale.ROOT))
 					.collect(Collectors.toSet());
@@ -238,8 +222,7 @@ public class BoardController {
 							&& states.contains(issue.getState().toLowerCase(java.util.Locale.ROOT)))
 					.toList();
 			columnViews.add(new BoardColumnView(column.getName(), column.getStates(),
-					wipByName.get(column.getName()),
-					hueByColumn.getOrDefault(column.getName(), 250), inColumn));
+					scope.wipLimit(column.getName()), scope.hue(column.getName()), inColumn));
 		}
 		return new BoardView(board, boardSprints, columnViews);
 	}

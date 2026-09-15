@@ -190,15 +190,18 @@ public class BoardReader {
 				summary ? summarize(criteria) : null);
 	}
 
-	/** What the filter can offer over every card of the board, of the sprint or of the backlog. */
-	public BoardFacets facets(String boardId, String sprintId, boolean backlog, User user) {
+	/**
+	 * What the filter can offer over every card of [shape] on the board, in the sprint or in the
+	 * backlog: a planning offers the epics and sub-tasks it lists, a wall only its work items.
+	 */
+	public BoardFacets facets(String boardId, String sprintId, boolean backlog, BoardQuery.Shape shape, User user) {
 		checkId(sprintId);
 		if (backlog && present(sprintId)) {
 			throw invalid();
 		}
 		BoardScope scope = scope(boardId, user);
 		Place place = backlog ? Place.BACKLOG : present(sprintId) ? Place.sprint(sprintId) : Place.BOARD;
-		Criteria criteria = criteria(scope, place, BoardQuery.ALL).orElseThrow();
+		Criteria criteria = criteria(scope, place, BoardQuery.all(shape)).orElseThrow();
 		Document facets = mongo.aggregate(Aggregation.newAggregation(Aggregation.match(criteria), FACET_FIELDS, FACETS),
 				ISSUES, Document.class).getUniqueMappedResult();
 		List<String> assignees = values(facets, "assignees");
@@ -413,7 +416,7 @@ public class BoardReader {
 			}
 		}
 		Map<String, IssueService.SubtaskTally> tallies =
-				issueService.subtaskTallies(cards.stream().map(Issue::getId).toList());
+				issueService.subtaskTallies(cards);
 		List<DirectoryUser> people = people(cards.stream().flatMap(card -> Stream.concat(
 				Stream.of(card.getAssigneeId(), card.getReporterId()),
 				card.getAssigneeIds() == null ? Stream.empty() : card.getAssigneeIds().stream())));

@@ -30,13 +30,11 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 	Page<Issue> findByProjectId(String projectId, Pageable pageable);
 
-	List<Issue> findByProjectIdAndSprintId(String projectId, String sprintId);
-
 	/** A project's active issues, as many and in the order [pageable] says, without counting them. */
 	List<Issue> findByProjectIdAndArchivedFalse(String projectId, Pageable pageable);
 
-	/** A project's active issues in one sprint. */
-	List<Issue> findByProjectIdAndSprintIdAndArchivedFalse(String projectId, String sprintId);
+	/** A project's active issues in one sprint, as many and in the order [pageable] says, without counting them. */
+	List<Issue> findByProjectIdAndSprintIdAndArchivedFalse(String projectId, String sprintId, Pageable pageable);
 
 	List<Issue> findBySprintId(String sprintId);
 

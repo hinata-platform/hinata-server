@@ -246,6 +246,36 @@ class BoardReaderIntegrationTest {
 	}
 
 	@Test
+	void countsOnlyTheActiveSubTasksOfTheParentsOwnProject() {
+		Issue story = issue(hinata, "Story", i -> i.type(Issue.Type.STORY));
+		issue(hinata, "Own child", i -> i.type(Issue.Type.SUBTASK).parentId(story.getId()).state("Done"));
+		issue(hinata, "Archived child", i -> i.type(Issue.Type.SUBTASK).parentId(story.getId()).archived(true));
+		// Left behind in another project when its parent moved: a viewer of the story may not see it.
+		issue(secret, "Stayed behind", i -> i.type(Issue.Type.SUBTASK).parentId(story.getId()));
+
+		BoardCard card = card(filtered(BoardQuery.ALL), story);
+
+		assertThat(card.subtaskCount()).isEqualTo(1);
+		assertThat(card.subtaskDoneCount()).isEqualTo(1);
+	}
+
+	@Test
+	void offersWhatTheShapeLists() {
+		Issue epic = issue(hinata, "Epic", i -> i.type(Issue.Type.EPIC).tags(new ArrayList<>(List.of("roadmap"))));
+		issue(hinata, "Sub-task", i -> i.type(Issue.Type.SUBTASK).parentId(epic.getId()));
+		issue(hinata, "Task", i -> { });
+
+		BoardReader.BoardFacets wall = reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, member);
+		BoardReader.BoardFacets planning = reader.facets(board.getId(), null, false, BoardQuery.Shape.PLANNING,
+				member);
+
+		assertThat(wall.types()).containsExactly("TASK");
+		assertThat(wall.labels()).doesNotContain("roadmap");
+		assertThat(planning.types()).containsExactlyInAnyOrder("EPIC", "SUBTASK", "TASK");
+		assertThat(planning.labels()).contains("roadmap");
+	}
+
+	@Test
 	void readsOnlyTheProjectsOfTheBoardTheViewerMaySee() {
 		board.setProjectIds(new ArrayList<>(List.of(hinata.getId(), secret.getId())));
 		boards.save(board);
@@ -264,7 +294,7 @@ class BoardReaderIntegrationTest {
 				.containsExactlyInAnyOrder("Own work", "Secret work");
 
 		assertRefused(() -> reader.wall(board.getId(), null, BoardQuery.ALL, 30, outsider), "error.accessDenied");
-		assertRefused(() -> reader.facets(board.getId(), null, false, outsider), "error.accessDenied");
+		assertRefused(() -> reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, outsider), "error.accessDenied");
 
 		hinata.setArchived(true);
 		projects.save(hinata);
@@ -299,7 +329,7 @@ class BoardReaderIntegrationTest {
 		issue(hinata, "Two", i -> i.state("Done").priority(Issue.Priority.MINOR).tags(new ArrayList<>(List.of("ui"))));
 		Issue epic = issue(hinata, "Epic", i -> i.type(Issue.Type.EPIC));
 
-		BoardReader.BoardFacets facets = reader.facets(board.getId(), null, false, member);
+		BoardReader.BoardFacets facets = reader.facets(board.getId(), null, false, BoardQuery.Shape.WALL, member);
 
 		assertThat(facets.assigneeIds()).containsExactly(member.getId());
 		assertThat(facets.reporterIds()).containsExactly(outsider.getId());
