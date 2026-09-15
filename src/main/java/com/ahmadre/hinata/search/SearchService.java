@@ -2,6 +2,7 @@ package com.ahmadre.hinata.search;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.board.AgileBoard;
+import com.ahmadre.hinata.board.BoardLinks;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
@@ -290,7 +291,7 @@ public class SearchService {
 		return SearchHit.builder()
 				.category(SearchCategory.BOARDS.name())
 				.id(b.getId())
-				.route("/board")
+				.route(BoardLinks.of(b.getId()))
 				.title(b.getName())
 				.subtitle("Agile board")
 				.build();
@@ -300,7 +301,8 @@ public class SearchService {
 		return SearchHit.builder()
 				.category(SearchCategory.BOARDS.name())
 				.id(s.getId())
-				.route("/board")
+				// A sprint has no page of its own; it is planned and run on its board.
+				.route(BoardLinks.of(s.getBoardId()))
 				.title(s.getName())
 				.subtitle(s.getGoal() != null && !s.getGoal().isBlank() ? s.getGoal() : "Sprint")
 				.build();

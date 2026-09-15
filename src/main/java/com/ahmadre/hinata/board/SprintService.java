@@ -152,21 +152,17 @@ public class SprintService {
 		return ids;
 	}
 
-	/** Deep-links to the board of the first project the board belongs to. */
-	private String boardLink(AgileBoard board) {
-		return board.getProjectIds().isEmpty() ? null
-				: "/projects/" + board.getProjectIds().get(0) + "/boards";
-	}
-
 	/** Best-effort member fan-out for sprint start / completion; never fails the action. */
 	private void notifySprintLifecycle(AgileBoard board, String sprintName, User actor, boolean started) {
 		try {
 			Set<String> members = boardMembers(board);
+			// The board itself, where the sprint is planned and run.
+			String link = BoardLinks.of(board.getId());
 			if (started) {
-				notifications.notifySprintStarted(members, sprintName, boardLink(board), actor);
+				notifications.notifySprintStarted(members, sprintName, link, actor);
 			}
 			else {
-				notifications.notifySprintCompleted(members, sprintName, boardLink(board), actor);
+				notifications.notifySprintCompleted(members, sprintName, link, actor);
 			}
 		}
 		catch (RuntimeException ex) {
