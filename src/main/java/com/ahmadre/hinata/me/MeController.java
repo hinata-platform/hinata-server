@@ -2,6 +2,7 @@ package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -133,8 +134,8 @@ public class MeController {
 			Integer countdownMinutes,
 			Boolean sound,
 			// A target of 0 removes it: absent already means "leave it alone".
-			@Min(0) @Max(com.ahmadre.hinata.common.TimePolicy.MAX_DAILY_TARGET_MINUTES) Integer dailyTargetMinutes,
-			@Min(0) @Max(com.ahmadre.hinata.common.TimePolicy.MAX_WEEKLY_TARGET_MINUTES) Integer weeklyTargetMinutes,
+			@Min(0) @Max(TimePolicy.MAX_DAILY_TARGET_MINUTES) Integer dailyTargetMinutes,
+			@Min(0) @Max(TimePolicy.MAX_WEEKLY_TARGET_MINUTES) Integer weeklyTargetMinutes,
 			@Min(0) @Max(TimePreferences.LAST_MINUTE_OF_DAY) Integer dailyReminderAt,
 			@Min(0) @Max(TimePreferences.LAST_MINUTE_OF_DAY) Integer weeklyReminderAt,
 			DayOfWeek weeklyReminderDay) {

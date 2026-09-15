@@ -98,8 +98,11 @@ import java.util.List;
 		partialFilter = "{'updatedAt': {'$exists': true}}")
 // A project's recorded minutes summed from the keys alone, for the budget alerts. Without
 // durationMinutes in an index every entry of the project would be read to add one integer.
-@CompoundIndex(name = "project_duration", def = "{'projectId': 1, 'durationMinutes': 1}")
+@CompoundIndex(name = WorkItem.PROJECT_DURATION_INDEX, def = "{'projectId': 1, 'durationMinutes': 1}")
 public class WorkItem {
+
+	/** The index a project's recorded minutes are summed from; named once for the annotation and the hint. */
+	public static final String PROJECT_DURATION_INDEX = "project_duration";
 
 	/**
 	 * Where an entry came from. Absent on documents written before 2.0 — read as

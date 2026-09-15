@@ -484,11 +484,12 @@ public class NotificationService {
 	/**
 	 * Reminds somebody of the target they set themselves (HIN-92), and nobody else.
 	 *
-	 * <p>The bell and the mail say how much is missing, because the person opens those. A reminder
-	 * only exists when something is missing, so everything that leaves the account is kept from
-	 * saying that it is one: the push, which Hinata Connect and the platform services carry, has
-	 * the title, text and type every time notice could have (R7). Nothing says why a day counts;
-	 * a day off is no reminder day and never a sentence.
+	 * <p>The bell and the mail say how much is missing, because the person opens those. The push
+	 * says neither that nor that it is a reminder, only that there is something new in the time
+	 * tracking (R7): a lock screen is read by whoever holds the phone. Its type stays the real one,
+	 * as for every notice a client routes by, so the push services that carry it (Hinata Connect,
+	 * Apple, Google) can see that a reminder was delivered, never what it says; the privacy page
+	 * tells operators so. Nothing says why a day counts; a day off is no reminder day.
 	 *
 	 * <p>Only the latest reminder stays in the bell. Kept, they would add up to a history of the
 	 * days somebody fell short, which is the record the reminder job itself never keeps.
@@ -505,8 +506,7 @@ public class NotificationService {
 						hours(locale, targetMinutes - recordedMinutes), hours(locale, targetMinutes));
 		notifications.deleteByUserIdAndType(person.getId(), Notification.Type.TIME_TARGET_REMINDER);
 		deliverGated(person, Notification.Type.TIME_TARGET_REMINDER, title, body,
-				words.of(person, "notify.time.pushTitle"), words.of(person, "notify.timeTarget.push"),
-				"TIME", "/time");
+				words.of(person, "notify.time.pushTitle"), words.of(person, "notify.timeTarget.push"), "/time");
 	}
 
 	/**
@@ -573,15 +573,12 @@ public class NotificationService {
 	 */
 	private void deliverGated(User user, Notification.Type type, String title, String body,
 			String pushBody, String link) {
-		deliverGated(user, type, title, body, title, pushBody, type.name(), link);
+		deliverGated(user, type, title, body, title, pushBody, link);
 	}
 
-	/**
-	 * As above, with a push that can say less than the bell in its title and its type as well,
-	 * for the one notice whose mere existence says something about the person.
-	 */
+	/** As above, with a push that says less than the bell in its title as well. */
 	private void deliverGated(User user, Notification.Type type, String title, String body,
-			String pushTitle, String pushBody, String pushType, String link) {
+			String pushTitle, String pushBody, String link) {
 		if (user == null || !user.isActive()) return;
 		String eventId = eventId(type);
 		notifications.save(Notification.builder()
@@ -592,7 +589,7 @@ public class NotificationService {
 					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		}
 		if (prefs.deliversPush(eventId)) {
-			push.sendToUser(user.getId(), pushTitle, pushBody, link, Map.of("type", pushType));
+			push.sendToUser(user.getId(), pushTitle, pushBody, link, Map.of("type", type.name()));
 		}
 	}
 

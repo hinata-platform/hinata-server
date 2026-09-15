@@ -128,7 +128,7 @@ class TimeReminderNotificationTest {
 	}
 
 	@Test
-	void onlyTheLatestReminderStaysInTheBellAndItsPushLooksLikeAnyTimeNotice() {
+	void onlyTheLatestReminderStaysInTheBellAndItsPushSaysNothingOfIt() {
 		timeEvent(false, true);
 
 		service.notifyTimeTargetReminder(person, NotificationService.TargetPeriod.DAY, 300, 480);
@@ -138,7 +138,8 @@ class TimeReminderNotificationTest {
 		Invocation sent = mockingDetails(push).getInvocations().iterator().next();
 		assertThat((String) sent.getArgument(1)).isEqualTo("Zeiterfassung");
 		java.util.Map<String, String> data = sent.getArgument(4);
-		assertThat(data).containsEntry("type", "TIME");
+		assertThat((String) sent.getArgument(2)).isEqualTo("Es gibt Neues in deiner Zeiterfassung.");
+		assertThat(data).containsEntry("type", "TIME_TARGET_REMINDER");
 	}
 
 	@Test

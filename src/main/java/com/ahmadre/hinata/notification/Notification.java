@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -12,6 +13,10 @@ import java.time.Instant;
 @Data
 @Builder
 @Document("notifications")
+// A person's latest target reminder, found and replaced before a new one is written (HIN-92).
+// Partial, so it holds one entry per person with a target and not their whole history.
+@CompoundIndex(name = "user_target_reminder", def = "{'userId': 1, 'type': 1}",
+		partialFilter = "{'type': 'TIME_TARGET_REMINDER'}")
 public class Notification {
 
 	public enum Type {

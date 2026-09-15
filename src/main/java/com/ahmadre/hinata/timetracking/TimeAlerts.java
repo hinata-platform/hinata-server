@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -80,7 +81,19 @@ class TimeAlerts {
 	private final ProjectReach reach;
 	private final Clock clock;
 
-	enum Kind { BUDGET, ESTIMATES, ISSUE }
+	/** What is measured; a project kind names the limit its alert speaks of. */
+	enum Kind {
+		BUDGET(TimeLimit.BUDGET), ESTIMATES(TimeLimit.ESTIMATES), ISSUE(null);
+
+		final TimeLimit limit;
+
+		Kind(TimeLimit limit) {
+			this.limit = limit;
+		}
+	}
+
+	/** The primary index, for the reads by id that must not wander onto another one. */
+	private static final String ID_INDEX = "_id_";
 
 	/** One subject measured against one limit at the thresholds that alert. */
 	record Measure(Kind kind, String subjectId, long used, long limit, Set<Integer> percents) {
@@ -157,14 +170,15 @@ class TimeAlerts {
 	private int alertProjects(List<String> ids) {
 		Map<String, ProjectTimeSettings> settings = settingsOf(ids);
 		Map<String, Long> estimated = sums(Issue.class, Criteria.where("projectId").in(ids)
-				.and("archived").is(false).and("estimateMinutes").gt(0), "projectId", "estimateMinutes", "project_estimates");
+				.and("archived").is(false).and("estimateMinutes").gt(0),
+				"projectId", "estimateMinutes", Issue.PROJECT_ESTIMATES_INDEX);
 		List<String> measurable = ids.stream()
 				.filter(id -> budgetOf(settings.get(id)) > 0 || estimated.getOrDefault(id, 0L) > 0)
 				.toList();
 		if (measurable.isEmpty()) {
 			return 0;
 		}
-		Query query = Query.query(Criteria.where("_id").in(measurable).and("archived").ne(true)).withHint("_id_");
+		Query query = Query.query(Criteria.where("_id").in(measurable).and("archived").ne(true)).withHint(ID_INDEX);
 		query.fields().include("name", "leadId", "leadIds");
 		Map<String, Project> projects = new HashMap<>();
 		Map<String, Set<String>> leads = new HashMap<>();
@@ -179,7 +193,7 @@ class TimeAlerts {
 			return 0;
 		}
 		Map<String, Long> recorded = sums(WorkItem.class, Criteria.where("projectId").in(projects.keySet()),
-				"projectId", "durationMinutes", "project_duration");
+				"projectId", "durationMinutes", WorkItem.PROJECT_DURATION_INDEX);
 
 		List<Measure> measures = new ArrayList<>();
 		for (Project project : projects.values()) {
@@ -194,11 +208,14 @@ class TimeAlerts {
 		}
 
 		int sent = 0;
-		for (Map.Entry<Measure, Integer> reached : settle(measures).entrySet()) {
+		// Every measured project has leads to tell: those without were left out above.
+		Map<Measure, Integer> reachedByProject = settle(measures,
+				candidates -> candidates.stream().map(Measure::subjectId).collect(Collectors.toSet()));
+		for (Map.Entry<Measure, Integer> reached : reachedByProject.entrySet()) {
 			Measure measure = reached.getKey();
 			Project project = projects.get(measure.subjectId());
 			notifications.notifyTimeBudgetAlert(leads.get(project.getId()), project.getId(), project.getName(),
-					measure.kind() == Kind.ESTIMATES ? TimeLimit.ESTIMATES : TimeLimit.BUDGET,
+					measure.kind().limit,
 					reached.getValue(), measure.used(), measure.limit());
 			sent++;
 		}
@@ -207,24 +224,21 @@ class TimeAlerts {
 
 	private int alertIssues(List<String> ids) {
 		Query query = Query.query(Criteria.where("_id").in(ids).and("archived").is(false)
-				.and("estimateMinutes").gt(0)).withHint("_id_");
+				.and("estimateMinutes").gt(0)).withHint(ID_INDEX);
 		query.fields().include("readableId", "projectId", "estimateMinutes", "spentMinutes", "assigneeIds");
-		List<Issue> issues = mongo.find(query, Issue.class).stream()
+		Map<String, Issue> issues = new HashMap<>();
+		mongo.find(query, Issue.class).stream()
 				.filter(issue -> issue.getProjectId() != null && issue.getAssigneeIds() != null
 						&& !issue.getAssigneeIds().isEmpty())
-				.toList();
+				.forEach(issue -> issues.put(issue.getId(), issue));
 		if (issues.isEmpty()) {
 			return 0;
 		}
-		Map<String, Set<String>> recipients = recipientsOf(issues);
-		Map<String, Issue> byId = new HashMap<>();
-		issues.stream().filter(issue -> recipients.containsKey(issue.getId()))
-				.forEach(issue -> byId.put(issue.getId(), issue));
-		Map<String, ProjectTimeSettings> settings = settingsOf(byId.values().stream()
+		Map<String, ProjectTimeSettings> settings = settingsOf(issues.values().stream()
 				.map(Issue::getProjectId).distinct().toList());
 
 		List<Measure> measures = new ArrayList<>();
-		for (Issue issue : byId.values()) {
+		for (Issue issue : issues.values()) {
 			ProjectTimeSettings own = settings.get(issue.getProjectId());
 			Integer percent = own == null || own.getAlertThresholds() == null ? null
 					: own.getAlertThresholds().getEstimatePercent();
@@ -232,9 +246,16 @@ class TimeAlerts {
 					Set.of(percent == null ? DEFAULT_ESTIMATE_PERCENT : percent)));
 		}
 
+		// Who is told is asked only of the issues that reach a threshold they have not claimed: an
+		// hour of entries on estimated issues that stay under it costs no project or team read.
+		Map<String, Set<String>> recipients = new HashMap<>();
+		Map<Measure, Integer> reachedByIssue = settle(measures, candidates -> {
+			recipients.putAll(recipientsOf(candidates.stream().map(measure -> issues.get(measure.subjectId())).toList()));
+			return recipients.keySet();
+		});
 		int sent = 0;
-		for (Map.Entry<Measure, Integer> reached : settle(measures).entrySet()) {
-			Issue issue = byId.get(reached.getKey().subjectId());
+		for (Map.Entry<Measure, Integer> reached : reachedByIssue.entrySet()) {
+			Issue issue = issues.get(reached.getKey().subjectId());
 			notifications.notifyTimeEstimateReached(recipients.get(issue.getId()), issue.getReadableId(),
 					issue.getProjectId(), reached.getValue(), issue.getSpentMinutes(), issue.getEstimateMinutes());
 			sent++;
@@ -249,7 +270,8 @@ class TimeAlerts {
 	 */
 	private Map<String, Set<String>> recipientsOf(List<Issue> issues) {
 		Map<String, List<Issue>> byProject = issues.stream().collect(Collectors.groupingBy(Issue::getProjectId));
-		Query open = Query.query(Criteria.where("_id").in(byProject.keySet()).and("archived").ne(true)).withHint("_id_");
+		Query open = Query.query(Criteria.where("_id").in(byProject.keySet()).and("archived").ne(true))
+				.withHint(ID_INDEX);
 		open.fields().include("_id");
 		Map<String, Set<String>> recipients = new HashMap<>();
 		for (Project project : mongo.find(open, Project.class)) {
@@ -258,7 +280,8 @@ class TimeAlerts {
 					.collect(Collectors.toSet());
 			Set<String> seeing = new HashSet<>(reach.whoCanSee(project.getId(), assignees));
 			for (Issue issue : ofProject) {
-				Set<String> told = issue.getAssigneeIds().stream().filter(seeing::contains).collect(Collectors.toSet());
+				Set<String> told = issue.getAssigneeIds().stream().filter(seeing::contains)
+						.collect(Collectors.toSet());
 				if (!told.isEmpty()) {
 					recipients.put(issue.getId(), told);
 				}
@@ -271,33 +294,50 @@ class TimeAlerts {
 	 * Claims every threshold a measure reaches and has not claimed yet, gives back the claims of
 	 * thresholds it is under, and returns the highest newly claimed threshold per measure. From
 	 * nothing to past both thresholds in one run is one alert, at the higher one.
+	 *
+	 * <p>[deliverable] is asked, once, which of the measures about to claim have somebody to tell;
+	 * the others claim nothing, so their alert still comes once somebody is there.
 	 */
-	private Map<Measure, Integer> settle(List<Measure> measures) {
+	private Map<Measure, Integer> settle(List<Measure> measures,
+			Function<List<Measure>, Set<String>> deliverable) {
 		Set<String> existing = marks.existing(measures.stream()
 				.flatMap(measure -> measure.percents().stream().map(measure::key)).toList());
 		List<String> fallen = new ArrayList<>();
-		List<String> wanted = new ArrayList<>();
+		List<Measure> candidates = new ArrayList<>();
 		for (Measure measure : measures) {
+			boolean wants = false;
 			for (int percent : measure.percents()) {
 				String key = measure.key(percent);
 				if (!measure.reaches(percent) && existing.contains(key)) {
 					fallen.add(key);
 				}
 				else if (measure.reaches(percent) && !existing.contains(key)) {
-					wanted.add(key);
+					wants = true;
 				}
 			}
+			if (wants) {
+				candidates.add(measure);
+			}
 		}
+		marks.release(fallen);
+		if (candidates.isEmpty()) {
+			return Map.of();
+		}
+		Set<String> told = deliverable.apply(candidates);
+		List<String> wanted = candidates.stream()
+				.filter(measure -> told.contains(measure.subjectId()))
+				.flatMap(measure -> measure.percents().stream()
+						.filter(measure::reaches).map(measure::key).filter(key -> !existing.contains(key)))
+				.toList();
 		Set<String> taken = marks.claimAll(wanted);
 		Map<Measure, Integer> reached = new LinkedHashMap<>();
-		for (Measure measure : measures) {
+		for (Measure measure : candidates) {
 			for (int percent : measure.percents()) {
 				if (taken.contains(measure.key(percent))) {
 					reached.merge(measure, percent, Math::max);
 				}
 			}
 		}
-		marks.release(fallen);
 		return reached;
 	}
 
@@ -331,7 +371,8 @@ class TimeAlerts {
 		mongo.aggregate(Aggregation.newAggregation(Aggregation.match(match),
 								Aggregation.group(by).sum(field).as("total"))
 						.withOptions(AggregationOptions.builder().hint(index).build()), collection, Document.class)
-				.forEach(row -> sums.put(String.valueOf(row.get("_id")), ((Number) row.get("total")).longValue()));
+				.forEach(row -> sums.put(String.valueOf(row.get("_id")),
+						((Number) row.get("total")).longValue()));
 		return sums;
 	}
 }

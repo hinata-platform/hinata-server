@@ -89,9 +89,12 @@ import java.util.List;
 		partialFilter = "{'type': 'EPIC'}")
 // The estimates of a project summed from the keys alone, for the budget alerts (HIN-92). Partial,
 // so it holds only issues that carry an estimate; the query asks for one, which lets it be used.
-@CompoundIndex(name = "project_estimates", def = "{'projectId': 1, 'archived': 1, 'estimateMinutes': 1}",
+@CompoundIndex(name = Issue.PROJECT_ESTIMATES_INDEX, def = "{'projectId': 1, 'archived': 1, 'estimateMinutes': 1}",
 		partialFilter = "{'estimateMinutes': {'$gt': 0}}")
 public class Issue {
+
+	/** The index the budget alerts sum estimates from; named once for the annotation and the hint. */
+	public static final String PROJECT_ESTIMATES_INDEX = "project_estimates";
 
 	public enum Type {
 		TASK, BUG, FEATURE, STORY, EPIC, SUBTASK;
