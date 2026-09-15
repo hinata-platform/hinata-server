@@ -125,9 +125,11 @@ class TimeReminders {
 		if (due.isEmpty()) {
 			return 0;
 		}
-		Set<String> taken = marks.existing(due.stream().map(Due::key).toList());
-		Set<String> claimed = marks.claimAll(due.stream().map(Due::key).filter(key -> !taken.contains(key)).toList());
-		List<Due> onWorkingDays = onWorkingDays(due.stream().filter(reminder -> claimed.contains(reminder.key())).toList());
+		List<String> keys = due.stream().map(Due::key).toList();
+		Set<String> taken = marks.existing(keys);
+		Set<String> claimed = marks.claimAll(keys.stream().filter(key -> !taken.contains(key)).toList());
+		List<Due> onWorkingDays = onWorkingDays(
+				due.stream().filter(reminder -> claimed.contains(reminder.key())).toList());
 		Map<String, Long> recorded = recordedMinutes(onWorkingDays);
 		int sent = 0;
 		for (Due reminder : onWorkingDays) {
@@ -166,8 +168,8 @@ class TimeReminders {
 			}
 			if (prefs.getWeeklyTargetMinutes() != null && today.getDayOfWeek() == prefs.getWeeklyReminderDay()
 					&& minute >= prefs.getWeeklyReminderAt()) {
-				due.add(new Due(person, TargetPeriod.WEEK, today.with(TemporalAdjusters.previousOrSame(weekStartsOn)),
-						today, prefs.getWeeklyTargetMinutes()));
+				LocalDate weekStart = today.with(TemporalAdjusters.previousOrSame(weekStartsOn));
+				due.add(new Due(person, TargetPeriod.WEEK, weekStart, today, prefs.getWeeklyTargetMinutes()));
 			}
 		}
 		return due;
