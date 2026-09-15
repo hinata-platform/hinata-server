@@ -181,15 +181,20 @@ class ModuleBoundaryTest {
 			// The holidays a working-time hint names.
 			TIME + ".TimeHintsService",
 			// Tells availability whether, and through which projects, leads see absences.
-			TIME + ".TimeAvailabilityPolicy");
+			TIME + ".TimeAvailabilityPolicy",
+			// Skips a reminder on a day that is no working day (HIN-92). It writes marks and
+			// notifications, never an entry, and asks only yes or no per person.
+			TIME + ".TimeReminders");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
-	 * reader. A route writes through its service, and no service is on this list.
+	 * reader. A route writes through its service, and no service is on this list. The reminder
+	 * job is the schedule of its reader, the way a controller is the route of one.
 	 */
 	private static final Set<String> READERS_AND_THEIR_ROUTES = Set.of(
 			TIME + ".TimeCalendarLayers", TIME + ".TimeHintsService", TIME + ".TimeAvailabilityPolicy",
-			TIME + ".TimeEntryController", TIME + ".TimeHintsController");
+			TIME + ".TimeReminders", TIME + ".TimeEntryController", TIME + ".TimeHintsController",
+			TIME + ".TimeReminderJob");
 
 	/** The services that write an entry, a timer, a submission or a correction. */
 	private static final Set<String> WRITE_PATHS = Set.of(

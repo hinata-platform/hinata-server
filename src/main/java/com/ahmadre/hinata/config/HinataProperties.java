@@ -549,6 +549,16 @@ public class HinataProperties {
 		/** Personal target reminders — only ever to the person themselves. Off by default. */
 		private boolean targetRemindersEnabled = false;
 
+		/** A daily target people are offered to take over, in minutes; null ⇒ no suggestion. */
+		@Min(0)
+		@Max(TimePolicy.MAX_DAILY_TARGET_MINUTES)
+		private Integer suggestedDailyTargetMinutes;
+
+		/** A weekly target people are offered to take over, in minutes; null ⇒ no suggestion. */
+		@Min(0)
+		@Max(TimePolicy.MAX_WEEKLY_TARGET_MINUTES)
+		private Integer suggestedWeeklyTargetMinutes;
+
 		/** German working-hours-act self-hints (own day over 10 h, short rest). Off by default. */
 		private boolean arbzgHintsEnabled = false;
 

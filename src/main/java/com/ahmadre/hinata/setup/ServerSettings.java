@@ -503,6 +503,20 @@ public class ServerSettings {
 				message = "error.timeTracking.lateEntryHintDaysInvalid")
 		private Integer lateEntryHintDays;
 
+		/**
+		 * A daily and a weekly target the reminders settings offer a person to take
+		 * over (HIN-92); null ⇒ env default, {@code 0} ⇒ no suggestion. Only ever a
+		 * suggestion: a target is the person's own, and nothing applies this one to
+		 * anybody who did not pick it.
+		 */
+		@Min(value = 0, message = "error.timeTracking.suggestedTargetInvalid")
+		@Max(value = TimePolicy.MAX_DAILY_TARGET_MINUTES, message = "error.timeTracking.suggestedTargetInvalid")
+		private Integer suggestedDailyTargetMinutes;
+
+		@Min(value = 0, message = "error.timeTracking.suggestedTargetInvalid")
+		@Max(value = TimePolicy.MAX_WEEKLY_TARGET_MINUTES, message = "error.timeTracking.suggestedTargetInvalid")
+		private Integer suggestedWeeklyTargetMinutes;
+
 		/** Subscribing to external calendars; null ⇒ env default. */
 		private Boolean icsImportEnabled;
 

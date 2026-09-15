@@ -1,18 +1,22 @@
 package com.ahmadre.hinata.me;
 
-import lombok.AllArgsConstructor;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.time.DayOfWeek;
 
 /**
  * How this person likes their timer to count: pomodoro lengths, the countdown
  * they usually reach for, and whether the end of an interval makes a sound.
- * Embedded in the {@code users} document.
+ * Since HIN-92 also the targets they set themselves and when they want to be
+ * reminded of them. Embedded in the {@code users} document.
  *
  * <p>Here rather than in {@code ServerSettings} because these are the person's
  * own working rhythm, and an administrator prescribing how long somebody's
  * breaks are is precisely the kind of thing the module is built not to do
- * (HIN-60 R2/R7). Nothing reads them but the account that owns them.
+ * (HIN-60 R2/R7). Nothing reads them but the account that owns them — and the
+ * reminder job, which only ever writes back to that same account.
  *
  * <p>Here rather than in the {@code timetracking} package because {@code User}
  * embeds them and the module boundary runs the other way — {@code ModuleBoundaryTest}
@@ -25,10 +29,13 @@ import lombok.NoArgsConstructor;
  * the request validators state the same bounds, so a client sending 0 is a bug
  * on its side, and the honest repair is the nearest usable number rather than a
  * 400 that leaves the person unable to change their display name.
+ *
+ * <p>The reminder fields are object types with their defaults in the getters: a
+ * primitive added to a document that predates it reads back as 0, and 0 is a
+ * target and a time of day (midnight) rather than "never set".
  */
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class TimePreferences {
 
 	/** Minutes of one pomodoro work interval. */
@@ -51,6 +58,20 @@ public class TimePreferences {
 	public static final int MIN_COUNTDOWN = 1;
 	public static final int MAX_COUNTDOWN = 24 * 60;
 
+	/** A day's target can be the whole day and no more. */
+	public static final int MAX_DAILY_TARGET = 24 * 60;
+
+	/** A week's target can be the whole week and no more. */
+	public static final int MAX_WEEKLY_TARGET = 7 * 24 * 60;
+
+	/** A reminder time is a minute of the day, 0 to 1439. */
+	public static final int LAST_MINUTE_OF_DAY = 24 * 60 - 1;
+
+	/** 17:00 for the day, Friday 16:00 for the week (HIN-92). */
+	public static final int DEFAULT_DAILY_REMINDER_AT = 17 * 60;
+	public static final int DEFAULT_WEEKLY_REMINDER_AT = 16 * 60;
+	public static final DayOfWeek DEFAULT_WEEKLY_REMINDER_DAY = DayOfWeek.FRIDAY;
+
 	private int pomodoroWork = 25;
 	private int pomodoroShortBreak = 5;
 	private int pomodoroLongBreak = 15;
@@ -62,8 +83,49 @@ public class TimePreferences {
 	/** Whether the end of an interval plays a sound. The toast appears either way. */
 	private boolean sound = true;
 
+	/** The minutes this person wants to record on a working day; null for no daily reminder. */
+	private Integer dailyTargetMinutes;
+
+	/** The minutes this person wants to record in a week; null for no weekly reminder. */
+	private Integer weeklyTargetMinutes;
+
+	/** The minute of the day, in the person's own zone, the daily reminder is due. */
+	private Integer dailyReminderAt;
+
+	/** The minute of the day, in the person's own zone, the weekly reminder is due. */
+	private Integer weeklyReminderAt;
+
+	/** The day of the week the weekly reminder is due. */
+	private DayOfWeek weeklyReminderDay;
+
+	/**
+	 * Whether a target is set, written by {@link #sanitized()}. Stored only so the
+	 * reminder job finds the few people with a target through a partial index,
+	 * instead of reading every account four times an hour. Never sent to a client:
+	 * it is the targets themselves that say it.
+	 */
+	@JsonIgnore
+	private Boolean targetsSet;
+
 	public static TimePreferences defaults() {
 		return new TimePreferences();
+	}
+
+	public int getDailyReminderAt() {
+		return dailyReminderAt == null ? DEFAULT_DAILY_REMINDER_AT : dailyReminderAt;
+	}
+
+	public int getWeeklyReminderAt() {
+		return weeklyReminderAt == null ? DEFAULT_WEEKLY_REMINDER_AT : weeklyReminderAt;
+	}
+
+	public DayOfWeek getWeeklyReminderDay() {
+		return weeklyReminderDay == null ? DEFAULT_WEEKLY_REMINDER_DAY : weeklyReminderDay;
+	}
+
+	@JsonIgnore
+	public boolean isTargetsSet() {
+		return Boolean.TRUE.equals(targetsSet);
 	}
 
 	/**
@@ -74,13 +136,20 @@ public class TimePreferences {
 	 * pomodoro that never breaks or a set that never completes.
 	 */
 	public TimePreferences sanitized() {
-		return new TimePreferences(
-				clamp(pomodoroWork, MIN_WORK, MAX_WORK, 25),
-				clamp(pomodoroShortBreak, MIN_BREAK, MAX_BREAK, 5),
-				clamp(pomodoroLongBreak, MIN_LONG_BREAK, MAX_LONG_BREAK, 15),
-				clamp(pomodoroCycles, MIN_CYCLES, MAX_CYCLES, 4),
-				clamp(countdownMinutes, MIN_COUNTDOWN, MAX_COUNTDOWN, 25),
-				sound);
+		TimePreferences copy = new TimePreferences();
+		copy.pomodoroWork = clamp(pomodoroWork, MIN_WORK, MAX_WORK, 25);
+		copy.pomodoroShortBreak = clamp(pomodoroShortBreak, MIN_BREAK, MAX_BREAK, 5);
+		copy.pomodoroLongBreak = clamp(pomodoroLongBreak, MIN_LONG_BREAK, MAX_LONG_BREAK, 15);
+		copy.pomodoroCycles = clamp(pomodoroCycles, MIN_CYCLES, MAX_CYCLES, 4);
+		copy.countdownMinutes = clamp(countdownMinutes, MIN_COUNTDOWN, MAX_COUNTDOWN, 25);
+		copy.sound = sound;
+		copy.dailyTargetMinutes = target(dailyTargetMinutes, MAX_DAILY_TARGET);
+		copy.weeklyTargetMinutes = target(weeklyTargetMinutes, MAX_WEEKLY_TARGET);
+		copy.dailyReminderAt = minuteOfDay(dailyReminderAt);
+		copy.weeklyReminderAt = minuteOfDay(weeklyReminderAt);
+		copy.weeklyReminderDay = weeklyReminderDay;
+		copy.targetsSet = copy.dailyTargetMinutes != null || copy.weeklyTargetMinutes != null;
+		return copy;
 	}
 
 	/**
@@ -96,5 +165,14 @@ public class TimePreferences {
 			return fallback;
 		}
 		return Math.clamp(value, min, max);
+	}
+
+	/** A target up to {@code max}; zero or less is no target, which is how a client removes one. */
+	private static Integer target(Integer minutes, int max) {
+		return minutes == null || minutes <= 0 ? null : Math.min(minutes, max);
+	}
+
+	private static Integer minuteOfDay(Integer minute) {
+		return minute == null ? null : Math.clamp(minute, 0, LAST_MINUTE_OF_DAY);
 	}
 }
