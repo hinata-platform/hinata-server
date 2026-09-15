@@ -45,6 +45,7 @@ public class BoardController {
 	private final DeletionService deletion;
 	private final CurrentUser currentUser;
 	private final com.ahmadre.hinata.team.TeamRepository teams;
+	private final BoardReader reader;
 
 	public record CreateBoardRequest(@NotBlank @Size(max = 120) String name,
 			@NotEmpty List<String> projectIds, AgileBoard.Type type) {
@@ -94,6 +95,11 @@ public class BoardController {
 	 * it; this only guards a pathological org's unfiltered findAll path). */
 	private static final int LIST_CAP = 500;
 
+	/** What the old board view reads per project: at most 500 active issues, lowest rank first. */
+	private static final org.springframework.data.domain.Pageable OLD_VIEW_CARDS =
+			org.springframework.data.domain.PageRequest.of(0, 500,
+					org.springframework.data.domain.Sort.by("rank", "id"));
+
 	/** Ids of the projects the user may see (deduped, archived excluded). */
 	private Set<String> visibleProjectIds(User user) {
 		return projects.visibleTo(user).stream().map(Project::getId).collect(Collectors.toSet());
@@ -106,25 +112,6 @@ public class BoardController {
 			projects.findOptional(projectId).ifPresent(spanned::add);
 		}
 		return spanned;
-	}
-
-	/**
-	 * The spanned projects a given viewer may actually work with: existing, not
-	 * archived, and visible to them. A board may legitimately span several
-	 * projects, but a viewer must never see issues — or even columns — of a
-	 * project they cannot access, otherwise a shared cross-project board leaks a
-	 * foreign backlog.
-	 */
-	private List<Project> viewableProjects(AgileBoard board, User user) {
-		Set<String> active = projects.activeProjectIds();
-		Set<String> visibleToViewer = user.isAdmin() ? null : visibleProjectIds(user);
-		List<Project> viewable = new ArrayList<>();
-		for (Project project : spannedProjects(board.getProjectIds())) {
-			if (!active.contains(project.getId())) continue;
-			if (visibleToViewer != null && !visibleToViewer.contains(project.getId())) continue;
-			viewable.add(project);
-		}
-		return viewable;
 	}
 
 	/**
@@ -200,27 +187,22 @@ public class BoardController {
 	@GetMapping("/{id}")
 	public BoardView view(@PathVariable String id, @RequestParam(required = false) String sprintId) {
 		User user = currentUser.require();
-		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
-		assertBoardAccess(board, user);
+		// Only the projects this viewer may actually work with: a shared
+		// cross-project board must never leak a foreign project's backlog.
+		BoardScope scope = reader.scope(id, user);
+		AgileBoard board = scope.board();
 		List<Sprint> boardSprints = sprints.findByBoardIdOrderByStartDateDesc(id);
 		String effectiveSprint = sprintId != null ? sprintId : board.getActiveSprintId();
 
-		// Only the projects this viewer may actually work with — a shared
-		// cross-project board must never leak a foreign project's backlog.
-		List<Project> viewable = viewableProjects(board, user);
-
+		// App versions before the paged wall (BoardWallController) read every card
+		// from here, so this keeps its shape and its cap. Archived issues are
+		// soft-deleted, and the query leaves them out.
 		List<Issue> candidates = new ArrayList<>();
-		for (Project project : viewable) {
-			if (effectiveSprint != null) {
-				candidates.addAll(issues.findByProjectIdAndSprintId(project.getId(), effectiveSprint));
-			}
-			else {
-				candidates.addAll(issues.findByProjectId(project.getId(),
-						org.springframework.data.domain.PageRequest.of(0, 500)).getContent());
-			}
+		for (Project project : scope.projects()) {
+			candidates.addAll(effectiveSprint != null
+					? issues.findByProjectIdAndSprintIdAndArchivedFalse(project.getId(), effectiveSprint)
+					: issues.findByProjectIdAndArchivedFalse(project.getId(), OLD_VIEW_CARDS));
 		}
-		// Archived issues are soft-deleted — they never appear on the board.
-		candidates.removeIf(Issue::isArchived);
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
 		// Stamp each card with its direct-child (sub-task) count/progress so the
 		// board can show the indicator + expander without a per-card lookup. The
@@ -238,10 +220,8 @@ public class BoardController {
 		// …unless a manager arranged the columns by hand, in which case that layout
 		// is the truth and only gets narrowed to what this viewer may see, plus any
 		// state that has appeared since and would otherwise have no home.
-		List<AgileBoard.Column> columns = board.hasCustomColumns()
-				? BoardColumns.reconcile(board.getColumns(), viewable)
-				: BoardColumns.merge(viewable);
-		Map<String, Integer> hueByColumn = BoardColumns.hues(columns, viewable);
+		List<AgileBoard.Column> columns = scope.columns();
+		Map<String, Integer> hueByColumn = scope.hues();
 
 		Map<String, Integer> wipByName = new HashMap<>();
 		for (AgileBoard.Column column : board.getColumns()) {

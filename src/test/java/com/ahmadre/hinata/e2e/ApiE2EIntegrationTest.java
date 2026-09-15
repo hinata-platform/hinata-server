@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
@@ -202,6 +204,49 @@ class ApiE2EIntegrationTest {
 
 		JsonNode readBack = getOk("/api/v1/projects/" + id, token);
 		assertThat(readBack.path("name").asText()).isEqualTo("E2E Integration Project");
+	}
+
+	@Test
+	@DisplayName("a board reads in pages, with its search and filter bound from the query string")
+	void boardReadsInPages() {
+		String token = login(ADMIN_USER, ADMIN_PASS);
+		String projectId = getOk("/api/v1/projects", token).get(0).path("id").asText();
+		HttpResponse<String> created = postJson("/api/v1/boards",
+				"{\"name\":\"E2E board\",\"projectIds\":[\"" + projectId + "\"]}", token);
+		assertThat(created.statusCode()).as("create board").isEqualTo(201);
+		String boards = "/api/v1/boards/" + parse(created.body()).path("id").asText();
+
+		JsonNode wall = getOk(boards + "/wall?size=2", token);
+		JsonNode busiest = null;
+		for (JsonNode column : wall.path("columns")) {
+			assertThat(column.path("issues").size()).isLessThanOrEqualTo(2);
+			if (busiest == null || column.path("total").asLong() > busiest.path("total").asLong()) {
+				busiest = column;
+			}
+		}
+		assertThat(busiest).as("a column").isNotNull();
+		assertThat(busiest.path("total").asLong()).as("cards of the seeded project").isPositive();
+		JsonNode card = busiest.path("issues").get(0);
+		assertThat(card.path("readableId").asText()).isNotBlank();
+		// A card is the slim shape: nothing of the description travels with it.
+		assertThat(card.has("description")).isFalse();
+		assertThat(card.has("descriptionDoc")).isFalse();
+
+		String column = URLEncoder.encode(busiest.path("name").asText(), StandardCharsets.UTF_8);
+		JsonNode page = getOk(boards + "/cards?column=" + column + "&page=0&size=1", token);
+		assertThat(page.path("totalElements").asLong()).isEqualTo(busiest.path("total").asLong());
+		assertThat(page.path("content").size()).isEqualTo(1);
+
+		// Lists bind from repeated parameters, and the search from q.
+		String state = URLEncoder.encode(busiest.path("states").get(0).asText(), StandardCharsets.UTF_8);
+		JsonNode filtered = getOk(boards + "/cards?states=" + state + "&states=NOPE&types=TASK&types=BUG"
+				+ "&q=" + URLEncoder.encode(card.path("title").asText(), StandardCharsets.UTF_8) + "&size=100", token);
+		assertThat(filtered.path("content").isArray()).isTrue();
+		assertThat(getOk(boards + "/facets", token).path("states").isArray()).isTrue();
+
+		assertThat(get(boards + "/cards?shape=kanban", token).statusCode()).isEqualTo(400);
+		assertThat(get(boards + "/cards?column=Nowhere", token).statusCode()).isEqualTo(400);
+		assertThat(get(boards + "/wall", null).statusCode()).isEqualTo(401);
 	}
 
 	@Test

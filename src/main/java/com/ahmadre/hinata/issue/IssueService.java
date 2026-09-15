@@ -544,30 +544,54 @@ public class IssueService {
 	 */
 	public void enrichSubtaskCounts(List<Issue> parents) {
 		if (parents == null || parents.isEmpty()) return;
-		List<String> parentIds = parents.stream()
-				.map(Issue::getId).filter(Objects::nonNull).distinct().toList();
-		if (parentIds.isEmpty()) return;
+		Map<String, SubtaskTally> tallies = subtaskTallies(parents.stream().map(Issue::getId).toList());
+		for (Issue parent : parents) {
+			SubtaskTally tally = tallies.getOrDefault(parent.getId(), SubtaskTally.NONE);
+			parent.setSubtaskCount(tally.total());
+			parent.setSubtaskDoneCount(tally.done());
+		}
+	}
 
-		List<Issue> children = issues.findByParentIdIn(parentIds);
+	/** A parent's direct children: how many there are, and how many of them are done. */
+	public record SubtaskTally(int total, int done) {
+
+		/** A parent without children. */
+		public static final SubtaskTally NONE = new SubtaskTally(0, 0);
+	}
+
+	/**
+	 * The direct children of [parentIds], counted, in one index-backed {@code parentId $in}
+	 * query that reads only the four fields the count needs. A parent without children is
+	 * absent from the map. "Done" is defined as in {@link #enrichSubtaskCounts}, and like it
+	 * this performs no authorization.
+	 */
+	public Map<String, SubtaskTally> subtaskTallies(List<String> parentIds) {
+		List<String> ids = parentIds.stream().filter(Objects::nonNull).distinct().toList();
+		if (ids.isEmpty()) return Map.of();
+
+		Query query = Query.query(Criteria.where("parentId").in(ids));
+		query.fields().include("parentId", "projectId", "state", "resolvedAt");
 		Map<String, int[]> byParent = new HashMap<>(); // parentId -> [total, done]
 		Map<String, Set<String>> resolvedByProject = new HashMap<>();
-		for (Issue child : children) {
-			int[] tally = byParent.computeIfAbsent(child.getParentId(), k -> new int[2]);
+		// Read as plain documents: nothing here needs an Issue built, only four values.
+		for (org.bson.Document child : mongo.find(query, org.bson.Document.class,
+				mongo.getCollectionName(Issue.class))) {
+			int[] tally = byParent.computeIfAbsent(child.getString("parentId"), k -> new int[2]);
 			tally[0]++;
-			Set<String> resolved = resolvedByProject.computeIfAbsent(
-					child.getProjectId(),
+			String projectId = child.getString("projectId");
+			Set<String> resolved = projectId == null ? Set.of() : resolvedByProject.computeIfAbsent(
+					projectId,
 					pid -> projects.findOptional(pid)
 							.map(p -> new HashSet<>(p.getResolvedStates()))
 							.orElseGet(HashSet::new));
-			boolean done = (child.getState() != null && resolved.contains(child.getState()))
-					|| child.getResolvedAt() != null;
+			String state = child.getString("state");
+			boolean done = (state != null && resolved.contains(state))
+					|| child.get("resolvedAt") != null;
 			if (done) tally[1]++;
 		}
-		for (Issue parent : parents) {
-			int[] tally = byParent.get(parent.getId());
-			parent.setSubtaskCount(tally == null ? 0 : tally[0]);
-			parent.setSubtaskDoneCount(tally == null ? 0 : tally[1]);
-		}
+		Map<String, SubtaskTally> tallies = new HashMap<>();
+		byParent.forEach((parentId, tally) -> tallies.put(parentId, new SubtaskTally(tally[0], tally[1])));
+		return tallies;
 	}
 
 	// ── aggregate detail (first-paint bootstrap) ─────────────────────────────

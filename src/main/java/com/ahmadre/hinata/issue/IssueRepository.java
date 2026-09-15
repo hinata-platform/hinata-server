@@ -32,6 +32,12 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 	List<Issue> findByProjectIdAndSprintId(String projectId, String sprintId);
 
+	/** A project's active issues, as many and in the order [pageable] says, without counting them. */
+	List<Issue> findByProjectIdAndArchivedFalse(String projectId, Pageable pageable);
+
+	/** A project's active issues in one sprint. */
+	List<Issue> findByProjectIdAndSprintIdAndArchivedFalse(String projectId, String sprintId);
+
 	List<Issue> findBySprintId(String sprintId);
 
 	List<Issue> findByProjectIdAndStartDateNotNull(String projectId);
@@ -45,10 +51,6 @@ public interface IssueRepository extends MongoRepository<Issue, String> {
 
 
 	List<Issue> findByParentId(String parentId);
-
-	/** Direct children of a batch of parents — one index-backed ({@code parent_number})
-	 * query to compute sub-task counts for a whole board or issue-list page. */
-	List<Issue> findByParentIdIn(List<String> parentIds);
 
 	/** Highest issue number currently used in a project — used to repair a
 	 * project's issueCounter if it ever falls behind the real data. */
