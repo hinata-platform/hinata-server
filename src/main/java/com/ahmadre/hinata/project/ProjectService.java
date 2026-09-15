@@ -38,8 +38,9 @@ import java.util.stream.Collectors;
 public class ProjectService {
 
 	/** Ceiling on a single {@link #resolveVisible} lookup — a picker labels a
-	 * handful of held ids, never an unbounded list handed in by a caller. */
-	private static final int RESOLVE_CAP = 100;
+	 * handful of held ids, never an unbounded list handed in by a caller. A
+	 * caller with more ids than this asks {@link #visibleTo} instead. */
+	public static final int RESOLVE_CAP = 100;
 
 	private static final String ISSUES = "issues";
 	private static final String GIT_DEV_INFO = "git_dev_info";

@@ -52,6 +52,17 @@ import java.util.List;
 // narrowed to one person's watch list, which is a small set by construction.
 @CompoundIndex(name = "watchers_updated",
 		def = "{'watcherIds': 1, 'archived': 1, 'updatedAt': -1, '_id': -1}")
+// A board column's cards in board order (board/BoardReader). Equality on projectId,
+// archived and state, where a column names few states and each in few spellings, so the
+// planner merges one scan per combination and the page comes off the index already
+// sorted. type goes last: the wall's "no epics, no sub-tasks" then filters keys rather
+// than documents, and counting a column needs no document at all.
+@CompoundIndex(name = "board_column",
+		def = "{'projectId': 1, 'archived': 1, 'state': 1, 'rank': 1, '_id': 1, 'type': 1}")
+// The same for a sprint, and for the backlog as the sprint null: equality on the sprint
+// instead of the state. A sprint wall's column filters its state within the sprint.
+@CompoundIndex(name = "board_sprint",
+		def = "{'projectId': 1, 'archived': 1, 'sprintId': 1, 'rank': 1, '_id': 1, 'type': 1}")
 public class Issue {
 
 	public enum Type {
@@ -76,6 +87,13 @@ public class Issue {
 	/** Declaration order = descending severity; sorting relies on the ordinal, so
 	 *  new values must be appended at the matching severity position only. */
 	public enum Priority { SHOWSTOPPER, CRITICAL, MAJOR, NORMAL, MINOR, TRIVIAL }
+
+	/**
+	 * The fields every projection that is read as an {@code Issue} has to include.
+	 * Spring Data builds the issue through its all-arguments constructor, which takes
+	 * these three as primitives and refuses the null an absent field would give it.
+	 */
+	public static final String[] PROJECTION_REQUIRED = { "numberInProject", "spentMinutes", "rank" };
 
 	@Id
 	private String id;
