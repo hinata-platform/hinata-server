@@ -5,6 +5,7 @@ import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.DayOfWeek;
@@ -41,7 +42,8 @@ public class WorkingSchedule {
 	/** Seven entries, Monday first, each 0 to {@link #DAY_MINUTES_MAX}. */
 	private List<Integer> minutesPerWeekday;
 
-	/** The holiday calendar this person follows, or null for the instance default. */
+	/** The holiday calendar this person follows, or null for the instance default. Indexed for deleting a calendar. */
+	@Indexed(name = "holiday_calendar", sparse = true)
 	private String holidayCalendarId;
 
 	/** Who saved it: the person, or an administrator on their behalf. */

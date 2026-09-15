@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -109,6 +110,23 @@ class WorkingTimeHintsTest {
 				});
 		assertThat(WorkingTimeHints.of(List.of(typed("m", MONDAY, 30)), sunday, MONDAY, UTC, ACT))
 				.isEmpty();
+	}
+
+	@Test
+	void hoursOnAHolidayAreNamedAndAHolidayWithoutHoursIsNot() {
+		LocalDate holiday = MONDAY.plusDays(2);
+		LocalDate idleHoliday = MONDAY.plusDays(3);
+		List<WorkingTimeHints.Entry> entries = List.of(typed("h", holiday, 30), typed("t", MONDAY.plusDays(1), 30));
+
+		assertThat(WorkingTimeHints.of(entries, MONDAY, idleHoliday, UTC, ACT, Set.of(holiday, idleHoliday)))
+				.singleElement()
+				.satisfies(hint -> {
+					assertThat(hint.kind()).isEqualTo(WorkingTimeHints.Kind.HOLIDAY_WORK);
+					assertThat(hint.date()).isEqualTo(holiday);
+				});
+		// With the Working Hours Act hints off, a holiday says nothing either.
+		assertThat(WorkingTimeHints.of(entries, MONDAY, idleHoliday, UTC, new WorkingTimeHints.Rules(false, null),
+				Set.of(holiday))).isEmpty();
 	}
 
 	@Test

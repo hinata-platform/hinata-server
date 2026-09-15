@@ -17,7 +17,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 /**
@@ -57,15 +56,11 @@ public class TimeOffService {
 
 	/** One person's absences touching [from] to [to], newest first. Filtered in the query. */
 	public Listing page(User viewer, String userId, LocalDate from, LocalDate to, int page, int size) {
-		String person = userId == null || userId.isBlank() ? viewer.getId() : userId;
-		AvailabilityAccess.Sight sight = access.of(viewer, person);
-		if (sight == AvailabilityAccess.Sight.NONE) {
-			throw ApiException.forbidden("error.availability.forbidden");
-		}
+		AvailabilityAccess.Visible visible = access.requireVisible(viewer, userId);
 		if (from != null && to != null) {
 			CapacityService.assertWindow(from, to);
 		}
-		Criteria criteria = Criteria.where("userId").is(person);
+		Criteria criteria = Criteria.where("userId").is(visible.userId());
 		if (from != null) {
 			criteria.and("to").gte(from);
 		}
@@ -76,13 +71,14 @@ public class TimeOffService {
 				NEWEST_FIRST);
 		List<TimeOff> rows = mongo.find(Query.query(criteria).with(request), TimeOff.class);
 		return new Listing(PageableExecutionUtils.getPage(rows, request,
-				() -> mongo.count(Query.query(criteria), TimeOff.class)), sight);
+				() -> mongo.count(Query.query(criteria), TimeOff.class)), visible.sight());
 	}
 
 	public TimeOff create(User viewer, Draft draft) {
-		User person = target(viewer, draft.userId());
+		User person = access.requireKeeper(viewer, draft.userId());
 		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(viewer.getId()).build();
 		apply(item, draft.type(), draft.from(), draft.to(), draft.halfDay(), draft.note());
+		assertRoomIn(person.getId(), item.getFrom().getYear());
 		TimeOff saved = timeOff.save(item);
 		recordForOther(viewer, person, "created", saved);
 		return saved;
@@ -90,12 +86,16 @@ public class TimeOffService {
 
 	public TimeOff update(User viewer, String id, Patch patch) {
 		TimeOff item = writable(viewer, id);
+		int yearBefore = item.getFrom().getYear();
 		apply(item,
 				patch.type() != null ? patch.type() : item.getType(),
 				patch.from() != null ? patch.from() : item.getFrom(),
 				patch.to() != null ? patch.to() : item.getTo(),
 				patch.halfDay() != null ? patch.halfDay() : item.getHalfDay(),
 				patch.note() != null ? patch.note() : item.getNote());
+		if (item.getFrom().getYear() != yearBefore) {
+			assertRoomIn(item.getUserId(), item.getFrom().getYear());
+		}
 		item.setUpdatedAt(clock.instant());
 		TimeOff saved = timeOff.save(item);
 		users.findById(saved.getUserId()).ifPresent(person -> recordForOther(viewer, person, "updated", saved));
@@ -113,9 +113,6 @@ public class TimeOffService {
 			throw ApiException.badRequest("error.availability.timeOffInvalid");
 		}
 		CapacityService.assertWindow(from, to);
-		if (ChronoUnit.DAYS.between(from, to) + 1 > TimeOff.DAYS_MAX) {
-			throw ApiException.badRequest("error.availability.windowTooLong", TimeOff.DAYS_MAX);
-		}
 		boolean half = Boolean.TRUE.equals(halfDay);
 		if (half && !from.equals(to)) {
 			throw ApiException.badRequest("error.availability.halfDaySingle");
@@ -131,6 +128,15 @@ public class TimeOffService {
 		item.setNote(cleanNote);
 	}
 
+	/** Refuses one more absence in a year that already holds {@link TimeOff#PER_YEAR_MAX} of them. */
+	private void assertRoomIn(String userId, int year) {
+		Query inYear = Query.query(Criteria.where("userId").is(userId)
+				.and("from").gte(LocalDate.of(year, 1, 1)).lte(LocalDate.of(year, 12, 31)));
+		if (mongo.count(inYear, TimeOff.class) >= TimeOff.PER_YEAR_MAX) {
+			throw ApiException.badRequest("error.availability.timeOffPerYear", TimeOff.PER_YEAR_MAX);
+		}
+	}
+
 	/** An absence the viewer may change: their own, or anybody's for an administrator. */
 	private TimeOff writable(User viewer, String id) {
 		TimeOff item = timeOff.findById(id).orElseThrow(() -> ApiException.notFound("timeOff"));
@@ -140,23 +146,17 @@ public class TimeOffService {
 		return item;
 	}
 
-	private User target(User viewer, String userId) {
-		if (userId == null || userId.isBlank() || userId.equals(viewer.getId())) {
-			return viewer;
-		}
-		if (!viewer.isAdmin()) {
-			throw ApiException.forbidden("error.availability.forbidden");
-		}
-		return users.findById(userId).orElseThrow(() -> ApiException.notFound("user"));
-	}
-
+	/**
+	 * What an administrator did to somebody's absence: the change and the days, never the type or
+	 * the note. A sick day is health data, and the audit log keeps its entries long after the
+	 * absence and the account are gone.
+	 */
 	private void recordForOther(User actor, User person, String change, TimeOff item) {
 		if (actor.getId().equals(person.getId())) {
 			return;
 		}
 		audit.event(AuditAction.AVAILABILITY_TIME_OFF_CHANGED).actor(actor).target(person)
 				.meta("change", change)
-				.meta("type", String.valueOf(item.getType()))
 				.meta("from", String.valueOf(item.getFrom()))
 				.meta("to", String.valueOf(item.getTo()))
 				.log();

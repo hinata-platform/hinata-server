@@ -14,7 +14,6 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * The Working Hours Act hints and the late-entry hint for one person's own entries.
@@ -23,8 +22,9 @@ import java.util.stream.Collectors;
  * more. Why nobody may ask it about somebody else is written on
  * {@link TimeHintsController}.
  *
- * <p>One of the two places in the module that read availability, for the holidays a
- * hint names. A read for display: no write path may know it ({@code ModuleBoundaryTest}).
+ * <p>One of the three places in the module that read availability (with
+ * {@link TimeCalendarLayers} and {@link TimeAvailabilityPolicy}), for the holidays a hint
+ * names. A read for display: no write path may reach it ({@code ModuleBoundaryTest}).
  */
 @Service
 @RequiredArgsConstructor
@@ -67,10 +67,7 @@ class TimeHintsService {
 						WorkItemDocuments.instant(document, "endedAt"),
 						WorkItemDocuments.instant(document, "createdAt")))
 				.toList();
-		Set<LocalDate> holidays = rules.workingTimeAct()
-				? capacity.window(user.getId(), from, to).holidays().stream()
-						.map(CapacityService.HolidayMark::date).collect(Collectors.toSet())
-				: Set.of();
+		Set<LocalDate> holidays = rules.workingTimeAct() ? capacity.holidayDates(user.getId(), from, to) : Set.of();
 		return WorkingTimeHints.of(own, from, to, entries.zoneOf(user), rules, holidays);
 	}
 }

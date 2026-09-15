@@ -65,13 +65,12 @@ final class HolidayDays {
 			else {
 				continue;
 			}
-			for (LocalDate day = start; day.isBefore(end); day = day.plusDays(1)) {
-				if (day.getYear() == year) {
-					byDay.putIfAbsent(day, name);
-				}
-				else if (day.getYear() > year) {
-					break;
-				}
+			// Clamped to the year first: a feed can send an event from the year 1 to next year, and
+			// walking that day by day would cost millions of steps after the parser's budget is spent.
+			LocalDate first = start.isBefore(LocalDate.of(year, 1, 1)) ? LocalDate.of(year, 1, 1) : start;
+			LocalDate stop = end.isAfter(LocalDate.of(year + 1, 1, 1)) ? LocalDate.of(year + 1, 1, 1) : end;
+			for (LocalDate day = first; day.isBefore(stop); day = day.plusDays(1)) {
+				byDay.putIfAbsent(day, name);
 			}
 		}
 		List<Day> days = byDay.entrySet().stream()

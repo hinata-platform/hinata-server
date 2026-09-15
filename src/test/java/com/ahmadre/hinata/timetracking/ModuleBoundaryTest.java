@@ -15,6 +15,7 @@ import java.util.Set;
 import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideOutsideOfPackages;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -173,14 +174,22 @@ class ModuleBoundaryTest {
 				.check(PRODUCTION);
 	}
 
-	/** The classes of the module that read availability, each for display only. */
+	/** The classes of the module that read availability: two for display, one for who sees it. */
 	private static final Set<String> AVAILABILITY_READERS = Set.of(
 			// The absences, holidays and planned minutes the calendar draws.
 			TIME + ".TimeCalendarLayers",
 			// The holidays a working-time hint names.
 			TIME + ".TimeHintsService",
-			// Tells availability whether leads see absences; reads a policy, not availability.
+			// Tells availability whether, and through which projects, leads see absences.
 			TIME + ".TimeAvailabilityPolicy");
+
+	/**
+	 * The readers and the routes that serve what they compute: the only classes that may call a
+	 * reader. A route writes through its service, and no service is on this list.
+	 */
+	private static final Set<String> READERS_AND_THEIR_ROUTES = Set.of(
+			TIME + ".TimeCalendarLayers", TIME + ".TimeHintsService", TIME + ".TimeAvailabilityPolicy",
+			TIME + ".TimeEntryController", TIME + ".TimeHintsController");
 
 	/** The services that write an entry, a timer, a submission or a correction. */
 	private static final Set<String> WRITE_PATHS = Set.of(
@@ -204,6 +213,14 @@ class ModuleBoundaryTest {
 				.that(named(WRITE_PATHS, "a write path of the module"))
 				.should().dependOnClassesThat(named(AVAILABILITY_READERS, "a read of availability"))
 				.because("a write path that knew a holiday could refuse one (R9)")
+				.check(PRODUCTION);
+		// The list of write paths misses the next service, and a helper between a write path and a
+		// reader passes the rule above. So the readers also name who may call them.
+		classes()
+				.that(named(AVAILABILITY_READERS, "a read of availability"))
+				.should().onlyBeAccessed().byClassesThat(
+						named(READERS_AND_THEIR_ROUTES, "a reader, or the route that serves what it reads"))
+				.because("a reader called from anywhere else is one step away from a refusal (R9)")
 				.check(PRODUCTION);
 	}
 

@@ -109,6 +109,8 @@ services:
       HINATA_ICS_SECRET: ${HINATA_ICS_SECRET:-}
       HINATA_ICS_ALLOWED_HOSTS: ${HINATA_ICS_ALLOWED_HOSTS:-}
       HINATA_ICS_DENIED_HOSTS: ${HINATA_ICS_DENIED_HOSTS:-}
+      # Planned minutes per weekday, Monday first, for people without their own.
+      HINATA_AVAILABILITY_DEFAULT_WEEKDAY_MINUTES: ${HINATA_AVAILABILITY_DEFAULT_WEEKDAY_MINUTES:-480,480,480,480,480,0,0}
       # X.509 client auth over TLS (no password in the URI). The app presents the
       # client certificate from HINATA_MONGO_TLS_KEYSTORE; register its subject DN
       # as the $external user via deploy/x509/init-prod-user.sh.

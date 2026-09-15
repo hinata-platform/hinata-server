@@ -24,12 +24,17 @@ import java.time.LocalDate;
 @Builder(toBuilder = true)
 @Document("time_off")
 @CompoundIndex(name = "user_to_from", def = "{'userId': 1, 'to': 1, 'from': 1}")
+// The order every list reads in, forwards or backwards: sorted from the index, not in memory.
+@CompoundIndex(name = "user_from_id", def = "{'userId': 1, 'from': 1, '_id': 1}")
 public class TimeOff {
 
 	public static final int NOTE_MAX = 200;
 
-	/** Longest one absence may be, the same bound as a window. */
-	public static final int DAYS_MAX = 366;
+	/**
+	 * Most absences one person keeps per year, counted by their first day. A week of vacation every
+	 * week and every sick day is still below it; a script filing thousands is not.
+	 */
+	public static final int PER_YEAR_MAX = 100;
 
 	public enum Type {
 		VACATION, SICK, OTHER
