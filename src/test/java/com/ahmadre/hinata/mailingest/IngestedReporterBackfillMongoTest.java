@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.mailingest;
 
+import com.ahmadre.hinata.common.TestMongo;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
@@ -29,7 +30,7 @@ import java.util.Optional;
 class IngestedReporterBackfillMongoTest {
 
 	@Container
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private MongoTemplate mongo;
 	private UserService users;

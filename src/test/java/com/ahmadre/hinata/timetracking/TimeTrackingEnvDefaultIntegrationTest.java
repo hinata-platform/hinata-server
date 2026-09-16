@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
@@ -57,7 +58,7 @@ class TimeTrackingEnvDefaultIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper();
 

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.notification;
 
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.me.NotificationPreferences;
@@ -82,7 +83,7 @@ class IssueMailDigestIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	/** Where the test's "now" lives, so the windows can be crossed instantly. */
 	static final AtomicReference<Instant> NOW =

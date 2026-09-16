@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditLogRepository;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.notification.Notification;
 import com.ahmadre.hinata.notification.NotificationRepository;
 import com.ahmadre.hinata.project.Project;
@@ -73,7 +74,7 @@ class IssueCloneIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	/** A sprint id is opaque to the creation path — no sprint document is read. */
 	private static final String SPRINT_ID = "sprint-1";

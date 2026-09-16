@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.notification.IssueDigestService;
 import com.ahmadre.hinata.notification.IssueMailDigest;
 import com.ahmadre.hinata.project.Project;
@@ -64,7 +65,7 @@ class IssueWatchIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	@Autowired
 	private MongoTemplate mongo;

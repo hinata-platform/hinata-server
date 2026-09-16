@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.git;
 
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
@@ -58,7 +59,7 @@ class SmartCommitTimeIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	static final Instant NOW = Instant.parse("2026-09-07T12:00:00Z");
 	private static final LocalDate TODAY = LocalDate.of(2026, 9, 7);

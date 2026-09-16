@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.mcp;
 
+import com.ahmadre.hinata.common.TestMongo;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -44,7 +45,7 @@ class McpSecurityIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper();
 	private static final String ADMIN_USER = "admin";

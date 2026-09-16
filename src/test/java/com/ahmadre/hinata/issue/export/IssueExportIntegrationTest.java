@@ -3,6 +3,7 @@ package com.ahmadre.hinata.issue.export;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditLogRepository;
+import com.ahmadre.hinata.common.TestMongo;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,7 +56,7 @@ class IssueExportIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper();
 	private static final String PASSWORD = "hinata-demo-2026";

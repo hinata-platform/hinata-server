@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.common.TestMongo;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
@@ -55,7 +56,7 @@ class TimerApiIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper();
 	private static final String ADMIN_USER = "admin";
@@ -74,7 +75,7 @@ class TimerApiIntegrationTest {
 
 	@BeforeAll
 	static void dockerImagePinned() {
-		assertThat(MONGO.getDockerImageName()).contains("mongo:8.0");
+		assertThat(MONGO.getDockerImageName()).contains(TestMongo.IMAGE);
 	}
 
 	@BeforeEach

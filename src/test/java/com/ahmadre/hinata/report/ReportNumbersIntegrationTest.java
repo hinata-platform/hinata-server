@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.report;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
@@ -57,7 +58,7 @@ class ReportNumbersIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	@Autowired
 	private MongoTemplate mongo;
