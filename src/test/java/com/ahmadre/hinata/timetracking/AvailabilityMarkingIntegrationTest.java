@@ -4,6 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.availability.AvailabilityController;
 import com.ahmadre.hinata.availability.HolidayController;
 import com.ahmadre.hinata.availability.TimeOff;
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.setup.ServerSettings;
@@ -66,7 +67,7 @@ class AvailabilityMarkingIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	/** Wednesday, 23 December 2026, noon. */
 	private static final Instant NOW = Instant.parse("2026-12-23T12:00:00Z");

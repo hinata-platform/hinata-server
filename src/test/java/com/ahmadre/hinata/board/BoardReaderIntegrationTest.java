@@ -2,6 +2,7 @@ package com.ahmadre.hinata.board;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueLink;
 import com.ahmadre.hinata.issue.IssueLinkGraphService;
@@ -64,7 +65,7 @@ class BoardReaderIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	@Autowired
 	private MongoTemplate mongo;

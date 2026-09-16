@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.ics.IcsFetchResult;
 import com.ahmadre.hinata.ics.IcsFetcher;
 import com.ahmadre.hinata.issue.Issue;
@@ -77,7 +78,7 @@ class AvailabilityIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	static final Instant NOW = Instant.parse("2026-12-16T12:00:00Z");
 

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.migration;
 
+import com.ahmadre.hinata.common.TestMongo;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
@@ -38,7 +39,7 @@ class ArticleIssueKeysBackfillTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	@Autowired
 	private MongoTemplate mongo;

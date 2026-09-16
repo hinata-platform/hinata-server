@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.e2e;
 
+import com.ahmadre.hinata.common.TestMongo;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -56,7 +57,7 @@ class ApiE2EIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper();
 	private static final String ADMIN_USER = "admin";
@@ -71,7 +72,7 @@ class ApiE2EIntegrationTest {
 	@BeforeAll
 	static void dockerImagePinned() {
 		// Fail loudly rather than silently pulling :latest.
-		assertThat(MONGO.getDockerImageName()).contains("mongo:8.0");
+		assertThat(MONGO.getDockerImageName()).contains(TestMongo.IMAGE);
 	}
 
 	// --- HTTP helpers ------------------------------------------------------

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.mailingest;
 
+import com.ahmadre.hinata.common.TestMongo;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.mongodb.client.MongoClients;
@@ -29,7 +30,7 @@ import org.testcontainers.utility.DockerImageName;
 class IngestedHtmlDescriptionBackfillMongoTest {
 
 	@Container
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final String HEADER = "Created from e-mail by a@b.de\n\n---\n\n";
 	private static final String HTML_BODY = "<table>\n<tr><td>x</td></tr>\n</table>";

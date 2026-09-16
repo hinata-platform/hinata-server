@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.mcp;
 
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.storage.AttachmentContentService;
 import com.ahmadre.hinata.storage.ImageOps;
@@ -75,7 +76,7 @@ class McpAttachmentIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper();
 	private static final String ADMIN_USER = "admin";

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.migration.MigrationMarkers;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
@@ -41,7 +42,7 @@ class IssueSearchTextIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	@Autowired
 	private MongoTemplate mongo;

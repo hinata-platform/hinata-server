@@ -9,7 +9,7 @@ name: hinata-dev
 
 services:
   mongo:
-    image: mongo:8.0
+    image: mongo:8.2.12
     # requireTLS + client-cert verification (tlsCAFile). --auth turns on access
     # control; the X.509 user is created by deploy/x509/setup-dev.sh.
     command: >-
