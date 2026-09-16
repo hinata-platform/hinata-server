@@ -4,6 +4,7 @@ import com.ahmadre.hinata.availability.Holiday;
 import com.ahmadre.hinata.availability.HolidayCalendar;
 import com.ahmadre.hinata.availability.TimeOff;
 import com.ahmadre.hinata.availability.WorkingSchedule;
+import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.notification.Notification;
 import com.ahmadre.hinata.notification.NotificationRepository;
@@ -60,7 +61,7 @@ class TimeReminderIntegrationTest {
 
 	@Container
 	@ServiceConnection
-	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse("mongo:8.0"));
+	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	static final LocalDate MONDAY = LocalDate.of(2026, 9, 7);
 
