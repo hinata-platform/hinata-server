@@ -82,6 +82,11 @@ public class TimeTrackingSettingsAudit implements SettingsAudit {
 		compare(changes, "advancedEnabled", was, now, ServerSettings.TimeTracking::getAdvancedEnabled);
 		compare(changes, "absenceManagementEnabled", was, now,
 				ServerSettings.TimeTracking::getAbsenceManagementEnabled);
+		// The names are the record worth keeping: who was given sight of everybody's
+		// absences, and by whom. The count alone would not answer that.
+		compare(changes, "absenceManagers", was, now,
+				block -> block.getAbsenceManagers() == null ? null
+						: String.join(",", block.getAbsenceManagers()));
 		compare(changes, "requiredFields", was, now,
 				block -> block.getRequiredFields() == null ? null
 						: "project=" + block.getRequiredFields().getProject()

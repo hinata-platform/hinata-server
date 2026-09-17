@@ -49,6 +49,8 @@ public class TimeTrackingAdminPrefill implements SettingsPrefill {
 		// screen greys it out while the extended module is off and says why;
 		// showing false there would claim somebody had turned it off.
 		view.setAbsenceManagementEnabled(settings.absenceManagementConfigured());
+		// Empty is an answer here too: it is what "administrators only" looks like.
+		view.setAbsenceManagers(settings.absenceManagers());
 
 		TimeTrackingSettings.RequiredFields required = settings.requiredFields();
 		ServerSettings.TimeTracking.RequiredFields requiredView =

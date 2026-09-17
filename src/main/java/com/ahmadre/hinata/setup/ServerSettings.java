@@ -422,6 +422,24 @@ public class ServerSettings {
 		 */
 		private Boolean absenceManagementEnabled;
 
+		/**
+		 * Who keeps absence types, entitlements and balances for everybody — the
+		 * people an operator names for it; null or empty ⇒ administrators only.
+		 *
+		 * <p>Named rather than derived from a role, because this is the one place
+		 * in the module where somebody sees another person's sick days as sick
+		 * days (Art. 9 DSGVO). "Every administrator" is a wider circle than most
+		 * operators want for that, and "every lead" would be wider still —
+		 * whoever creates a project leads it. So the circle is written down, and
+		 * an empty list keeps the conservative default rather than opening it up.
+		 *
+		 * <p>Administrators keep the right regardless: they can add themselves to
+		 * this list in one save, so pretending otherwise would only hide who can
+		 * see what.
+		 */
+		@Size(max = TimePolicy.ABSENCE_MANAGERS_MAX, message = "error.timeOff.managersTooMany")
+		private List<String> absenceManagers;
+
 		/** Which fields an entry must carry; null fields ⇒ env defaults. */
 		@Valid
 		private RequiredFields requiredFields;

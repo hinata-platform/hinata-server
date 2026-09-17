@@ -15,6 +15,7 @@ import org.springframework.validation.annotation.Validated;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -487,6 +488,14 @@ public class HinataProperties {
 		 * foundation was off would be a screen telling an untruth.
 		 */
 		private boolean absenceManagementEnabled = false;
+
+		/**
+		 * User ids that keep absence types, entitlements and balances for
+		 * everybody. Empty (the default) means administrators only, which is the
+		 * narrower circle and therefore the right default for a list whose
+		 * members see sick days as sick days (Art. 9 DSGVO).
+		 */
+		private List<String> absenceManagers = new ArrayList<>();
 
 		/** Which fields an entry must carry to be accepted. */
 		private RequiredFields requiredFields = new RequiredFields();

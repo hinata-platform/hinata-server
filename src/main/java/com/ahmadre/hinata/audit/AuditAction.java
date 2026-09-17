@@ -150,6 +150,22 @@ public enum AuditAction {
 	AVAILABILITY_HOLIDAYS_CHANGED(CONFIGURATION, INFO, true),
 	AVAILABILITY_HOLIDAYS_IMPORTED(CONFIGURATION, NOTICE, true),
 
+	// --- Absence management 2.0 (HIN-116) --------------------------------------
+	// The catalogue of absence types is instance configuration, like tags and
+	// holiday calendars: what an operator offers, not what anybody took.
+	TIME_OFF_TYPE_CHANGED(CONFIGURATION, NOTICE, true),
+	// An entitlement and a booking are statements about one person's claim, so
+	// they are DATA and they name the type, the year and the amount — never the
+	// reason text of a sick type, which is health data the log would outlive.
+	// WARNING for the booking: a balance is a claim somebody has, and "who moved
+	// my days, when and why" is the question this log exists to answer.
+	TIME_OFF_ENTITLEMENT_CHANGED(DATA, NOTICE, true),
+	TIME_OFF_LEDGER_BOOKED(DATA, WARNING, true),
+	// Joining and leaving dates: the only personal facts the module keeps, and
+	// only because waiting period, twelfths and settlement cannot be computed
+	// without them (§§ 4, 5, 7 Abs. 4 BUrlG).
+	TIME_OFF_EMPLOYMENT_CHANGED(DATA, NOTICE, true),
+
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),
 	PAT_REVOKED(INTEGRATION, NOTICE, true),
