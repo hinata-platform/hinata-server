@@ -131,8 +131,7 @@ public class TimeOffTypeController {
 
 	@GetMapping("/{id}")
 	public TimeOffTypeResponse get(@PathVariable String id) {
-		currentUser.require();
-		return TimeOffTypeResponse.from(types.require(id));
+		return TimeOffTypeResponse.from(types.require(currentUser.require(), id));
 	}
 
 	@PostMapping

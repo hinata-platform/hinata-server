@@ -533,16 +533,13 @@ public class NotificationService {
 				: words.in(locale, "timeOff.type." + (systemKey == null ? "other" : systemKey));
 		String title = words.of(person, "notify.timeOff.entitlement.title");
 		String body = words.in(locale, "notify.timeOff.entitlement.body", type, year,
-				days(locale, milliDays));
+				words.timeOffDays(locale, milliDays));
 		deliverGated(person, Notification.Type.TIME_OFF_ENTITLEMENT_CHANGED, title, body,
 				words.of(person, "notify.time.pushTitle"),
 				words.of(person, "notify.timeOff.push"), "/time/absences");
 	}
 
 	/** Thousandths of a working day as days, in the reader's own number format. */
-	private String days(Locale locale, int milliDays) {
-		return words.in(locale, "notify.timeOff.days", milliDays / 1000.0);
-	}
 
 	/**
 	 * Tells a project's leads that its recorded time reached a threshold of its budget, or of the

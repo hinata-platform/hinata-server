@@ -33,6 +33,15 @@ public final class TimeOffLegalFloor {
 	/** The days the statute names for that week: 24. */
 	public static final int STATUTORY_DAYS = WEEKS * STATUTORY_WEEK_DAYS;
 
+	/**
+	 * The week to assume where there is no person to ask about: five days, twenty days of leave.
+	 *
+	 * <p>For a screen that spans a page of people rather than standing in front of one — a keeper's
+	 * list, the editor where a quota is typed. It is a figure to compare against, never one to
+	 * decide with: whose week it really is, only that person's pattern says.
+	 */
+	public static final int STANDARD_WORKING_DAYS = 5;
+
 	private TimeOffLegalFloor() {
 	}
 

@@ -348,18 +348,73 @@ class TimeOffBalanceIntegrationTest {
 	// --- the statutory floor ---------------------------------------------------------------
 
 	@Test
+	@DisplayName("a quota under four weeks is flagged on the balance and saved all the same")
 	void anAllowanceBelowFourWeeksIsFlaggedAndStillSaved() {
 		TimeOffType thin = types.update(keeper, vacation.getId(),
 				TimeOffTypeService.Draft.builder().allowanceMilliDays(18 * TimeOffType.DAY).build());
 
-		TimeOffBalanceService.LegalFloor floor = timeOff.legalFloor(member.getId(), thin);
+		// Read where the person reads it, rather than through a helper nothing else calls.
+		TimeOffBalanceService.Balance balance = balanceOf(member, vacation);
 
-		// Nobody saved a working pattern, so the instance default — five days — decides.
-		assertThat(floor.workingDaysPerWeek()).isEqualTo(5);
-		assertThat(floor.minimumMilliDays()).isEqualTo(20 * TimeOffType.DAY);
-		assertThat(floor.fallsShort()).isTrue();
+		assertThat(balance.belowLegalMinimum()).isTrue();
+		// Nobody saved a working pattern, so the instance default — five days — decides: § 3 Abs. 1
+		// BUrlG is four weeks of whatever the week is.
+		assertThat(balance.legalMinimumMilliDays()).isEqualTo(20 * TimeOffType.DAY);
+		assertThat(timeOff.workingDaysPerWeek(member.getId())).isEqualTo(5);
 		// Saved all the same: a warning, never a refusal.
 		assertThat(thin.allowanceMilliDays()).isEqualTo(18 * TimeOffType.DAY);
+	}
+
+	@Test
+	@DisplayName("why a year is short is read back, not guessed from the numbers")
+	void theAccrualReasonIsStoredWithTheGrant() {
+		// Somebody who left in March: eight of twenty, the same number a waiting period would
+		// give — and § 5 BUrlG treats the two as different things.
+		timeOff.saveEmployment(keeper, member.getId(), LocalDate.of(2020, 1, 1),
+				LocalDate.of(YEAR, 3, 31), null);
+
+		timeOff.grant(keeper, member.getId(), vacation.getId(), YEAR, null, null);
+
+		assertThat(balanceOf(member, vacation).reason())
+				.isEqualTo(TimeOffBalances.Reason.LEFT_IN_FIRST_HALF);
+	}
+
+	@Test
+	@DisplayName("a correction cannot be booked against a type that has no balance")
+	void anAdjustmentNeedsATypeWithAQuota() {
+		TimeOffType sick = types.byKey(TimeOffType.SYSTEM_SICK).orElseThrow();
+
+		assertThatThrownBy(() -> timeOff.adjust(keeper, member.getId(), sick.getId(), YEAR,
+				TimeOffType.DAY, null, "Wiedereingliederung"))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.timeOff.unlimitedHasNoBalance");
+	}
+
+	@Test
+	@DisplayName("the correction's reason stays on the row and never reaches the audit log")
+	void theReasonIsNotCopiedIntoTheAuditLog() {
+		timeOff.grant(keeper, member.getId(), vacation.getId(), YEAR, null, null);
+
+		timeOff.adjust(keeper, member.getId(), vacation.getId(), YEAR, 5 * TimeOffType.DAY, null,
+				"Zusatzurlaub, GdB 50");
+
+		// It is the designated home for facts under § 208 SGB IX — Art. 9 data — so it lives on
+		// the ledger row, which goes when the row goes, and not in a log that outlives the account.
+		List<AuditLog> booked = mongo.find(Query.query(
+				Criteria.where("action").is(AuditAction.TIME_OFF_LEDGER_BOOKED.name())), AuditLog.class);
+		assertThat(booked).hasSize(1);
+		assertThat(booked.getFirst().getMetadata()).doesNotContainKey("reason");
+		assertThat(booked.getFirst().getMetadata()).containsEntry("year", String.valueOf(YEAR));
+		assertThat(ledger.findAll()).anyMatch(row -> "Zusatzurlaub, GdB 50".equals(row.getReason()));
+	}
+
+	@Test
+	@DisplayName("the one amount that would overflow the balance is refused")
+	void theDeepestIntegerIsNotAnAdjustment() {
+		assertThatThrownBy(() -> timeOff.adjust(keeper, member.getId(), vacation.getId(), YEAR,
+				Integer.MIN_VALUE, null, "overflow"))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.timeOff.allowanceInvalid");
 	}
 
 	// --- helpers -------------------------------------------------------------------------

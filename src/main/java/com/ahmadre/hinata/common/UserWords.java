@@ -50,6 +50,21 @@ public class UserWords {
 	}
 
 	/** {@code key} rendered for an explicit locale. */
+	/**
+	 * A number of absence days, written the way [locale] writes numbers.
+	 *
+	 * <p>Days travel as thousandths of a working day, so half a day is 500 and five twelfths of
+	 * twenty days is 8333. Two callers render that — the data export and the notification that
+	 * tells somebody their entitlement changed — and they must agree, so the conversion is here.
+	 *
+	 * <p>The divisor mirrors {@code TimeOffType.DAY}, which lives in the absence-management module
+	 * and is not importable from here: the module sits on top of the core and the core knows
+	 * nothing about it. {@code TimeOffDaysTest} asserts the two agree.
+	 */
+	public String timeOffDays(Locale locale, int milliDays) {
+		return in(locale, "notify.timeOff.days", milliDays / 1000.0);
+	}
+
 	public String in(Locale locale, String key, Object... args) {
 		return messages.getMessage(key, args, key, locale == null ? Locale.ENGLISH : locale);
 	}

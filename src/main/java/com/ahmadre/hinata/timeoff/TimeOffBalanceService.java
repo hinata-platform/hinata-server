@@ -28,7 +28,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Entitlements, balances and the bookings that move them — plus the two employment dates the
@@ -89,7 +91,8 @@ public class TimeOffBalanceService {
 	public record Balance(String typeId, int year, int entitledMilliDays, int accruedMilliDays,
 			int carriedInMilliDays, int adjustedMilliDays, int takenMilliDays, int plannedMilliDays,
 			int expiredMilliDays, int paidOutMilliDays, int remainingMilliDays, LocalDate expiresOn,
-			boolean granted, boolean unlimited, TimeOffBalances.Reason reason) {
+			boolean granted, boolean unlimited, TimeOffBalances.Reason reason,
+			boolean belowLegalMinimum, int legalMinimumMilliDays) {
 	}
 
 	/** What a bulk grant would do, before it does it. */
@@ -119,6 +122,10 @@ public class TimeOffBalanceService {
 	public List<Balance> balances(User viewer, String userId, int year) {
 		User person = access.requireSubject(viewer, userId);
 		assertYearInRange(year);
+		// One reading of the working week for the whole screen: the statutory floor is a property
+		// of the person's week (§ 3 Abs. 1 BUrlG), not of each type, and asking per row would make
+		// a balance screen cost as many round trips as the operator has types.
+		int workingDays = workingDaysPerWeek(person.getId());
 		Map<String, TimeOffType> byId = new LinkedHashMap<>();
 		for (TimeOffType type : types.list(viewer, true)) {
 			byId.put(type.getId(), type);
@@ -129,9 +136,15 @@ public class TimeOffBalanceService {
 		for (TimeOffEntitlement entitlement : entitlements.findByUserIdAndYear(person.getId(), year)) {
 			granted.put(entitlement.getTypeId(), entitlement);
 		}
-		// A retired type with history still has to answer for itself.
-		for (String typeId : sums.keySet()) {
-			byId.computeIfAbsent(typeId, id -> types.require(id));
+		// A retired type with history still has to answer for itself — a balance that vanished
+		// because an operator retired the type would be a balance somebody is still owed. In one
+		// query: a member sees only active types, so every year of history under a retired one
+		// would otherwise be its own round trip.
+		List<String> retired = sums.keySet().stream().filter(id -> !byId.containsKey(id)).toList();
+		if (!retired.isEmpty()) {
+			for (TimeOffType type : types.findAllById(retired)) {
+				byId.put(type.getId(), type);
+			}
 		}
 		List<Balance> balances = new ArrayList<>();
 		for (TimeOffType type : byId.values()) {
@@ -140,13 +153,14 @@ public class TimeOffBalanceService {
 				continue;
 			}
 			balances.add(balance(type, year, sums.get(type.getId()),
-					planned.getOrDefault(type.getId(), 0), granted.get(type.getId())));
+					planned.getOrDefault(type.getId(), 0), granted.get(type.getId()), workingDays));
 		}
 		return balances;
 	}
 
 	private Balance balance(TimeOffType type, int year,
-			Map<TimeOffLedgerEntry.Kind, Integer> sums, int planned, TimeOffEntitlement granted) {
+			Map<TimeOffLedgerEntry.Kind, Integer> sums, int planned, TimeOffEntitlement granted,
+			int workingDaysPerWeek) {
 		Map<TimeOffLedgerEntry.Kind, Integer> byKind =
 				sums == null ? Map.of() : sums;
 		int accrual = byKind.getOrDefault(TimeOffLedgerEntry.Kind.ACCRUAL, 0);
@@ -166,10 +180,23 @@ public class TimeOffBalanceService {
 				accrual, carriedIn, adjusted,
 				Math.max(0, takenTotal - planned), planned, expired, paidOut, remaining,
 				carryoverExpiry(type, year), granted != null, type.isUnlimited(),
-				granted == null ? null : reasonOf(granted));
+				granted == null ? null : reasonOf(granted),
+				TimeOffLegalFloor.fallsShort(type, workingDaysPerWeek),
+				TimeOffLegalFloor.minimumMilliDays(workingDaysPerWeek));
 	}
 
+	/**
+	 * Why a year worked out the way it did: what was decided when it was granted.
+	 *
+	 * <p>Read, not re-derived. "Eight of twenty" is the same number whether somebody joined in
+	 * July, left in March or is still inside their waiting period, and § 5 BUrlG treats those as
+	 * three different things — a derivation from the numbers can only ever guess one of them. The
+	 * guess is kept for documents written before the field existed, and for nothing else.
+	 */
 	private static TimeOffBalances.Reason reasonOf(TimeOffEntitlement granted) {
+		if (granted.getReason() != null) {
+			return granted.getReason();
+		}
 		if (granted.accruedMilliDays() == 0) {
 			return TimeOffBalances.Reason.NOT_EMPLOYED;
 		}
@@ -254,9 +281,14 @@ public class TimeOffBalanceService {
 		TimeOffType type = types.require(typeId);
 		Pageable pageable = PageRequest.of(Math.max(0, page), Math.clamp(size, 1, PAGE_MAX),
 				Sort.by(Sort.Direction.ASC, "displayName"));
-		// Escaped, like every other directory search: a term is a term, never a pattern.
-		Page<User> people = users.searchActive(Pattern.quote(query == null ? "" : query.strip()),
-				pageable);
+		String term = query == null ? "" : query.strip();
+		// With no term this is the whole directory, and the search finder would read every active
+		// document to run three unanchored regexes over it. The first page of a keeper's list is
+		// exactly that case, so it asks the indexed finder instead.
+		// With a term: escaped, like every other directory search — a term is a term, never a
+		// pattern.
+		Page<User> people = term.isEmpty() ? users.findByActiveIsTrue(pageable)
+				: users.searchActive(Pattern.quote(term), pageable);
 		List<String> ids = people.getContent().stream().map(User::getId).toList();
 		if (ids.isEmpty()) {
 			return people.map(person -> new Standing(person.getId(), 0, 0, 0, 0, 0, false, null, null));
@@ -273,8 +305,11 @@ public class TimeOffBalanceService {
 			facts.put(row.getUserId(), row);
 		}
 		return people.map(person -> {
+			// The floor plays no part in a keeper's list — it is about one person's own week, and
+			// the list spans a page of them — so the standard week stands in and is not read.
 			Balance balance = balance(type, year, sums.get(person.getId()),
-					planned.getOrDefault(person.getId(), 0), granted.get(person.getId()));
+					planned.getOrDefault(person.getId(), 0), granted.get(person.getId()),
+					TimeOffLegalFloor.STANDARD_WORKING_DAYS);
 			TimeOffEmployment dates = facts.get(person.getId());
 			return new Standing(person.getId(), balance.entitledMilliDays(),
 					balance.accruedMilliDays(), balance.takenMilliDays(), balance.plannedMilliDays(),
@@ -334,25 +369,49 @@ public class TimeOffBalanceService {
 		access.requireKeeper(actor);
 		assertYearInRange(year);
 		User person = users.findById(userId).orElseThrow(() -> ApiException.notFound("user"));
+		TimeOffType type = grantableType(typeId);
+		if (entitlements.findByUserIdAndTypeIdAndYear(person.getId(), typeId, year).isPresent()) {
+			throw ApiException.conflict("error.timeOff.alreadyGranted");
+		}
+		return write(actor, person, type, year, allowanceFor(type, allowanceOverride),
+				allowanceOverride != null, employment.findByUserId(person.getId()).orElse(null), note);
+	}
+
+	/** The type a year may be granted for at all: one with a quota to hand out. */
+	private TimeOffType grantableType(String typeId) {
 		TimeOffType type = types.require(typeId);
 		if (type.isUnlimited() || !type.countsAgainstBalance()) {
 			throw ApiException.badRequest("error.timeOff.unlimitedHasNoBalance");
 		}
-		if (entitlements.findByUserIdAndTypeIdAndYear(person.getId(), typeId, year).isPresent()) {
-			throw ApiException.conflict("error.timeOff.alreadyGranted");
-		}
-		int allowance = allowanceOverride != null ? allowanceOverride : type.allowanceMilliDays();
+		return type;
+	}
+
+	private static int allowanceFor(TimeOffType type, Integer override) {
+		int allowance = override != null ? override : type.allowanceMilliDays();
 		if (allowance < 0 || allowance > TimeOffType.ALLOWANCE_MAX_MILLI_DAYS) {
 			throw ApiException.badRequest("error.timeOff.allowanceInvalid");
 		}
-		TimeOffBalances.Accrued accrued = accrueFor(person.getId(), type, allowance, year);
+		return allowance;
+	}
+
+	/**
+	 * One person's grant, written: the entitlement, the accrual behind it, the log and the notice.
+	 *
+	 * <p>Takes the employment record rather than reading it, so a bulk grant can read a page of
+	 * them in one query. Everything that is the same for everybody in a bulk — the type, the
+	 * allowance, the keeper check — is settled before this is called.
+	 */
+	private TimeOffEntitlement write(User actor, User person, TimeOffType type, int year,
+			int allowance, boolean individual, TimeOffEmployment facts, String note) {
+		TimeOffBalances.Accrued accrued = accrueWith(facts, type, allowance, year);
 		TimeOffEntitlement entitlement = TimeOffEntitlement.builder()
 				.userId(person.getId())
-				.typeId(typeId)
+				.typeId(type.getId())
 				.year(year)
 				.allowanceMilliDays(allowance)
 				.accruedMilliDays(accrued.milliDays())
-				.source(allowanceOverride != null ? TimeOffEntitlement.Source.INDIVIDUAL
+				.reason(accrued.reason())
+				.source(individual ? TimeOffEntitlement.Source.INDIVIDUAL
 						: TimeOffEntitlement.Source.TYPE_DEFAULT)
 				.note(note == null || note.isBlank() ? null : note.strip())
 				.grantedBy(actor.getId())
@@ -368,7 +427,7 @@ public class TimeOffBalanceService {
 		if (accrued.milliDays() > 0) {
 			book(TimeOffLedgerEntry.builder()
 					.userId(person.getId())
-					.typeId(typeId)
+					.typeId(type.getId())
 					.year(year)
 					.kind(TimeOffLedgerEntry.Kind.ACCRUAL)
 					.milliDays(accrued.milliDays())
@@ -398,11 +457,17 @@ public class TimeOffBalanceService {
 		TimeOffType type = types.require(typeId);
 		List<String> people = capped(userIds);
 		int allowance = allowanceOverride != null ? allowanceOverride : type.allowanceMilliDays();
+		// Two queries for the whole preview, whatever its length. A preview of five hundred people
+		// that asked per person would be a thousand round trips for a screen that writes nothing —
+		// and the keeper fires it again with every allowance they try.
+		Set<String> already = grantedAlready(typeId, year, people);
+		Map<String, TimeOffEmployment> facts = employmentOf(people);
 		List<GrantPreview> preview = new ArrayList<>();
 		for (String userId : people) {
-			boolean already = entitlements.findByUserIdAndTypeIdAndYear(userId, typeId, year).isPresent();
-			TimeOffBalances.Accrued accrued = accrueFor(userId, type, allowance, year);
-			preview.add(new GrantPreview(userId, accrued.milliDays(), accrued.reason(), already));
+			TimeOffBalances.Accrued accrued =
+					accrueWith(facts.get(userId), type, allowance, year);
+			preview.add(new GrantPreview(userId, accrued.milliDays(), accrued.reason(),
+					already.contains(userId)));
 		}
 		return preview;
 	}
@@ -411,18 +476,53 @@ public class TimeOffBalanceService {
 	 * Grants a year to several people at once. Anybody already granted is skipped rather than
 	 * refused: a keeper adding three new joiners to a year they granted in January should not have
 	 * to deselect the other forty.
+	 *
+	 * <p>Four queries before the loop rather than nine inside it. The type in particular was being
+	 * read once per person — five hundred reads of one document — and the duplicate check twice.
+	 * What is left per person is what is genuinely per person: the entitlement, its accrual, the
+	 * log entry and the notice.
 	 */
 	public List<TimeOffEntitlement> grantMany(User actor, String typeId, int year,
 			List<String> userIds, Integer allowanceOverride) {
 		access.requireKeeper(actor);
+		assertYearInRange(year);
+		List<String> people = capped(userIds);
+		TimeOffType type = grantableType(typeId);
+		int allowance = allowanceFor(type, allowanceOverride);
+		Map<String, User> byId = new HashMap<>();
+		for (User person : users.findAllById(people)) {
+			byId.put(person.getId(), person);
+		}
+		Set<String> already = grantedAlready(typeId, year, people);
+		Map<String, TimeOffEmployment> facts = employmentOf(people);
 		List<TimeOffEntitlement> granted = new ArrayList<>();
-		for (String userId : capped(userIds)) {
-			if (entitlements.findByUserIdAndTypeIdAndYear(userId, typeId, year).isPresent()) {
+		for (String userId : people) {
+			User person = byId.get(userId);
+			// An id nobody answers to is skipped rather than refused: a bulk grant is a list
+			// somebody assembled on a screen, and one stale row should not lose the other forty.
+			if (person == null || already.contains(userId)) {
 				continue;
 			}
-			granted.add(grant(actor, userId, typeId, year, allowanceOverride, null));
+			granted.add(write(actor, person, type, year, allowance, allowanceOverride != null,
+					facts.get(userId), null));
 		}
 		return granted;
+	}
+
+	/** Who among [people] already has this type and year, in one query. */
+	private Set<String> grantedAlready(String typeId, int year, List<String> people) {
+		return entitlements.findByTypeIdAndYearAndUserIdIn(typeId, year, people).stream()
+				.map(TimeOffEntitlement::getUserId)
+				.collect(Collectors.toSet());
+	}
+
+	/** The joining and leaving dates of [people], in one query. */
+	private Map<String, TimeOffEmployment> employmentOf(List<String> people) {
+		Map<String, TimeOffEmployment> facts = new HashMap<>();
+		for (TimeOffEmployment row : employment.findByUserIdIn(people)) {
+			facts.put(row.getUserId(), row);
+		}
+		return facts;
 	}
 
 	private static List<String> capped(List<String> userIds) {
@@ -435,11 +535,15 @@ public class TimeOffBalanceService {
 		return userIds.stream().distinct().toList();
 	}
 
-	private TimeOffBalances.Accrued accrueFor(String userId, TimeOffType type, int allowance,
-			int year) {
-		TimeOffEmployment facts = employment.findByUserId(userId).orElse(null);
-		TimeOffBalances.Rules rules = new TimeOffBalances.Rules(allowance, type.yearAnchor(),
-				type.waitingPeriodMonths(), type.prorateOnJoin(), type.prorateOnLeave());
+	/**
+	 * What a year is worth for somebody whose employment dates are already in hand.
+	 *
+	 * <p>The dates are passed in rather than read, so a bulk grant reads a page of them at once.
+	 * The allowance overrides the type's, which is the whole point of an individual grant.
+	 */
+	private static TimeOffBalances.Accrued accrueWith(TimeOffEmployment facts, TimeOffType type,
+			int allowance, int year) {
+		TimeOffBalances.Rules rules = TimeOffBalances.Rules.of(type).withAllowance(allowance);
 		return TimeOffBalances.accrue(rules, facts == null ? null : facts.getHiredOn(),
 				facts == null ? null : facts.getLeftOn(), year);
 	}
@@ -457,11 +561,18 @@ public class TimeOffBalanceService {
 		access.requireKeeper(actor);
 		assertYearInRange(year);
 		User person = users.findById(userId).orElseThrow(() -> ApiException.notFound("user"));
-		TimeOffType type = types.require(typeId);
+		// The same refusal a grant makes. Without it a keeper could book days against a type that
+		// contractually has none — the sick type among them — and § 3 EFZG is continued pay, not a
+		// quota somebody draws down.
+		TimeOffType type = grantableType(typeId);
 		if (milliDays == 0) {
 			throw ApiException.badRequest("error.timeOff.adjustmentZero");
 		}
-		if (Math.abs(milliDays) > TimeOffType.ALLOWANCE_MAX_MILLI_DAYS) {
+		// Two-sided rather than Math.abs: abs(Integer.MIN_VALUE) is Integer.MIN_VALUE, which is
+		// less than any ceiling, so the bound would let through the one value that overflows the
+		// balance aggregation — into a row nothing can delete.
+		if (milliDays < -TimeOffType.ALLOWANCE_MAX_MILLI_DAYS
+				|| milliDays > TimeOffType.ALLOWANCE_MAX_MILLI_DAYS) {
 			throw ApiException.badRequest("error.timeOff.allowanceInvalid");
 		}
 		String text = reason == null ? "" : reason.strip();
@@ -482,13 +593,17 @@ public class TimeOffBalanceService {
 				.reason(text)
 				.actorId(actor.getId())
 				.build());
+		// The type, the year and the amount — never the sentence. The reason is free text, and
+		// this module's own documentation names it as the place additional leave under § 208
+		// SGB IX or a reduction under § 17 BEEG is written down: special categories of personal
+		// data (Art. 9 DSGVO). On the ledger row it is visible to the person and their keepers and
+		// goes when the row goes; in the admin audit log it would outlive the account, survive the
+		// module being switched off, and be readable by every administrator. The same rule the
+		// employment dates already follow.
 		audit.event(AuditAction.TIME_OFF_LEDGER_BOOKED).actor(actor).target(person)
 				.meta("type", String.valueOf(type.getKey()))
 				.meta("year", String.valueOf(year))
 				.meta("milliDays", String.valueOf(milliDays))
-				// The reason is an operator's sentence about an entitlement, not a diagnosis: a
-				// sick type carries no allowance, so an adjustment is never about an illness.
-				.meta("reason", text)
 				.log();
 		return entry;
 	}
@@ -547,20 +662,6 @@ public class TimeOffBalanceService {
 	}
 
 	// --- the statutory floor ------------------------------------------------------
-
-	/**
-	 * Whether a type's allowance falls short of the statutory minimum for somebody's working week,
-	 * and what that minimum is. A warning for the screen, never a refusal — see
-	 * {@link TimeOffLegalFloor}.
-	 */
-	public record LegalFloor(int minimumMilliDays, int workingDaysPerWeek, boolean fallsShort) {
-	}
-
-	public LegalFloor legalFloor(String userId, TimeOffType type) {
-		int days = workingDaysPerWeek(userId);
-		return new LegalFloor(TimeOffLegalFloor.minimumMilliDays(days), days,
-				TimeOffLegalFloor.fallsShort(type, days));
-	}
 
 	/**
 	 * The working days in somebody's week today — read once per screen rather than once per type,

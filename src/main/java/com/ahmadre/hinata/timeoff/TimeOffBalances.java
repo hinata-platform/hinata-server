@@ -43,6 +43,12 @@ public final class TimeOffBalances {
 			return new Rules(type.allowanceMilliDays(), type.yearAnchor(), type.waitingPeriodMonths(),
 					type.prorateOnJoin(), type.prorateOnLeave());
 		}
+
+		/** The same rules with a different quota — an individual grant, which § 5 still prorates. */
+		public Rules withAllowance(int allowanceMilliDays) {
+			return new Rules(allowanceMilliDays, anchor, waitingPeriodMonths, prorateOnJoin,
+					prorateOnLeave);
+		}
 	}
 
 	/** Why a year worked out the way it did. The screen says this in words; the test asserts it. */
