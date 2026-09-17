@@ -25,8 +25,6 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Balances, the journal behind them, the grants that start them, and the two employment dates the
@@ -45,7 +43,6 @@ import java.util.stream.Collectors;
 public class TimeOffController {
 
 	private final TimeOffBalanceService timeOff;
-	private final TimeOffTypeService types;
 	private final CurrentUser currentUser;
 	private final Clock clock;
 
@@ -60,6 +57,27 @@ public class TimeOffController {
 			int plannedMilliDays, int expiredMilliDays, int paidOutMilliDays, int remainingMilliDays,
 			LocalDate expiresOn, boolean granted, boolean unlimited, String reason,
 			boolean belowLegalMinimum, int legalMinimumMilliDays) {
+
+		static BalanceResponse from(TimeOffBalanceService.Balance balance) {
+			return new BalanceResponse(balance.typeId(), balance.year(), balance.entitledMilliDays(),
+					balance.accruedMilliDays(), balance.carriedInMilliDays(),
+					balance.adjustedMilliDays(), balance.takenMilliDays(), balance.plannedMilliDays(),
+					balance.expiredMilliDays(), balance.paidOutMilliDays(),
+					balance.remainingMilliDays(), balance.expiresOn(), balance.granted(),
+					balance.unlimited(), name(balance.reason()), balance.belowLegalMinimum(),
+					balance.legalMinimumMilliDays());
+		}
+	}
+
+	/**
+	 * An enum's name on the wire, or a real JSON null.
+	 *
+	 * <p>{@code String.valueOf(null)} is the string "null", which a client cannot tell from a
+	 * reason called null — and the one that read it built a translation key out of it and printed
+	 * it on the screen. Found in the live check.
+	 */
+	private static String name(Enum<?> value) {
+		return value == null ? null : value.name();
 	}
 
 	/** Everything a balance screen needs in one answer, including the statutory floor to warn about. */
@@ -72,7 +90,7 @@ public class TimeOffController {
 
 		static LedgerEntryResponse from(TimeOffLedgerEntry entry) {
 			return new LedgerEntryResponse(entry.getId(), entry.getTypeId(), entry.getYear(),
-					String.valueOf(entry.getKind()), entry.milliDays(), entry.getEffectiveOn(),
+					name(entry.getKind()), entry.milliDays(), entry.getEffectiveOn(),
 					entry.getReason(), entry.getActorId(), entry.getRefId());
 		}
 	}
@@ -83,7 +101,7 @@ public class TimeOffController {
 		static EntitlementResponse from(TimeOffEntitlement entitlement) {
 			return new EntitlementResponse(entitlement.getId(), entitlement.getUserId(),
 					entitlement.getTypeId(), entitlement.getYear(), entitlement.allowanceMilliDays(),
-					entitlement.accruedMilliDays(), String.valueOf(entitlement.getSource()),
+					entitlement.accruedMilliDays(), name(entitlement.getSource()),
 					entitlement.getNote());
 		}
 	}
@@ -127,7 +145,8 @@ public class TimeOffController {
 			@NotBlank String userId,
 			@NotBlank String typeId,
 			@NotNull @Min(1970) @Max(2200) Integer year,
-			@NotNull Integer milliDays,
+			@NotNull @Min(-TimeOffType.ALLOWANCE_MAX_MILLI_DAYS)
+			@Max(TimeOffType.ALLOWANCE_MAX_MILLI_DAYS) Integer milliDays,
 			LocalDate effectiveOn,
 			@NotBlank @Size(max = TimeOffLedgerEntry.REASON_MAX) String reason) {
 	}
@@ -160,27 +179,8 @@ public class TimeOffController {
 		int leaveYear = year != null ? year : LocalDate.now(clock).getYear();
 		List<TimeOffBalanceService.Balance> balances = timeOff.balances(viewer, userId, leaveYear);
 		String subject = userId == null || userId.isBlank() ? viewer.getId() : userId;
-		// One reading of the working week and one of the catalogue for the whole screen: the floor
-		// is a property of the person's week, not of each type, and a query per row would make a
-		// balance screen cost as many round trips as the operator has types.
-		int workingDays = timeOff.workingDaysPerWeek(subject);
-		int minimum = TimeOffLegalFloor.minimumMilliDays(workingDays);
-		Map<String, TimeOffType> catalogue = types.list(viewer, true).stream()
-				.collect(Collectors.toMap(TimeOffType::getId, type -> type, (first, second) -> first));
-		List<BalanceResponse> rows = balances.stream()
-				.map(balance -> {
-					TimeOffType type = catalogue.get(balance.typeId());
-					boolean belowMinimum = type != null && TimeOffLegalFloor.fallsShort(type, workingDays);
-					return new BalanceResponse(balance.typeId(), balance.year(),
-							balance.entitledMilliDays(), balance.accruedMilliDays(),
-							balance.carriedInMilliDays(), balance.adjustedMilliDays(),
-							balance.takenMilliDays(), balance.plannedMilliDays(),
-							balance.expiredMilliDays(), balance.paidOutMilliDays(),
-							balance.remainingMilliDays(), balance.expiresOn(), balance.granted(),
-							balance.unlimited(), String.valueOf(balance.reason()), belowMinimum, minimum);
-				})
-				.toList();
-		return new BalancesResponse(subject, leaveYear, workingDays, rows);
+		return new BalancesResponse(subject, leaveYear, timeOff.workingDaysPerWeek(subject),
+				balances.stream().map(BalanceResponse::from).toList());
 	}
 
 	@GetMapping("/balances/{userId}/{typeId}/{year}/ledger")

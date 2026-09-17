@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.DateTimeException;
 import java.time.MonthDay;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -82,6 +83,27 @@ public class TimeOffTypeService {
 
 	public TimeOffType require(String id) {
 		return types.findById(id).orElseThrow(() -> ApiException.notFound("timeOffType"));
+	}
+
+	/**
+	 * A named set of types, in one query — for a balance screen that has to name the retired types
+	 * somebody still has history under.
+	 */
+	public List<TimeOffType> findAllById(Collection<String> ids) {
+		return ids == null || ids.isEmpty() ? List.of() : types.findAllById(ids);
+	}
+
+	/**
+	 * One type, if the reader may see it at all. A retired type is invisible to everybody but a
+	 * keeper, exactly as {@link #list} decides for the catalogue — two endpoints about the same
+	 * rule should not disagree about it.
+	 */
+	public TimeOffType require(User viewer, String id) {
+		TimeOffType type = require(id);
+		if (!type.isActive() && !access.isKeeper(viewer)) {
+			throw ApiException.notFound("timeOffType");
+		}
+		return type;
 	}
 
 	public Optional<TimeOffType> byKey(String key) {
@@ -262,6 +284,15 @@ public class TimeOffTypeService {
 		if (type.getKind() == TimeOffType.Kind.SICK && Boolean.TRUE.equals(type.getApprovalRequired())) {
 			// Refused rather than silently corrected: the screen has to be able to explain it.
 			throw ApiException.badRequest("error.timeOff.sickNeedsNoApproval");
+		}
+		if (type.getKind() == TimeOffType.Kind.SICK
+				&& (type.countsAgainstBalance() || type.accrual() != TimeOffType.Accrual.NONE
+						|| type.allowanceMilliDays() > 0)) {
+			// § 3 EFZG is continued pay, not a quota somebody draws down — being ill is not a
+			// budget that runs out. And a sick type with a balance would be granted like any
+			// other, which sends the person an email naming the type: the one channel where the
+			// name of a sick-leave type has no business being (Art. 9 DSGVO).
+			throw ApiException.badRequest("error.timeOff.sickNeedsNoBalance");
 		}
 		int allowance = type.allowanceMilliDays();
 		if (allowance < 0 || allowance > TimeOffType.ALLOWANCE_MAX_MILLI_DAYS) {

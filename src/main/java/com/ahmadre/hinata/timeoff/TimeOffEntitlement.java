@@ -65,6 +65,17 @@ public class TimeOffEntitlement {
 
 	private Source source;
 
+	/**
+	 * Why the year worked out the way it did, as {@link TimeOffBalances#accrue} decided at the
+	 * moment of the grant.
+	 *
+	 * <p>Stored rather than re-derived, because it cannot be re-derived: "eight of twenty" is the
+	 * same number whether somebody joined in July, left in March or is still inside their waiting
+	 * period, and § 5 BUrlG treats those as three different things. Null on a document written
+	 * before this field existed, and then the reader falls back to what the numbers still allow.
+	 */
+	private TimeOffBalances.Reason reason;
+
 	/** Why this person got something other than the type's figure. Free text, optional. */
 	private String note;
 

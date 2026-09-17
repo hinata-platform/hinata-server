@@ -34,10 +34,13 @@ import java.time.LocalDate;
 @Data
 @Builder(toBuilder = true)
 @Document("time_off_ledger")
-// The balance query and the ledger list both read one person, one type, one year, in date order.
-// Equality first, then the sort — the order the index can actually serve.
-@CompoundIndex(name = "user_type_year_on_id",
-		def = "{'userId': 1, 'typeId': 1, 'year': 1, 'effectiveOn': 1, '_id': 1}")
+// One person, one leave year, then the type, then the date. Three equality predicates before the
+// sort, and their order among themselves does not change what the index can bound — but putting
+// `year` second does: the balance screen sums a person's whole year across every type, and with
+// `typeId` in the way that query could bound on the person alone and had to walk every row they
+// ever had. HIN-116 performance review.
+@CompoundIndex(name = "user_year_type_on_id",
+		def = "{'userId': 1, 'year': 1, 'typeId': 1, 'effectiveOn': 1, '_id': 1}")
 // Whether a type has any history at all, which is what stands between deleting one and switching
 // it off. Also the reach of the yearly run in A4, which walks a type's year.
 @CompoundIndex(name = "type_year", def = "{'typeId': 1, 'year': 1}")

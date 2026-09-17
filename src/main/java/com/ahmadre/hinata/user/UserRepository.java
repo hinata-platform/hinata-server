@@ -30,6 +30,16 @@ public interface UserRepository extends MongoRepository<User, String> {
 	/** All active users – used to fan out the periodic digest. */
 	List<User> findByActiveIsTrue();
 
+	/**
+	 * A page of the active directory, by name.
+	 *
+	 * <p>For a list that shows everybody rather than a search result. {@link #searchActive} answers
+	 * the same thing for an empty term, but only by fetching every active document and running
+	 * three unanchored regexes over it — so a screen whose normal state is "no filter" asks this
+	 * instead, and the {@code active_displayName} index serves it pre-sorted.
+	 */
+	Page<User> findByActiveIsTrue(Pageable pageable);
+
 	/** Self-registrations that have verified their email but await an admin's approval. */
 	long countByAwaitingApprovalIsTrue();
 

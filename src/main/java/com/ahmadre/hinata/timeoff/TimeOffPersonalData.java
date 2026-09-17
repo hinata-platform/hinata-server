@@ -67,8 +67,8 @@ public class TimeOffPersonalData implements PersonalDataExport {
 						.map(entitlement -> List.of(
 								keys.getOrDefault(entitlement.getTypeId(), "—"),
 								String.valueOf(entitlement.getYear()),
-								days(locale, entitlement.allowanceMilliDays()),
-								days(locale, entitlement.accruedMilliDays())))
+								words.timeOffDays(locale, entitlement.allowanceMilliDays()),
+								words.timeOffDays(locale, entitlement.accruedMilliDays())))
 						.toList(),
 				null);
 		List<TimeOffLedgerEntry> movements = ledgerOf(user, TABLE_ROWS + 1);
@@ -81,7 +81,7 @@ public class TimeOffPersonalData implements PersonalDataExport {
 						.map(entry -> List.of(String.valueOf(entry.getEffectiveOn()),
 								keys.getOrDefault(entry.getTypeId(), "—"),
 								String.valueOf(entry.getKind()),
-								days(locale, entry.milliDays()),
+								words.timeOffDays(locale, entry.milliDays()),
 								entry.getReason() == null ? "—" : entry.getReason()))
 						.toList(),
 				movements.size() > TABLE_ROWS ? t(locale, "export.pdf.time.listCapped", TABLE_ROWS) : null);
@@ -148,9 +148,6 @@ public class TimeOffPersonalData implements PersonalDataExport {
 		return out;
 	}
 
-	private String days(Locale locale, int milliDays) {
-		return words.in(locale, "notify.timeOff.days", milliDays / 1000.0);
-	}
 
 	private String t(Locale locale, String key, Object... args) {
 		return words.in(locale, key, args);
