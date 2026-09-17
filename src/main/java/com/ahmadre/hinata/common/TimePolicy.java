@@ -63,6 +63,18 @@ public final class TimePolicy {
 	 */
 	public static final int LOCK_EXCEPTIONS_MAX = 20;
 
+	/**
+	 * How many people an operator may name as keepers of absence types,
+	 * entitlements and balances.
+	 *
+	 * <p>Fifty rather than unbounded for the same reason as above: the list
+	 * travels with the settings document on every admin read, and a circle of
+	 * people who may see sick days as sick days is not one that grows by
+	 * accident. An operator who needs more has a role question, not a list
+	 * question.
+	 */
+	public static final int ABSENCE_MANAGERS_MAX = 50;
+
 	/** Longest reason text on an approval decision, a reopen or a lock exception. */
 	public static final int LOCK_NOTE_MAX = 1000;
 

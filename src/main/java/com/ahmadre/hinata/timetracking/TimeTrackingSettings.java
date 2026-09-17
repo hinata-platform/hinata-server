@@ -98,6 +98,21 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 		return override != null ? override : env().isAbsenceManagementEnabled();
 	}
 
+	/**
+	 * The people an operator named to keep absence types, entitlements and
+	 * balances for everybody. Never null; empty means administrators only.
+	 *
+	 * <p>An empty stored list is an answer, not an absence: an operator who
+	 * removes the last name is saying "administrators again", and falling back
+	 * to the environment there would put a name back that somebody just took
+	 * out. Only a stored {@code null} — the block was never written — defers.
+	 */
+	public List<String> absenceManagers() {
+		List<String> override = db().getAbsenceManagers();
+		List<String> managers = override != null ? override : env().getAbsenceManagers();
+		return managers == null ? List.of() : List.copyOf(managers);
+	}
+
 	// --- policies ------------------------------------------------------------
 
 	/** Which fields an entry must carry to be accepted (enforced from stage 6). */
