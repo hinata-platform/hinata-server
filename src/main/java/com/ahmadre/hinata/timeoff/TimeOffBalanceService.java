@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
@@ -27,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /**
  * Entitlements, balances and the bookings that move them — plus the two employment dates the
@@ -93,6 +95,18 @@ public class TimeOffBalanceService {
 	/** What a bulk grant would do, before it does it. */
 	public record GrantPreview(String userId, int accruedMilliDays, TimeOffBalances.Reason reason,
 			boolean alreadyGranted) {
+	}
+
+	/**
+	 * Where one person stands for one type and year, as a keeper's list shows it.
+	 *
+	 * <p>The joining and leaving dates travel with the row because they are the answer to the
+	 * question the numbers raise: a keeper looking at eight and a third days wants to see July
+	 * beside it, not to open a second screen to find out why.
+	 */
+	public record Standing(String userId, int entitledMilliDays, int accruedMilliDays,
+			int takenMilliDays, int plannedMilliDays, int remainingMilliDays, boolean granted,
+			LocalDate hiredOn, LocalDate leftOn) {
 	}
 
 	// --- balances --------------------------------------------------------------
@@ -219,6 +233,94 @@ public class TimeOffBalanceService {
 		assertYearInRange(year);
 		return ledger.findByUserIdAndTypeIdAndYear(person.getId(), typeId, year,
 				PageRequest.of(Math.max(0, page), Math.clamp(size, 1, PAGE_MAX), OLDEST_FIRST));
+	}
+
+	/**
+	 * A page of the directory beside where each person stands for one type and year — the list a
+	 * keeper grants, corrects and reads journals from.
+	 *
+	 * <p>Four queries for the whole page, whatever its length: the people, their ledger sums,
+	 * what of that is still ahead of them, and their grants. A row per request would be a screen
+	 * of twenty-five names costing twenty-five round trips, and it is the shape that quietly
+	 * stops working at two hundred employees.
+	 *
+	 * <p>Only active accounts, and only a keeper's to ask (R10): how many days somebody has left
+	 * is not a question project planning has to answer.
+	 */
+	public Page<Standing> standings(User actor, String typeId, int year, String query, int page,
+			int size) {
+		access.requireKeeper(actor);
+		assertYearInRange(year);
+		TimeOffType type = types.require(typeId);
+		Pageable pageable = PageRequest.of(Math.max(0, page), Math.clamp(size, 1, PAGE_MAX),
+				Sort.by(Sort.Direction.ASC, "displayName"));
+		// Escaped, like every other directory search: a term is a term, never a pattern.
+		Page<User> people = users.searchActive(Pattern.quote(query == null ? "" : query.strip()),
+				pageable);
+		List<String> ids = people.getContent().stream().map(User::getId).toList();
+		if (ids.isEmpty()) {
+			return people.map(person -> new Standing(person.getId(), 0, 0, 0, 0, 0, false, null, null));
+		}
+		Map<String, Map<TimeOffLedgerEntry.Kind, Integer>> sums = sumsByUser(ids, typeId, year);
+		Map<String, Integer> planned = plannedByUser(ids, typeId, year);
+		Map<String, TimeOffEntitlement> granted = new HashMap<>();
+		for (TimeOffEntitlement entitlement :
+				entitlements.findByTypeIdAndYearAndUserIdIn(typeId, year, ids)) {
+			granted.put(entitlement.getUserId(), entitlement);
+		}
+		Map<String, TimeOffEmployment> facts = new HashMap<>();
+		for (TimeOffEmployment row : employment.findByUserIdIn(ids)) {
+			facts.put(row.getUserId(), row);
+		}
+		return people.map(person -> {
+			Balance balance = balance(type, year, sums.get(person.getId()),
+					planned.getOrDefault(person.getId(), 0), granted.get(person.getId()));
+			TimeOffEmployment dates = facts.get(person.getId());
+			return new Standing(person.getId(), balance.entitledMilliDays(),
+					balance.accruedMilliDays(), balance.takenMilliDays(), balance.plannedMilliDays(),
+					balance.remainingMilliDays(), balance.granted(),
+					dates == null ? null : dates.getHiredOn(),
+					dates == null ? null : dates.getLeftOn());
+		});
+	}
+
+	/** Every kind's total for one type and year, for a page of people, in one aggregation. */
+	private Map<String, Map<TimeOffLedgerEntry.Kind, Integer>> sumsByUser(List<String> userIds,
+			String typeId, int year) {
+		AggregationResults<Document> results = mongo.aggregate(
+				Aggregation.newAggregation(
+						Aggregation.match(Criteria.where("userId").in(userIds).and("typeId").is(typeId)
+								.and("year").is(year)),
+						Aggregation.group("userId", "kind").sum("milliDays").as("total")),
+				TimeOffLedgerEntry.class, Document.class);
+		Map<String, Map<TimeOffLedgerEntry.Kind, Integer>> sums = new LinkedHashMap<>();
+		for (Document row : results) {
+			Document id = row.get("_id", Document.class);
+			String userId = id.getString("userId");
+			String kind = id.getString("kind");
+			if (userId == null || kind == null) {
+				continue;
+			}
+			sums.computeIfAbsent(userId, key -> new EnumMap<>(TimeOffLedgerEntry.Kind.class))
+					.merge(TimeOffLedgerEntry.Kind.valueOf(kind), toInt(row.get("total")), Integer::sum);
+		}
+		return sums;
+	}
+
+	/** What is booked but still ahead of each of them, for the same page. */
+	private Map<String, Integer> plannedByUser(List<String> userIds, String typeId, int year) {
+		AggregationResults<Document> results = mongo.aggregate(
+				Aggregation.newAggregation(
+						Aggregation.match(Criteria.where("userId").in(userIds).and("typeId").is(typeId)
+								.and("year").is(year).and("kind").is(TimeOffLedgerEntry.Kind.BOOKED.name())
+								.and("effectiveOn").gt(LocalDate.now(clock))),
+						Aggregation.group("userId").sum("milliDays").as("total")),
+				TimeOffLedgerEntry.class, Document.class);
+		Map<String, Integer> planned = new LinkedHashMap<>();
+		for (Document row : results) {
+			planned.put(row.getString("_id"), -toInt(row.get("total")));
+		}
+		return planned;
 	}
 
 	// --- granting a year ---------------------------------------------------------
@@ -430,6 +532,18 @@ public class TimeOffBalanceService {
 				.meta("leftOn", String.valueOf(leftOn))
 				.log();
 		return saved;
+	}
+
+	/**
+	 * Whether somebody keeps absences for everybody — the one thing a screen needs to know before
+	 * it offers a way into the keeper's pages.
+	 *
+	 * <p>Asked rather than derived from the admin role, because a keeper need not be one: an
+	 * operator names the circle that sees sick days as sick days (Art. 9 DSGVO), and a named
+	 * keeper who could not find the page would be a list that configures nothing.
+	 */
+	public boolean isKeeper(User viewer) {
+		return access.isKeeper(viewer);
 	}
 
 	// --- the statutory floor ------------------------------------------------------
