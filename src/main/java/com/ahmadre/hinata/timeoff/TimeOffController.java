@@ -115,12 +115,13 @@ public class TimeOffController {
 
 	/** Where one person stands for one type and year, as a keeper's list shows it. */
 	public record StandingResponse(String userId, int entitledMilliDays, int accruedMilliDays,
-			int takenMilliDays, int plannedMilliDays, int remainingMilliDays, boolean granted,
-			LocalDate hiredOn, LocalDate leftOn) {
+			int adjustedMilliDays, int takenMilliDays, int plannedMilliDays, int remainingMilliDays,
+			boolean granted, LocalDate hiredOn, LocalDate leftOn) {
 
 		static StandingResponse from(TimeOffBalanceService.Standing standing) {
 			return new StandingResponse(standing.userId(), standing.entitledMilliDays(),
-					standing.accruedMilliDays(), standing.takenMilliDays(), standing.plannedMilliDays(),
+					standing.accruedMilliDays(), standing.adjustedMilliDays(),
+					standing.takenMilliDays(), standing.plannedMilliDays(),
 					standing.remainingMilliDays(), standing.granted(), standing.hiredOn(),
 					standing.leftOn());
 		}
