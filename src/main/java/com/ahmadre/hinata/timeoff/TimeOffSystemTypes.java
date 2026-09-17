@@ -55,7 +55,12 @@ public class TimeOffSystemTypes implements ApplicationRunner {
 	@EventListener
 	void onSettingsChanged(SettingsService.SettingsChangedEvent event) {
 		// So switching the module on brings its catalogue with it, before anybody opens the screen.
-		ensure();
+		// Asked of the document the event carries rather than of the resolver's cache: listeners
+		// run in an order nobody declares, and a cache another listener refreshes would still hold
+		// "off" on exactly the save that turned the module on.
+		if (settings.enabledIn(event.settings())) {
+			create();
+		}
 	}
 
 	/** Creates whichever of the three is missing. Does nothing at all while the module is off. */
@@ -63,6 +68,10 @@ public class TimeOffSystemTypes implements ApplicationRunner {
 		if (!settings.enabled()) {
 			return;
 		}
+		create();
+	}
+
+	private void create() {
 		for (TimeOffType candidate : defaults()) {
 			if (types.findBySystemKey(candidate.getSystemKey()).isPresent()) {
 				continue;

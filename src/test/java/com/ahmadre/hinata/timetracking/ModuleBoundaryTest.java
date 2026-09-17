@@ -63,6 +63,7 @@ class ModuleBoundaryTest {
 
 	private static final String ROOT = "com.ahmadre.hinata";
 	private static final String TIME = ROOT + ".timetracking";
+	private static final String TIME_OFF = ROOT + ".timeoff";
 
 	/** The module and the three packages that hang off it. */
 	private static final String[] MODULE_PACKAGES = {
@@ -140,12 +141,14 @@ class ModuleBoundaryTest {
 
 	@Test
 	void onlyTimeTrackingAndShiftPlanningReadAvailability() {
-		// No bridges and no storage contract here. Capacity has two readers by design:
-		// time tracking, which shows absences and holidays beside the entries, and
-		// shift planning (HIN-43/45), which checks shifts against them. Neither may
-		// ask it before a write: a marking must never turn into a refusal (R9).
+		// No bridges and no storage contract here. Capacity has three readers by design:
+		// time tracking, which shows absences and holidays beside the entries, absence
+		// management, which needs the shape of a working week for § 3 BUrlG, and shift
+		// planning (HIN-43/45), which checks shifts against them. None may ask it before
+		// a write: a marking must never turn into a refusal (R9).
 		noClasses()
-				.that(resideOutsideOfPackages("..availability..", "..timetracking..", "..schedule.."))
+				.that(resideOutsideOfPackages("..availability..", "..timetracking..", "..timeoff..",
+						"..schedule.."))
 				.should().dependOnClassesThat().resideInAnyPackage("..availability..")
 				.because("capacity is read by time tracking and shift planning, and by nobody else")
 				.check(PRODUCTION);
@@ -211,7 +214,11 @@ class ModuleBoundaryTest {
 			TIME + ".TimeAvailabilityPolicy",
 			// Skips a reminder on a day that is no working day (HIN-92). It writes marks and
 			// notifications, never an entry, and asks only yes or no per person.
-			TIME + ".TimeReminders");
+			TIME + ".TimeReminders",
+			// The working days in somebody's week, for the statutory minimum leave (§ 3 BUrlG).
+			// Days, never minutes: a balance counts working days and capacity counts minutes,
+			// and neither is computed from the other.
+			TIME_OFF + ".TimeOffWorkWeek");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
@@ -221,7 +228,8 @@ class ModuleBoundaryTest {
 	private static final Set<String> READERS_AND_THEIR_ROUTES = Set.of(
 			TIME + ".TimeCalendarLayers", TIME + ".TimeHintsService", TIME + ".TimeAvailabilityPolicy",
 			TIME + ".TimeReminders", TIME + ".TimeEntryController", TIME + ".TimeHintsController",
-			TIME + ".TimeReminderJob");
+			TIME + ".TimeReminderJob",
+			TIME_OFF + ".TimeOffWorkWeek", TIME_OFF + ".TimeOffBalanceService");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {

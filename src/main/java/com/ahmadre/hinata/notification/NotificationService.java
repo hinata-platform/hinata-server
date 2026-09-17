@@ -510,6 +510,41 @@ public class NotificationService {
 	}
 
 	/**
+	 * Tells somebody their leave entitlement for a year changed (HIN-116).
+	 *
+	 * <p>Sent to the person it is about and to nobody else. § 2 Abs. 1 Satz 2 Nr. 8 NachwG puts
+	 * the annual leave among the things an employee has to be told, so a keeper raising or
+	 * lowering it silently would leave the employer owing a notification the product could have
+	 * sent.
+	 *
+	 * <p>The bell names the type and the days, because it is the person's own entitlement. The
+	 * push says only that something changed: the type of an absence is not something to put on a
+	 * lock screen in front of whoever is standing there (R7, R11).
+	 *
+	 * <p>[typeName] is what an operator called the type, or null for one of the built-ins nobody
+	 * renamed — then [systemKey] names the translated label. Strings rather than the type itself,
+	 * so this package keeps knowing nothing about absence management.
+	 */
+	public void notifyTimeOffEntitlement(User person, String typeName, String systemKey, int year,
+			int milliDays) {
+		if (person == null || !person.isActive()) return;
+		Locale locale = words.localeOf(person);
+		String type = typeName != null && !typeName.isBlank() ? typeName
+				: words.in(locale, "timeOff.type." + (systemKey == null ? "other" : systemKey));
+		String title = words.of(person, "notify.timeOff.entitlement.title");
+		String body = words.in(locale, "notify.timeOff.entitlement.body", type, year,
+				days(locale, milliDays));
+		deliverGated(person, Notification.Type.TIME_OFF_ENTITLEMENT_CHANGED, title, body,
+				words.of(person, "notify.time.pushTitle"),
+				words.of(person, "notify.timeOff.push"), "/time/absences");
+	}
+
+	/** Thousandths of a working day as days, in the reader's own number format. */
+	private String days(Locale locale, int milliDays) {
+		return words.in(locale, "notify.timeOff.days", milliDays / 1000.0);
+	}
+
+	/**
 	 * Tells a project's leads that its recorded time reached a threshold of its budget, or of the
 	 * sum of its estimates (HIN-92). Names the project and the sums, never who recorded them; the
 	 * push names neither.
@@ -1078,7 +1113,7 @@ public class NotificationService {
 			case TIME_TIMER_AUTO_STOPPED, TIMESHEET_SUBMITTED, TIMESHEET_APPROVED,
 					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED,
 					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED, TIME_TARGET_REMINDER,
-					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED -> "time";
+					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED, TIME_OFF_ENTITLEMENT_CHANGED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}
