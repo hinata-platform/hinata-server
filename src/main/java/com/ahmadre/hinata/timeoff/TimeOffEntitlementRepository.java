@@ -2,6 +2,7 @@ package com.ahmadre.hinata.timeoff;
 
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -12,6 +13,16 @@ public interface TimeOffEntitlementRepository extends MongoRepository<TimeOffEnt
 
 	/** One person's grants for a year, across every type: what a balance screen is built from. */
 	List<TimeOffEntitlement> findByUserIdAndYear(String userId, Integer year);
+
+	/**
+	 * One type and year for a page of people, in one query.
+	 *
+	 * <p>A keeper's list shows a page of the directory beside what each person was granted. Asking
+	 * per row would cost a round trip per name, which is the shape that turns a screen of
+	 * twenty-five into twenty-five queries.
+	 */
+	List<TimeOffEntitlement> findByTypeIdAndYearAndUserIdIn(String typeId, Integer year,
+			Collection<String> userIds);
 
 	/** Whether a type has been granted to anybody: half of what keeps it from being deleted. */
 	boolean existsByTypeId(String typeId);

@@ -22,6 +22,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.domain.Page;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -35,10 +36,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -266,6 +269,53 @@ class TimeOffBalanceIntegrationTest {
 				TimeOffType.DAY, null, "please")).isInstanceOf(ApiException.class);
 		assertThatThrownBy(() -> timeOff.saveEmployment(member, member.getId(),
 				LocalDate.of(2020, 1, 1), null, null)).isInstanceOf(ApiException.class);
+	}
+
+	// --- a keeper's list ----------------------------------------------------------------
+
+	@Test
+	@DisplayName("the overview shows a page of people beside where each of them stands")
+	void standingsPageTheDirectoryBesideTheNumbers() {
+		timeOff.saveEmployment(keeper, other.getId(), LocalDate.of(YEAR, 7, 15), null, null);
+		timeOff.grant(keeper, member.getId(), vacation.getId(), YEAR, null, null);
+		timeOff.grant(keeper, other.getId(), vacation.getId(), YEAR, null, null);
+
+		Page<TimeOffBalanceService.Standing> page =
+				timeOff.standings(keeper, vacation.getId(), YEAR, "", 0, 25);
+
+		// Everybody active, by name, whether or not they were granted anything.
+		assertThat(page.getTotalElements()).isEqualTo(3);
+		Map<String, TimeOffBalanceService.Standing> byUser = page.getContent().stream()
+				.collect(Collectors.toMap(TimeOffBalanceService.Standing::userId, row -> row));
+		assertThat(byUser.get(member.getId()).remainingMilliDays()).isEqualTo(20 * TimeOffType.DAY);
+		assertThat(byUser.get(member.getId()).granted()).isTrue();
+		// The July joiner brings both the number and the reason for it.
+		assertThat(byUser.get(other.getId()).remainingMilliDays()).isEqualTo(8_333);
+		assertThat(byUser.get(other.getId()).hiredOn()).isEqualTo(LocalDate.of(YEAR, 7, 15));
+		// Nobody granted the keeper a year, and the row says so rather than being absent.
+		assertThat(byUser.get(keeper.getId()).granted()).isFalse();
+		assertThat(byUser.get(keeper.getId()).remainingMilliDays()).isZero();
+	}
+
+	@Test
+	void theOverviewSearchesByNameAndOnlyAKeeperMayAskAtAll() {
+		assertThat(timeOff.standings(keeper, vacation.getId(), YEAR, "memb", 0, 25).getContent())
+				.extracting(TimeOffBalanceService.Standing::userId)
+				.containsExactly(member.getId());
+		// A term is a term: a regex in the box matches nobody rather than everybody.
+		assertThat(timeOff.standings(keeper, vacation.getId(), YEAR, ".*", 0, 25)).isEmpty();
+
+		assertThatThrownBy(() -> timeOff.standings(member, vacation.getId(), YEAR, "", 0, 25))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.timeOff.forbidden");
+	}
+
+	@Test
+	@DisplayName("a named keeper is one without being an administrator")
+	void keepingIsTheNamedListPlusAdministrators() {
+		assertThat(timeOff.isKeeper(keeper)).isTrue();
+		assertThat(timeOff.isKeeper(member)).isFalse();
+		assertThat(timeOff.isKeeper(user("boss", Role.ADMIN))).isTrue();
 	}
 
 	// --- employment dates ---------------------------------------------------------------

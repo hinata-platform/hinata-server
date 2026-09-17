@@ -95,6 +95,23 @@ public class TimeOffController {
 	public record EmploymentResponse(String userId, LocalDate hiredOn, LocalDate leftOn, String note) {
 	}
 
+	/** Where one person stands for one type and year, as a keeper's list shows it. */
+	public record StandingResponse(String userId, int entitledMilliDays, int accruedMilliDays,
+			int takenMilliDays, int plannedMilliDays, int remainingMilliDays, boolean granted,
+			LocalDate hiredOn, LocalDate leftOn) {
+
+		static StandingResponse from(TimeOffBalanceService.Standing standing) {
+			return new StandingResponse(standing.userId(), standing.entitledMilliDays(),
+					standing.accruedMilliDays(), standing.takenMilliDays(), standing.plannedMilliDays(),
+					standing.remainingMilliDays(), standing.granted(), standing.hiredOn(),
+					standing.leftOn());
+		}
+	}
+
+	/** Whether the caller keeps absences for everybody. */
+	public record AccessResponse(boolean keeper) {
+	}
+
 	/** A grant for one person, or — with {@code userIds} — for several at once. */
 	public record GrantRequest(
 			String userId,
@@ -117,6 +134,21 @@ public class TimeOffController {
 
 	public record EmploymentRequest(LocalDate hiredOn, LocalDate leftOn,
 			@Size(max = TimeOffEmployment.NOTE_MAX) String note) {
+	}
+
+	// --- who is asking ------------------------------------------------------------
+
+	/**
+	 * Whether the caller may keep the catalogue and other people's entitlements.
+	 *
+	 * <p>Its own answer rather than a field on something else, because the screens that need it
+	 * ask nothing else first: a keeper who is not an administrator has no other way to find the
+	 * pages, and deriving it from the admin role in the client would hide them from exactly the
+	 * people an operator named.
+	 */
+	@GetMapping("/access")
+	public AccessResponse access() {
+		return new AccessResponse(timeOff.isKeeper(currentUser.require()));
 	}
 
 	// --- balances ---------------------------------------------------------------
@@ -158,6 +190,23 @@ public class TimeOffController {
 			@RequestParam(defaultValue = "50") int size) {
 		return timeOff.ledger(currentUser.require(), userId, typeId, year, page, size)
 				.map(LedgerEntryResponse::from);
+	}
+
+	/**
+	 * A page of the directory beside where each person stands for one type and year.
+	 *
+	 * <p>Paged and searchable, because the list is the whole organisation and the screen is the
+	 * one somebody grants a year from. A keeper's only.
+	 */
+	@GetMapping("/entitlements/overview")
+	public Page<StandingResponse> overview(@RequestParam String typeId,
+			@RequestParam(required = false) Integer year,
+			@RequestParam(required = false, defaultValue = "") String q,
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "25") int size) {
+		int leaveYear = year != null ? year : LocalDate.now(clock).getYear();
+		return timeOff.standings(currentUser.require(), typeId, leaveYear, q, page, size)
+				.map(StandingResponse::from);
 	}
 
 	// --- granting ------------------------------------------------------------------
