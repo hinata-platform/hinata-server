@@ -64,9 +64,9 @@ class ModuleBoundaryTest {
 	private static final String ROOT = "com.ahmadre.hinata";
 	private static final String TIME = ROOT + ".timetracking";
 
-	/** The module and the two packages that will hang off it. */
+	/** The module and the three packages that hang off it. */
 	private static final String[] MODULE_PACKAGES = {
-			"..timetracking..", "..availability..", "..billing.." };
+			"..timetracking..", "..availability..", "..billing..", "..timeoff.." };
 
 	/**
 	 * The {@code work_items} documents themselves — the entity, its Lombok
@@ -169,8 +169,35 @@ class ModuleBoundaryTest {
 		// (HIN-49), which needs the same capacity data, drag time tracking in.
 		noClasses()
 				.that().resideInAPackage("..availability..")
-				.should().dependOnClassesThat().resideInAnyPackage("..timetracking..", "..billing..")
+				.should().dependOnClassesThat()
+				.resideInAnyPackage("..timetracking..", "..billing..", "..timeoff..")
 				.because("timetracking -> availability is the one direction that is allowed")
+				.check(PRODUCTION);
+	}
+
+	@Test
+	void absenceManagementIsBuiltOnTopAndNothingIsBuiltOnIt() {
+		// timeoff -> timetracking is allowed and used once: the absence flag is a field of the
+		// timeTracking settings block, and TimeTrackingSettings resolves that block. A second
+		// resolver over the same document is how two answers to one question get created.
+		//
+		// The reverse is refused. Recording time knows nothing about entitlements, balances or
+		// requests, and must not learn: the day it asks whether somebody has vacation left is the
+		// day a balance could refuse an entry (R9). What time tracking needs from absence
+		// management later — the "requested" layer of A3 — arrives inverted, the way
+		// AvailabilityPolicy and SettingsGuard already do it.
+		noClasses()
+				.that().resideInAPackage("..timetracking..")
+				.should().dependOnClassesThat().resideInAnyPackage("..timeoff..")
+				.because("absences are managed on top of time tracking, never underneath it")
+				.check(PRODUCTION);
+		// And nothing outside the three module packages reaches in at all. Account deletion and
+		// the data export do not: they arrive through the UserDeletedEvent and the
+		// PersonalDataExport interface, so the core keeps knowing nothing.
+		noClasses()
+				.that(resideOutsideOfPackages(MODULE_PACKAGES))
+				.should().dependOnClassesThat().resideInAnyPackage("..timeoff..")
+				.because("absence management has to be switchable off by an administrator")
 				.check(PRODUCTION);
 	}
 

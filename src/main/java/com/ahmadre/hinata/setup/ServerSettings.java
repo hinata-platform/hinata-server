@@ -405,6 +405,23 @@ public class ServerSettings {
 		/** Master switch for the extended module; null ⇒ {@code hinata.time-tracking.advanced-enabled}. */
 		private Boolean advancedEnabled;
 
+		/**
+		 * Switch for absence management 2.0 — types, entitlements, balances,
+		 * requests; null ⇒ {@code hinata.time-tracking.absence-management-enabled}.
+		 *
+		 * <p>Its own switch rather than a corner of {@link #advancedEnabled},
+		 * because it is its own module: it brings routes, navigation, admin
+		 * screens and notifications that an instance recording project time has
+		 * no use for. It sits in this block all the same — it is resolved with
+		 * the rest of the time-tracking policy, and a second settings block
+		 * would be a second place to look.
+		 *
+		 * <p>Switching it back off keeps every type, entitlement, booking and
+		 * request; absences themselves live in {@code time_off} either way and
+		 * go on shaping capacity. The module simply stops existing for clients.
+		 */
+		private Boolean absenceManagementEnabled;
+
 		/** Which fields an entry must carry; null fields ⇒ env defaults. */
 		@Valid
 		private RequiredFields requiredFields;

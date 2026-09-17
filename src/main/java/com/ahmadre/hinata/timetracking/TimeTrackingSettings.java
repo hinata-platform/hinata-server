@@ -79,6 +79,25 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 		return override != null ? override : env().isAdvancedEnabled();
 	}
 
+	/**
+	 * Whether absence management 2.0 is switched on, <em>as the administrator
+	 * set it</em> — without asking whether the extended module underneath it is
+	 * on. The two questions are separate on purpose: the admin screen needs to
+	 * show the switch in the position it was left in, even while it cannot take
+	 * effect, or turning the extended module on would appear to flip a second
+	 * switch nobody touched.
+	 *
+	 * <p>Whether the module is <em>usable</em> is
+	 * {@code timeoff/TimeOffSettings.enabled()}, which is what its gate, its
+	 * services and the published feature flag read. Resolved here all the same,
+	 * because this class resolves the {@code timeTracking} block and a second
+	 * resolver for one field of it would be a second answer waiting to differ.
+	 */
+	public boolean absenceManagementConfigured() {
+		Boolean override = db().getAbsenceManagementEnabled();
+		return override != null ? override : env().isAbsenceManagementEnabled();
+	}
+
 	// --- policies ------------------------------------------------------------
 
 	/** Which fields an entry must carry to be accepted (enforced from stage 6). */

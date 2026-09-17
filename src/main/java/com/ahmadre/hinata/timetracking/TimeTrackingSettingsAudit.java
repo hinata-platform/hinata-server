@@ -80,6 +80,8 @@ public class TimeTrackingSettingsAudit implements SettingsAudit {
 			User actor) {
 		Map<String, String> changes = new LinkedHashMap<>();
 		compare(changes, "advancedEnabled", was, now, ServerSettings.TimeTracking::getAdvancedEnabled);
+		compare(changes, "absenceManagementEnabled", was, now,
+				ServerSettings.TimeTracking::getAbsenceManagementEnabled);
 		compare(changes, "requiredFields", was, now,
 				block -> block.getRequiredFields() == null ? null
 						: "project=" + block.getRequiredFields().getProject()
