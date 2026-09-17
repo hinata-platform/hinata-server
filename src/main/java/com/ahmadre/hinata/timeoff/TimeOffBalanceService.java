@@ -108,8 +108,8 @@ public class TimeOffBalanceService {
 	 * beside it, not to open a second screen to find out why.
 	 */
 	public record Standing(String userId, int entitledMilliDays, int accruedMilliDays,
-			int takenMilliDays, int plannedMilliDays, int remainingMilliDays, boolean granted,
-			LocalDate hiredOn, LocalDate leftOn) {
+			int adjustedMilliDays, int takenMilliDays, int plannedMilliDays, int remainingMilliDays,
+			boolean granted, LocalDate hiredOn, LocalDate leftOn) {
 	}
 
 	// --- balances --------------------------------------------------------------
@@ -291,7 +291,7 @@ public class TimeOffBalanceService {
 				: users.searchActive(Pattern.quote(term), pageable);
 		List<String> ids = people.getContent().stream().map(User::getId).toList();
 		if (ids.isEmpty()) {
-			return people.map(person -> new Standing(person.getId(), 0, 0, 0, 0, 0, false, null, null));
+			return people.map(person -> new Standing(person.getId(), 0, 0, 0, 0, 0, 0, false, null, null));
 		}
 		Map<String, Map<TimeOffLedgerEntry.Kind, Integer>> sums = sumsByUser(ids, typeId, year);
 		Map<String, Integer> planned = plannedByUser(ids, typeId, year);
@@ -312,8 +312,8 @@ public class TimeOffBalanceService {
 					TimeOffLegalFloor.STANDARD_WORKING_DAYS);
 			TimeOffEmployment dates = facts.get(person.getId());
 			return new Standing(person.getId(), balance.entitledMilliDays(),
-					balance.accruedMilliDays(), balance.takenMilliDays(), balance.plannedMilliDays(),
-					balance.remainingMilliDays(), balance.granted(),
+					balance.accruedMilliDays(), balance.adjustedMilliDays(), balance.takenMilliDays(),
+					balance.plannedMilliDays(), balance.remainingMilliDays(), balance.granted(),
 					dates == null ? null : dates.getHiredOn(),
 					dates == null ? null : dates.getLeftOn());
 		});
