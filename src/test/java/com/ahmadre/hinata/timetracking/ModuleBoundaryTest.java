@@ -218,7 +218,12 @@ class ModuleBoundaryTest {
 			// The working days in somebody's week, for the statutory minimum leave (§ 3 BUrlG).
 			// Days, never minutes: a balance counts working days and capacity counts minutes,
 			// and neither is computed from the other.
-			TIME_OFF + ".TimeOffWorkWeek");
+			TIME_OFF + ".TimeOffWorkWeek",
+			// The catalogue's answer to the one question availability asks it (HIN-116): which of
+			// the three stored kinds an operator's own absence type is. It names TimeOff.Type and
+			// implements an interface availability declares — it reads no absence and asks no
+			// capacity, which is why it is a bridge and not a reader of anybody's days.
+			TIME_OFF + ".TimeOffCatalogueBridge");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
@@ -229,7 +234,8 @@ class ModuleBoundaryTest {
 			TIME + ".TimeCalendarLayers", TIME + ".TimeHintsService", TIME + ".TimeAvailabilityPolicy",
 			TIME + ".TimeReminders", TIME + ".TimeEntryController", TIME + ".TimeHintsController",
 			TIME + ".TimeReminderJob",
-			TIME_OFF + ".TimeOffWorkWeek", TIME_OFF + ".TimeOffBalanceService");
+			TIME_OFF + ".TimeOffWorkWeek", TIME_OFF + ".TimeOffBalanceService",
+			TIME_OFF + ".TimeOffCatalogueBridge");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {

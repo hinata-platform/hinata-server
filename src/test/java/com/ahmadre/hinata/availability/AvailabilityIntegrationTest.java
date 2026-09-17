@@ -254,19 +254,19 @@ class AvailabilityIntegrationTest {
 		as(member);
 
 		AvailabilityController.TimeOffResponse plain = availability.createTimeOff(
-				new AvailabilityController.TimeOffRequest(null, TimeOff.Type.SICK, day(12, 14), day(12, 15), null, null));
+				new AvailabilityController.TimeOffRequest(null, TimeOff.Type.SICK, null, day(12, 14), day(12, 15), null, null));
 
 		assertThat(plain.id()).isNotNull();
 		assertThat(plain.note()).isNull();
 		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(null,
-				TimeOff.Type.VACATION, day(12, 17), day(12, 17), null, "x".repeat(TimeOff.NOTE_MAX + 1))))
+				TimeOff.Type.VACATION, null, day(12, 17), day(12, 17), null, "x".repeat(TimeOff.NOTE_MAX + 1))))
 				.isInstanceOf(ApiException.class).hasMessage("error.availability.noteTooLong");
 		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(null,
-				TimeOff.Type.OTHER, day(12, 17), day(12, 18), true, null)))
+				TimeOff.Type.OTHER, null, day(12, 17), day(12, 18), true, null)))
 				.isInstanceOf(ApiException.class).hasMessage("error.availability.halfDaySingle");
 		// Today is 16 December 2026: two years ahead ends on 16 December 2028.
 		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(null,
-				TimeOff.Type.VACATION, LocalDate.of(2028, 12, 16), LocalDate.of(2028, 12, 17), null, null)))
+				TimeOff.Type.VACATION, null, LocalDate.of(2028, 12, 16), LocalDate.of(2028, 12, 17), null, null)))
 				.isInstanceOf(ApiException.class).hasMessage("error.availability.timeOffOutOfRange");
 	}
 
@@ -279,10 +279,10 @@ class AvailabilityIntegrationTest {
 		as(member);
 
 		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(null,
-				TimeOff.Type.VACATION, LocalDate.of(2027, 6, 1), LocalDate.of(2027, 6, 1), null, null)))
+				TimeOff.Type.VACATION, null, LocalDate.of(2027, 6, 1), LocalDate.of(2027, 6, 1), null, null)))
 				.hasMessage("error.availability.timeOffPerYear");
 		// Starting in December, it belongs to the year before, which has room.
-		assertThat(availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION,
+		assertThat(availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null,
 				day(12, 30), LocalDate.of(2027, 1, 2), null, null)).id()).isNotNull();
 	}
 
@@ -290,7 +290,7 @@ class AvailabilityIntegrationTest {
 	void absencesAreSeenByTheOwnerAndAdmins_byLeadsOnlyWithThePolicyAndWithoutTheNote() {
 		as(member);
 		AvailabilityController.TimeOffResponse own = availability.createTimeOff(new AvailabilityController.TimeOffRequest(
-				null, TimeOff.Type.VACATION, day(12, 21), day(12, 23), null, "Familie"));
+				null, TimeOff.Type.VACATION, null, day(12, 21), day(12, 23), null, "Familie"));
 		worked(member, issue(project, "HIN-1", List.of()), day(12, 1), WorkItem.Source.APP);
 		LocalDate from = day(12, 1);
 		LocalDate to = day(12, 31);
@@ -327,10 +327,10 @@ class AvailabilityIntegrationTest {
 		assertThatThrownBy(() -> availability.schedule(member.getId()))
 				.hasMessage("error.availability.forbidden");
 		assertThatThrownBy(() -> availability.createTimeOff(new AvailabilityController.TimeOffRequest(member.getId(),
-				TimeOff.Type.OTHER, day(12, 28), day(12, 28), null, null)))
+				TimeOff.Type.OTHER, null, day(12, 28), day(12, 28), null, null)))
 				.hasMessage("error.availability.forbidden");
 		assertThatThrownBy(() -> availability.updateTimeOff(own.id(), new AvailabilityController.TimeOffPatchRequest(
-				TimeOff.Type.SICK, null, null, null, null)))
+				TimeOff.Type.SICK, null, null, null, null, null)))
 				.hasMessage("error.notFound");
 
 		// An administrator sees everything.
@@ -342,7 +342,7 @@ class AvailabilityIntegrationTest {
 	@Test
 	void aProjectSomebodyWasOnlyAddedToShowsItsLeadNothing_andALeadSeesASickDayAsAway() {
 		as(member);
-		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.SICK, day(12, 14),
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.SICK, null, day(12, 14),
 				day(12, 15), null, null));
 		policy(true);
 		LocalDate from = day(12, 1);
@@ -383,10 +383,10 @@ class AvailabilityIntegrationTest {
 	@Test
 	void anAdministratorKeepingSomebodysAbsenceIsRecorded_withoutItsTypeOrNote() {
 		as(member);
-		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, day(12, 14),
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null, day(12, 14),
 				day(12, 14), null, "Eigene"));
 		as(admin);
-		availability.createTimeOff(new AvailabilityController.TimeOffRequest(member.getId(), TimeOff.Type.SICK,
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(member.getId(), TimeOff.Type.SICK, null,
 				day(12, 15), day(12, 15), null, "Arzt"));
 
 		List<AuditLog> records = mongo.find(Query.query(Criteria.where("action")
@@ -404,7 +404,7 @@ class AvailabilityIntegrationTest {
 		AvailabilityController.PatternResponse pattern = availability.saveSchedule(null,
 				new AvailabilityController.PatternRequest(day(12, 1), List.of(480, 480, 480, 480, 480, 0, 0), null));
 		AvailabilityController.TimeOffResponse absence = availability.createTimeOff(
-				new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, day(12, 21), day(12, 21), null,
+				new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null, day(12, 21), day(12, 21), null,
 						null));
 
 		as(stranger);
@@ -492,7 +492,7 @@ class AvailabilityIntegrationTest {
 		as(member);
 		availability.saveSchedule(null, new AvailabilityController.PatternRequest(day(12, 1),
 				List.of(480, 480, 480, 480, 0, 0, 0), null));
-		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, day(12, 14),
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null, day(12, 14),
 				day(12, 14), null, "Reise"));
 
 		Map<String, Object> part = partOf(me.exportData(users.findById(member.getId()).orElseThrow()),

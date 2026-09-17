@@ -8,6 +8,7 @@ import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserZones;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -45,12 +46,24 @@ public class TimeOffService {
 	private final AuditService audit;
 	private final Clock clock;
 
-	public record Draft(String userId, TimeOff.Type type, LocalDate from, LocalDate to, Boolean halfDay,
-			String note) {
+	/**
+	 * What an operator's own absence types are, when there are any. Injected as a provider so this
+	 * module runs with absence management absent, off, or not yet built — it asks the catalogue
+	 * only about an id somebody sent, and gets "no such type" when there is nobody to ask.
+	 */
+	private final ObjectProvider<TimeOffCatalogue> catalogueProvider;
+
+	private TimeOffCatalogue catalogue() {
+		return catalogueProvider.getIfAvailable(TimeOffCatalogue::unknown);
+	}
+
+	public record Draft(String userId, TimeOff.Type type, String typeId, LocalDate from, LocalDate to,
+			Boolean halfDay, String note) {
 	}
 
 	/** An edit; null leaves a field alone, and a blank note clears it. */
-	public record Patch(TimeOff.Type type, LocalDate from, LocalDate to, Boolean halfDay, String note) {
+	public record Patch(TimeOff.Type type, String typeId, LocalDate from, LocalDate to, Boolean halfDay,
+			String note) {
 	}
 
 	/** A page of absences and how much of them the reader may see. */
@@ -80,7 +93,7 @@ public class TimeOffService {
 	public TimeOff create(User viewer, Draft draft) {
 		User person = access.requireKeeper(viewer, draft.userId());
 		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(viewer.getId()).build();
-		apply(item, draft.type(), draft.from(), draft.to(), draft.halfDay(), draft.note());
+		apply(item, draft.type(), draft.typeId(), draft.from(), draft.to(), draft.halfDay(), draft.note());
 		assertNearToday(item, person);
 		assertRoomIn(person.getId(), item.getFrom().getYear());
 		TimeOff saved = timeOff.save(item);
@@ -95,6 +108,7 @@ public class TimeOffService {
 		LocalDate toBefore = item.getTo();
 		apply(item,
 				patch.type() != null ? patch.type() : item.getType(),
+				patch.typeId() != null ? patch.typeId() : item.getTypeId(),
 				patch.from() != null ? patch.from() : item.getFrom(),
 				patch.to() != null ? patch.to() : item.getTo(),
 				patch.halfDay() != null ? patch.halfDay() : item.getHalfDay(),
@@ -120,8 +134,17 @@ public class TimeOffService {
 		users.findById(item.getUserId()).ifPresent(person -> recordForOther(viewer, person, "deleted", item));
 	}
 
-	private void apply(TimeOff item, TimeOff.Type type, LocalDate from, LocalDate to, Boolean halfDay, String note) {
-		if (type == null || from == null || to == null) {
+	private void apply(TimeOff item, TimeOff.Type type, String typeId, LocalDate from, LocalDate to,
+			Boolean halfDay, String note) {
+		// An operator's own type decides the stored kind; without one the three values are the
+		// whole answer, exactly as they were before absence management existed.
+		TimeOff.Type stored = type;
+		String cleanTypeId = typeId == null || typeId.isBlank() ? null : typeId.strip();
+		if (cleanTypeId != null) {
+			stored = catalogue().kindOf(cleanTypeId)
+					.orElseThrow(() -> ApiException.badRequest("error.availability.timeOffTypeUnknown"));
+		}
+		if (stored == null || from == null || to == null) {
 			throw ApiException.badRequest("error.availability.timeOffInvalid");
 		}
 		CapacityService.assertWindow(from, to);
@@ -133,7 +156,8 @@ public class TimeOffService {
 		if (cleanNote != null && cleanNote.length() > TimeOff.NOTE_MAX) {
 			throw ApiException.badRequest("error.availability.noteTooLong", TimeOff.NOTE_MAX);
 		}
-		item.setType(type);
+		item.setType(stored);
+		item.setTypeId(cleanTypeId);
 		item.setFrom(from);
 		item.setTo(to);
 		item.setHalfDay(half ? Boolean.TRUE : null);
