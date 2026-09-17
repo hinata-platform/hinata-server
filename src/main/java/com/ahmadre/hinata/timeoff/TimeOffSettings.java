@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.timeoff;
 
 import com.ahmadre.hinata.common.FeatureFlags;
+import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.timetracking.TimeTrackingSettings;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -54,5 +55,19 @@ public class TimeOffSettings implements FeatureFlags.Module {
 	/** Whether the module is usable: switched on, over an extended module that is also on. */
 	public boolean enabled() {
 		return timeTracking.advancedEnabled() && timeTracking.absenceManagementConfigured();
+	}
+
+	/**
+	 * The same answer for a settings document that has just been saved, before any cache has been
+	 * told about it.
+	 *
+	 * <p>{@code SettingsChangedEvent} reaches its listeners in an order nobody declares. A listener
+	 * that asked {@link #enabled()} would be asking a cache another listener is about to refresh,
+	 * and would get the previous answer on exactly the save that turned the module on — which is
+	 * the one save where being wrong is visible.
+	 */
+	public boolean enabledIn(ServerSettings settings) {
+		ServerSettings.TimeTracking block = settings == null ? null : settings.getTimeTracking();
+		return timeTracking.advancedEnabledIn(block) && timeTracking.absenceManagementConfiguredIn(block);
 	}
 }

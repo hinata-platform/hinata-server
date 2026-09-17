@@ -75,7 +75,19 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 
 	/** Whether the extended module is switched on at all. */
 	public boolean advancedEnabled() {
-		Boolean override = db().getAdvancedEnabled();
+		return advancedEnabledIn(db());
+	}
+
+	/**
+	 * The same question against a block that is <em>not</em> the cached one — the document an
+	 * event is carrying, before this class has had its turn at it.
+	 *
+	 * <p>Listeners of {@code SettingsChangedEvent} run in an order nobody declares, so a second
+	 * listener that asked {@link #advancedEnabled()} would get last save's answer whenever it
+	 * happened to run first. Asking the document it was handed has no such day.
+	 */
+	public boolean advancedEnabledIn(ServerSettings.TimeTracking block) {
+		Boolean override = orEmpty(block).getAdvancedEnabled();
 		return override != null ? override : env().isAdvancedEnabled();
 	}
 
@@ -94,7 +106,12 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 	 * resolver for one field of it would be a second answer waiting to differ.
 	 */
 	public boolean absenceManagementConfigured() {
-		Boolean override = db().getAbsenceManagementEnabled();
+		return absenceManagementConfiguredIn(db());
+	}
+
+	/** As above, against a block an event is carrying rather than the cached one. */
+	public boolean absenceManagementConfiguredIn(ServerSettings.TimeTracking block) {
+		Boolean override = orEmpty(block).getAbsenceManagementEnabled();
 		return override != null ? override : env().isAbsenceManagementEnabled();
 	}
 
