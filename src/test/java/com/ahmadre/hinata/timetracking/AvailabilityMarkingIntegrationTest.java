@@ -132,7 +132,7 @@ class AvailabilityMarkingIntegrationTest {
 		holidayApi.addHoliday(new HolidayController.HolidayRequest(calendar.id(), HOLIDAY, "Testfeiertag", null));
 
 		as(member);
-		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, ABSENT,
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null, ABSENT,
 				ABSENT, null, null));
 		availability.saveSchedule(null, new AvailabilityController.PatternRequest(LocalDate.of(2026, 12, 1),
 				List.of(0, 480, 480, 480, 480, 0, 0), null));

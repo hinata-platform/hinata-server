@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.timeoff;
 
 import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.availability.TimeOff;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TestMongo;
@@ -62,6 +63,8 @@ class TimeOffTypeIntegrationTest {
 	private TimeOffLedgerRepository ledger;
 	@Autowired
 	private TimeOffSystemTypes systemTypes;
+	@Autowired
+	private TimeOffCatalogueBridge bridge;
 	private User member;
 	private User keeper;
 	private User admin;
@@ -248,6 +251,49 @@ class TimeOffTypeIntegrationTest {
 				.name(key)
 				.kind(TimeOffType.Kind.SPECIAL)
 				.build();
+	}
+
+	// --- the bridge to the absences themselves -------------------------------------
+
+	@Test
+	@org.junit.jupiter.api.DisplayName("an operator's own type still reads as one of the three")
+	void theCatalogueBridgeDerivesTheStoredKind() {
+		TimeOffType vacation = typeRepository.findByKey(TimeOffType.SYSTEM_VACATION).orElseThrow();
+		TimeOffType parental = types.create(keeper, TimeOffTypeService.Draft.builder()
+				.key("parental").name("Elternzeit").kind(TimeOffType.Kind.PARENTAL)
+				.countsAgainstBalance(false).build());
+		TimeOffType sick = typeRepository.findByKey(TimeOffType.SYSTEM_SICK).orElseThrow();
+
+		// The three values are a wire and storage contract: the published app reads them, and a
+		// document written before the catalogue existed has nothing else.
+		assertThat(bridge.kindOf(vacation.getId())).contains(TimeOff.Type.VACATION);
+		assertThat(bridge.kindOf(sick.getId())).contains(TimeOff.Type.SICK);
+		// Everything an operator invents is OTHER — which is what a client that has never heard
+		// of "Elternzeit" will show, correctly.
+		assertThat(bridge.kindOf(parental.getId())).contains(TimeOff.Type.OTHER);
+	}
+
+	@Test
+	void aRetiredOrUnknownTypeIsNoTypeToEnterAnAbsenceUnder() {
+		TimeOffType retired = types.create(keeper, TimeOffTypeService.Draft.builder()
+				.key("sabbatical").name("Sabbatical").kind(TimeOffType.Kind.UNPAID)
+				.countsAgainstBalance(false).build());
+		types.update(keeper, retired.getId(), TimeOffTypeService.Draft.builder().active(false).build());
+
+		assertThat(bridge.kindOf(retired.getId())).isEmpty();
+		assertThat(bridge.kindOf("6a0000000000000000000000")).isEmpty();
+		assertThat(bridge.kindOf(null)).isEmpty();
+	}
+
+	@Test
+	@org.junit.jupiter.api.DisplayName("with the module off there is no catalogue to point at")
+	void theBridgeAnswersNothingWhileTheModuleIsOff() {
+		TimeOffType vacation = typeRepository.findByKey(TimeOffType.SYSTEM_VACATION).orElseThrow();
+		ServerSettings current = settings.get();
+		current.getTimeTracking().setAbsenceManagementEnabled(false);
+		settings.save(current);
+
+		assertThat(bridge.kindOf(vacation.getId())).isEmpty();
 	}
 
 	private User user(String name, Role role) {

@@ -54,6 +54,16 @@ public class TimeOff {
 
 	private Type type;
 
+	/**
+	 * The operator-defined type this was entered under, when there is one (HIN-116). Null on every
+	 * document written before absence management existed, and on every one written while it is off.
+	 *
+	 * <p>{@link #type} stays the truth a client reads: it is derived from this type's kind on the
+	 * way in, so an absence entered under "parental leave" reads as {@code OTHER} to an app that
+	 * has never heard of the catalogue, and as parental leave to one that has.
+	 */
+	private String typeId;
+
 	private LocalDate from;
 
 	private LocalDate to;

@@ -102,20 +102,25 @@ public class AvailabilityController {
 	 * An absence. For a lead's view {@code id} and {@code note} are always null, and a sick day reads
 	 * as {@code OTHER} ({@link AvailabilityAccess#typeFor}).
 	 */
-	public record TimeOffResponse(String id, String userId, TimeOff.Type type, LocalDate from, LocalDate to,
-			boolean halfDay, String note) {
+	public record TimeOffResponse(String id, String userId, TimeOff.Type type, String typeId,
+			LocalDate from, LocalDate to, boolean halfDay, String note) {
 
 		static TimeOffResponse from(TimeOff item, AvailabilityAccess.Sight sight) {
 			boolean full = sight == AvailabilityAccess.Sight.FULL;
 			return new TimeOffResponse(full ? item.getId() : null, item.getUserId(),
-					AvailabilityAccess.typeFor(item.getType(), sight), item.getFrom(), item.getTo(), item.isHalfDay(),
+					AvailabilityAccess.typeFor(item.getType(), sight),
+					// Withheld from anybody who does not see everything, and for the same reason
+					// the type is narrowed: the catalogue is readable by every member, so an id
+					// would name exactly what typeFor exists to hide.
+					full ? item.getTypeId() : null,
+					item.getFrom(), item.getTo(), item.isHalfDay(),
 					full ? item.getNote() : null);
 		}
 
 		/** An absence in a capacity, which only its owner and administrators read. */
 		static TimeOffResponse from(CapacityService.AbsenceMark mark, String userId) {
-			return new TimeOffResponse(mark.id(), userId, mark.type(), mark.from(), mark.to(), mark.halfDay(),
-					mark.note());
+			return new TimeOffResponse(mark.id(), userId, mark.type(), null, mark.from(), mark.to(),
+					mark.halfDay(), mark.note());
 		}
 	}
 
@@ -123,6 +128,12 @@ public class AvailabilityController {
 	public record TimeOffRequest(
 			@Size(max = 64) String userId,
 			@NotNull TimeOff.Type type,
+			/**
+			 * An operator's own absence type, when the instance offers any (HIN-116). It decides
+			 * the stored {@code type}, which stays required so a client that has never heard of
+			 * the catalogue keeps working exactly as it did.
+			 */
+			@Size(max = 64) String typeId,
 			@NotNull LocalDate from,
 			@NotNull LocalDate to,
 			Boolean halfDay,
@@ -132,6 +143,7 @@ public class AvailabilityController {
 	/** An edit; what is absent is left alone, a blank note clears it. */
 	public record TimeOffPatchRequest(
 			TimeOff.Type type,
+			@Size(max = 64) String typeId,
 			LocalDate from,
 			LocalDate to,
 			Boolean halfDay,
@@ -153,14 +165,15 @@ public class AvailabilityController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public TimeOffResponse createTimeOff(@RequestBody @Valid TimeOffRequest request) {
 		TimeOff saved = timeOff.create(currentUser.require(), new TimeOffService.Draft(request.userId(),
-				request.type(), request.from(), request.to(), request.halfDay(), request.note()));
+				request.type(), request.typeId(), request.from(), request.to(), request.halfDay(),
+				request.note()));
 		return TimeOffResponse.from(saved, AvailabilityAccess.Sight.FULL);
 	}
 
 	@PatchMapping("/time-off/{id}")
 	public TimeOffResponse updateTimeOff(@PathVariable String id, @RequestBody @Valid TimeOffPatchRequest request) {
 		TimeOff saved = timeOff.update(currentUser.require(), id, new TimeOffService.Patch(request.type(),
-				request.from(), request.to(), request.halfDay(), request.note()));
+				request.typeId(), request.from(), request.to(), request.halfDay(), request.note()));
 		return TimeOffResponse.from(saved, AvailabilityAccess.Sight.FULL);
 	}
 
