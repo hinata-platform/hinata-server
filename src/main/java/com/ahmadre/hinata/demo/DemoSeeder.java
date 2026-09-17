@@ -1130,6 +1130,7 @@ public class DemoSeeder {
 		timeTags();
 		timesheetApprovals(hin, mob, admin, lena);
 		availability(admin, tomas, lena);
+		absenceManagement(admin, tomas, lena);
 
 		syncSpent();
 		log.info("[demo] seeded {} work items", workItems.count());
@@ -1195,6 +1196,102 @@ public class DemoSeeder {
 				.append("to", utcDay(monday.plusDays(3)))
 				.append("halfDay", true)
 				.append("createdBy", lena.getId())
+				.append("createdAt", now));
+	}
+
+	/**
+	 * Absence types beyond the three built-in ones, a granted year for two people, and the
+	 * bookings behind it, so the balance cards have something to show (HIN-116).
+	 *
+	 * <p>Raw documents like {@link #availability}: absence management is its own module and the
+	 * seeder may not reach into it. It runs on {@code ApplicationReadyEvent}, after every
+	 * {@code ApplicationRunner}, so the module has already created its system types by now — and
+	 * if it has not, because the flag is off, there is nothing here to seed and this returns.
+	 *
+	 * <ul>
+	 * <li>A fourth type, five training days a year, to show a catalogue with more than the
+	 * built-ins in it.</li>
+	 * <li>Tomas and Lena are granted this year's vacation. Lena joined in July, so hers is five
+	 * twelfths — the part-year case § 5 BUrlG describes, visible on the screen.</li>
+	 * <li>One correction with a reason, because a balance that only ever accrues does not show
+	 * what the journal is for.</li>
+	 * </ul>
+	 */
+	private void absenceManagement(User admin, User tomas, User lena) {
+		org.bson.Document vacation = mongo.getCollection("time_off_types")
+				.find(new org.bson.Document("key", "vacation")).first();
+		if (vacation == null || mongo.getCollection("time_off_entitlements").countDocuments() > 0) {
+			return;
+		}
+		Object vacationId = vacation.get("_id");
+		java.util.Date now = java.util.Date.from(Instant.now());
+		int year = LocalDate.now(ZoneOffset.UTC).getYear();
+		LocalDate lenaJoined = LocalDate.of(year, 7, 15);
+
+		mongo.getCollection("time_off_types").insertOne(new org.bson.Document()
+				.append("key", "training")
+				.append("name", "Fortbildung")
+				.append("icon", "graduation-cap")
+				.append("hue", 265)
+				.append("kind", "TRAINING")
+				.append("paid", true)
+				.append("countsAgainstBalance", true)
+				.append("unlimited", false)
+				.append("approvalRequired", true)
+				.append("approverRule", "TEAM_LEAD")
+				.append("halfDaysAllowed", true)
+				.append("accrual", "ANNUAL")
+				.append("allowanceMilliDays", 5_000)
+				.append("carryover", "NONE")
+				.append("visibility", "SELF_ONLY")
+				.append("active", true)
+				.append("createdBy", admin.getId())
+				.append("createdAt", now)
+				.append("updatedAt", now));
+
+		mongo.getCollection("time_off_employment").insertOne(new org.bson.Document()
+				.append("userId", lena.getId())
+				.append("hiredOn", utcDay(lenaJoined))
+				.append("updatedBy", admin.getId())
+				.append("updatedAt", now));
+
+		// Twenty days for a full year; five twelfths of it for somebody who joined in July, which
+		// § 5 Abs. 2 BUrlG leaves as 8.333 rather than rounding down.
+		grantDemoYear(tomas, vacationId, year, 20_000, 20_000, admin, now);
+		grantDemoYear(lena, vacationId, year, 20_000, 8_333, admin, now);
+
+		mongo.getCollection("time_off_ledger").insertOne(new org.bson.Document()
+				.append("userId", tomas.getId())
+				.append("typeId", String.valueOf(vacationId))
+				.append("year", year)
+				.append("kind", "ADJUSTMENT")
+				.append("milliDays", 2_000)
+				.append("effectiveOn", utcDay(LocalDate.of(year, 3, 1)))
+				.append("reason", "Zusatzurlaub laut Betriebsvereinbarung")
+				.append("actorId", admin.getId())
+				.append("createdAt", now));
+	}
+
+	/** One person's grant for a year, and the accrual that follows from it. */
+	private void grantDemoYear(User person, Object typeId, int year, int allowance, int accrued,
+			User admin, java.util.Date now) {
+		mongo.getCollection("time_off_entitlements").insertOne(new org.bson.Document()
+				.append("userId", person.getId())
+				.append("typeId", String.valueOf(typeId))
+				.append("year", year)
+				.append("allowanceMilliDays", allowance)
+				.append("accruedMilliDays", accrued)
+				.append("source", "TYPE_DEFAULT")
+				.append("grantedBy", admin.getId())
+				.append("grantedAt", now));
+		mongo.getCollection("time_off_ledger").insertOne(new org.bson.Document()
+				.append("userId", person.getId())
+				.append("typeId", String.valueOf(typeId))
+				.append("year", year)
+				.append("kind", "ACCRUAL")
+				.append("milliDays", accrued)
+				.append("effectiveOn", utcDay(LocalDate.of(year, 1, 1)))
+				.append("actorId", admin.getId())
 				.append("createdAt", now));
 	}
 
