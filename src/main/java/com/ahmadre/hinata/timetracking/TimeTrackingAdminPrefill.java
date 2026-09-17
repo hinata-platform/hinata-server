@@ -45,6 +45,10 @@ public class TimeTrackingAdminPrefill implements SettingsPrefill {
 	private ServerSettings.TimeTracking effective() {
 		ServerSettings.TimeTracking view = new ServerSettings.TimeTracking();
 		view.setAdvancedEnabled(settings.advancedEnabled());
+		// What the switch is set to, not whether it can take effect. The admin
+		// screen greys it out while the extended module is off and says why;
+		// showing false there would claim somebody had turned it off.
+		view.setAbsenceManagementEnabled(settings.absenceManagementConfigured());
 
 		TimeTrackingSettings.RequiredFields required = settings.requiredFields();
 		ServerSettings.TimeTracking.RequiredFields requiredView =

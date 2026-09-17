@@ -473,6 +473,21 @@ public class HinataProperties {
 		 */
 		private boolean advancedEnabled = false;
 
+		/**
+		 * Absence management 2.0: types with their own rules, yearly
+		 * entitlements, balances and requests. Off by default, and off it
+		 * stays until an administrator switches it on in the admin area —
+		 * holiday principles and the holiday plan are subject to co-determination
+		 * under § 87 Abs. 1 Nr. 5 BetrVG, so a deployment must not arrive with
+		 * them running.
+		 *
+		 * <p>Only has an effect while {@link #advancedEnabled} is on: the module
+		 * counts days from working patterns, holiday calendars and capacity,
+		 * which are the extended module's. A switch that read "on" while its
+		 * foundation was off would be a screen telling an untruth.
+		 */
+		private boolean absenceManagementEnabled = false;
+
 		/** Which fields an entry must carry to be accepted. */
 		private RequiredFields requiredFields = new RequiredFields();
 
