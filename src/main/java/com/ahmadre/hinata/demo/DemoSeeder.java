@@ -1270,6 +1270,107 @@ public class DemoSeeder {
 				.append("reason", "Zusatzurlaub laut Betriebsvereinbarung")
 				.append("actorId", admin.getId())
 				.append("createdAt", now));
+
+		absenceRequests(admin, tomas, lena, vacationId, year, now);
+	}
+
+	/**
+	 * Three requests in three states, one of them with a stand-in (HIN-117).
+	 *
+	 * <p>One waiting, so the inbox has something in it; one approved, so an absence and a booking
+	 * have a request behind them; one rejected with its reason, because a screen that only ever
+	 * shows yes never shows what § 7 Abs. 1 BUrlG asks a no to carry.
+	 *
+	 * <p>The approved one writes the absence and the booking itself, the way approving would —
+	 * this module's service is not reachable from here, and a demo with a request pointing at
+	 * nothing would teach the wrong shape.
+	 */
+	private void absenceRequests(User admin, User tomas, User lena, Object vacationId, int year,
+			java.util.Date now) {
+		LocalDate nextMonday = LocalDate.now(ZoneOffset.UTC).with(
+				java.time.temporal.TemporalAdjusters.next(java.time.DayOfWeek.MONDAY));
+
+		absenceRequest(tomas, admin, vacationId, nextMonday.plusWeeks(3), nextMonday.plusWeeks(3).plusDays(4),
+				5_000, "SUBMITTED", "Familienbesuch", lena.getId(), null, null, now);
+
+		String approvedId = new org.bson.types.ObjectId().toHexString();
+		String absenceId = new org.bson.types.ObjectId().toHexString();
+		String bookingId = new org.bson.types.ObjectId().toHexString();
+		mongo.getCollection("time_off").insertOne(new org.bson.Document()
+				.append("_id", new org.bson.types.ObjectId(absenceId))
+				.append("userId", lena.getId())
+				.append("type", "VACATION")
+				.append("typeId", String.valueOf(vacationId))
+				.append("from", utcDay(nextMonday.plusWeeks(6)))
+				.append("to", utcDay(nextMonday.plusWeeks(6).plusDays(2)))
+				.append("createdBy", admin.getId())
+				.append("createdAt", now));
+		mongo.getCollection("time_off_ledger").insertOne(new org.bson.Document()
+				.append("_id", new org.bson.types.ObjectId(bookingId))
+				.append("userId", lena.getId())
+				.append("typeId", String.valueOf(vacationId))
+				.append("year", year)
+				.append("kind", "BOOKED")
+				.append("milliDays", -3_000)
+				.append("effectiveOn", utcDay(nextMonday.plusWeeks(6)))
+				.append("refId", approvedId)
+				.append("actorId", admin.getId())
+				.append("createdAt", now));
+		absenceRequest(lena, admin, vacationId, nextMonday.plusWeeks(6), nextMonday.plusWeeks(6).plusDays(2),
+				3_000, "APPROVED", null, null, absenceId, bookingId, now, approvedId);
+
+		absenceRequest(tomas, admin, vacationId, nextMonday.plusWeeks(1), nextMonday.plusWeeks(1).plusDays(4),
+				5_000, "REJECTED", null, null, null, null, now);
+	}
+
+	private void absenceRequest(User person, User decider, Object typeId, LocalDate from, LocalDate to,
+			int milliDays, String status, String note, String substituteId, String absenceId,
+			String ledgerId, java.util.Date now) {
+		absenceRequest(person, decider, typeId, from, to, milliDays, status, note, substituteId,
+				absenceId, ledgerId, now, new org.bson.types.ObjectId().toHexString());
+	}
+
+	private void absenceRequest(User person, User decider, Object typeId, LocalDate from, LocalDate to,
+			int milliDays, String status, String note, String substituteId, String absenceId,
+			String ledgerId, java.util.Date now, String id) {
+		boolean decided = !"SUBMITTED".equals(status);
+		org.bson.Document request = new org.bson.Document()
+				.append("_id", new org.bson.types.ObjectId(id))
+				.append("userId", person.getId())
+				.append("typeId", String.valueOf(typeId))
+				.append("from", utcDay(from))
+				.append("to", utcDay(to))
+				.append("firstDayMilliDays", 1_000)
+				.append("lastDayMilliDays", 1_000)
+				.append("milliDays", milliDays)
+				.append("workingDays", milliDays / 1_000)
+				.append("holidays", 0)
+				.append("status", status)
+				.append("approverIds", List.of(decider.getId()))
+				.append("history", List.of(new org.bson.Document()
+						.append("at", now).append("by", person.getId()).append("to", "SUBMITTED")))
+				.append("version", 0L)
+				.append("createdAt", now)
+				.append("updatedAt", now);
+		if (note != null) {
+			request.append("note", note);
+		}
+		if (substituteId != null) {
+			request.append("substituteId", substituteId);
+		}
+		if (decided) {
+			request.append("decidedBy", decider.getId()).append("decidedAt", now);
+		}
+		if ("REJECTED".equals(status)) {
+			request.append("decisionNote", "In dieser Woche ist bereits die halbe Gruppe unterwegs.");
+		}
+		if (absenceId != null) {
+			request.append("timeOffId", absenceId);
+		}
+		if (ledgerId != null) {
+			request.append("ledgerId", ledgerId);
+		}
+		mongo.getCollection("time_off_requests").insertOne(request);
 	}
 
 	/** One person's grant for a year, and the accrual that follows from it. */

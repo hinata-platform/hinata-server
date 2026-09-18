@@ -11,6 +11,7 @@ import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
@@ -539,7 +540,151 @@ public class NotificationService {
 				words.of(person, "notify.timeOff.push"), "/time/absences");
 	}
 
-	/** Thousandths of a working day as days, in the reader's own number format. */
+	/**
+	 * Which way a request went, for the one notification that reports a decision.
+	 *
+	 * <p>Two constants and not three: an automatic approval is its own message (a person who
+	 * never waited for anybody should not be told somebody decided), and a cancellation is not a
+	 * decision on a request at all.
+	 */
+	public enum TimeOffEvent {
+		APPROVED(Notification.Type.TIME_OFF_APPROVED, "approved"),
+		REJECTED(Notification.Type.TIME_OFF_REJECTED, "rejected");
+
+		private final Notification.Type type;
+		private final String key;
+
+		TimeOffEvent(Notification.Type type, String key) {
+			this.type = type;
+			this.key = key;
+		}
+	}
+
+	/**
+	 * Tells whoever may decide a request that one is waiting.
+	 *
+	 * <p>Names the person and nothing else — not the type, not the span, not the reason. The
+	 * inbox has all of that behind a login; a notification is read wherever the recipient happens
+	 * to be standing, and "Anna: sick leave" on a lock screen is a health fact handed to whoever
+	 * is standing there with them (R7, R11). The same rule {@link #notifyTimesheetSubmitted}
+	 * follows, for the same reason.
+	 *
+	 * <p>The person who asked is never in [recipients]: the caller struck them out when it worked
+	 * out who may decide, because it is the caller that knows who acted.
+	 */
+	public void notifyTimeOffRequested(Set<String> recipients, String person, String link) {
+		if (recipients == null || recipients.isEmpty()) return;
+		deliver(recipients, Notification.Type.TIME_OFF_REQUESTED,
+				locale -> words.in(locale, "notify.timeOffRequest.title"),
+				locale -> words.in(locale, "notify.timeOffRequest.body", person),
+				locale -> words.in(locale, "notify.timeOff.requestPush"),
+				link, null, Routing.of(Notification.Type.TIME_OFF_REQUESTED));
+	}
+
+	/**
+	 * Tells somebody what became of what they asked for.
+	 *
+	 * <p>The reason for a rejection is on the request and not in here. § 7 Abs. 1 BUrlG makes a
+	 * refusal explain itself, and it does — on a screen the person opens, not on one anybody can
+	 * read over their shoulder.
+	 */
+	public void notifyTimeOffDecided(User person, TimeOffEvent event, String link) {
+		if (person == null || !person.isActive()) return;
+		String title = words.of(person, "notify.timeOff." + event.key + ".title");
+		String body = words.of(person, "notify.timeOff." + event.key + ".body");
+		deliverGated(person, event.type, title, body,
+				words.of(person, "notify.time.pushTitle"),
+				words.of(person, "notify.timeOff.requestPush"), link);
+	}
+
+	/**
+	 * Tells somebody their request was granted the moment it arrived.
+	 *
+	 * <p>Its own message rather than an approval with a different word: Art. 22 DSGVO is about
+	 * decisions made without a person in them, and an operator who set a type to approve itself
+	 * owes the people using it the plain fact that nobody looked. A yes is a yes either way — this
+	 * says which kind it was.
+	 */
+	public void notifyTimeOffAutoApproved(User person, String link) {
+		if (person == null || !person.isActive()) return;
+		deliverGated(person, Notification.Type.TIME_OFF_AUTO_APPROVED,
+				words.of(person, "notify.timeOffAuto.title"),
+				words.of(person, "notify.timeOffAuto.body"),
+				words.of(person, "notify.time.pushTitle"),
+				words.of(person, "notify.timeOff.requestPush"), link);
+	}
+
+	/**
+	 * Tells everybody an absence concerned that it is off again.
+	 *
+	 * <p>Two messages rather than one: the person reads "your absence", everybody else reads whose
+	 * it was. One text for both would either tell Anna about Anna in the third person or leave a
+	 * lead guessing which of their team is back. Whoever cancelled it is in neither set — the
+	 * caller removed them.
+	 */
+	public void notifyTimeOffCancelled(User person, Set<String> others, String personName, String link) {
+		if (person != null && person.isActive()) {
+			deliverGated(person, Notification.Type.TIME_OFF_CANCELLED,
+					words.of(person, "notify.timeOffCancelled.title"),
+					words.of(person, "notify.timeOffCancelled.mine"),
+					words.of(person, "notify.time.pushTitle"),
+					words.of(person, "notify.timeOff.requestPush"), link);
+		}
+		if (others == null || others.isEmpty()) return;
+		deliver(others, Notification.Type.TIME_OFF_CANCELLED,
+				locale -> words.in(locale, "notify.timeOffCancelled.title"),
+				locale -> words.in(locale, "notify.timeOffCancelled.theirs", personName),
+				locale -> words.in(locale, "notify.timeOff.requestPush"),
+				link, null, Routing.of(Notification.Type.TIME_OFF_CANCELLED));
+	}
+
+	/**
+	 * Tells the person that approved leave of theirs got shorter, and the deciders that it did.
+	 *
+	 * <p>§ 9 BUrlG gives back leave somebody spent ill, and the days come back by themselves — but
+	 * a plan that changed without anybody asking has to say so, or the first anyone knows of it is
+	 * a balance that moved. The person's copy carries the one thing the product cannot do for
+	 * them: § 5 EFZG still obliges them to report the sickness to their employer, and this is not
+	 * that report.
+	 *
+	 * <p><b>Nobody else is told why.</b> The deciders read that leave was shortened, never that
+	 * somebody was ill — a lead who learned the reason would be learning a health fact through a
+	 * side door (R10, R11).
+	 */
+	public void notifyTimeOffShortened(User person, Set<String> others, String personName, String link) {
+		if (person != null && person.isActive()) {
+			deliverGated(person, Notification.Type.TIME_OFF_SHORTENED,
+					words.of(person, "notify.timeOffShortened.title"),
+					words.of(person, "notify.timeOffShortened.mine"),
+					words.of(person, "notify.time.pushTitle"),
+					words.of(person, "notify.timeOff.requestPush"), link);
+		}
+		if (others == null || others.isEmpty()) return;
+		deliver(others, Notification.Type.TIME_OFF_SHORTENED,
+				locale -> words.in(locale, "notify.timeOffShortened.title"),
+				locale -> words.in(locale, "notify.timeOffShortened.theirs", personName),
+				locale -> words.in(locale, "notify.timeOff.requestPush"),
+				link, null, Routing.of(Notification.Type.TIME_OFF_SHORTENED));
+	}
+
+	/**
+	 * Tells somebody they were named as a stand-in, and when.
+	 *
+	 * <p>Informed, never asked: a stand-in who had to confirm would make one person's leave wait
+	 * on another person's attention. The dates are the whole point of the message — without them
+	 * it says only that something is expected of them at some time.
+	 */
+	public void notifyTimeOffSubstitute(User stand, String person, LocalDate from, LocalDate to,
+			String link) {
+		if (stand == null || !stand.isActive()) return;
+		Locale locale = words.localeOf(stand);
+		deliverGated(stand, Notification.Type.TIME_OFF_SUBSTITUTE_NAMED,
+				words.in(locale, "notify.timeOffSubstitute.title"),
+				words.in(locale, "notify.timeOffSubstitute.body", person,
+						words.date(locale, from), words.date(locale, to)),
+				words.in(locale, "notify.time.pushTitle"),
+				words.in(locale, "notify.timeOff.requestPush"), link);
+	}
 
 	/**
 	 * Tells a project's leads that its recorded time reached a threshold of its budget, or of the
@@ -1110,7 +1255,9 @@ public class NotificationService {
 			case TIME_TIMER_AUTO_STOPPED, TIMESHEET_SUBMITTED, TIMESHEET_APPROVED,
 					TIMESHEET_REJECTED, TIMESHEET_REOPENED, TIME_CORRECTION_REQUESTED,
 					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED, TIME_TARGET_REMINDER,
-					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED, TIME_OFF_ENTITLEMENT_CHANGED -> "time";
+					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED, TIME_OFF_ENTITLEMENT_CHANGED,
+					TIME_OFF_REQUESTED, TIME_OFF_APPROVED, TIME_OFF_REJECTED, TIME_OFF_AUTO_APPROVED,
+					TIME_OFF_CANCELLED, TIME_OFF_SHORTENED, TIME_OFF_SUBSTITUTE_NAMED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

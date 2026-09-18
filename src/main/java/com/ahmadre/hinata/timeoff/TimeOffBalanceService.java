@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -624,6 +625,43 @@ public class TimeOffBalanceService {
 			total += value == null ? 0 : value;
 		}
 		return total;
+	}
+
+	/**
+	 * What is left of every type, for several people and several years, in one aggregation.
+	 *
+	 * <p>For a list of requests that has to say "the days are there" or "they are not" beside each
+	 * row. Asking {@link #remainingMilliDays} per row would be one aggregation per row, which is
+	 * the shape A1 spent a review round removing from the entitlement directory.
+	 *
+	 * <p>Keyed {@code userId → typeId → year}. Still a yes-or-no for whoever reads it: the figure
+	 * belongs to the person, and what a decider is handed is whether it covers the request (R2,
+	 * R10).
+	 */
+	Map<String, Map<String, Map<Integer, Integer>>> remainingByPerson(Collection<String> userIds,
+			Collection<Integer> years) {
+		if (userIds == null || userIds.isEmpty() || years == null || years.isEmpty()) {
+			return Map.of();
+		}
+		AggregationResults<Document> results = mongo.aggregate(
+				Aggregation.newAggregation(
+						Aggregation.match(Criteria.where("userId").in(userIds).and("year").in(years)),
+						Aggregation.group("userId", "typeId", "year").sum("milliDays").as("total")),
+				TimeOffLedgerEntry.class, Document.class);
+		Map<String, Map<String, Map<Integer, Integer>>> remaining = new LinkedHashMap<>();
+		for (Document row : results) {
+			Document id = row.get("_id", Document.class);
+			String userId = id.getString("userId");
+			String typeId = id.getString("typeId");
+			Integer year = id.getInteger("year");
+			if (userId == null || typeId == null || year == null) {
+				continue;
+			}
+			remaining.computeIfAbsent(userId, key -> new LinkedHashMap<>())
+					.computeIfAbsent(typeId, key -> new LinkedHashMap<>())
+					.merge(year, toInt(row.get("total")), Integer::sum);
+		}
+		return remaining;
 	}
 
 	/** The one place a row enters the journal. Nothing updates one, and nothing deletes one. */

@@ -49,7 +49,6 @@ public class UserWords {
 		return messages.getMessage(key, args, key, localeOf(user));
 	}
 
-	/** {@code key} rendered for an explicit locale. */
 	/**
 	 * A number of absence days, written the way [locale] writes numbers.
 	 *
@@ -65,6 +64,25 @@ public class UserWords {
 		return in(locale, "notify.timeOff.days", milliDays / 1000.0);
 	}
 
+	/**
+	 * A date, written the way [locale] writes dates.
+	 *
+	 * <p>Not left to {@code MessageFormat}: a bare placeholder prints a {@code LocalDate} as
+	 * {@code 2026-09-18}, which is nobody's spelling, and {@code {0,date,medium}} throws on one
+	 * outright because it wants a {@code java.util.Date}. HIN-87 found the other half of the same
+	 * trap — a plain placeholder with a {@code Date} invents a time of day.
+	 */
+	public String date(Locale locale, java.time.LocalDate date) {
+		if (date == null) {
+			return "";
+		}
+		return java.time.format.DateTimeFormatter
+				.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM)
+				.withLocale(locale == null ? Locale.ENGLISH : locale)
+				.format(date);
+	}
+
+	/** {@code key} rendered for an explicit locale. */
 	public String in(Locale locale, String key, Object... args) {
 		return messages.getMessage(key, args, key, locale == null ? Locale.ENGLISH : locale);
 	}

@@ -25,6 +25,13 @@ public interface TimeOffRequestRepository extends MongoRepository<TimeOffRequest
 
 	Page<TimeOffRequest> findByUserIdAndStatus(String userId, TimeOffRequest.Status status, Pageable pageable);
 
+	/** One leave year of somebody's own list. The bound is on {@code from}, which is the sort key. */
+	Page<TimeOffRequest> findByUserIdAndFromBetween(String userId, LocalDate first, LocalDate last,
+			Pageable pageable);
+
+	Page<TimeOffRequest> findByUserIdAndStatusAndFromBetween(String userId, TimeOffRequest.Status status,
+			LocalDate first, LocalDate last, Pageable pageable);
+
 	Page<TimeOffRequest> findByApproverIdsContains(String approverId, Pageable pageable);
 
 	Page<TimeOffRequest> findByApproverIdsContainsAndStatus(String approverId, TimeOffRequest.Status status,
@@ -33,6 +40,18 @@ public interface TimeOffRequestRepository extends MongoRepository<TimeOffRequest
 	/** Who else is away across [from]–[to], for the clash line a decider sees. */
 	List<TimeOffRequest> findByStatusInAndToGreaterThanEqualAndFromLessThanEqual(
 			Collection<TimeOffRequest.Status> statuses, LocalDate from, LocalDate to, Pageable pageable);
+
+	/**
+	 * The same question narrowed to what one decider may see, which is how anybody but a keeper
+	 * asks it.
+	 *
+	 * <p>Leads with {@code approverIds}, the way the {@code approver_status_from} index is built,
+	 * so it is a read of that person's inbox rather than a read of the organisation with a filter
+	 * behind it.
+	 */
+	List<TimeOffRequest> findByApproverIdsContainsAndStatusInAndToGreaterThanEqualAndFromLessThanEqual(
+			String approverId, Collection<TimeOffRequest.Status> statuses, LocalDate from, LocalDate to,
+			Pageable pageable);
 
 	/** Approved requests of one person touching a span — § 9 BUrlG asks this of a sick note. */
 	List<TimeOffRequest> findByUserIdAndStatusAndToGreaterThanEqualAndFromLessThanEqual(String userId,

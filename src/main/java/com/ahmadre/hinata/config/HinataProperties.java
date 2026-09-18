@@ -316,6 +316,16 @@ public class HinataProperties {
 		 */
 		@Min(1)
 		private int exportsPerMinute = 12;
+		/**
+		 * Absence requests and sick reports per person per day.
+		 *
+		 * <p>A day rather than a minute: filing leave is a deliberate act somebody does a handful
+		 * of times a year, and a per-minute budget would still let a loop write a thousand
+		 * requests into everybody's inbox before lunch. Generous enough that nobody correcting
+		 * their plans ever meets it (HIN-117).
+		 */
+		@Min(1)
+		private int timeOffRequestsPerDay = 50;
 		/** Failed logins per account before a temporary database-backed block. */
 		@Min(3)
 		private int maxLoginFailures = 5;

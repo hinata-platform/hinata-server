@@ -16,9 +16,13 @@ import org.springframework.stereotype.Service;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Asking for time off, deciding it, and taking it back.
@@ -64,6 +68,7 @@ public class TimeOffRequestService {
 	private final TimeOffApprovers approvers;
 	private final TimeOffBalanceService balances;
 	private final TimeOffAccess access;
+	private final TimeOffRequestLimiter limiter;
 	private final UserRepository users;
 	private final NotificationService notifications;
 	private final AuditService audit;
@@ -75,12 +80,15 @@ public class TimeOffRequestService {
 	}
 
 	/**
-	 * A request with the things a screen needs beside it, worked out once rather than per row.
+	 * A request with the things a screen needs beside it, worked out once for a page rather than
+	 * once per row.
 	 *
 	 * <p>[balanceShort] is a yes or no and never a figure: a lead deciding leave for their team
-	 * learns whether the days are there, not how many the person has (R2, R10).
+	 * learns whether the days are there, not how many the person has (R2, R10). [clashes] counts
+	 * other people away across the same span, and names none of them — the line that names them is
+	 * its own read, which a decider makes by opening the request.
 	 */
-	public record View(TimeOffRequest request, String typeKey, String typeSystemKey,
+	public record View(TimeOffRequest request, String personName, String typeKey, String typeSystemKey,
 			boolean balanceShort, boolean shortNotice, int clashes) {
 	}
 
@@ -91,12 +99,28 @@ public class TimeOffRequestService {
 
 	// ------------------------------------------------------------------ reading
 
-	/** Somebody's own requests, newest first. */
-	public Page<TimeOffRequest> mine(User person, TimeOffRequest.Status status, int page, int size) {
+	/**
+	 * Somebody's own requests, newest first, optionally one status and one leave year.
+	 *
+	 * <p>The year narrows on [from], which is the field the list is ordered by and the third field
+	 * of {@code user_status_from} — so it stays a range walk of the index rather than a filter
+	 * after the fact.
+	 */
+	public Page<View> mine(User person, TimeOffRequest.Status status, Integer year, int page, int size) {
 		Pageable request = pageOf(page, size);
-		return status == null
-				? requests.findByUserId(person.getId(), request)
-				: requests.findByUserIdAndStatus(person.getId(), status, request);
+		Page<TimeOffRequest> found;
+		if (year == null) {
+			found = status == null
+					? requests.findByUserId(person.getId(), request)
+					: requests.findByUserIdAndStatus(person.getId(), status, request);
+		} else {
+			LocalDate first = LocalDate.of(year, 1, 1);
+			LocalDate last = LocalDate.of(year, 12, 31);
+			found = status == null
+					? requests.findByUserIdAndFromBetween(person.getId(), first, last, request)
+					: requests.findByUserIdAndStatusAndFromBetween(person.getId(), status, first, last, request);
+		}
+		return found.map(viewsOf(found.getContent(), person, false)::get);
 	}
 
 	/**
@@ -106,11 +130,12 @@ public class TimeOffRequestService {
 	 * request stays in the inbox of the person who was asked, rather than moving because a team
 	 * gained a lead halfway through.
 	 */
-	public Page<TimeOffRequest> inbox(User decider, TimeOffRequest.Status status, int page, int size) {
+	public Page<View> inbox(User decider, TimeOffRequest.Status status, int page, int size) {
 		Pageable request = pageOf(page, size);
-		return status == null
+		Page<TimeOffRequest> found = status == null
 				? requests.findByApproverIdsContains(decider.getId(), request)
 				: requests.findByApproverIdsContainsAndStatus(decider.getId(), status, request);
+		return found.map(viewsOf(found.getContent(), decider, true)::get);
 	}
 
 	/**
@@ -125,6 +150,22 @@ public class TimeOffRequestService {
 			throw ApiException.notFound("timeOffRequest");
 		}
 		return request;
+	}
+
+	/**
+	 * One request with everything a detail screen shows beside it.
+	 *
+	 * <p>The same shape a list row has, so a client has one model rather than two that drift. The
+	 * clash count is in it here as well: on the screen where somebody decides, "two others are
+	 * away then" is the fact § 7 Abs. 1 BUrlG makes the decision turn on.
+	 */
+	public View view(String id, User viewer) {
+		return view(get(id, viewer), viewer);
+	}
+
+	/** As above for a request already in hand, so a write need not read it back. */
+	public View view(TimeOffRequest request, User viewer) {
+		return viewsOf(List.of(request), viewer, true).get(request);
 	}
 
 	/**
@@ -156,15 +197,21 @@ public class TimeOffRequestService {
 		if (from.plusDays(CONFLICT_DAYS_MAX - 1L).isBefore(to)) {
 			throw ApiException.badRequest("error.timeOff.spanTooLong", CONFLICT_DAYS_MAX);
 		}
-		List<TimeOffRequest> found = requests.findByStatusInAndToGreaterThanEqualAndFromLessThanEqual(
-				List.of(TimeOffRequest.Status.SUBMITTED, TimeOffRequest.Status.APPROVED), from, to,
-				PageRequest.of(0, CONFLICTS_MAX));
+		List<TimeOffRequest.Status> live = List.of(TimeOffRequest.Status.SUBMITTED,
+				TimeOffRequest.Status.APPROVED);
+		Pageable window = PageRequest.of(0, CONFLICTS_MAX);
+		// Asked of the database rather than filtered afterwards. A lead reading the first fifty
+		// requests in the organisation and then keeping the ones that are theirs would be told
+		// "nobody else is away" on exactly the busy weeks the line exists for.
+		List<TimeOffRequest> found = access.isKeeper(decider)
+				? requests.findByStatusInAndToGreaterThanEqualAndFromLessThanEqual(live, from, to, window)
+				: requests.findByApproverIdsContainsAndStatusInAndToGreaterThanEqualAndFromLessThanEqual(
+						decider.getId(), live, from, to, window);
 		List<TimeOffRequest> theirs = found.stream()
 				.filter(each -> !each.getUserId().equals(decider.getId()))
-				.filter(each -> access.isKeeper(decider) || each.getApproverIds().contains(decider.getId()))
 				.toList();
 		List<String> ids = theirs.stream().map(TimeOffRequest::getUserId).distinct().toList();
-		java.util.Map<String, String> names = new java.util.HashMap<>();
+		Map<String, String> names = new HashMap<>();
 		for (User person : users.findAllById(ids)) {
 			names.put(person.getId(), person.getDisplayName());
 		}
@@ -180,6 +227,88 @@ public class TimeOffRequestService {
 	public record Clash(String userId, String name, LocalDate from, LocalDate to, boolean approved) {
 	}
 
+	/**
+	 * Everything a page of rows needs beside the rows, in four reads however long the page is.
+	 *
+	 * <p>The names, the types, the balances and the clashes are each one query for the whole page.
+	 * Asked per row they would be four per row, which is the shape A1 spent a review round taking
+	 * out of the entitlement directory — and an inbox is the screen somebody opens every morning.
+	 */
+	private Map<TimeOffRequest, View> viewsOf(List<TimeOffRequest> rows, User viewer, boolean withClashes) {
+		Map<TimeOffRequest, View> views = new IdentityHashMap<>();
+		if (rows.isEmpty()) {
+			return views;
+		}
+		List<String> userIds = rows.stream().map(TimeOffRequest::getUserId).distinct().toList();
+		Map<String, String> names = new HashMap<>();
+		for (User person : users.findAllById(userIds)) {
+			names.put(person.getId(), person.getDisplayName());
+		}
+		Map<String, TimeOffType> catalogue = new HashMap<>();
+		for (TimeOffType type : types.findAllById(
+				rows.stream().map(TimeOffRequest::getTypeId).distinct().toList())) {
+			catalogue.put(type.getId(), type);
+		}
+		Set<Integer> years = rows.stream().map(row -> row.getFrom().getYear()).collect(Collectors.toSet());
+		Map<String, Map<String, Map<Integer, Integer>>> remaining =
+				balances.remainingByPerson(userIds, years);
+		Map<TimeOffRequest, Integer> clashes = withClashes ? clashesAcross(rows, viewer) : Map.of();
+		for (TimeOffRequest row : rows) {
+			TimeOffType type = catalogue.get(row.getTypeId());
+			views.put(row, new View(row, names.get(row.getUserId()),
+					type == null ? null : type.getKey(),
+					type == null ? null : type.getSystemKey(),
+					type != null && balanceFallsShort(type, remaining, row),
+					type != null && shortNotice(type, row.getFrom()),
+					clashes.getOrDefault(row, 0)));
+		}
+		return views;
+	}
+
+	/** Whether what is left will not cover [row]. A yes or a no; the figure never leaves here. */
+	private static boolean balanceFallsShort(TimeOffType type,
+			Map<String, Map<String, Map<Integer, Integer>>> remaining, TimeOffRequest row) {
+		if (!type.countsAgainstBalance() || type.isUnlimited()) {
+			return false;
+		}
+		int left = remaining.getOrDefault(row.getUserId(), Map.of())
+				.getOrDefault(row.getTypeId(), Map.of())
+				.getOrDefault(row.getFrom().getYear(), 0);
+		return left - row.milliDays() < 0;
+	}
+
+	/**
+	 * How many other people are away across each row's span, counted from one read.
+	 *
+	 * <p>One query for the widest span the page covers, then counted in memory. Per row it would
+	 * be a query per row, and the answer is a single number on a card.
+	 *
+	 * <p>Only for an inbox. On somebody's own list the same read would return nothing for almost
+	 * everybody — who else is away is a decider's question — and cost a query to say so.
+	 */
+	private Map<TimeOffRequest, Integer> clashesAcross(List<TimeOffRequest> rows, User viewer) {
+		Map<TimeOffRequest, Integer> counts = new IdentityHashMap<>();
+		LocalDate first = rows.stream().map(TimeOffRequest::getFrom).min(LocalDate::compareTo).orElse(null);
+		LocalDate last = rows.stream().map(TimeOffRequest::getTo).max(LocalDate::compareTo).orElse(null);
+		if (first == null || last == null || first.plusDays(CONFLICT_DAYS_MAX - 1L).isBefore(last)) {
+			// A page reaching across more than a quarter would make this the very sweep the clash
+			// query is bounded to avoid. The cards then simply carry no count.
+			return counts;
+		}
+		List<Clash> around = conflicts(viewer, first, last);
+		for (TimeOffRequest row : rows) {
+			int count = 0;
+			for (Clash clash : around) {
+				if (!clash.userId().equals(row.getUserId())
+						&& !clash.from().isAfter(row.getTo()) && !clash.to().isBefore(row.getFrom())) {
+					count++;
+				}
+			}
+			counts.put(row, count);
+		}
+		return counts;
+	}
+
 	// ------------------------------------------------------------------ writing
 
 	/**
@@ -191,6 +320,7 @@ public class TimeOffRequestService {
 	 * the history, so an automatic yes is as visible as a considered one.
 	 */
 	public TimeOffRequest submit(User person, Draft draft) {
+		limiter.require(person.getId());
 		TimeOffType type = types.require(person, draft.typeId());
 		if (type.getKind() == TimeOffType.Kind.SICK) {
 			// Not a refusal of the absence — a refusal of the queue. § 5 EFZG knows a notification,
@@ -223,7 +353,7 @@ public class TimeOffRequestService {
 				.note(request.getNote()).build());
 		request.setUpdatedAt(clock.instant());
 		TimeOffRequest saved = requests.save(request);
-		audited(AuditAction.TIME_OFF_REQUEST_SUBMITTED, saved, person, null);
+		audited(AuditAction.TIME_OFF_REQUEST_SUBMITTED, saved, person);
 
 		if (decidesItself) {
 			return decideInternally(saved, person, person, TimeOffRequest.Status.APPROVED, null, true);
@@ -298,8 +428,8 @@ public class TimeOffRequestService {
 		request.setTimeOffId(null);
 		TimeOffRequest saved = transition(request, actor, TimeOffRequest.Status.CANCELLED, note,
 				AuditAction.TIME_OFF_REQUEST_CANCELLED);
-		notifications.notifyTimeOffCancelled(recipientsOf(saved, actor), person.getDisplayName(),
-				"/absences/requests");
+		notifications.notifyTimeOffCancelled(actor.getId().equals(person.getId()) ? null : person,
+				othersOf(saved, actor), person.getDisplayName(), "/absences/requests");
 		return saved;
 	}
 
@@ -317,6 +447,9 @@ public class TimeOffRequestService {
 	 * the leave is shortened, because leave that somebody spent ill was not leave.
 	 */
 	public Sick reportSick(User person, LocalDate from, LocalDate to, boolean halfDay, String typeId) {
+		// Metered so the count is honest, never refused: § 5 EFZG knows a notification and not a
+		// permission, so there is no path through here that can say no (R11).
+		limiter.allow(person.getId());
 		TimeOffType type = sickType(person, typeId);
 		LocalDate last = to == null ? from : to;
 		TimeOffSpan.Result span = workingDays.of(person.getId(), from, last,
@@ -400,7 +533,7 @@ public class TimeOffRequestService {
 			// again, or a week off would cost two weeks of balance.
 			throw ApiException.conflict("error.timeOff.requestChangedMeanwhile");
 		}
-		audited(action, saved, actor, note);
+		audited(action, saved, actor);
 		return saved;
 	}
 
@@ -451,7 +584,10 @@ public class TimeOffRequestService {
 					.to(TimeOffRequest.Status.APPROVED).build());
 			leave.setUpdatedAt(clock.instant());
 			requests.save(leave);
-			notifications.notifyTimeOffShortened(person, "/absences/requests");
+			// The deciders learn that the leave got shorter and never why: "shortened because they
+			// were ill" would hand a lead a health fact through a side door (R10, R11).
+			notifications.notifyTimeOffShortened(person, new LinkedHashSet<>(leave.getApproverIds()),
+					person.getDisplayName(), "/absences/requests");
 		}
 		return returned;
 	}
@@ -516,13 +652,22 @@ public class TimeOffRequestService {
 	 * turn a question of timing into a wall.
 	 */
 	private void assertBalanceCovers(User person, TimeOffType type, TimeOffRequest request) {
-		if (!type.countsAgainstBalance() || type.isUnlimited() || type.negativeBalanceAllowed()) {
+		if (!type.countsAgainstBalance() || type.isUnlimited()) {
 			return;
 		}
-		int remaining = balances.remainingMilliDays(person.getId(), type.getId(), request.getFrom().getYear());
-		if (remaining - request.milliDays() < 0) {
-			throw ApiException.conflict("error.timeOff.balanceExceeded",
-					TimeOffRefusalDetails.balance());
+		int after = balances.remainingMilliDays(person.getId(), type.getId(), request.getFrom().getYear())
+				- request.milliDays();
+		if (after >= 0) {
+			return;
+		}
+		if (!type.negativeBalanceAllowed()) {
+			throw TimeOffRefusal.balanceExceeded();
+		}
+		// A type that allows a negative balance may still name how far. Null is "no floor beyond
+		// zero" only for a type that does not allow one at all; here it means no floor.
+		Integer floor = type.getNegativeLimitMilliDays();
+		if (floor != null && after < -floor) {
+			throw TimeOffRefusal.balanceExceeded();
 		}
 	}
 
@@ -583,14 +728,17 @@ public class TimeOffRequestService {
 		return users.findById(request.getUserId()).orElseThrow(() -> ApiException.notFound("user"));
 	}
 
-	/** Everybody a cancellation concerns except whoever cancelled it. */
-	private Set<String> recipientsOf(TimeOffRequest request, User actor) {
+	/**
+	 * Everybody a cancellation concerns except whoever cancelled it — and except the person it is
+	 * about, who is told in their own words.
+	 */
+	private Set<String> othersOf(TimeOffRequest request, User actor) {
 		Set<String> ids = new LinkedHashSet<>(request.getApproverIds());
-		ids.add(request.getUserId());
 		if (request.getSubstituteId() != null) {
 			ids.add(request.getSubstituteId());
 		}
 		ids.remove(actor.getId());
+		ids.remove(request.getUserId());
 		return ids;
 	}
 
@@ -649,7 +797,7 @@ public class TimeOffRequestService {
 	 * would outlive the account, survive the module being switched off, and be readable by every
 	 * administrator. The sentence stays on the request, where it disappears with it (Art. 9 DSGVO).
 	 */
-	private void audited(AuditAction action, TimeOffRequest request, User actor, String note) {
+	private void audited(AuditAction action, TimeOffRequest request, User actor) {
 		audit.event(action).actor(actor)
 				.target(request.getId(), request.getFrom() + " – " + request.getTo())
 				.meta("user", request.getUserId())

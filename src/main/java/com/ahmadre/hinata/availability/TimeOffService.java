@@ -223,10 +223,10 @@ public class TimeOffService {
 		}
 	}
 
-	/** An absence the viewer may change: their own, or anybody's for an administrator. */
+	/** An absence the viewer may change: their own, or anybody's for somebody who keeps absences. */
 	private TimeOff writable(User viewer, String id) {
 		TimeOff item = timeOff.findById(id).orElseThrow(() -> ApiException.notFound("timeOff"));
-		if (!viewer.isAdmin() && !viewer.getId().equals(item.getUserId())) {
+		if (!access.keeps(viewer) && !viewer.getId().equals(item.getUserId())) {
 			throw ApiException.notFound("timeOff");
 		}
 		return item;

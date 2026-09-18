@@ -81,6 +81,18 @@ public class ApiException extends RuntimeException {
 		return new ApiException(HttpStatus.CONFLICT, messageKey, args);
 	}
 
+	/**
+	 * A 409 the client can act on: see {@link #getDetails()}.
+	 *
+	 * <p>Its own overload rather than trusting the varargs above, which would take a map as a
+	 * format argument and send a refusal with no facts on it — silently, since a message with no
+	 * placeholder simply ignores what it was handed.
+	 */
+	public static ApiException conflict(String messageKey, Map<String, String> details,
+			Object... args) {
+		return new ApiException(HttpStatus.CONFLICT, messageKey, details, args);
+	}
+
 	public static ApiException unauthorized(String messageKey, Object... args) {
 		return new ApiException(HttpStatus.UNAUTHORIZED, messageKey, args);
 	}

@@ -223,7 +223,22 @@ class ModuleBoundaryTest {
 			// the three stored kinds an operator's own absence type is. It names TimeOff.Type and
 			// implements an interface availability declares — it reads no absence and asks no
 			// capacity, which is why it is a bridge and not a reader of anybody's days.
-			TIME_OFF + ".TimeOffCatalogueBridge");
+			TIME_OFF + ".TimeOffCatalogueBridge",
+			// What a span of dates is worth in working days (HIN-117). It reads one capacity
+			// window for the person's own pattern and their holidays, throws the minutes and the
+			// absences away, and answers in days.
+			TIME_OFF + ".TimeOffWorkingDays",
+			// The whole contact surface between the approval flow and the calendar an approval
+			// writes into: enter, shorten, remove. One named class rather than five, so the
+			// question "who may learn that somebody is away?" has one place to be asked.
+			TIME_OFF + ".TimeOffAbsences",
+			// Answers the question availability asks about a direct entry — whether the type is
+			// one somebody has to approve. It names the interface availability declares and
+			// reads no absence at all.
+			TIME_OFF + ".TimeOffApprovalGuard",
+			// Answers the other question availability asks: whether somebody keeps absences
+			// without being an administrator (HIN-116's named circle). It reads no absence either.
+			TIME_OFF + ".TimeOffKeeperBridge");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
@@ -235,7 +250,12 @@ class ModuleBoundaryTest {
 			TIME + ".TimeReminders", TIME + ".TimeEntryController", TIME + ".TimeHintsController",
 			TIME + ".TimeReminderJob",
 			TIME_OFF + ".TimeOffWorkWeek", TIME_OFF + ".TimeOffBalanceService",
-			TIME_OFF + ".TimeOffCatalogueBridge");
+			TIME_OFF + ".TimeOffCatalogueBridge",
+			TIME_OFF + ".TimeOffWorkingDays", TIME_OFF + ".TimeOffAbsences",
+			TIME_OFF + ".TimeOffApprovalGuard", TIME_OFF + ".TimeOffKeeperBridge",
+			// The approval flow: it calls the readers above and holds nothing of availability
+			// itself, which is why TimeOffAbsences exists at all.
+			TIME_OFF + ".TimeOffRequestService");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {
