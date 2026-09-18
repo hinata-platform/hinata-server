@@ -1,0 +1,661 @@
+package com.ahmadre.hinata.timeoff;
+
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.notification.NotificationService;
+import com.ahmadre.hinata.user.User;
+import com.ahmadre.hinata.user.UserRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+
+import java.time.Clock;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Asking for time off, deciding it, and taking it back.
+ *
+ * <p>The flow is the one HIN-88 settled for timesheets, because a second flow would be a second
+ * set of rules about who may decide what, and they would drift: a request is submitted, somebody
+ * other than the person decides it, every step is recorded, and a decision that was made twice at
+ * once loses rather than books twice.
+ *
+ * <p><b>What the approval writes.</b> Exactly one absence and exactly one booking, and the request
+ * keeps both ids. Cancelling reverses those two and nothing else. Nothing here recomputes a
+ * balance: the ledger is append-only and every figure is a sum of it, so a cancellation is a
+ * counter-booking rather than the removal of a row.
+ *
+ * <p><b>What it refuses, and what it merely says out loud.</b> Hard refusals are the rules the
+ * type itself sets — more consecutive days than it allows, a balance it will not let go negative.
+ * Everything else is a warning to whoever decides: short notice, a balance that will not cover it,
+ * somebody else in the team away at the same time. A tool that refuses what the law leaves to
+ * judgement takes the judgement away from the people the law gives it to (§ 7 Abs. 1 BUrlG).
+ *
+ * <p><b>Sickness never comes through here.</b> {@link #reportSick} is a different method with no
+ * approver, no status and no path that can say no — § 5 EFZG knows a notification, not a
+ * permission (R11). It is also where § 9 BUrlG lives: sickness that falls inside approved leave
+ * gives the leave back.
+ */
+@Service
+@RequiredArgsConstructor
+public class TimeOffRequestService {
+
+	/** The largest page anybody may ask for, matching the rest of the module. */
+	public static final int PAGE_MAX = 100;
+
+	/** How far a clash query may look, so one read cannot sweep a year of everybody's absences. */
+	public static final int CONFLICT_DAYS_MAX = 92;
+
+	/** How many other people a clash line will name before it stops counting them out. */
+	static final int CONFLICTS_MAX = 50;
+
+	private final TimeOffRequestRepository requests;
+	private final TimeOffTypeService types;
+	private final TimeOffWorkingDays workingDays;
+	private final TimeOffAbsences absences;
+	private final TimeOffApprovers approvers;
+	private final TimeOffBalanceService balances;
+	private final TimeOffAccess access;
+	private final UserRepository users;
+	private final NotificationService notifications;
+	private final AuditService audit;
+	private final Clock clock;
+
+	/** What somebody asks for. [first] and [last] are thousandths of a day for the edge days. */
+	public record Draft(String typeId, LocalDate from, LocalDate to, Integer first, Integer last,
+			String note, String substituteId) {
+	}
+
+	/**
+	 * A request with the things a screen needs beside it, worked out once rather than per row.
+	 *
+	 * <p>[balanceShort] is a yes or no and never a figure: a lead deciding leave for their team
+	 * learns whether the days are there, not how many the person has (R2, R10).
+	 */
+	public record View(TimeOffRequest request, String typeKey, String typeSystemKey,
+			boolean balanceShort, boolean shortNotice, int clashes) {
+	}
+
+	/** What a span would cost, for the form to show while somebody is still picking dates. */
+	public record Preview(int milliDays, int workingDays, int holidays, int daysOff,
+			boolean balanceShort, boolean shortNotice) {
+	}
+
+	// ------------------------------------------------------------------ reading
+
+	/** Somebody's own requests, newest first. */
+	public Page<TimeOffRequest> mine(User person, TimeOffRequest.Status status, int page, int size) {
+		Pageable request = pageOf(page, size);
+		return status == null
+				? requests.findByUserId(person.getId(), request)
+				: requests.findByUserIdAndStatus(person.getId(), status, request);
+	}
+
+	/**
+	 * What [decider] has to decide.
+	 *
+	 * <p>Read off {@code approverIds}, which was frozen when the request was submitted — so a
+	 * request stays in the inbox of the person who was asked, rather than moving because a team
+	 * gained a lead halfway through.
+	 */
+	public Page<TimeOffRequest> inbox(User decider, TimeOffRequest.Status status, int page, int size) {
+		Pageable request = pageOf(page, size);
+		return status == null
+				? requests.findByApproverIdsContains(decider.getId(), request)
+				: requests.findByApproverIdsContainsAndStatus(decider.getId(), status, request);
+	}
+
+	/**
+	 * One request, for anybody it concerns: the person, whoever may decide it, or a keeper.
+	 *
+	 * <p>Everybody else gets 404 rather than 403 — a stranger probing ids learns nothing from the
+	 * difference between "not yours" and "not there".
+	 */
+	public TimeOffRequest get(String id, User viewer) {
+		TimeOffRequest request = requests.findById(id).orElseThrow(() -> ApiException.notFound("timeOffRequest"));
+		if (!concerns(request, viewer)) {
+			throw ApiException.notFound("timeOffRequest");
+		}
+		return request;
+	}
+
+	/**
+	 * What [draft] would cost [person], and what somebody should be told about it.
+	 *
+	 * <p>The same arithmetic the submission freezes, so the number in the form is the number on the
+	 * request. Read-only, and it writes nothing.
+	 */
+	public Preview preview(User person, Draft draft) {
+		TimeOffType type = types.require(person, draft.typeId());
+		TimeOffSpan.Result span = span(person, type, draft);
+		return new Preview(span.milliDays(), span.workingDays(), span.holidays(), span.daysOff(),
+				balanceShort(person, type, draft.from(), span.milliDays()),
+				shortNotice(type, draft.from()));
+	}
+
+	/**
+	 * Who else is away between [from] and [to] — for a decider weighing one request against the
+	 * team it leaves behind (§ 7 Abs. 1 BUrlG: somebody else's prior claim is a lawful reason).
+	 *
+	 * <p>Names and spans, never the type. Whether a colleague is on vacation or ill is not part of
+	 * this decision, and a clash line that said so would be a way for anybody who ever decides a
+	 * request to learn it (R10, R11).
+	 */
+	public List<Clash> conflicts(User decider, LocalDate from, LocalDate to) {
+		if (from == null || to == null || to.isBefore(from)) {
+			throw ApiException.badRequest("error.timeOff.spanInvalid");
+		}
+		if (from.plusDays(CONFLICT_DAYS_MAX - 1L).isBefore(to)) {
+			throw ApiException.badRequest("error.timeOff.spanTooLong", CONFLICT_DAYS_MAX);
+		}
+		List<TimeOffRequest> found = requests.findByStatusInAndToGreaterThanEqualAndFromLessThanEqual(
+				List.of(TimeOffRequest.Status.SUBMITTED, TimeOffRequest.Status.APPROVED), from, to,
+				PageRequest.of(0, CONFLICTS_MAX));
+		List<TimeOffRequest> theirs = found.stream()
+				.filter(each -> !each.getUserId().equals(decider.getId()))
+				.filter(each -> access.isKeeper(decider) || each.getApproverIds().contains(decider.getId()))
+				.toList();
+		List<String> ids = theirs.stream().map(TimeOffRequest::getUserId).distinct().toList();
+		java.util.Map<String, String> names = new java.util.HashMap<>();
+		for (User person : users.findAllById(ids)) {
+			names.put(person.getId(), person.getDisplayName());
+		}
+		List<Clash> clashes = new ArrayList<>();
+		for (TimeOffRequest each : theirs) {
+			clashes.add(new Clash(each.getUserId(), names.get(each.getUserId()), each.getFrom(), each.getTo(),
+					each.getStatus() == TimeOffRequest.Status.APPROVED));
+		}
+		return clashes;
+	}
+
+	/** Somebody else away at the same time: who, when, and whether it is already settled. */
+	public record Clash(String userId, String name, LocalDate from, LocalDate to, boolean approved) {
+	}
+
+	// ------------------------------------------------------------------ writing
+
+	/**
+	 * Files a request for [person] and routes it.
+	 *
+	 * <p>A type nobody has to approve is decided as it arrives, rather than filed into an inbox
+	 * that would never look at it — that is what {@code AUTO} means, and a type whose approval was
+	 * switched off behaves the same way for the same reason. The person is told, and the step is in
+	 * the history, so an automatic yes is as visible as a considered one.
+	 */
+	public TimeOffRequest submit(User person, Draft draft) {
+		TimeOffType type = types.require(person, draft.typeId());
+		if (type.getKind() == TimeOffType.Kind.SICK) {
+			// Not a refusal of the absence — a refusal of the queue. § 5 EFZG knows a notification,
+			// and the route that takes one is next door.
+			throw ApiException.badRequest("error.timeOff.sickNotRequested");
+		}
+		TimeOffSpan.Result span = span(person, type, draft);
+		assertWithinTypeRules(type, span, draft);
+
+		Set<String> audience = new LinkedHashSet<>(approvers.of(type, person));
+		boolean decidesItself = !type.requiresApproval() || type.approverRule() == TimeOffType.ApproverRule.AUTO;
+
+		TimeOffRequest request = TimeOffRequest.builder()
+				.userId(person.getId())
+				.typeId(type.getId())
+				.from(draft.from())
+				.to(draft.to())
+				.firstDayMilliDays(portion(draft.first()))
+				.lastDayMilliDays(portion(draft.last()))
+				.milliDays(span.milliDays())
+				.workingDays(span.workingDays())
+				.holidays(span.holidays())
+				.note(note(draft.note()))
+				.substituteId(substitute(person, draft.substituteId()))
+				.status(TimeOffRequest.Status.SUBMITTED)
+				.approverIds(new ArrayList<>(audience))
+				.build();
+		request.record(TimeOffRequest.Event.builder()
+				.at(clock.instant()).by(person.getId()).to(TimeOffRequest.Status.SUBMITTED)
+				.note(request.getNote()).build());
+		request.setUpdatedAt(clock.instant());
+		TimeOffRequest saved = requests.save(request);
+		audited(AuditAction.TIME_OFF_REQUEST_SUBMITTED, saved, person, null);
+
+		if (decidesItself) {
+			return decideInternally(saved, person, person, TimeOffRequest.Status.APPROVED, null, true);
+		}
+		notifications.notifyTimeOffRequested(audience, person.getDisplayName(), "/absences/inbox");
+		notifySubstitute(saved, person);
+		return saved;
+	}
+
+	/** Approves, with an optional word about why. */
+	public TimeOffRequest approve(String id, String note, User decider) {
+		TimeOffRequest request = decidable(id, decider);
+		User person = personOf(request);
+		return decideInternally(request, person, decider, TimeOffRequest.Status.APPROVED, note, false);
+	}
+
+	/**
+	 * Rejects, and the reason is required.
+	 *
+	 * <p>§ 7 Abs. 1 BUrlG allows a refusal only for urgent operational reasons or somebody else's
+	 * prior claim. A refusal that names neither is not one anybody can check, so there is no way to
+	 * send one from here.
+	 */
+	public TimeOffRequest reject(String id, String note, User decider) {
+		String reason = note == null ? "" : note.strip();
+		if (reason.isEmpty()) {
+			throw ApiException.badRequest("error.timeOff.decisionReasonRequired");
+		}
+		TimeOffRequest request = decidable(id, decider);
+		User person = personOf(request);
+		return decideInternally(request, person, decider, TimeOffRequest.Status.REJECTED, reason, false);
+	}
+
+	/** Takes a request back, before anybody has decided it. Only the person who made it. */
+	public TimeOffRequest withdraw(String id, User person) {
+		TimeOffRequest request = requests.findById(id).orElseThrow(() -> ApiException.notFound("timeOffRequest"));
+		if (!request.getUserId().equals(person.getId())) {
+			throw ApiException.notFound("timeOffRequest");
+		}
+		if (!request.getStatus().open()) {
+			throw ApiException.conflict("error.timeOff.requestDecided");
+		}
+		return transition(request, person, TimeOffRequest.Status.WITHDRAWN, null,
+				AuditAction.TIME_OFF_REQUEST_WITHDRAWN);
+	}
+
+	/**
+	 * Cancels leave that was already approved: the absence goes, and the days come back.
+	 *
+	 * <p>The person may cancel their own while all of it is still ahead of them — nothing has been
+	 * taken yet, and making somebody ask permission to *not* be away would be a rule with no
+	 * purpose. Whoever decided it is told, because the plan they agreed to has changed. Once any of
+	 * it is in the past it takes a keeper, since by then it is a record of what happened rather
+	 * than a plan.
+	 */
+	public TimeOffRequest cancel(String id, String note, User actor) {
+		TimeOffRequest request = requests.findById(id).orElseThrow(() -> ApiException.notFound("timeOffRequest"));
+		if (!concerns(request, actor)) {
+			throw ApiException.notFound("timeOffRequest");
+		}
+		if (request.getStatus() != TimeOffRequest.Status.APPROVED) {
+			throw ApiException.conflict("error.timeOff.requestNotApproved");
+		}
+		boolean started = !request.getFrom().isAfter(LocalDate.now(clock));
+		boolean keeper = access.isKeeper(actor);
+		if (!keeper && (started || !request.getUserId().equals(actor.getId()))) {
+			throw ApiException.forbidden("error.timeOff.cancelNotYours");
+		}
+		User person = personOf(request);
+		absences.remove(actor, request.getTimeOffId());
+		returnDays(request, person, actor, request.milliDays());
+		request.setTimeOffId(null);
+		TimeOffRequest saved = transition(request, actor, TimeOffRequest.Status.CANCELLED, note,
+				AuditAction.TIME_OFF_REQUEST_CANCELLED);
+		notifications.notifyTimeOffCancelled(recipientsOf(saved, actor), person.getDisplayName(),
+				"/absences/requests");
+		return saved;
+	}
+
+	/**
+	 * Reports sickness. One step, effective at once, and there is no path through here that says
+	 * no.
+	 *
+	 * <p>No approver, no reason, no certificate, and retroactive within the same bounds any
+	 * absence has. § 5 EFZG obliges a person to say they are ill, not to ask whether they may be;
+	 * since 2023 an employer retrieves the certificate from the health insurer under § 109 SGB IV,
+	 * which is why there is nowhere here to upload one — that would be Art. 9 data in a project
+	 * tool (R11).
+	 *
+	 * <p>§ 9 BUrlG lives here too: days of approved leave the sickness falls on are given back and
+	 * the leave is shortened, because leave that somebody spent ill was not leave.
+	 */
+	public Sick reportSick(User person, LocalDate from, LocalDate to, boolean halfDay, String typeId) {
+		TimeOffType type = sickType(person, typeId);
+		LocalDate last = to == null ? from : to;
+		TimeOffSpan.Result span = workingDays.of(person.getId(), from, last,
+				halfDay ? TimeOffSpan.DAY / 2 : TimeOffSpan.DAY, TimeOffSpan.DAY);
+
+		String absenceId = absences.enter(person, person, type.getId(), from, last, halfDay, null);
+		String ledgerId = null;
+		if (type.countsAgainstBalance() && span.milliDays() > 0) {
+			ledgerId = book(person, person, type, from, -span.milliDays(), absenceId, null).getId();
+		}
+		int returned = returnOverlappedLeave(person, from, last);
+		audit.event(AuditAction.TIME_OFF_SICK_REPORTED).actor(person).target(person)
+				.meta("from", String.valueOf(from))
+				.meta("to", String.valueOf(last))
+				.log();
+		return new Sick(absenceId, ledgerId, span.milliDays(), returned);
+	}
+
+	/** What reporting sickness produced, including any leave § 9 BUrlG gave back. */
+	public record Sick(String absenceId, String ledgerId, int milliDays, int returnedMilliDays) {
+	}
+
+	// ------------------------------------------------------------------ the middle
+
+	/**
+	 * The one place a request changes hands.
+	 *
+	 * <p>Approving writes the absence and the booking before the status moves, so a failure
+	 * anywhere in there leaves a request still waiting rather than a request marked approved with
+	 * nothing behind it.
+	 */
+	private TimeOffRequest decideInternally(TimeOffRequest request, User person, User decider,
+			TimeOffRequest.Status target, String note, boolean automatic) {
+		if (target == TimeOffRequest.Status.APPROVED) {
+			TimeOffType type = types.require(person, request.getTypeId());
+			assertBalanceCovers(person, type, request);
+			String absenceId = absences.enter(decider, person, type.getId(), request.getFrom(), request.getTo(),
+					isHalfDay(request), request.getNote());
+			request.setTimeOffId(absenceId);
+			if (type.countsAgainstBalance() && request.milliDays() > 0) {
+				request.setLedgerId(book(decider, person, type, request.getFrom(), -request.milliDays(),
+						request.getId(), null).getId());
+			}
+		}
+		request.setDecidedBy(decider.getId());
+		request.setDecidedAt(clock.instant());
+		request.setDecisionNote(note(note));
+		TimeOffRequest saved = transition(request, decider, target,
+				note, target == TimeOffRequest.Status.APPROVED
+						? AuditAction.TIME_OFF_REQUEST_APPROVED
+						: AuditAction.TIME_OFF_REQUEST_REJECTED);
+		if (automatic) {
+			notifications.notifyTimeOffAutoApproved(person, "/absences/requests");
+			notifySubstitute(saved, person);
+		} else {
+			notifications.notifyTimeOffDecided(person,
+					target == TimeOffRequest.Status.APPROVED
+							? NotificationService.TimeOffEvent.APPROVED
+							: NotificationService.TimeOffEvent.REJECTED,
+					"/absences/requests");
+			if (target == TimeOffRequest.Status.APPROVED) {
+				notifySubstitute(saved, person);
+			}
+		}
+		return saved;
+	}
+
+	/** Moves the status, records the step, and answers a race with 409 rather than a second write. */
+	private TimeOffRequest transition(TimeOffRequest request, User actor, TimeOffRequest.Status target,
+			String note, AuditAction action) {
+		TimeOffRequest.Status before = request.getStatus();
+		request.setStatus(target);
+		request.record(TimeOffRequest.Event.builder()
+				.at(clock.instant()).by(actor.getId()).from(before).to(target).note(note(note)).build());
+		request.setUpdatedAt(clock.instant());
+		TimeOffRequest saved;
+		try {
+			saved = requests.save(request);
+		} catch (OptimisticLockingFailureException decidedConcurrently) {
+			// Two people pressed the same button. One of them booked; the other must not book
+			// again, or a week off would cost two weeks of balance.
+			throw ApiException.conflict("error.timeOff.requestChangedMeanwhile");
+		}
+		audited(action, saved, actor, note);
+		return saved;
+	}
+
+	/** Gives [milliDays] back to a balance as a {@code RETURNED} row, never by deleting a booking. */
+	private void returnDays(TimeOffRequest request, User person, User actor, int milliDays) {
+		if (request.getLedgerId() == null || milliDays <= 0) {
+			return;
+		}
+		TimeOffType type = types.require(person, request.getTypeId());
+		if (!type.countsAgainstBalance()) {
+			return;
+		}
+		book(actor, person, type, request.getFrom(), milliDays, request.getId(), request.getLedgerId());
+		request.setLedgerId(null);
+	}
+
+	/**
+	 * § 9 BUrlG: hands back the days of approved leave that [from]–[to] of sickness fell on.
+	 *
+	 * <p>The leave is shortened rather than erased — the days before the person fell ill were
+	 * leave and stay leave. Whoever decided it sees that it got shorter and never why: a decider
+	 * learning "shortened because they were ill" would be learning a health fact through the back
+	 * door (R10, R11).
+	 */
+	private int returnOverlappedLeave(User person, LocalDate from, LocalDate to) {
+		List<TimeOffRequest> approved = requests.findByUserIdAndStatusAndToGreaterThanEqualAndFromLessThanEqual(
+				person.getId(), TimeOffRequest.Status.APPROVED, from, to);
+		int returned = 0;
+		for (TimeOffRequest leave : approved) {
+			LocalDate overlapFrom = leave.getFrom().isBefore(from) ? from : leave.getFrom();
+			LocalDate overlapTo = leave.getTo().isAfter(to) ? to : leave.getTo();
+			TimeOffSpan.Result eaten = workingDays.of(person.getId(), overlapFrom, overlapTo,
+					TimeOffSpan.DAY, TimeOffSpan.DAY);
+			if (eaten.milliDays() <= 0) {
+				continue;
+			}
+			returnDays(leave, person, person, eaten.milliDays());
+			returned += eaten.milliDays();
+			if (overlapFrom.isAfter(leave.getFrom())) {
+				absences.endOn(person, leave.getTimeOffId(), overlapFrom.minusDays(1));
+				leave.setTo(overlapFrom.minusDays(1));
+			} else {
+				absences.remove(person, leave.getTimeOffId());
+				leave.setTimeOffId(null);
+			}
+			leave.record(TimeOffRequest.Event.builder()
+					.at(clock.instant()).from(TimeOffRequest.Status.APPROVED)
+					.to(TimeOffRequest.Status.APPROVED).build());
+			leave.setUpdatedAt(clock.instant());
+			requests.save(leave);
+			notifications.notifyTimeOffShortened(person, "/absences/requests");
+		}
+		return returned;
+	}
+
+	private TimeOffLedgerEntry book(User actor, User person, TimeOffType type, LocalDate on, int milliDays,
+			String refId, String reversalOf) {
+		return balances.book(TimeOffLedgerEntry.builder()
+				.userId(person.getId())
+				.typeId(type.getId())
+				// The leave year the span starts in. A span that crosses New Year belongs to the
+				// year it was taken from, which is the year it was granted against — splitting it
+				// would make one absence two balances and neither of them answerable.
+				.year(on.getYear())
+				.kind(milliDays < 0 ? TimeOffLedgerEntry.Kind.BOOKED : TimeOffLedgerEntry.Kind.RETURNED)
+				.milliDays(milliDays)
+				.effectiveOn(on)
+				.refId(refId)
+				.reversalOf(reversalOf)
+				.actorId(actor.getId())
+				.build());
+	}
+
+	// ------------------------------------------------------------------ rules
+
+	private TimeOffSpan.Result span(User person, TimeOffType type, Draft draft) {
+		if (draft.from() == null) {
+			throw ApiException.badRequest("error.timeOff.spanInvalid");
+		}
+		LocalDate to = draft.to() == null ? draft.from() : draft.to();
+		TimeOffSpan.Result span = workingDays.of(person.getId(), draft.from(), to,
+				portion(draft.first()), portion(draft.last()));
+		if (span.milliDays() <= 0) {
+			// Every day of it is a weekend, a holiday or a day this person does not work. Not a
+			// technicality: there is no leave to grant, so there is nothing to decide.
+			throw ApiException.badRequest("error.timeOff.spanHasNoWorkingDays");
+		}
+		return span;
+	}
+
+	private void assertWithinTypeRules(TimeOffType type, TimeOffSpan.Result span, Draft draft) {
+		boolean partialEdges = portion(draft.first()) != TimeOffSpan.DAY || portion(draft.last()) != TimeOffSpan.DAY;
+		boolean halves = portion(draft.first()) == TimeOffSpan.DAY / 2 || portion(draft.last()) == TimeOffSpan.DAY / 2;
+		if (partialEdges && !halves && !Boolean.TRUE.equals(type.getFractionAllowed())) {
+			throw ApiException.badRequest("error.timeOff.fractionNotAllowed");
+		}
+		if (halves && !Boolean.TRUE.equals(type.getHalfDaysAllowed())) {
+			throw ApiException.badRequest("error.timeOff.halfDayNotAllowed");
+		}
+		Integer max = type.getMaxConsecutiveDays();
+		if (max != null && max > 0 && span.workingDays() > max) {
+			// One of the two hard rules: the type says so in as many words, so refusing it is
+			// carrying out the operator's decision rather than making one.
+			throw ApiException.badRequest("error.timeOff.tooManyConsecutiveDays", max);
+		}
+	}
+
+	/**
+	 * The other hard rule: a balance the type will not let go negative.
+	 *
+	 * <p>Checked when the decision is made rather than when the request is filed, because that is
+	 * when it has to be true — a grant may well arrive in between, and refusing at submission would
+	 * turn a question of timing into a wall.
+	 */
+	private void assertBalanceCovers(User person, TimeOffType type, TimeOffRequest request) {
+		if (!type.countsAgainstBalance() || type.isUnlimited() || type.negativeBalanceAllowed()) {
+			return;
+		}
+		int remaining = balances.remainingMilliDays(person.getId(), type.getId(), request.getFrom().getYear());
+		if (remaining - request.milliDays() < 0) {
+			throw ApiException.conflict("error.timeOff.balanceExceeded",
+					TimeOffRefusalDetails.balance());
+		}
+	}
+
+	private boolean balanceShort(User person, TimeOffType type, LocalDate from, int milliDays) {
+		if (!type.countsAgainstBalance() || type.isUnlimited()) {
+			return false;
+		}
+		return balances.remainingMilliDays(person.getId(), type.getId(), from.getYear()) - milliDays < 0;
+	}
+
+	private boolean shortNotice(TimeOffType type, LocalDate from) {
+		Integer notice = type.getMinNoticeDays();
+		if (notice == null || notice <= 0 || from == null) {
+			return false;
+		}
+		return LocalDate.now(clock).plusDays(notice).isAfter(from);
+	}
+
+	private TimeOffType sickType(User person, String typeId) {
+		if (typeId != null && !typeId.isBlank()) {
+			TimeOffType named = types.require(person, typeId);
+			if (named.getKind() != TimeOffType.Kind.SICK) {
+				throw ApiException.badRequest("error.timeOff.notASickType");
+			}
+			return named;
+		}
+		return types.byKey(TimeOffType.SYSTEM_SICK)
+				.orElseThrow(() -> ApiException.badRequest("error.timeOff.noSickType"));
+	}
+
+	// ------------------------------------------------------------------ small things
+
+	private TimeOffRequest decidable(String id, User decider) {
+		TimeOffRequest request = requests.findById(id).orElseThrow(() -> ApiException.notFound("timeOffRequest"));
+		if (request.getUserId().equals(decider.getId())) {
+			// The second of the two guards. The first struck them out of their own audience when
+			// the request was filed; this one holds even if that list were ever wrong.
+			throw ApiException.forbidden("error.timeOff.decideOwn");
+		}
+		boolean mayDecide = access.isKeeper(decider) || request.getApproverIds().contains(decider.getId());
+		if (!mayDecide) {
+			throw ApiException.notFound("timeOffRequest");
+		}
+		if (!request.getStatus().open()) {
+			throw ApiException.conflict("error.timeOff.requestDecided");
+		}
+		return request;
+	}
+
+	private boolean concerns(TimeOffRequest request, User viewer) {
+		return request.getUserId().equals(viewer.getId())
+				|| request.getApproverIds().contains(viewer.getId())
+				|| viewer.getId().equals(request.getSubstituteId())
+				|| access.isKeeper(viewer);
+	}
+
+	private User personOf(TimeOffRequest request) {
+		return users.findById(request.getUserId()).orElseThrow(() -> ApiException.notFound("user"));
+	}
+
+	/** Everybody a cancellation concerns except whoever cancelled it. */
+	private Set<String> recipientsOf(TimeOffRequest request, User actor) {
+		Set<String> ids = new LinkedHashSet<>(request.getApproverIds());
+		ids.add(request.getUserId());
+		if (request.getSubstituteId() != null) {
+			ids.add(request.getSubstituteId());
+		}
+		ids.remove(actor.getId());
+		return ids;
+	}
+
+	private void notifySubstitute(TimeOffRequest request, User person) {
+		if (request.getSubstituteId() == null) {
+			return;
+		}
+		users.findById(request.getSubstituteId()).ifPresent(stand ->
+				notifications.notifyTimeOffSubstitute(stand, person.getDisplayName(), request.getFrom(),
+						request.getTo(), "/absences/requests"));
+	}
+
+	private String substitute(User person, String substituteId) {
+		if (substituteId == null || substituteId.isBlank() || substituteId.equals(person.getId())) {
+			return null;
+		}
+		return users.findById(substituteId).map(User::getId)
+				.orElseThrow(() -> ApiException.badRequest("error.timeOff.substituteUnknown"));
+	}
+
+	private static int portion(Integer milliDays) {
+		if (milliDays == null) {
+			return TimeOffSpan.DAY;
+		}
+		if (milliDays <= 0 || milliDays > TimeOffSpan.DAY) {
+			throw ApiException.badRequest("error.timeOff.portionInvalid");
+		}
+		return milliDays;
+	}
+
+	/** A one-day request for half a day is the half day the old calendar already understood. */
+	private static boolean isHalfDay(TimeOffRequest request) {
+		return request.getFrom().equals(request.getTo())
+				&& request.getFirstDayMilliDays() != null
+				&& request.getFirstDayMilliDays() == TimeOffSpan.DAY / 2;
+	}
+
+	private static String note(String text) {
+		if (text == null || text.isBlank()) {
+			return null;
+		}
+		String clean = text.strip();
+		return clean.length() > TimeOffRequest.NOTE_MAX ? clean.substring(0, TimeOffRequest.NOTE_MAX) : clean;
+	}
+
+	private static Pageable pageOf(int page, int size) {
+		int capped = Math.clamp(size, 1, PAGE_MAX);
+		return PageRequest.of(Math.max(0, page), capped, TimeOffRequestRepository.NEWEST_FIRST);
+	}
+
+	/**
+	 * Records the step.
+	 *
+	 * <p>The type, the span and the amount — never the note and never the decision's reason. A
+	 * reason may name an illness or a recognised disability (§ 208 SGB IX), and in the audit log it
+	 * would outlive the account, survive the module being switched off, and be readable by every
+	 * administrator. The sentence stays on the request, where it disappears with it (Art. 9 DSGVO).
+	 */
+	private void audited(AuditAction action, TimeOffRequest request, User actor, String note) {
+		audit.event(action).actor(actor)
+				.target(request.getId(), request.getFrom() + " – " + request.getTo())
+				.meta("user", request.getUserId())
+				.meta("from", String.valueOf(request.getFrom()))
+				.meta("to", String.valueOf(request.getTo()))
+				.meta("milliDays", String.valueOf(request.milliDays()))
+				.log();
+	}
+}

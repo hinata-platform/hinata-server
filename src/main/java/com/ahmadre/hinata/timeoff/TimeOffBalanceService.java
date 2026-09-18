@@ -608,6 +608,24 @@ public class TimeOffBalanceService {
 		return entry;
 	}
 
+	/**
+	 * What is left of [typeId] for [userId] in [year], without asking who wants to know.
+	 *
+	 * <p>For the approval flow, which has to answer "does this cover it?" for somebody who may not
+	 * read the balance itself. A lead deciding leave for their team learns whether the days are
+	 * there, never how many there are — that number is the person's (R2, R10), and the difference
+	 * between a yes-or-no and a figure is the whole of it.
+	 */
+	int remainingMilliDays(String userId, String typeId, int year) {
+		Map<TimeOffLedgerEntry.Kind, Integer> sums =
+				sumsByType(userId, year).getOrDefault(typeId, Map.of());
+		int total = 0;
+		for (Integer value : sums.values()) {
+			total += value == null ? 0 : value;
+		}
+		return total;
+	}
+
 	/** The one place a row enters the journal. Nothing updates one, and nothing deletes one. */
 	TimeOffLedgerEntry book(TimeOffLedgerEntry entry) {
 		return ledger.save(entry);

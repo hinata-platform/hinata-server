@@ -150,7 +150,14 @@ public final class TimePolicy {
 		 * shape of answer, because the way out is the same act: an administrator
 		 * opens the span with a reason (HIN-89, R9).
 		 */
-		MAX_DAYS_BACK
+		MAX_DAYS_BACK,
+		/**
+		 * The absence type is one somebody has to approve, so it cannot simply be
+		 * entered (HIN-117). Nothing is frozen here either — the way out is to ask
+		 * rather than to write — but a client that already knows this vocabulary
+		 * gets the same component and the same "and here is what to do next".
+		 */
+		APPROVAL_REQUIRED
 	}
 
 	/** Who can lift a freeze. Never the person whose entry it is — that is the point. */
@@ -180,7 +187,13 @@ public final class TimePolicy {
 		 * An administrator opens the days for this one person, with a reason and an
 		 * expiry (HIN-89). Not a lock exception: that would open them for everyone.
 		 */
-		BACKFILL_GRANT
+		BACKFILL_GRANT,
+		/**
+		 * The person submits a request and somebody decides it (HIN-117). The only
+		 * remedy on this list that the person themselves performs, which is why the
+		 * client turns it into a button rather than a sentence about somebody else.
+		 */
+		REQUEST
 	}
 
 	/** How a reported duration is folded onto the configured increment. */
