@@ -537,7 +537,10 @@ public class NotificationService {
 				words.timeOffDays(locale, milliDays));
 		deliverGated(person, Notification.Type.TIME_OFF_ENTITLEMENT_CHANGED, title, body,
 				words.of(person, "notify.time.pushTitle"),
-				words.of(person, "notify.timeOff.push"), "/time/absences");
+				// A1 pointed this at /time/absences, which no client has ever had a screen
+				// for: the bell entry was a dead end. The requests page is where somebody
+				// reads their own standing and acts on it.
+				words.of(person, "notify.timeOff.push"), "/absences/requests");
 	}
 
 	/**
