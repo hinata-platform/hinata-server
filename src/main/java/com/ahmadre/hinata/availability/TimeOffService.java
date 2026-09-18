@@ -53,8 +53,19 @@ public class TimeOffService {
 	 */
 	private final ObjectProvider<TimeOffCatalogue> catalogueProvider;
 
+	/**
+	 * Whether a type has to be asked for rather than simply entered, when anything above knows.
+	 * Injected the same way and for the same reason as the catalogue: with absence management
+	 * absent or off, everything may be entered directly, which is how this module always worked.
+	 */
+	private final ObjectProvider<TimeOffGate> gateProvider;
+
 	private TimeOffCatalogue catalogue() {
 		return catalogueProvider.getIfAvailable(TimeOffCatalogue::unknown);
+	}
+
+	private TimeOffGate gate() {
+		return gateProvider.getIfAvailable(TimeOffGate::open);
 	}
 
 	public record Draft(String userId, TimeOff.Type type, String typeId, LocalDate from, LocalDate to,
@@ -90,20 +101,47 @@ public class TimeOffService {
 				() -> mongo.count(Query.query(criteria), TimeOff.class)), visible.sight());
 	}
 
+	/**
+	 * Enters an absence the direct way: somebody writes the days they are away and they are away.
+	 *
+	 * <p>Closed for a type somebody has to approve — see {@link TimeOffGate}. That road exists
+	 * because this module predates approvals, and leaving it open would let a person walk past
+	 * their own by using the older screen.
+	 */
 	public TimeOff create(User viewer, Draft draft) {
 		User person = access.requireKeeper(viewer, draft.userId());
-		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(viewer.getId()).build();
+		gate().assertDirectEntry(draft.typeId(), person.getId(), viewer);
+		return enter(viewer, person, draft);
+	}
+
+	/**
+	 * Writes the absence, without asking whether this was the right road to it.
+	 *
+	 * <p>For a caller that has already settled the question its own way — today that is an
+	 * approved request, which decided who may have these days before it got here, and whose
+	 * decider is a lead rather than somebody who keeps absences. It still goes through every rule
+	 * about the absence itself: the catalogue, the window, the half day, the note, how far from
+	 * today it may sit and how many one year may hold.
+	 */
+	public TimeOff enter(User actor, User person, Draft draft) {
+		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(actor.getId()).build();
 		apply(item, draft.type(), draft.typeId(), draft.from(), draft.to(), draft.halfDay(), draft.note());
 		assertNearToday(item, person);
 		assertRoomIn(person.getId(), item.getFrom().getYear());
 		TimeOff saved = timeOff.save(item);
-		recordForOther(viewer, person, "created", saved);
+		recordForOther(actor, person, "created", saved);
 		return saved;
 	}
 
 	public TimeOff update(User viewer, String id, Patch patch) {
 		TimeOff item = writable(viewer, id);
 		User person = users.findById(item.getUserId()).orElse(null);
+		// Only when the type changes, and for the type it changes to: retyping an absence into one
+		// that needs approving is the same walk-around as entering it that way, while editing the
+		// note on an absence that already needs none is nobody's business but the owner's.
+		if (patch.typeId() != null && !patch.typeId().equals(item.getTypeId())) {
+			gate().assertDirectEntry(patch.typeId(), item.getUserId(), viewer);
+		}
 		LocalDate fromBefore = item.getFrom();
 		LocalDate toBefore = item.getTo();
 		apply(item,
