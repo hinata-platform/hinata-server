@@ -166,6 +166,27 @@ public enum AuditAction {
 	// without them (§§ 4, 5, 7 Abs. 4 BUrlG).
 	TIME_OFF_EMPLOYMENT_CHANGED(DATA, NOTICE, true),
 
+	// --- Absence management 2.0 (HIN-117) --------------------------------------
+	// Asking for time off, and what became of the asking. DATA because a request
+	// is a statement about one person, and WARNING on the decision because "who
+	// granted these days, and who refused them" is the question § 7 Abs. 1 BUrlG
+	// makes answerable at all.
+	//
+	// The records name the span and the amount — never the note, never the reason
+	// a decision gives, and never the type on a sick report. A reason may name an
+	// illness or a recognised disability (§ 208 SGB IX); in the audit log it would
+	// outlive the account, survive the module being switched off and be readable by
+	// every administrator. Those sentences stay on the request, where they go when
+	// it does (Art. 9 DSGVO).
+	TIME_OFF_REQUEST_SUBMITTED(DATA, NOTICE, true),
+	TIME_OFF_REQUEST_APPROVED(DATA, WARNING, true),
+	TIME_OFF_REQUEST_REJECTED(DATA, WARNING, true),
+	TIME_OFF_REQUEST_WITHDRAWN(DATA, NOTICE, true),
+	TIME_OFF_REQUEST_CANCELLED(DATA, WARNING, true),
+	// Reporting sickness is a notification, not a request (§ 5 EFZG, R11), so it
+	// has no decision to record — only that a report was made, for whom and when.
+	TIME_OFF_SICK_REPORTED(DATA, NOTICE, true),
+
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),
 	PAT_REVOKED(INTEGRATION, NOTICE, true),

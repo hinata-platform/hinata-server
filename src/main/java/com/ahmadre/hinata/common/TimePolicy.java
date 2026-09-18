@@ -157,7 +157,14 @@ public final class TimePolicy {
 		 * rather than to write — but a client that already knows this vocabulary
 		 * gets the same component and the same "and here is what to do next".
 		 */
-		APPROVAL_REQUIRED
+		APPROVAL_REQUIRED,
+		/**
+		 * The balance will not cover the absence and its type forbids going under
+		 * (HIN-117). Not a freeze either — the days simply are not there — and the
+		 * way out is somebody granting more, which is why its holder and its remedy
+		 * are the two below rather than an approver and a reopen.
+		 */
+		BALANCE_EXCEEDED
 	}
 
 	/** Who can lift a freeze. Never the person whose entry it is — that is the point. */
@@ -167,7 +174,13 @@ public final class TimePolicy {
 		/** A lead of the project, or an administrator: approvals are theirs to reopen. */
 		APPROVER,
 		/** Whoever issues invoices on this instance (HIN-96). */
-		ACCOUNTING
+		ACCOUNTING,
+		/**
+		 * Whoever keeps absences: an administrator, or somebody an operator named in
+		 * {@code absenceManagers} (HIN-116). A narrower circle than the administrators
+		 * on purpose — this is where sick days are visible as sick days.
+		 */
+		KEEPER
 	}
 
 	/**
@@ -193,7 +206,13 @@ public final class TimePolicy {
 		 * remedy on this list that the person themselves performs, which is why the
 		 * client turns it into a button rather than a sentence about somebody else.
 		 */
-		REQUEST
+		REQUEST,
+		/**
+		 * Whoever keeps absences grants or corrects the days (HIN-117). The one remedy
+		 * that adds something rather than reopening something: a balance that is short
+		 * is not a door that was shut, it is a claim that was never that large.
+		 */
+		GRANT
 	}
 
 	/** How a reported duration is folded onto the configured increment. */

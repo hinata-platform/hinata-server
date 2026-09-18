@@ -17,7 +17,8 @@ import java.util.Map;
 
 /**
  * This module's part of a person's data export (Art. 15/20 DSGVO): what they were granted, every
- * movement of their balances, and the two employment dates the arithmetic uses.
+ * movement of their balances, the requests they made and what became of them, and the two
+ * employment dates the arithmetic uses.
  *
  * <p>Exported whether or not the module is switched on today. A person asking what is held about
  * them is owed the answer that is actually held, not the answer the current configuration would
@@ -53,6 +54,10 @@ public class TimeOffPersonalData implements PersonalDataExport {
 		out.put("balanceMovements", movements.stream().limit(LEDGER_CAP)
 				.map(entry -> movement(entry, keys)).toList());
 		out.put("balanceMovementsTruncated", movements.size() > LEDGER_CAP);
+		List<TimeOffRequest> filed = requestsOf(user, LEDGER_CAP + 1);
+		out.put("requests", filed.stream().limit(LEDGER_CAP)
+				.map(request -> request(request, keys)).toList());
+		out.put("requestsTruncated", filed.size() > LEDGER_CAP);
 		return out;
 	}
 
@@ -85,7 +90,23 @@ public class TimeOffPersonalData implements PersonalDataExport {
 								entry.getReason() == null ? "—" : entry.getReason()))
 						.toList(),
 				movements.size() > TABLE_ROWS ? t(locale, "export.pdf.time.listCapped", TABLE_ROWS) : null);
-		return List.of(entitlements, ledger);
+		List<TimeOffRequest> filed = requestsOf(user, TABLE_ROWS + 1);
+		Table asked = new Table(t(locale, "export.pdf.timeOff.requests"),
+				List.of(t(locale, "export.pdf.timeOff.on"), t(locale, "export.pdf.timeOff.type"),
+						t(locale, "export.pdf.timeOff.days"), t(locale, "export.pdf.timeOff.status"),
+						t(locale, "export.pdf.timeOff.decision")),
+				new float[]{2, 2.5f, 1.5f, 2, 4},
+				filed.stream().limit(TABLE_ROWS)
+						.map(request -> List.of(request.getFrom() + " – " + request.getTo(),
+								keys.getOrDefault(request.getTypeId(), "—"),
+								words.timeOffDays(locale, request.milliDays()),
+								String.valueOf(request.getStatus()),
+								// The reason a refusal gave, in the answer it belongs in. It is kept
+								// out of the audit log so that it lives here and nowhere else.
+								request.getDecisionNote() == null ? "—" : request.getDecisionNote()))
+						.toList(),
+				filed.size() > TABLE_ROWS ? t(locale, "export.pdf.time.listCapped", TABLE_ROWS) : null);
+		return List.of(entitlements, ledger, asked);
 	}
 
 	// --- reading -----------------------------------------------------------------
@@ -98,6 +119,12 @@ public class TimeOffPersonalData implements PersonalDataExport {
 	private List<TimeOffEntitlement> entitlementsOf(User user) {
 		return mongo.find(Query.query(Criteria.where("userId").is(user.getId()))
 				.with(Sort.by(Sort.Order.desc("year"))).limit(TABLE_ROWS), TimeOffEntitlement.class);
+	}
+
+	private List<TimeOffRequest> requestsOf(User user, int limit) {
+		return mongo.find(Query.query(Criteria.where("userId").is(user.getId()))
+				.with(Sort.by(Sort.Order.desc("from"), Sort.Order.desc("_id"))).limit(limit),
+				TimeOffRequest.class);
 	}
 
 	private List<TimeOffLedgerEntry> ledgerOf(User user, int limit) {
@@ -136,6 +163,29 @@ public class TimeOffPersonalData implements PersonalDataExport {
 		return out;
 	}
 
+	/**
+	 * One request, with every sentence anybody wrote on it.
+	 *
+	 * <p>The note and the decision's reason are in here, and only here. Art. 15 asks for the data
+	 * held about the person, and a refusal they were given is the clearest example of it — it is
+	 * kept out of the audit log for exactly the reason it belongs in this answer: it is theirs.
+	 */
+	private static Map<String, Object> request(TimeOffRequest request, Map<String, String> keys) {
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("type", keys.get(request.getTypeId()));
+		out.put("from", request.getFrom());
+		out.put("to", request.getTo());
+		out.put("milliDays", request.milliDays());
+		out.put("status", request.getStatus());
+		out.put("note", request.getNote());
+		out.put("decidedBy", request.getDecidedBy());
+		out.put("decidedAt", request.getDecidedAt());
+		out.put("decisionNote", request.getDecisionNote());
+		out.put("substituteId", request.getSubstituteId());
+		out.put("createdAt", request.getCreatedAt());
+		return out;
+	}
+
 	private static Map<String, Object> movement(TimeOffLedgerEntry entry, Map<String, String> keys) {
 		Map<String, Object> out = new LinkedHashMap<>();
 		out.put("type", keys.get(entry.getTypeId()));
@@ -147,7 +197,6 @@ public class TimeOffPersonalData implements PersonalDataExport {
 		out.put("createdAt", entry.getCreatedAt());
 		return out;
 	}
-
 
 	private String t(Locale locale, String key, Object... args) {
 		return words.in(locale, key, args);

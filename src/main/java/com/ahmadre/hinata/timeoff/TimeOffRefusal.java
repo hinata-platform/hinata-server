@@ -37,6 +37,24 @@ final class TimeOffRefusal {
 						TimePolicy.LockRemedy.REQUEST));
 	}
 
+	/**
+	 * 409 for leave the balance will not cover, on a type whose rules forbid going under.
+	 *
+	 * <p>The same three words as every other refusal, so the client shows the same component: the
+	 * days are not there, whoever keeps absences is the one who could put them there, and the way
+	 * out is a grant rather than a reopen — nothing was closed, the claim was never that large. It
+	 * never says how many days are missing: a decider learns yes or no and the figure itself stays
+	 * the person's (R2, R10).
+	 *
+	 * <p>Raised at the decision rather than at the filing. A grant may well arrive in between, and
+	 * refusing on the way in would turn a question of timing into a wall.
+	 */
+	static ApiException balanceExceeded() {
+		return ApiException.conflict("error.timeOff.balanceExceeded",
+				details(TimePolicy.LockReason.BALANCE_EXCEEDED, TimePolicy.LockHolder.KEEPER,
+						TimePolicy.LockRemedy.GRANT));
+	}
+
 	private static Map<String, String> details(TimePolicy.LockReason reason, TimePolicy.LockHolder holder,
 			TimePolicy.LockRemedy remedy) {
 		Map<String, String> details = new LinkedHashMap<>();

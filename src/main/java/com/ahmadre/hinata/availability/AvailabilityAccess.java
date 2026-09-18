@@ -35,7 +35,8 @@ import java.util.Set;
  * </ul>
  *
  * <p>Keeping is narrower than seeing: absences, working-time patterns and the capacity they spell
- * out are one's own or an administrator's ({@link #requireKeeper}). A lead reads absences, not hours.
+ * out are one's own, an administrator's, or the business of somebody an operator named to keep
+ * absences ({@link #requireKeeper}, {@link AbsenceKeepers}). A lead reads absences, not hours.
  */
 @Component
 @RequiredArgsConstructor
@@ -48,6 +49,12 @@ public class AvailabilityAccess {
 	static final int LED_PROJECTS_MAX = 500;
 
 	private final ObjectProvider<AvailabilityPolicy> policy;
+	/**
+	 * Whether somebody keeps absences without being an administrator. Injected the same way and
+	 * for the same reason as the policy: with absence management absent or off, the answer is the
+	 * one this module always gave.
+	 */
+	private final ObjectProvider<AbsenceKeepers> keepers;
 	private final MongoTemplate mongo;
 	private final ProjectReach reach;
 	private final UserRepository users;
@@ -82,15 +89,29 @@ public class AvailabilityAccess {
 		return new Visible(person, sight);
 	}
 
-	/** The person a write, a pattern or a capacity is about: oneself, or anybody for an administrator. */
+	/**
+	 * The person a write, a pattern or a capacity is about: oneself, or anybody for somebody who
+	 * keeps absences.
+	 *
+	 * <p>"Keeps absences" was the administrators alone until an operator could name a narrower
+	 * circle (HIN-116). Naming one has to mean something on the day they use it: a keeper who could
+	 * grant a year of leave but not enter the absence it is taken as would be a role that reads and
+	 * never acts.
+	 */
 	public User requireKeeper(User viewer, String userId) {
 		if (userId == null || userId.isBlank() || userId.equals(viewer.getId())) {
 			return viewer;
 		}
-		if (!viewer.isAdmin()) {
+		if (!keeps(viewer)) {
 			throw ApiException.forbidden("error.availability.forbidden");
 		}
 		return users.findById(userId).orElseThrow(() -> ApiException.notFound("user"));
+	}
+
+	/** Whether [viewer] may write somebody else's absences at all. */
+	public boolean keeps(User viewer) {
+		return viewer != null
+				&& (viewer.isAdmin() || keepers.getIfAvailable(AbsenceKeepers::adminsOnly).keeps(viewer));
 	}
 
 	/**

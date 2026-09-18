@@ -73,6 +73,10 @@ public class TimeLocks {
 				case LOCK_DATE, MAX_DAYS_BACK -> TimePolicy.LockHolder.ADMIN;
 				case APPROVAL -> TimePolicy.LockHolder.APPROVER;
 				case INVOICE -> TimePolicy.LockHolder.ACCOUNTING;
+				// The vocabulary is shared with absence management, which refuses absences and
+				// never work items. Listed rather than defaulted so the next word added to it
+				// stops here again and has to be thought about.
+				case APPROVAL_REQUIRED, BALANCE_EXCEEDED -> throw notALockOnTime(reason);
 			};
 		}
 
@@ -85,7 +89,13 @@ public class TimeLocks {
 				case MAX_DAYS_BACK -> TimePolicy.LockRemedy.BACKFILL_GRANT;
 				case APPROVAL -> TimePolicy.LockRemedy.REOPEN;
 				case INVOICE -> TimePolicy.LockRemedy.CREDIT_NOTE;
+				case APPROVAL_REQUIRED, BALANCE_EXCEEDED -> throw notALockOnTime(reason);
 			};
+		}
+
+		/** A reason that belongs to absences, arriving where only work items are frozen. */
+		private static IllegalStateException notALockOnTime(TimePolicy.LockReason reason) {
+			return new IllegalStateException(reason + " never freezes a work item");
 		}
 
 		/**
