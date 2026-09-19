@@ -376,6 +376,81 @@ public class TimeOffRequestService {
 		return saved;
 	}
 
+	/**
+	 * Changes a request that is still waiting, by the person who made it.
+	 *
+	 * <p>The same rules as filing it: the type's rules, the span, the working days worked out again
+	 * and frozen again, and the routing asked again — a new type may be somebody else's to decide.
+	 * Whoever that adds to the audience is told; whoever was already there sees the change in the
+	 * inbox they are looking at, rather than a second notice about the same request. A type that
+	 * decides itself decides the edited request as it would a new one.
+	 *
+	 * <p>Only while nobody has decided it. An approved request is a plan somebody agreed to; it is
+	 * cancelled and asked for again rather than edited behind the back of whoever agreed.
+	 */
+	public TimeOffRequest edit(String id, User person, Draft draft) {
+		TimeOffRequest request = requests.findById(id).orElseThrow(() -> ApiException.notFound("timeOffRequest"));
+		if (!request.getUserId().equals(person.getId())) {
+			throw ApiException.notFound("timeOffRequest");
+		}
+		if (!request.getStatus().open()) {
+			throw ApiException.conflict("error.timeOff.requestDecided");
+		}
+		TimeOffType type = types.require(person, draft.typeId());
+		if (type.getKind() == TimeOffType.Kind.SICK) {
+			throw ApiException.badRequest("error.timeOff.sickNotRequested");
+		}
+		TimeOffSpan.Result span = span(person, type, draft);
+		assertWithinTypeRules(type, span, draft);
+
+		boolean decidesItself = !type.requiresApproval() || type.approverRule() == TimeOffType.ApproverRule.AUTO;
+		Set<String> audience = new LinkedHashSet<>(approvers.of(type, person));
+		if (audience.isEmpty()) {
+			audience = approvers.adminIds();
+			audience.remove(person.getId());
+		}
+		Set<String> newcomers = new LinkedHashSet<>(audience);
+		newcomers.removeAll(request.getApproverIds());
+		String substituteBefore = request.getSubstituteId();
+
+		request.setTypeId(type.getId());
+		request.setFrom(draft.from());
+		request.setTo(draft.to() == null ? draft.from() : draft.to());
+		request.setFirstDayMilliDays(portion(draft.first()));
+		request.setLastDayMilliDays(portion(draft.last()));
+		request.setMilliDays(span.milliDays());
+		request.setWorkingDays(span.workingDays());
+		request.setHolidays(span.holidays());
+		request.setNote(note(draft.note()));
+		request.setSubstituteId(substitute(person, draft.substituteId()));
+		request.setApproverIds(new ArrayList<>(audience));
+		// From waiting to waiting: the step that says it changed, and nothing about how — the
+		// request itself shows what it asks for now.
+		request.record(TimeOffRequest.Event.builder()
+				.at(clock.instant()).by(person.getId())
+				.from(TimeOffRequest.Status.SUBMITTED).to(TimeOffRequest.Status.SUBMITTED).build());
+		request.setUpdatedAt(clock.instant());
+		TimeOffRequest saved;
+		try {
+			saved = requests.save(request);
+		} catch (OptimisticLockingFailureException decidedMeanwhile) {
+			// Somebody decided it while it was being edited; the decision stands.
+			throw ApiException.conflict("error.timeOff.requestChangedMeanwhile");
+		}
+		audited(AuditAction.TIME_OFF_REQUEST_EDITED, saved, person);
+
+		if (decidesItself) {
+			return decideInternally(saved, person, person, TimeOffRequest.Status.APPROVED, null, true, type);
+		}
+		if (!newcomers.isEmpty()) {
+			notifications.notifyTimeOffRequested(newcomers, person.getDisplayName(), "/absences/inbox");
+		}
+		if (saved.getSubstituteId() != null && !saved.getSubstituteId().equals(substituteBefore)) {
+			notifySubstitute(saved, person);
+		}
+		return saved;
+	}
+
 	/** Approves, with an optional word about why. */
 	public TimeOffRequest approve(String id, String note, User decider) {
 		TimeOffRequest request = decidable(id, decider);
@@ -472,7 +547,7 @@ public class TimeOffRequestService {
 		TimeOffSpan.Result span = workingDays.of(person.getId(), from, last,
 				halfDay ? TimeOffSpan.DAY / 2 : TimeOffSpan.DAY, TimeOffSpan.DAY);
 
-		String absenceId = absences.enter(person, person, type.getId(), from, last, halfDay, null);
+		String absenceId = absences.enter(person, person, null, type.getId(), from, last, halfDay, null);
 		String ledgerId = null;
 		if (type.countsAgainstBalance() && span.milliDays() > 0) {
 			ledgerId = book(person, person, type, from, -span.milliDays(), absenceId, null).getId();
@@ -526,8 +601,8 @@ public class TimeOffRequestService {
 						: AuditAction.TIME_OFF_REQUEST_REJECTED);
 		if (target == TimeOffRequest.Status.APPROVED) {
 			try {
-				String absenceId = absences.enter(decider, person, type.getId(), saved.getFrom(), saved.getTo(),
-						isHalfDay(saved), saved.getNote());
+				String absenceId = absences.enter(decider, person, saved.getId(), type.getId(), saved.getFrom(),
+						saved.getTo(), isHalfDay(saved), saved.getNote());
 				saved.setTimeOffId(absenceId);
 				if (type.countsAgainstBalance() && saved.milliDays() > 0) {
 					saved.setLedgerId(book(decider, person, type, saved.getFrom(), -saved.milliDays(),

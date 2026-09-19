@@ -294,32 +294,32 @@ class AvailabilityIntegrationTest {
 		worked(member, issue(project, "HIN-1", List.of()), day(12, 1), WorkItem.Source.APP);
 		LocalDate from = day(12, 1);
 		LocalDate to = day(12, 31);
-		assertThat(availability.timeOff(from, to, null, 0, 50).getContent())
+		assertThat(availability.timeOff(from, to, null, null, null, null, null, 0, 50).getContent())
 				.singleElement().extracting(AvailabilityController.TimeOffResponse::note).isEqualTo("Familie");
 
 		// Somebody who shares no project with the member.
 		as(stranger);
-		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50))
 				.hasMessage("error.availability.forbidden");
 		assertThatThrownBy(() -> availability.capacity(from, to, member.getId()))
 				.hasMessage("error.availability.forbidden");
 
 		// A lead, while the policy is off.
 		as(lead);
-		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50))
 				.hasMessage("error.availability.forbidden");
 
 		// A lead with the policy: type and span, never the note, and nobody outside the lead's projects.
 		policy(true);
 		as(lead);
-		AvailabilityController.TimeOffResponse seen = availability.timeOff(from, to, member.getId(), 0, 50)
+		AvailabilityController.TimeOffResponse seen = availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50)
 				.getContent().getFirst();
 		assertThat(seen.type()).isEqualTo(TimeOff.Type.VACATION);
 		assertThat(seen.from()).isEqualTo(day(12, 21));
 		assertThat(seen.to()).isEqualTo(day(12, 23));
 		assertThat(seen.note()).isNull();
 		assertThat(seen.id()).isNull();
-		assertThatThrownBy(() -> availability.timeOff(from, to, stranger.getId(), 0, 50))
+		assertThatThrownBy(() -> availability.timeOff(from, to, stranger.getId(), null, null, null, null, 0, 50))
 				.hasMessage("error.availability.forbidden");
 		// Reading absences is all a lead may do: no hours, no writes.
 		assertThatThrownBy(() -> availability.capacity(from, to, member.getId()))
@@ -335,8 +335,51 @@ class AvailabilityIntegrationTest {
 
 		// An administrator sees everything.
 		as(admin);
-		assertThat(availability.timeOff(from, to, member.getId(), 0, 50).getContent().getFirst().note())
+		assertThat(availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50).getContent().getFirst().note())
 				.isEqualTo("Familie");
+	}
+
+	@Test
+	void theOwnListIsSearchedFilteredAndTurnedRound_andALeadCannotUseEitherToLearnWhatIsHidden() {
+		as(member);
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null,
+				day(12, 1), day(12, 2), null, "Familie im Norden"));
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.SICK, null,
+				day(12, 8), day(12, 8), null, null));
+		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null,
+				day(12, 20), day(12, 23), null, "Weihnachten (a+b)"));
+		LocalDate from = day(12, 1);
+		LocalDate to = day(12, 31);
+
+		// Words in the note, case-insensitive — and as text: brackets and a plus are not a pattern.
+		assertThat(availability.timeOff(from, to, null, "familie", null, null, null, 0, 50).getContent())
+				.extracting(AvailabilityController.TimeOffResponse::from).containsExactly(day(12, 1));
+		assertThat(availability.timeOff(from, to, null, "(a+b)", null, null, null, 0, 50).getContent())
+				.extracting(AvailabilityController.TimeOffResponse::from).containsExactly(day(12, 20));
+		// One type.
+		assertThat(availability.timeOff(from, to, null, null, null, "sick", null, 0, 50).getContent())
+				.extracting(AvailabilityController.TimeOffResponse::from).containsExactly(day(12, 8));
+		// Newest first unless asked otherwise.
+		assertThat(availability.timeOff(from, to, null, null, null, null, null, 0, 50).getContent())
+				.extracting(AvailabilityController.TimeOffResponse::from)
+				.containsExactly(day(12, 20), day(12, 8), day(12, 1));
+		assertThat(availability.timeOff(from, to, null, null, null, null, "oldest", 0, 50).getContent())
+				.extracting(AvailabilityController.TimeOffResponse::from)
+				.containsExactly(day(12, 1), day(12, 8), day(12, 20));
+		assertThatThrownBy(() -> availability.timeOff(from, to, null, "x".repeat(101), null, null, null, 0, 50))
+				.hasMessage("error.availability.queryTooLong");
+		// The window narrows too — it used to be dropped and the list returned everything.
+		assertThat(availability.timeOff(day(12, 5), day(12, 10), null, null, null, null, null, 0, 50)
+				.getContent()).extracting(AvailabilityController.TimeOffResponse::from)
+				.containsExactly(day(12, 8));
+
+		// A lead sees the span and a narrowed type; searching the note or keeping only sick days
+		// would tell them, by what is left, what the narrowing hides.
+		worked(member, issue(project, "HIN-1", List.of()), day(12, 1), WorkItem.Source.APP);
+		policy(true);
+		as(lead);
+		assertThat(availability.timeOff(from, to, member.getId(), "familie", null, "sick", null, 0, 50)
+				.getContent()).hasSize(3);
 	}
 
 	@Test
@@ -353,7 +396,7 @@ class AvailabilityIntegrationTest {
 				.leadIds(new ArrayList<>(List.of(stranger.getId())))
 				.memberIds(new ArrayList<>(List.of(stranger.getId(), member.getId()))).build());
 		as(stranger);
-		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50))
 				.hasMessage("error.availability.forbidden");
 
 		// Nor does time the member did not put there themselves: a commit can name anybody as its
@@ -363,20 +406,20 @@ class AvailabilityIntegrationTest {
 		worked(member, issue(mine, "MINE-2", List.of("HIN-7")), day(12, 3), WorkItem.Source.APP);
 		mongo.insert(WorkItem.builder().userId(member.getId()).projectId(mine.getId()).date(day(12, 4))
 				.durationMinutes(60).activityType("Development").build());
-		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50))
 				.hasMessage("error.availability.forbidden");
 
 		// Nor time on the lead's own project from more than a year ago.
 		worked(member, issue(project, "HIN-2", List.of()),
 				NOW.atZone(ZoneOffset.UTC).toLocalDate().minusYears(1).minusDays(1), WorkItem.Source.APP);
 		as(lead);
-		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), 0, 50))
+		assertThatThrownBy(() -> availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50))
 				.hasMessage("error.availability.forbidden");
 
 		// Recent time the member recorded on an issue of the project does, and the sick day reads as a
 		// day away.
 		worked(member, issue(project, "HIN-1", List.of()), day(12, 1), WorkItem.Source.TIMER);
-		assertThat(availability.timeOff(from, to, member.getId(), 0, 50).getContent()).singleElement()
+		assertThat(availability.timeOff(from, to, member.getId(), null, null, null, null, 0, 50).getContent()).singleElement()
 				.extracting(AvailabilityController.TimeOffResponse::type).isEqualTo(TimeOff.Type.OTHER);
 	}
 

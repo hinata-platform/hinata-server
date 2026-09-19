@@ -182,6 +182,9 @@ public enum AuditAction {
 	TIME_OFF_REQUEST_APPROVED(DATA, WARNING, true),
 	TIME_OFF_REQUEST_REJECTED(DATA, WARNING, true),
 	TIME_OFF_REQUEST_WITHDRAWN(DATA, NOTICE, true),
+	// A request changed by the person while it waits: the new span and amount, like
+	// the filing it replaces — never what the note now says.
+	TIME_OFF_REQUEST_EDITED(DATA, NOTICE, true),
 	TIME_OFF_REQUEST_CANCELLED(DATA, WARNING, true),
 	// Reporting sickness is a notification, not a request (§ 5 EFZG, R11), so it
 	// has no decision to record — only that a report was made, for whom and when.

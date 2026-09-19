@@ -99,11 +99,15 @@ public class AvailabilityController {
 	// --- absences ---------------------------------------------------------------
 
 	/**
-	 * An absence. For a lead's view {@code id} and {@code note} are always null, and a sick day reads
-	 * as {@code OTHER} ({@link AvailabilityAccess#typeFor}).
+	 * An absence. For a lead's view {@code id}, {@code note} and {@code requestId} are always null,
+	 * and a sick day reads as {@code OTHER} ({@link AvailabilityAccess#typeFor}).
+	 *
+	 * <p>{@code requestId} names the request an absence was approved from; a client offers to cancel
+	 * that request rather than to edit the absence, which the server would refuse. Added last, so
+	 * the published app, which reads the fields it knows, reads the same response it always did.
 	 */
 	public record TimeOffResponse(String id, String userId, TimeOff.Type type, String typeId,
-			LocalDate from, LocalDate to, boolean halfDay, String note) {
+			LocalDate from, LocalDate to, boolean halfDay, String note, String requestId) {
 
 		static TimeOffResponse from(TimeOff item, AvailabilityAccess.Sight sight) {
 			boolean full = sight == AvailabilityAccess.Sight.FULL;
@@ -114,13 +118,14 @@ public class AvailabilityController {
 					// would name exactly what typeFor exists to hide.
 					full ? item.getTypeId() : null,
 					item.getFrom(), item.getTo(), item.isHalfDay(),
-					full ? item.getNote() : null);
+					full ? item.getNote() : null,
+					full ? item.getRequestId() : null);
 		}
 
 		/** An absence in a capacity, which only its owner and administrators read. */
 		static TimeOffResponse from(CapacityService.AbsenceMark mark, String userId) {
-			return new TimeOffResponse(mark.id(), userId, mark.type(), null, mark.from(), mark.to(),
-					mark.halfDay(), mark.note());
+			return new TimeOffResponse(mark.id(), userId, mark.type(), mark.typeId(), mark.from(), mark.to(),
+					mark.halfDay(), mark.note(), mark.requestId());
 		}
 	}
 
@@ -150,15 +155,42 @@ public class AvailabilityController {
 			@Size(max = TimeOff.NOTE_MAX) String note) {
 	}
 
+	/**
+	 * One person's absences, newest first. [q] finds words in the note, [typeId] or [type] keeps one
+	 * type, and [sort] {@code oldest} turns the order round — all for the reader's own absences and
+	 * a keeper's; a lead's narrower view ignores them ({@link TimeOffService#page}).
+	 */
 	@GetMapping("/time-off")
 	public Page<TimeOffResponse> timeOff(
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
 			@RequestParam(required = false) String userId,
+			@RequestParam(required = false) String q,
+			@RequestParam(required = false) @Size(max = 64) String typeId,
+			@RequestParam(required = false) String type,
+			@RequestParam(required = false) String sort,
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "50") int size) {
-		TimeOffService.Listing listing = timeOff.page(currentUser.require(), userId, from, to, page, size);
+		TimeOffService.Filter filter = new TimeOffService.Filter(q, typeId, plainType(type),
+				"oldest".equalsIgnoreCase(sort));
+		TimeOffService.Listing listing = timeOff.page(currentUser.require(), userId, from, to, filter, page,
+				size);
 		return listing.page().map(item -> TimeOffResponse.from(item, listing.sight()));
+	}
+
+	/**
+	 * A plain type filter, or null for all of them. An unknown word is null rather than a 400: a
+	 * filter from a newer client should show everything, not an error.
+	 */
+	private static TimeOff.Type plainType(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		try {
+			return TimeOff.Type.valueOf(value.strip().toUpperCase(java.util.Locale.ROOT));
+		} catch (IllegalArgumentException unknown) {
+			return null;
+		}
 	}
 
 	@PostMapping("/time-off")

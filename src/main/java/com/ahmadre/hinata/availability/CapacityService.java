@@ -63,8 +63,13 @@ public class CapacityService {
 	}
 
 	/** An absence touching the window. */
+	/**
+	 * An absence as a window shows it. [typeId] and [requestId] are there for the person's own
+	 * calendar, which opens an absence from the day it falls on; everybody who reads a window reads
+	 * their own or is a keeper.
+	 */
 	public record AbsenceMark(String id, TimeOff.Type type, LocalDate from, LocalDate to, boolean halfDay,
-			String note) {
+			String note, String typeId, String requestId) {
 	}
 
 	public record Window(LocalDate from, LocalDate to, List<ScheduledDay> days, List<HolidayMark> holidays,
@@ -98,7 +103,8 @@ public class CapacityService {
 		Capacity.Result capacity = Capacity.of(from, to, minutesByDay::get, holidayHalfDays,
 				absences.stream().map(a -> new Capacity.Absence(a.getFrom(), a.getTo(), a.isHalfDay())).toList());
 		List<AbsenceMark> absenceMarks = absences.stream()
-				.map(a -> new AbsenceMark(a.getId(), a.getType(), a.getFrom(), a.getTo(), a.isHalfDay(), a.getNote()))
+				.map(a -> new AbsenceMark(a.getId(), a.getType(), a.getFrom(), a.getTo(), a.isHalfDay(), a.getNote(),
+						a.getTypeId(), a.getRequestId()))
 				.toList();
 		return new Window(from, to, List.copyOf(days), List.copyOf(holidayMarks), absenceMarks, capacity);
 	}

@@ -164,7 +164,12 @@ public final class TimePolicy {
 		 * way out is somebody granting more, which is why its holder and its remedy
 		 * are the two below rather than an approver and a reopen.
 		 */
-		BALANCE_EXCEEDED
+		BALANCE_EXCEEDED,
+		/**
+		 * The absence was approved from a request, and changes only through that request (HIN-117):
+		 * its days are booked against a balance, which a direct edit would leave standing.
+		 */
+		REQUEST_BACKED
 	}
 
 	/** Who can lift a freeze. Never the person whose entry it is — that is the point. */
@@ -212,7 +217,9 @@ public final class TimePolicy {
 		 * that adds something rather than reopening something: a balance that is short
 		 * is not a door that was shut, it is a claim that was never that large.
 		 */
-		GRANT
+		GRANT,
+		/** The person cancels the request the absence came from, and asks again if they want to. */
+		CANCEL_REQUEST
 	}
 
 	/** How a reported duration is folded onto the configured increment. */
