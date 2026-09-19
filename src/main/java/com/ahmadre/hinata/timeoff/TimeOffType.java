@@ -262,8 +262,23 @@ public class TimeOffType {
 		return carryover == null ? Carryover.NONE : carryover;
 	}
 
+	/**
+	 * Who decides a request of this type, and {@link ApproverRule#ADMIN} where nobody chose.
+	 *
+	 * <p>The administrators are the default rather than the team leads, and that is a security
+	 * decision rather than a taste one: in hinata <b>anybody may create a team and add anybody to
+	 * it</b>, without the person's consent. Routing leave to "the admins of this person's teams"
+	 * by default would therefore let any account make itself the approver of any other account's
+	 * statutory leave — and read the note, the balance warning and the history that come with it.
+	 * HIN-91 learned the same lesson about who may <em>see</em> an absence; this is the other half
+	 * of it (see {@code AvailabilityAccess}).
+	 *
+	 * <p>{@link ApproverRule#TEAM_LEAD} stays on offer, because on an instance whose teams are the
+	 * real organisation it is the right answer. Picking it is then an operator's decision, made in
+	 * a screen that says what it means.
+	 */
 	public ApproverRule approverRule() {
-		return approverRule == null ? ApproverRule.TEAM_LEAD : approverRule;
+		return approverRule == null ? ApproverRule.ADMIN : approverRule;
 	}
 
 	public Visibility visibility() {

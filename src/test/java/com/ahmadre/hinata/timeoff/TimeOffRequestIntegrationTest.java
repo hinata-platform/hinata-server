@@ -38,6 +38,9 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -165,6 +168,86 @@ class TimeOffRequestIntegrationTest {
 
 		assertThat(bookingsOf(member)).hasSize(1);
 		assertThat(absences.count()).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("two people deciding at the same moment produce one absence and one booking")
+	void twoConcurrentApprovalsBookOnce() throws Exception {
+		TimeOffRequest filed = requests.submit(member, week(3));
+		int deciders = 6;
+		CountDownLatch start = new CountDownLatch(1);
+		CountDownLatch done = new CountDownLatch(deciders);
+		AtomicInteger approvals = new AtomicInteger();
+		AtomicInteger refusals = new AtomicInteger();
+
+		for (int i = 0; i < deciders; i++) {
+			// Alternating, so the two administrators really are pressing the same button at the
+			// same moment rather than one of them doing it six times.
+			User decider = i % 2 == 0 ? admin : secondAdmin;
+			Thread.ofVirtual().start(() -> {
+				try {
+					start.await();
+					requests.approve(filed.getId(), null, decider);
+					approvals.incrementAndGet();
+				}
+				catch (Exception refused) {
+					refusals.incrementAndGet();
+				}
+				finally {
+					done.countDown();
+				}
+			});
+		}
+		start.countDown();
+		assertThat(done.await(30, TimeUnit.SECONDS)).isTrue();
+
+		// The point of the whole exercise. Before the claim moved ahead of the writes, every
+		// thread passed the status check, every thread entered an absence and booked the days,
+		// and only the saves raced — so a week off cost six weeks of balance.
+		assertThat(approvals.get()).isEqualTo(1);
+		assertThat(refusals.get()).isEqualTo(deciders - 1);
+		assertThat(bookingsOf(member)).hasSize(1);
+		assertThat(absences.count()).isEqualTo(1);
+		assertThat(remaining()).isEqualTo(15 * DAY);
+	}
+
+	@Test
+	@DisplayName("a claim that cannot be written is put back, not left standing")
+	void aFailedWriteLeavesTheRequestWaiting() {
+		TimeOffRequest filed = requests.submit(member, week(3));
+		// An absence more than two years out is refused by the calendar itself, which is the
+		// realistic way the write after the claim fails.
+		TimeOffRequest far = requestRepository.findById(filed.getId()).orElseThrow();
+		far.setFrom(TODAY.plusYears(4));
+		far.setTo(TODAY.plusYears(4).plusDays(4));
+		requestRepository.save(far);
+
+		assertThatThrownBy(() -> requests.approve(filed.getId(), null, admin))
+				.isInstanceOf(ApiException.class);
+
+		TimeOffRequest after = requestRepository.findById(filed.getId()).orElseThrow();
+		assertThat(after.getStatus()).isEqualTo(TimeOffRequest.Status.SUBMITTED);
+		assertThat(after.getDecidedBy()).isNull();
+		assertThat(after.getTimeOffId()).isNull();
+		// And the step that did not happen is not in the story of the request.
+		assertThat(after.getHistory()).extracting(TimeOffRequest.Event::getTo)
+				.containsExactly(TimeOffRequest.Status.SUBMITTED);
+		assertThat(bookingsOf(member)).isEmpty();
+		assertThat(absences.count()).isZero();
+	}
+
+	@Test
+	@DisplayName("a request nobody can be routed to still lands with the administrators")
+	void anAutomaticTypeStillNamesAnAudience() {
+		vacation.setApproverRule(TimeOffType.ApproverRule.AUTO);
+		typeRepository.save(vacation);
+
+		TimeOffRequest filed = requests.submit(member, week(3));
+
+		// The routing answers nobody for AUTO on purpose, but what is stored may not be nobody:
+		// an automatic approval that failed would otherwise leave a request no inbox can find.
+		assertThat(filed.getApproverIds()).containsExactlyInAnyOrder(admin.getId(), secondAdmin.getId());
+		assertThat(filed.getStatus()).isEqualTo(TimeOffRequest.Status.APPROVED);
 	}
 
 	@Test
