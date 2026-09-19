@@ -73,6 +73,16 @@ public class TimeOff {
 
 	private String note;
 
+	/**
+	 * The request this absence was approved from, when it was (HIN-117). Null for one entered
+	 * directly, and on every document written before requests existed.
+	 *
+	 * <p>An absence that came from a request is changed through the request and nowhere else: its
+	 * days are booked against a balance, and editing or deleting the absence directly would leave
+	 * the booking standing and the request pointing at nothing ({@link TimeOffGate}).
+	 */
+	private String requestId;
+
 	/** Who entered it: the person, or an administrator. */
 	private String createdBy;
 

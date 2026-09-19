@@ -42,19 +42,23 @@ public class TimeOffAbsences {
 	 * has already been made, by somebody the request named, and a lead deciding for their team is
 	 * not somebody who keeps absences for the organisation.
 	 */
-	public String enter(User decider, User person, String typeId, LocalDate from, LocalDate to, boolean halfDay,
-			String note) {
+	public String enter(User decider, User person, String requestId, String typeId, LocalDate from,
+			LocalDate to, boolean halfDay, String note) {
 		TimeOff written = absences.enter(decider, person,
-				new TimeOffService.Draft(person.getId(), null, typeId, from, to, halfDay ? Boolean.TRUE : null, note));
+				new TimeOffService.Draft(person.getId(), null, typeId, from, to, halfDay ? Boolean.TRUE : null, note),
+				requestId);
 		return written.getId();
 	}
 
-	/** Removes the absence a cancelled request had created, if it is still there. */
+	/**
+	 * Removes the absence a cancelled request had created, if it is still there. Through the door
+	 * for requests: the direct one refuses an absence a request produced, which this one is.
+	 */
 	public void remove(User actor, String absenceId) {
 		if (absenceId == null || absenceId.isBlank()) {
 			return;
 		}
-		repository.findById(absenceId).ifPresent(found -> absences.delete(actor, absenceId));
+		repository.findById(absenceId).ifPresent(found -> absences.deleteForRequest(actor, absenceId));
 	}
 
 	/**
@@ -64,7 +68,8 @@ public class TimeOffAbsences {
 	 * document they were entered on.
 	 */
 	public void endOn(User actor, String absenceId, LocalDate lastDay) {
-		absences.update(actor, absenceId, new TimeOffService.Patch(null, null, null, lastDay, null, null));
+		absences.updateForRequest(actor, absenceId,
+				new TimeOffService.Patch(null, null, null, lastDay, null, null));
 	}
 
 	/** What [absenceId] currently spans, or empty when it is gone. */

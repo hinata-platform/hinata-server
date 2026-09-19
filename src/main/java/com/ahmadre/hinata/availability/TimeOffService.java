@@ -26,8 +26,10 @@ import java.util.List;
  * Absences: a person keeps their own, an administrator keeps anybody's, and a lead may read the
  * type and span of a member's while the policy allows it ({@link AvailabilityAccess}).
  *
- * <p>No approval workflow. Whether a vacation is granted is HR software's business; this records
- * that somebody is away, so that capacity is right.
+ * <p>This records that somebody is away, so that capacity is right. Whether somebody may be away
+ * is the business of absence management ({@code timeoff}), which asks its questions through
+ * {@link TimeOffGate}: with it switched on, a type somebody has to approve is requested there
+ * rather than entered here, and an absence a request produced changes only through its request.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,6 +39,7 @@ public class TimeOffService {
 	static final int PAGE_INDEX_MAX = 10_000;
 
 	private static final Sort NEWEST_FIRST = Sort.by(Sort.Order.desc("from"), Sort.Order.desc("_id"));
+	private static final Sort OLDEST_FIRST = Sort.by(Sort.Order.asc("from"), Sort.Order.asc("_id"));
 
 	private final TimeOffRepository timeOff;
 	private final MongoTemplate mongo;
@@ -81,24 +84,69 @@ public class TimeOffService {
 	public record Listing(Page<TimeOff> page, AvailabilityAccess.Sight sight) {
 	}
 
+	/** Longest search text a list takes; anything longer is somebody pasting, not searching. */
+	public static final int QUERY_MAX = 100;
+
+	/**
+	 * What a list narrows to beyond the span: words in the note, one operator type or one plain
+	 * type, and the direction. Null leaves a filter off; [oldestFirst] false is newest first.
+	 */
+	public record Filter(String query, String typeId, TimeOff.Type type, boolean oldestFirst) {
+
+		public static final Filter NONE = new Filter(null, null, null, false);
+	}
+
 	/** One person's absences touching [from] to [to], newest first. Filtered in the query. */
 	public Listing page(User viewer, String userId, LocalDate from, LocalDate to, int page, int size) {
+		return page(viewer, userId, from, to, Filter.NONE, page, size);
+	}
+
+	/**
+	 * One person's absences touching [from] to [to], narrowed by [filter]. Filtered and sorted in
+	 * the query, off {@code user_from_id} in either direction.
+	 *
+	 * <p>Somebody with a narrower sight — a lead — cannot search the note or narrow to a type:
+	 * the note is not theirs to read, and a type filter would tell them, by what it keeps, exactly
+	 * what {@link AvailabilityAccess#typeFor} hides.
+	 */
+	public Listing page(User viewer, String userId, LocalDate from, LocalDate to, Filter filter, int page,
+			int size) {
 		AvailabilityAccess.Visible visible = access.requireVisible(viewer, userId);
 		if (from != null && to != null) {
 			CapacityService.assertWindow(from, to);
 		}
+		// Every narrowing is assigned back. Criteria.and() hands out a new criteria with a copy of
+		// the chain (Spring Data MongoDB 5), so a call whose result is dropped narrows nothing — the
+		// window below did exactly that and the list returned every absence the person ever had.
 		Criteria criteria = Criteria.where("userId").is(visible.userId());
 		if (from != null) {
-			criteria.and("to").gte(from);
+			criteria = criteria.and("to").gte(from);
 		}
 		if (to != null) {
-			criteria.and("from").lte(to);
+			criteria = criteria.and("from").lte(to);
+		}
+		if (visible.sight() == AvailabilityAccess.Sight.FULL) {
+			String words = filter.query() == null ? "" : filter.query().strip();
+			if (!words.isEmpty()) {
+				if (words.length() > QUERY_MAX) {
+					throw ApiException.badRequest("error.availability.queryTooLong", QUERY_MAX);
+				}
+				// Quoted: what somebody types is text to find, never a pattern to run.
+				criteria = criteria.and("note").regex(java.util.regex.Pattern.quote(words), "i");
+			}
+			if (filter.typeId() != null && !filter.typeId().isBlank()) {
+				criteria = criteria.and("typeId").is(filter.typeId().strip());
+			}
+			else if (filter.type() != null) {
+				criteria = criteria.and("type").is(filter.type());
+			}
 		}
 		PageRequest request = PageRequest.of(Math.clamp(page, 0, PAGE_INDEX_MAX), Math.clamp(size, 1, PAGE_MAX),
-				NEWEST_FIRST);
-		List<TimeOff> rows = mongo.find(Query.query(criteria).with(request), TimeOff.class);
+				filter.oldestFirst() ? OLDEST_FIRST : NEWEST_FIRST);
+		Query query = Query.query(criteria);
+		List<TimeOff> rows = mongo.find(Query.of(query).with(request), TimeOff.class);
 		return new Listing(PageableExecutionUtils.getPage(rows, request,
-				() -> mongo.count(Query.query(criteria), TimeOff.class)), visible.sight());
+				() -> mongo.count(Query.of(query), TimeOff.class)), visible.sight());
 	}
 
 	/**
@@ -110,7 +158,7 @@ public class TimeOffService {
 	 */
 	public TimeOff create(User viewer, Draft draft) {
 		User person = access.requireKeeper(viewer, draft.userId());
-		gate().assertDirectEntry(draft.typeId(), person.getId(), viewer);
+		gate().assertDirectEntry(draft.type(), draft.typeId(), person.getId(), viewer);
 		return enter(viewer, person, draft);
 	}
 
@@ -124,7 +172,13 @@ public class TimeOffService {
 	 * today it may sit and how many one year may hold.
 	 */
 	public TimeOff enter(User actor, User person, Draft draft) {
-		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(actor.getId()).build();
+		return enter(actor, person, draft, null);
+	}
+
+	/** {@link #enter(User, User, Draft)}, for the absence an approved request [requestId] earned. */
+	public TimeOff enter(User actor, User person, Draft draft, String requestId) {
+		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(actor.getId())
+				.requestId(requestId).build();
 		apply(item, draft.type(), draft.typeId(), draft.from(), draft.to(), draft.halfDay(), draft.note());
 		assertNearToday(item, person);
 		assertRoomIn(person.getId(), item.getFrom().getYear());
@@ -133,14 +187,34 @@ public class TimeOffService {
 		return saved;
 	}
 
+	/**
+	 * Changes an absence the direct way. Not one a request produced: that one changes through its
+	 * request ({@link TimeOffGate#assertDirectChange}).
+	 */
 	public TimeOff update(User viewer, String id, Patch patch) {
 		TimeOff item = writable(viewer, id);
+		gate().assertDirectChange(item, viewer);
+		return change(viewer, item, patch, true);
+	}
+
+	/**
+	 * Changes the absence behind request [id], for the request's own flow — § 9 BUrlG shortening
+	 * leave that sickness fell on. The request has settled the question the gate would ask.
+	 */
+	public TimeOff updateForRequest(User actor, String id, Patch patch) {
+		return change(actor, writable(actor, id), patch, false);
+	}
+
+	private TimeOff change(User viewer, TimeOff item, Patch patch, boolean direct) {
 		User person = users.findById(item.getUserId()).orElse(null);
 		// Only when the type changes, and for the type it changes to: retyping an absence into one
 		// that needs approving is the same walk-around as entering it that way, while editing the
 		// note on an absence that already needs none is nobody's business but the owner's.
-		if (patch.typeId() != null && !patch.typeId().equals(item.getTypeId())) {
-			gate().assertDirectEntry(patch.typeId(), item.getUserId(), viewer);
+		boolean retyped = patch.typeId() != null ? !patch.typeId().equals(item.getTypeId())
+				: patch.type() != null && item.getTypeId() == null && patch.type() != item.getType();
+		if (direct && retyped) {
+			gate().assertDirectEntry(patch.type() != null ? patch.type() : item.getType(),
+					patch.typeId() != null ? patch.typeId() : item.getTypeId(), item.getUserId(), viewer);
 		}
 		LocalDate fromBefore = item.getFrom();
 		LocalDate toBefore = item.getTo();
@@ -166,10 +240,21 @@ public class TimeOffService {
 		return saved;
 	}
 
+	/** Deletes an absence the direct way; not one a request produced ({@link #update}). */
 	public void delete(User viewer, String id) {
 		TimeOff item = writable(viewer, id);
+		gate().assertDirectChange(item, viewer);
+		remove(viewer, item);
+	}
+
+	/** Deletes the absence behind a request that was cancelled or given back in full. */
+	public void deleteForRequest(User actor, String id) {
+		remove(actor, writable(actor, id));
+	}
+
+	private void remove(User actor, TimeOff item) {
 		timeOff.delete(item);
-		users.findById(item.getUserId()).ifPresent(person -> recordForOther(viewer, person, "deleted", item));
+		users.findById(item.getUserId()).ifPresent(person -> recordForOther(actor, person, "deleted", item));
 	}
 
 	private void apply(TimeOff item, TimeOff.Type type, String typeId, LocalDate from, LocalDate to,

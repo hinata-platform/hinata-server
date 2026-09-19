@@ -28,7 +28,13 @@ public class TimeCalendarLayers {
 
 	private final CapacityService capacity;
 
-	public record Absence(String type, LocalDate from, LocalDate to, boolean halfDay) {
+	/**
+	 * One of the person's own absences. [id], [typeId] and [requestId] let the calendar open it from
+	 * the day it falls on; [note] is the person's own words. Only ever the reader's own — this is
+	 * their calendar — so nothing here is narrowed.
+	 */
+	public record Absence(String type, LocalDate from, LocalDate to, boolean halfDay, String id,
+			String typeId, String requestId, String note) {
 	}
 
 	public record HolidayDay(LocalDate date, String name, boolean halfDay) {
@@ -45,7 +51,8 @@ public class TimeCalendarLayers {
 		window.days().forEach(day -> scheduled.put(day.date(), day.minutes()));
 		return new Layers(
 				window.absences().stream()
-						.map(mark -> new Absence(mark.type().name(), mark.from(), mark.to(), mark.halfDay()))
+						.map(mark -> new Absence(mark.type().name(), mark.from(), mark.to(), mark.halfDay(),
+								mark.id(), mark.typeId(), mark.requestId(), mark.note()))
 						.toList(),
 				window.holidays().stream()
 						.map(mark -> new HolidayDay(mark.date(), mark.name(), mark.halfDay()))

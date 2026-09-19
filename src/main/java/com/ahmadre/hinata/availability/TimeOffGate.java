@@ -22,16 +22,32 @@ import com.ahmadre.hinata.user.User;
 public interface TimeOffGate {
 
 	/**
-	 * Throws when an absence of [typeId] for [subjectId] may not be entered directly by [actor].
+	 * Throws when an absence of [typeId] — or, without one, of the plain [type] — for [subjectId]
+	 * may not be entered directly by [actor].
+	 *
+	 * <p>[type] matters because a client that has never heard of the catalogue sends no [typeId],
+	 * and "vacation" without an id is still vacation: answering it as "no type, nothing to check"
+	 * was the way round every approval there was.
 	 *
 	 * <p>[actor] matters: somebody who keeps absences for the organisation enters them on anybody's
 	 * behalf as part of the job, and asking them to file a request to themselves would be a loop.
 	 */
-	void assertDirectEntry(String typeId, String subjectId, User actor);
+	void assertDirectEntry(TimeOff.Type type, String typeId, String subjectId, User actor);
+
+	/**
+	 * Throws when [absence] may not be changed or deleted the direct way.
+	 *
+	 * <p>An absence a request produced is changed through the request: its days are booked against
+	 * a balance, and a direct edit would leave the booking standing and the request pointing at an
+	 * absence that no longer is what was approved. Nothing to say when there is no absence
+	 * management.
+	 */
+	default void assertDirectChange(TimeOff absence, User actor) {
+	}
 
 	/** The answer when there is no absence management: everything may be entered directly. */
 	static TimeOffGate open() {
-		return (typeId, subjectId, actor) -> {
+		return (type, typeId, subjectId, actor) -> {
 		};
 	}
 }

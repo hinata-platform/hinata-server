@@ -76,7 +76,7 @@ public class TimeLocks {
 				// The vocabulary is shared with absence management, which refuses absences and
 				// never work items. Listed rather than defaulted so the next word added to it
 				// stops here again and has to be thought about.
-				case APPROVAL_REQUIRED, BALANCE_EXCEEDED -> throw notALockOnTime(reason);
+				case APPROVAL_REQUIRED, BALANCE_EXCEEDED, REQUEST_BACKED -> throw notALockOnTime(reason);
 			};
 		}
 
@@ -89,7 +89,7 @@ public class TimeLocks {
 				case MAX_DAYS_BACK -> TimePolicy.LockRemedy.BACKFILL_GRANT;
 				case APPROVAL -> TimePolicy.LockRemedy.REOPEN;
 				case INVOICE -> TimePolicy.LockRemedy.CREDIT_NOTE;
-				case APPROVAL_REQUIRED, BALANCE_EXCEEDED -> throw notALockOnTime(reason);
+				case APPROVAL_REQUIRED, BALANCE_EXCEEDED, REQUEST_BACKED -> throw notALockOnTime(reason);
 			};
 		}
 

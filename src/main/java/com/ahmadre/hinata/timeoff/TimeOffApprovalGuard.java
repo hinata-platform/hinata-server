@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.timeoff;
 
+import com.ahmadre.hinata.availability.TimeOff;
 import com.ahmadre.hinata.availability.TimeOffGate;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
@@ -31,18 +32,46 @@ public class TimeOffApprovalGuard implements TimeOffGate {
 	private final TimeOffAccess access;
 
 	@Override
-	public void assertDirectEntry(String typeId, String subjectId, User actor) {
-		if (!settings.enabled() || typeId == null || typeId.isBlank()) {
+	public void assertDirectEntry(TimeOff.Type type, String typeId, String subjectId, User actor) {
+		if (!settings.enabled() || access.isKeeper(actor)) {
 			return;
 		}
-		if (access.isKeeper(actor)) {
-			return;
-		}
-		boolean needsApproval = types.findById(typeId)
+		boolean needsApproval = typeOf(type, typeId)
 				.map(TimeOffType::requiresApproval)
 				.orElse(false);
 		if (needsApproval) {
 			throw TimeOffRefusal.approvalRequired();
 		}
+	}
+
+	/**
+	 * Refuses a direct change to an absence a request produced — for everybody, keepers included.
+	 * A keeper who wants it gone cancels the request, which is always open to them, and the days
+	 * come back with it; deleting the absence alone would leave them booked.
+	 */
+	@Override
+	public void assertDirectChange(TimeOff absence, User actor) {
+		if (settings.enabled() && absence.getRequestId() != null) {
+			throw TimeOffRefusal.requestBacked();
+		}
+	}
+
+	/**
+	 * The operator type an absence is entered under: the one it names, or — for a client that
+	 * names none — the built-in type of its plain kind. Without that second half, an absence sent
+	 * as "vacation" with no id went through as if nobody had ever made vacation need approval.
+	 */
+	private java.util.Optional<TimeOffType> typeOf(TimeOff.Type type, String typeId) {
+		if (typeId != null && !typeId.isBlank()) {
+			return types.findById(typeId.strip());
+		}
+		if (type == null) {
+			return java.util.Optional.empty();
+		}
+		return types.findBySystemKey(switch (type) {
+			case VACATION -> TimeOffType.SYSTEM_VACATION;
+			case SICK -> TimeOffType.SYSTEM_SICK;
+			case OTHER -> TimeOffType.SYSTEM_OTHER;
+		});
 	}
 }

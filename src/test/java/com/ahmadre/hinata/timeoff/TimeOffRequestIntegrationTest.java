@@ -488,6 +488,124 @@ class TimeOffRequestIntegrationTest {
 				vacation.getId(), monday(3), monday(3).plusDays(4), null, null))).isNotNull();
 	}
 
+	@Test
+	@DisplayName("vacation sent without a type id is still vacation, and still needs approving")
+	void theDirectEntryPathKnowsVacationWithoutItsId() {
+		// A client that never heard of the catalogue sends the plain type only. That used to pass
+		// the gate as "no type, nothing to check" — the way round every approval there was.
+		ApiException refusal = org.assertj.core.api.Assertions.catchThrowableOfType(ApiException.class,
+				() -> availability.create(member, new TimeOffService.Draft(member.getId(),
+						TimeOff.Type.VACATION, null, monday(3), monday(3).plusDays(4), null, null)));
+
+		assertThat(refusal.getMessageKey()).isEqualTo("error.timeOff.approvalRequired");
+		// Retyping an absence into vacation without naming the id is the same walk-around.
+		TimeOff other = availability.create(member, new TimeOffService.Draft(member.getId(),
+				TimeOff.Type.OTHER, null, monday(4), monday(4), null, null));
+		assertThatThrownBy(() -> availability.update(member, other.getId(),
+				new TimeOffService.Patch(TimeOff.Type.VACATION, null, null, null, null, null)))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.timeOff.approvalRequired");
+	}
+
+	@Test
+	@DisplayName("an absence from a request knows it, and changes only through the request")
+	void anAbsenceFromARequestChangesOnlyThroughIt() {
+		TimeOffRequest filed = requests.submit(member, week(3));
+		TimeOffRequest approved = requests.approve(filed.getId(), null, admin);
+		TimeOff absence = absences.findById(approved.getTimeOffId()).orElseThrow();
+		assertThat(absence.getRequestId()).isEqualTo(filed.getId());
+
+		// Neither the person nor a keeper may edit or delete it directly: the booking would stay.
+		for (User actor : List.of(member, keeper)) {
+			ApiException edit = org.assertj.core.api.Assertions.catchThrowableOfType(ApiException.class,
+					() -> availability.update(actor, absence.getId(),
+							new TimeOffService.Patch(null, null, null, null, null, "moved")));
+			assertThat(edit.getMessageKey()).isEqualTo("error.timeOff.requestBacked");
+			assertThat(edit.getDetails()).containsEntry("reason", "requestBacked")
+					.containsEntry("remedy", "cancelRequest");
+			assertThatThrownBy(() -> availability.delete(actor, absence.getId()))
+					.isInstanceOf(ApiException.class)
+					.hasMessageContaining("error.timeOff.requestBacked");
+		}
+		assertThat(absences.count()).isEqualTo(1);
+
+		// Cancelling the request is the way, and it takes the absence and the days back.
+		requests.cancel(filed.getId(), null, member);
+		assertThat(absences.count()).isZero();
+		assertThat(remaining()).isEqualTo(20 * DAY);
+	}
+
+	// --- editing a request -------------------------------------------------------------
+
+	@Test
+	@DisplayName("a waiting request can be edited by its owner, and its days are worked out again")
+	void aWaitingRequestIsEditedAndRecounted() {
+		TimeOffRequest filed = requests.submit(member, week(3));
+		assertThat(filed.milliDays()).isEqualTo(5 * DAY);
+
+		TimeOffRequest edited = requests.edit(filed.getId(), member,
+				new TimeOffRequestService.Draft(vacation.getId(), monday(3), monday(3).plusDays(1), null, null,
+						"Only two days after all", null));
+
+		assertThat(edited.getStatus()).isEqualTo(TimeOffRequest.Status.SUBMITTED);
+		assertThat(edited.milliDays()).isEqualTo(2 * DAY);
+		assertThat(edited.getTo()).isEqualTo(monday(3).plusDays(1));
+		assertThat(edited.getNote()).isEqualTo("Only two days after all");
+		assertThat(edited.getHistory()).last().satisfies(step -> {
+			assertThat(step.getFrom()).isEqualTo(TimeOffRequest.Status.SUBMITTED);
+			assertThat(step.getTo()).isEqualTo(TimeOffRequest.Status.SUBMITTED);
+			assertThat(step.getNote()).isNull();
+		});
+		// Nothing is written until somebody decides, edit or no edit.
+		assertThat(absences.count()).isZero();
+		assertThat(requests.approve(filed.getId(), null, admin).milliDays()).isEqualTo(2 * DAY);
+		assertThat(bookingsOf(member).getFirst().milliDays()).isEqualTo(-2 * DAY);
+	}
+
+	@Test
+	@DisplayName("only the owner edits, and only while nobody has decided")
+	void onlyTheOwnerEditsAWaitingRequest() {
+		TimeOffRequest filed = requests.submit(member, week(3));
+
+		assertThatThrownBy(() -> requests.edit(filed.getId(), admin, week(4)))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.notFound");
+
+		requests.approve(filed.getId(), null, admin);
+		assertThatThrownBy(() -> requests.edit(filed.getId(), member, week(4)))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.timeOff.requestDecided");
+	}
+
+	@Test
+	@DisplayName("an edit into a type nobody approves decides itself, like a new request would")
+	void anEditIntoAnAutomaticTypeDecidesItself() {
+		TimeOffRequest filed = requests.submit(member, week(3));
+		vacation.setApprovalRequired(false);
+		typeRepository.save(vacation);
+
+		TimeOffRequest edited = requests.edit(filed.getId(), member, week(3));
+
+		assertThat(edited.getStatus()).isEqualTo(TimeOffRequest.Status.APPROVED);
+		assertThat(absences.count()).isEqualTo(1);
+		assertThat(absences.findById(edited.getTimeOffId()).orElseThrow().getRequestId())
+				.isEqualTo(filed.getId());
+	}
+
+	@Test
+	@DisplayName("an edit is audited without the note")
+	void anEditIsAuditedWithoutItsNote() {
+		TimeOffRequest filed = requests.submit(member, week(3));
+		requests.edit(filed.getId(), member, new TimeOffRequestService.Draft(vacation.getId(), monday(3),
+				monday(3).plusDays(2), null, null, "Doctor's appointment moved", null));
+
+		List<AuditLog> edits = mongo.find(Query.query(Criteria.where("action")
+				.is(AuditAction.TIME_OFF_REQUEST_EDITED.name())), AuditLog.class);
+		assertThat(edits).hasSize(1);
+		assertThat(edits.getFirst().getMetadata()).containsKeys("user", "from", "to", "milliDays");
+		assertThat(String.valueOf(edits.getFirst().getMetadata())).doesNotContain("Doctor");
+	}
+
 	// --- what the messages say --------------------------------------------------------
 
 	@Test

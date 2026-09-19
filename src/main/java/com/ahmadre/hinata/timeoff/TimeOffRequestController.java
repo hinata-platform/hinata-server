@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -207,6 +208,13 @@ public class TimeOffRequestController {
 	public RequestResponse submit(@Valid @RequestBody SubmitRequest request) {
 		User person = currentUser.require();
 		return RequestResponse.from(requests.view(requests.submit(person, request.toDraft()), person));
+	}
+
+	/** Changes a request that is still waiting. Only the person who made it; 409 once decided. */
+	@PatchMapping("/requests/{id}")
+	public RequestResponse edit(@PathVariable String id, @Valid @RequestBody SubmitRequest request) {
+		User person = currentUser.require();
+		return RequestResponse.from(requests.view(requests.edit(id, person, request.toDraft()), person));
 	}
 
 	@PostMapping("/requests/{id}/approve")

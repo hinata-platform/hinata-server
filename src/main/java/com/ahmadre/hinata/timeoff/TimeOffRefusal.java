@@ -55,6 +55,18 @@ final class TimeOffRefusal {
 						TimePolicy.LockRemedy.GRANT));
 	}
 
+	/**
+	 * 409 for editing or deleting, the direct way, an absence a request produced.
+	 *
+	 * <p>The days of that absence are booked against a balance by the request, so the way to change
+	 * it is the request: cancel it, and ask again. Whoever decided it is the one it goes back to.
+	 */
+	static ApiException requestBacked() {
+		return ApiException.conflict("error.timeOff.requestBacked",
+				details(TimePolicy.LockReason.REQUEST_BACKED, TimePolicy.LockHolder.APPROVER,
+						TimePolicy.LockRemedy.CANCEL_REQUEST));
+	}
+
 	private static Map<String, String> details(TimePolicy.LockReason reason, TimePolicy.LockHolder holder,
 			TimePolicy.LockRemedy remedy) {
 		Map<String, String> details = new LinkedHashMap<>();
