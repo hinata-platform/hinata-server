@@ -30,4 +30,21 @@ public class PendingAuthorizationRequest {
 	/** TTL cleanup: Mongo removes a handshake that never completed after 10 min. */
 	@Indexed(expireAfter = "PT10M")
 	private Instant createdAt;
+
+	/**
+	 * When the identity provider's callback took this request. Set instead of deleting the document,
+	 * so a second arrival of the same callback can be told apart from a state nobody ever issued —
+	 * see {@link SsoCallbackReplay}. A consumed request is never loaded again; its payload is dropped.
+	 */
+	private Instant consumedAt;
+
+	/** Hash of the callback that consumed it (state and authorization code), never the values. */
+	private String callbackKey;
+
+	/**
+	 * Where the callback sent the browser — the app link with its handoff code, or the error. Kept for
+	 * the minute in which a duplicate of the same callback may still arrive and must get the same
+	 * answer; the handoff code in it is single-use either way.
+	 */
+	private String replayTarget;
 }

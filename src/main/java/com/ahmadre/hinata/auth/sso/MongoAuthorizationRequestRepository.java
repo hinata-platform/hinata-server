@@ -5,6 +5,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.oauth2.client.web.AuthorizationRequestRepository;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
@@ -70,6 +73,10 @@ public class MongoAuthorizationRequestRepository
 			log.info("SSO authz request lookup MISS (state={}…)", abbreviate(state));
 			return null;
 		}
+		if (stored.getConsumedAt() != null) {
+			log.info("SSO authz request already consumed (state={}…)", abbreviate(state));
+			return null;
+		}
 		return deserialize(stored.getPayload());
 	}
 
@@ -78,7 +85,22 @@ public class MongoAuthorizationRequestRepository
 			HttpServletResponse response) {
 		OAuth2AuthorizationRequest authorizationRequest = loadAuthorizationRequest(request);
 		if (authorizationRequest != null) {
-			removeByState(authorizationRequest.getState());
+			// Marked rather than deleted: a callback that arrives twice must find out that it is the
+			// second, or it is answered with an error that races the first one's success into the
+			// app (SsoCallbackReplay). Only the first to flip the mark gets the request.
+			PendingAuthorizationRequest claimed = mongo.findAndModify(
+					Query.query(Criteria.where("_id").is(authorizationRequest.getState())
+							.and("consumedAt").isNull()),
+					new Update()
+							.set("consumedAt", Instant.now())
+							.set("callbackKey", SsoCallbackReplay.keyOf(request))
+							.unset("payload"),
+					PendingAuthorizationRequest.class);
+			if (claimed == null) {
+				log.info("SSO authz request lost a race to another callback (state={}…)",
+						abbreviate(authorizationRequest.getState()));
+				return null;
+			}
 			log.info("SSO authz request consumed (state={}…)",
 					abbreviate(authorizationRequest.getState()));
 		}
@@ -87,9 +109,7 @@ public class MongoAuthorizationRequestRepository
 
 	private void removeByState(String state) {
 		if (StringUtils.hasText(state)) {
-			mongo.remove(new org.springframework.data.mongodb.core.query.Query(
-					org.springframework.data.mongodb.core.query.Criteria.where("_id").is(state)),
-					PendingAuthorizationRequest.class);
+			mongo.remove(Query.query(Criteria.where("_id").is(state)), PendingAuthorizationRequest.class);
 		}
 	}
 

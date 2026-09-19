@@ -24,10 +24,18 @@ import java.nio.charset.StandardCharsets;
 public class SsoLoginFailureHandler implements AuthenticationFailureHandler {
 
 	private final HinataProperties properties;
+	private final SsoCallbackReplay replay;
 
 	@Override
 	public void onAuthenticationFailure(HttpServletRequest request, HttpServletResponse response,
 			AuthenticationException exception) throws IOException {
+		// A second arrival of a callback that already went through is not a failure: it gets the
+		// first one's answer, or it would race that answer into the app as an error.
+		var replayed = replay.replayFor(request, exception);
+		if (replayed.isPresent()) {
+			response.sendRedirect(replayed.get());
+			return;
+		}
 		Throwable root = exception;
 		while (root.getCause() != null && root.getCause() != root) {
 			root = root.getCause();
@@ -40,6 +48,7 @@ public class SsoLoginFailureHandler implements AuthenticationFailureHandler {
 		String target = webOrigin != null
 				? webOrigin + "/login?ssoError=" + error
 				: properties.getApp().getCallbackScheme() + "://auth-callback?error=" + error;
+		replay.record(request, target);
 		response.sendRedirect(target);
 	}
 

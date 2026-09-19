@@ -43,6 +43,7 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 	private final com.ahmadre.hinata.config.ClientIpResolver clientIpResolver;
 	private final com.ahmadre.hinata.audit.AuditService audit;
 	private final SsoHandoffService handoff;
+	private final SsoCallbackReplay replay;
 
 	@Override
 	public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
@@ -71,6 +72,8 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 		String target = webOrigin != null
 				? webOrigin + "/auth-callback?" + query
 				: properties.getApp().getCallbackScheme() + "://auth-callback?" + query;
+		// Kept for a duplicate of this callback, which must get this answer rather than an error.
+		replay.record(request, target);
 		response.sendRedirect(target);
 	}
 
