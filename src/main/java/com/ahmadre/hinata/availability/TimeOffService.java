@@ -207,12 +207,16 @@ public class TimeOffService {
 
 	private TimeOff change(User viewer, TimeOff item, Patch patch, boolean direct) {
 		User person = users.findById(item.getUserId()).orElse(null);
-		// Only when the type changes, and for the type it changes to: retyping an absence into one
-		// that needs approving is the same walk-around as entering it that way, while editing the
-		// note on an absence that already needs none is nobody's business but the owner's.
+		// When the type changes, and when the absence takes more days than it did: retyping an
+		// absence into one that needs approving, or stretching one entered before approval was
+		// switched on, is the same walk-around as entering it that way. Editing the note, or giving
+		// days back, is nobody's business but the owner's.
 		boolean retyped = patch.typeId() != null ? !patch.typeId().equals(item.getTypeId())
 				: patch.type() != null && item.getTypeId() == null && patch.type() != item.getType();
-		if (direct && retyped) {
+		boolean takesMore = patch.from() != null && patch.from().isBefore(item.getFrom())
+				|| patch.to() != null && patch.to().isAfter(item.getTo())
+				|| Boolean.FALSE.equals(patch.halfDay()) && item.isHalfDay();
+		if (direct && (retyped || takesMore)) {
 			gate().assertDirectEntry(patch.type() != null ? patch.type() : item.getType(),
 					patch.typeId() != null ? patch.typeId() : item.getTypeId(), item.getUserId(), viewer);
 		}

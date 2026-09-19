@@ -508,6 +508,33 @@ class TimeOffRequestIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("vacation entered before approval came in is not stretched past it, only given back")
+	void anEarlierVacationIsNotStretchedPastTheGate() {
+		// Entered by a keeper, which is how vacation gets in once approval is on — and how every
+		// vacation got in before it was switched on.
+		TimeOff earlier = availability.create(keeper, new TimeOffService.Draft(member.getId(), null,
+				vacation.getId(), monday(3), monday(3).plusDays(1), null, null));
+
+		for (TimeOffService.Patch longer : List.of(
+				new TimeOffService.Patch(null, null, null, monday(3).plusDays(4), null, null),
+				new TimeOffService.Patch(null, null, monday(3).minusDays(3), null, null, null))) {
+			ApiException refusal = org.assertj.core.api.Assertions.catchThrowableOfType(ApiException.class,
+					() -> availability.update(member, earlier.getId(), longer));
+			assertThat(refusal.getMessageKey()).isEqualTo("error.timeOff.approvalRequired");
+		}
+
+		// Giving a day back, or changing the note, needs nobody.
+		TimeOff shorter = availability.update(member, earlier.getId(),
+				new TimeOffService.Patch(null, null, null, monday(3), null, "Just Monday"));
+		assertThat(shorter.getTo()).isEqualTo(monday(3));
+		assertThat(shorter.getNote()).isEqualTo("Just Monday");
+		// A keeper may still stretch it: entering absences for others is the job.
+		assertThat(availability.update(keeper, earlier.getId(),
+				new TimeOffService.Patch(null, null, null, monday(3).plusDays(2), null, null)).getTo())
+				.isEqualTo(monday(3).plusDays(2));
+	}
+
+	@Test
 	@DisplayName("an absence from a request knows it, and changes only through the request")
 	void anAbsenceFromARequestChangesOnlyThroughIt() {
 		TimeOffRequest filed = requests.submit(member, week(3));
