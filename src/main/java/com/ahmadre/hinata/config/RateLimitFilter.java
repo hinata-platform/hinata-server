@@ -47,6 +47,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
 	private final Map<String, Bucket> apiBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> authBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> mcpBuckets = new ConcurrentHashMap<>();
+	private final Map<String, Bucket> ssoBuckets = new ConcurrentHashMap<>();
 
 	public RateLimitFilter(HinataProperties properties,
 			com.ahmadre.hinata.auth.SecurityPolicy securityPolicy,
@@ -87,6 +88,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
 		else if (uri.startsWith("/api/v1/auth/") && !PUBLIC_AUTH_LOOKUPS.contains(uri)) {
 			bucket = authBuckets.computeIfAbsent(ip,
 					k -> newBucket(properties.getRateLimit().getAuthPerMinute()));
+		}
+		// The other sign-in door: the redirect that starts a single sign-on and the callback the
+		// identity provider comes back to. Anybody can reach the callback with a state and any
+		// code, and answering the duplicate of one holds a request thread for a moment — on the
+		// general budget that is three hundred parked threads a minute from one address.
+		else if (uri.startsWith("/login/oauth2/code/") || uri.startsWith("/oauth2/authorization/")
+				|| uri.startsWith("/login/saml2/")) {
+			bucket = ssoBuckets.computeIfAbsent(ip,
+					k -> newBucket(properties.getRateLimit().getSsoPerMinute()));
 		}
 		else {
 			bucket = apiBuckets.computeIfAbsent(ip,

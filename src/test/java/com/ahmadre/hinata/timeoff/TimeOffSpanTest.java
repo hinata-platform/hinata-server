@@ -125,19 +125,4 @@ class TimeOffSpanTest {
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.spanTooLong");
 	}
-
-	@Test
-	@DisplayName("a portion outside a day is refused rather than clamped")
-	void aPortionHasToBePartOfADay() {
-		assertThat(TimeOffSpan.Portion.HALF.milliDays(null)).isEqualTo(DAY / 2);
-		assertThat(TimeOffSpan.Portion.FULL.milliDays(null)).isEqualTo(DAY);
-		assertThat(TimeOffSpan.Portion.FRACTION.milliDays(375)).isEqualTo(375);
-
-		assertThatThrownBy(() -> TimeOffSpan.Portion.FRACTION.milliDays(DAY + 1))
-				.isInstanceOf(ApiException.class)
-				.hasMessageContaining("error.timeOff.portionInvalid");
-		assertThatThrownBy(() -> TimeOffSpan.Portion.FRACTION.milliDays(0))
-				.isInstanceOf(ApiException.class)
-				.hasMessageContaining("error.timeOff.portionInvalid");
-	}
 }

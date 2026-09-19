@@ -59,8 +59,11 @@ import java.util.List;
 // because the overlap is two ranges — `to >= from AND from <= to` — and an index that carried
 // only one of them would bound one end and walk that approver's whole history for the other.
 @CompoundIndex(name = "approver_status_to_from", def = "{'approverIds': 1, 'status': 1, 'to': 1, 'from': 1}")
-// The same question for a keeper, who asks it of everybody.
-@CompoundIndex(name = "status_from_to", def = "{'status': 1, 'from': 1, 'to': 1}")
+// The same question for a keeper, who asks it of everybody — and in the same key order, which
+// this one had backwards: bounded on `from`, the read walks every live request that ever started
+// before the end of the window, oldest first, and grows with the history. Bounded on `to` it
+// walks only what is still running or still ahead.
+@CompoundIndex(name = "status_to_from", def = "{'status': 1, 'to': 1, 'from': 1}")
 // § 9 BUrlG: one person's approved leave touching a span. Both ends again, and for the same
 // reason as above.
 @CompoundIndex(name = "user_status_to_from", def = "{'userId': 1, 'status': 1, 'to': 1, 'from': 1}")

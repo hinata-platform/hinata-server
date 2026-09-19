@@ -302,6 +302,15 @@ public class HinataProperties {
 		@Min(3)
 		private int authPerMinute = 10;
 		/**
+		 * Requests per minute per client IP for the browser redirects of a single sign-on: the one
+		 * that starts the handshake and the one the identity provider comes back to. Its own budget
+		 * because a whole office behind one address signs in through it — the password endpoints'
+		 * ten a minute would turn a Monday morning into a queue — while the general three hundred
+		 * is more than a door needs.
+		 */
+		@Min(6)
+		private int ssoPerMinute = 60;
+		/**
 		 * Requests per minute per client IP for the MCP endpoint. Kept on its own
 		 * budget so AI-client traffic can neither exhaust nor be exhausted by the
 		 * general API bucket.

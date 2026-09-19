@@ -44,11 +44,19 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class SsoCallbackReplay {
 
-	/** How long after the first arrival a duplicate is still answered like it. */
-	static final Duration WINDOW = Duration.ofSeconds(60);
+	/**
+	 * How long after the first arrival a duplicate is still answered like it. Seconds, because that
+	 * is how far apart two deliveries of one callback are; a minute is long enough for a URL out of
+	 * a proxy log to be worth replaying.
+	 */
+	static final Duration WINDOW = Duration.ofSeconds(20);
 
-	/** How long a duplicate waits for the first arrival to have its answer. */
-	static final Duration WAIT = Duration.ofSeconds(15);
+	/**
+	 * How long a duplicate waits for the first arrival to have its answer. Short on purpose: the
+	 * wait holds a request thread, and a callback endpoint is reachable by anybody. Longer than the
+	 * round trip to a provider's token endpoint takes, and no longer.
+	 */
+	static final Duration WAIT = Duration.ofSeconds(3);
 
 	private static final Duration POLL = Duration.ofMillis(150);
 
@@ -115,10 +123,25 @@ public class SsoCallbackReplay {
 					|| first.getConsumedAt().isBefore(clock.instant().minus(WINDOW))) {
 				return Optional.empty();
 			}
+			if (first.getReplayedAt() != null) {
+				// Somebody already got this answer. It carried a single-use handoff code, so there
+				// is nothing left here to give — and nothing to wait for either.
+				return Optional.empty();
+			}
 			if (first.getReplayTarget() != null) {
+				// Taken rather than read: the answer goes out once, to whichever duplicate claims
+				// it first, and the document keeps no copy of the code afterwards.
+				PendingAuthorizationRequest claimed = mongo.findAndModify(
+						Query.query(Criteria.where("_id").is(state).and("callbackKey").is(key)
+								.and("replayTarget").ne(null)),
+						new Update().unset("replayTarget").set("replayedAt", clock.instant()),
+						PendingAuthorizationRequest.class);
+				if (claimed == null || claimed.getReplayTarget() == null) {
+					return Optional.empty();
+				}
 				log.info("SSO callback arrived twice; answering the second like the first (state={}…)",
 						state.length() <= 8 ? state : state.substring(0, 8));
-				return Optional.of(first.getReplayTarget());
+				return Optional.of(claimed.getReplayTarget());
 			}
 			if (!clock.instant().isBefore(deadline)) {
 				return Optional.empty();

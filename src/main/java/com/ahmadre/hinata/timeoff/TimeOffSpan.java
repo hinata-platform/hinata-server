@@ -3,8 +3,6 @@ package com.ahmadre.hinata.timeoff;
 import com.ahmadre.hinata.common.ApiException;
 
 import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -43,49 +41,13 @@ public final class TimeOffSpan {
 	}
 
 	/**
-	 * How much of its day the first or the last day of a span counts for.
-	 *
-	 * <p>Only the edges, because only the edges can be partial: somebody leaves at noon on the
-	 * Friday and comes back at noon on the Wednesday, and everything between is a whole day.
-	 */
-	public enum Portion {
-
-		/** The whole day. */
-		FULL,
-
-		/** Half of it — a morning or an afternoon. */
-		HALF,
-
-		/** Some other part, in thousandths, for types whose rules allow one. */
-		FRACTION;
-
-		/**
-		 * What this portion is worth, with [fraction] used only by {@link #FRACTION} — and only
-		 * when it is a sensible part of a day.
-		 */
-		public int milliDays(Integer fraction) {
-			return switch (this) {
-				case FULL -> DAY;
-				case HALF -> DAY / 2;
-				case FRACTION -> {
-					if (fraction == null || fraction <= 0 || fraction > DAY) {
-						throw ApiException.badRequest("error.timeOff.portionInvalid");
-					}
-					yield fraction;
-				}
-			};
-		}
-	}
-
-	/**
 	 * The breakdown of a span: what it costs, and enough of why for a person to read it back.
 	 *
 	 * <p>[workingDays] and [holidays] exist so the form can say "seven working days, one public
 	 * holiday" rather than only a total. A number on its own invites the suspicion that something
 	 * was miscounted; the same number beside its reason does not.
 	 */
-	public record Result(int milliDays, int workingDays, int holidays, int daysOff,
-			List<LocalDate> countedDays) {
+	public record Result(int milliDays, int workingDays, int holidays, int daysOff) {
 	}
 
 	/**
@@ -107,7 +69,6 @@ public final class TimeOffSpan {
 		int workingDays = 0;
 		int holidayCount = 0;
 		int off = 0;
-		List<LocalDate> counted = new ArrayList<>();
 		for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
 			if (!working.test(day)) {
 				off++;
@@ -134,8 +95,7 @@ public final class TimeOffSpan {
 			}
 			total += worth;
 			workingDays++;
-			counted.add(day);
 		}
-		return new Result(total, workingDays, holidayCount, off, List.copyOf(counted));
+		return new Result(total, workingDays, holidayCount, off);
 	}
 }

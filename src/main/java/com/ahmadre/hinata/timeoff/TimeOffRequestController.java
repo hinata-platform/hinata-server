@@ -65,6 +65,22 @@ public class TimeOffRequestController {
 			boolean balanceShort, boolean shortNotice, int clashes, List<EventResponse> history,
 			Instant createdAt, Instant updatedAt) {
 
+		/**
+		 * A row of a list: everything a card draws, and no history. A waiting request keeps up to
+		 * fifty steps, and a hundred rows of them is half a megabyte of story no list tells — the
+		 * sheet that does tell it reads the request by its id.
+		 */
+		static RequestResponse summary(TimeOffRequestService.View view) {
+			RequestResponse full = from(view);
+			return new RequestResponse(full.id(), full.userId(), full.personName(), full.typeId(),
+					full.typeKey(), full.typeSystemKey(), full.from(), full.to(),
+					full.firstDayMilliDays(), full.lastDayMilliDays(), full.milliDays(),
+					full.workingDays(), full.holidays(), full.note(), full.status(),
+					full.approverIds(), full.decidedBy(), full.decidedAt(), full.decisionNote(),
+					full.substituteId(), full.timeOffId(), full.balanceShort(), full.shortNotice(),
+					full.clashes(), List.of(), full.createdAt(), full.updatedAt());
+		}
+
 		static RequestResponse from(TimeOffRequestService.View view) {
 			TimeOffRequest request = view.request();
 			return new RequestResponse(request.getId(), request.getUserId(), view.personName(),
@@ -160,7 +176,7 @@ public class TimeOffRequestController {
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
 		return requests.mine(currentUser.require(), status(status), year, page, size)
-				.map(RequestResponse::from);
+				.map(RequestResponse::summary);
 	}
 
 	/** What the caller has to decide. */
@@ -169,7 +185,7 @@ public class TimeOffRequestController {
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
 		return requests.inbox(currentUser.require(), status(status), page, size)
-				.map(RequestResponse::from);
+				.map(RequestResponse::summary);
 	}
 
 	/**

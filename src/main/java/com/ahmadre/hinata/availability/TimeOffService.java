@@ -159,7 +159,7 @@ public class TimeOffService {
 	public TimeOff create(User viewer, Draft draft) {
 		User person = access.requireKeeper(viewer, draft.userId());
 		gate().assertDirectEntry(draft.type(), draft.typeId(), person.getId(), viewer);
-		return enter(viewer, person, draft);
+		return enter(viewer, person, draft, null);
 	}
 
 	/**
@@ -167,15 +167,11 @@ public class TimeOffService {
 	 *
 	 * <p>For a caller that has already settled the question its own way — today that is an
 	 * approved request, which decided who may have these days before it got here, and whose
-	 * decider is a lead rather than somebody who keeps absences. It still goes through every rule
-	 * about the absence itself: the catalogue, the window, the half day, the note, how far from
-	 * today it may sit and how many one year may hold.
+	 * decider is a lead rather than somebody who keeps absences; [requestId] names it, and is null
+	 * for the direct road. It still goes through every rule about the absence itself: the
+	 * catalogue, the window, the half day, the note, how far from today it may sit and how many
+	 * one year may hold.
 	 */
-	public TimeOff enter(User actor, User person, Draft draft) {
-		return enter(actor, person, draft, null);
-	}
-
-	/** {@link #enter(User, User, Draft)}, for the absence an approved request [requestId] earned. */
 	public TimeOff enter(User actor, User person, Draft draft, String requestId) {
 		TimeOff item = TimeOff.builder().userId(person.getId()).createdBy(actor.getId())
 				.requestId(requestId).build();
@@ -194,7 +190,28 @@ public class TimeOffService {
 	public TimeOff update(User viewer, String id, Patch patch) {
 		TimeOff item = writable(viewer, id);
 		gate().assertDirectChange(item, viewer);
-		return change(viewer, item, patch, true);
+		assertMayRetypeOrStretch(viewer, item, patch);
+		return change(viewer, item, patch);
+	}
+
+	/**
+	 * Whether this change may be made without anybody deciding it.
+	 *
+	 * <p>Asked when the type changes, and when the absence takes more days than it had: retyping an
+	 * absence into one that needs approving, or stretching one entered before approval was switched
+	 * on, is the same walk-around as entering it that way. Editing the note, or giving days back, is
+	 * nobody's business but the owner's.
+	 */
+	private void assertMayRetypeOrStretch(User viewer, TimeOff item, Patch patch) {
+		boolean retyped = patch.typeId() != null ? !patch.typeId().equals(item.getTypeId())
+				: patch.type() != null && item.getTypeId() == null && patch.type() != item.getType();
+		boolean takesMore = patch.from() != null && patch.from().isBefore(item.getFrom())
+				|| patch.to() != null && patch.to().isAfter(item.getTo())
+				|| Boolean.FALSE.equals(patch.halfDay()) && item.isHalfDay();
+		if (retyped || takesMore) {
+			gate().assertDirectEntry(patch.type() != null ? patch.type() : item.getType(),
+					patch.typeId() != null ? patch.typeId() : item.getTypeId(), item.getUserId(), viewer);
+		}
 	}
 
 	/**
@@ -202,24 +219,11 @@ public class TimeOffService {
 	 * leave that sickness fell on. The request has settled the question the gate would ask.
 	 */
 	public TimeOff updateForRequest(User actor, String id, Patch patch) {
-		return change(actor, writable(actor, id), patch, false);
+		return change(actor, writable(actor, id), patch);
 	}
 
-	private TimeOff change(User viewer, TimeOff item, Patch patch, boolean direct) {
+	private TimeOff change(User viewer, TimeOff item, Patch patch) {
 		User person = users.findById(item.getUserId()).orElse(null);
-		// When the type changes, and when the absence takes more days than it did: retyping an
-		// absence into one that needs approving, or stretching one entered before approval was
-		// switched on, is the same walk-around as entering it that way. Editing the note, or giving
-		// days back, is nobody's business but the owner's.
-		boolean retyped = patch.typeId() != null ? !patch.typeId().equals(item.getTypeId())
-				: patch.type() != null && item.getTypeId() == null && patch.type() != item.getType();
-		boolean takesMore = patch.from() != null && patch.from().isBefore(item.getFrom())
-				|| patch.to() != null && patch.to().isAfter(item.getTo())
-				|| Boolean.FALSE.equals(patch.halfDay()) && item.isHalfDay();
-		if (direct && (retyped || takesMore)) {
-			gate().assertDirectEntry(patch.type() != null ? patch.type() : item.getType(),
-					patch.typeId() != null ? patch.typeId() : item.getTypeId(), item.getUserId(), viewer);
-		}
 		LocalDate fromBefore = item.getFrom();
 		LocalDate toBefore = item.getTo();
 		apply(item,

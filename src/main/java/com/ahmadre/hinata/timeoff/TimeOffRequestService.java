@@ -165,12 +165,17 @@ public class TimeOffRequestService {
 	 * away then" is the fact § 7 Abs. 1 BUrlG makes the decision turn on.
 	 */
 	public View view(String id, User viewer) {
-		return view(get(id, viewer), viewer);
+		return viewsOf(List.of(get(id, viewer)), viewer, true).values().iterator().next();
 	}
 
-	/** As above for a request already in hand, so a write need not read it back. */
+	/**
+	 * As above for a request already in hand, so a write need not read it back — and without the
+	 * clash count, which the answer to a button press nobody reads twice does not need. For a
+	 * keeper that count is a query across every live request in the organisation; paying it on
+	 * each of six write endpoints was paying it for nothing.
+	 */
 	public View view(TimeOffRequest request, User viewer) {
-		return viewsOf(List.of(request), viewer, true).get(request);
+		return viewsOf(List.of(request), viewer, false).get(request);
 	}
 
 	/**
@@ -181,7 +186,7 @@ public class TimeOffRequestService {
 	 */
 	public Preview preview(User person, Draft draft) {
 		TimeOffType type = types.require(person, draft.typeId());
-		TimeOffSpan.Result span = span(person, type, draft);
+		TimeOffSpan.Result span = span(person, draft);
 		return new Preview(span.milliDays(), span.workingDays(), span.holidays(), span.daysOff(),
 				balanceShort(person, type, draft.from(), span.milliDays()),
 				shortNotice(type, draft.from()));
@@ -293,6 +298,13 @@ public class TimeOffRequestService {
 	 */
 	private Map<TimeOffRequest, Integer> clashesAcross(List<TimeOffRequest> rows, User viewer) {
 		Map<TimeOffRequest, Integer> counts = new IdentityHashMap<>();
+		if (!access.isKeeper(viewer)
+				&& rows.stream().allMatch(row -> row.getUserId().equals(viewer.getId()))) {
+			// Their own requests, read by somebody who decides none: the query below asks which of
+			// the requests *they* may decide touch this span, and a person who decides nothing is
+			// in nobody's approver list. Two round trips for a count that is always zero.
+			return counts;
+		}
 		LocalDate first = rows.stream().map(TimeOffRequest::getFrom).min(LocalDate::compareTo).orElse(null);
 		LocalDate last = rows.stream().map(TimeOffRequest::getTo).max(LocalDate::compareTo).orElse(null);
 		if (first == null || last == null || first.plusDays(CONFLICT_DAYS_MAX - 1L).isBefore(last)) {
@@ -332,25 +344,17 @@ public class TimeOffRequestService {
 			// and the route that takes one is next door.
 			throw ApiException.badRequest("error.timeOff.sickNotRequested");
 		}
-		TimeOffSpan.Result span = span(person, type, draft);
+		TimeOffSpan.Result span = span(person, draft);
 		assertWithinTypeRules(type, span, draft);
 
-		boolean decidesItself = !type.requiresApproval() || type.approverRule() == TimeOffType.ApproverRule.AUTO;
-		Set<String> audience = new LinkedHashSet<>(approvers.of(type, person));
-		if (audience.isEmpty()) {
-			// `of` answers nobody for AUTO on purpose — there is nothing to route. Stored, that
-			// would be a request no inbox can ever find, and an automatic approval that fails for
-			// any reason would leave exactly such a request behind. The administrators are the
-			// floor here as everywhere else.
-			audience = approvers.adminIds();
-			audience.remove(person.getId());
-		}
+		Routing routing = routingFor(type, person);
+		Set<String> audience = routing.audience();
 
 		TimeOffRequest request = TimeOffRequest.builder()
 				.userId(person.getId())
 				.typeId(type.getId())
 				.from(draft.from())
-				.to(draft.to())
+				.to(lastDayOf(draft))
 				.firstDayMilliDays(portion(draft.first()))
 				.lastDayMilliDays(portion(draft.last()))
 				.milliDays(span.milliDays())
@@ -368,7 +372,7 @@ public class TimeOffRequestService {
 		TimeOffRequest saved = requests.save(request);
 		audited(AuditAction.TIME_OFF_REQUEST_SUBMITTED, saved, person);
 
-		if (decidesItself) {
+		if (routing.decidesItself()) {
 			return decideInternally(saved, person, person, TimeOffRequest.Status.APPROVED, null, true, type);
 		}
 		notifications.notifyTimeOffRequested(audience, person.getDisplayName(), "/absences/inbox");
@@ -400,22 +404,18 @@ public class TimeOffRequestService {
 		if (type.getKind() == TimeOffType.Kind.SICK) {
 			throw ApiException.badRequest("error.timeOff.sickNotRequested");
 		}
-		TimeOffSpan.Result span = span(person, type, draft);
+		TimeOffSpan.Result span = span(person, draft);
 		assertWithinTypeRules(type, span, draft);
 
-		boolean decidesItself = !type.requiresApproval() || type.approverRule() == TimeOffType.ApproverRule.AUTO;
-		Set<String> audience = new LinkedHashSet<>(approvers.of(type, person));
-		if (audience.isEmpty()) {
-			audience = approvers.adminIds();
-			audience.remove(person.getId());
-		}
+		Routing routing = routingFor(type, person);
+		Set<String> audience = routing.audience();
 		Set<String> newcomers = new LinkedHashSet<>(audience);
 		newcomers.removeAll(request.getApproverIds());
 		String substituteBefore = request.getSubstituteId();
 
 		request.setTypeId(type.getId());
 		request.setFrom(draft.from());
-		request.setTo(draft.to() == null ? draft.from() : draft.to());
+		request.setTo(lastDayOf(draft));
 		request.setFirstDayMilliDays(portion(draft.first()));
 		request.setLastDayMilliDays(portion(draft.last()));
 		request.setMilliDays(span.milliDays());
@@ -439,7 +439,7 @@ public class TimeOffRequestService {
 		}
 		audited(AuditAction.TIME_OFF_REQUEST_EDITED, saved, person);
 
-		if (decidesItself) {
+		if (routing.decidesItself()) {
 			return decideInternally(saved, person, person, TimeOffRequest.Status.APPROVED, null, true, type);
 		}
 		if (!newcomers.isEmpty()) {
@@ -721,25 +721,50 @@ public class TimeOffRequestService {
 		return returned;
 	}
 
-	/** One leave the sickness fell on: shortened, its days returned, everybody it concerns told. */
+	/**
+	 * One leave the sickness fell on: shortened, its days returned, everybody it concerns told.
+	 *
+	 * <p>What goes back is the difference between what the leave cost and what is left of it —
+	 * never a recount of the sick days at full rate. A half day of leave that somebody fell ill on
+	 * cost half a day, and handing a whole one back would let anybody turn a half day of leave and
+	 * a sick report into vacation out of thin air.
+	 *
+	 * <p>The leave keeps the days before the sickness and loses everything from the first sick day
+	 * on, including whatever lay behind it. Those days go back to the balance rather than staying
+	 * booked on an absence nobody is taking, and they are asked for again — a leave cut in two
+	 * would be a second request nobody filed and nobody decided.
+	 */
 	private int giveBack(TimeOffRequest leave, User person, LocalDate from, LocalDate to) {
 		LocalDate overlapFrom = leave.getFrom().isBefore(from) ? from : leave.getFrom();
 		LocalDate overlapTo = leave.getTo().isAfter(to) ? to : leave.getTo();
-		TimeOffSpan.Result eaten = workingDays.of(person.getId(), overlapFrom, overlapTo,
-				TimeOffSpan.DAY, TimeOffSpan.DAY);
-		if (eaten.milliDays() <= 0) {
+		if (overlapTo.isBefore(overlapFrom)) {
+			return 0;
+		}
+		boolean shorten = overlapFrom.isAfter(leave.getFrom());
+		// What the leave is worth once the sick days come out of it, counted the way it was
+		// counted when it was decided: its own first day portion, and whole days after that.
+		TimeOffSpan.Result rest = shorten
+				? workingDays.of(person.getId(), leave.getFrom(), overlapFrom.minusDays(1),
+						portionOrWhole(leave.getFirstDayMilliDays()), TimeOffSpan.DAY)
+				: null;
+		int give = Math.max(0, leave.milliDays() - (rest == null ? 0 : rest.milliDays()));
+		if (give <= 0) {
 			return 0;
 		}
 		String absenceId = leave.getTimeOffId();
-		boolean shorten = overlapFrom.isAfter(leave.getFrom());
 		String ledgerId = leave.getLedgerId();
 		// The claim first, as everywhere else: the document is written under its version guard
 		// before anything is booked, so a second pass over the same leave finds nothing left to
 		// give back rather than crediting the days twice.
 		if (shorten) {
 			leave.setTo(overlapFrom.minusDays(1));
+			leave.setLastDayMilliDays(null);
+			leave.setMilliDays(rest.milliDays());
+			leave.setWorkingDays(rest.workingDays());
+			leave.setHolidays(rest.holidays());
 		} else {
 			leave.setTimeOffId(null);
+			leave.setMilliDays(0);
 		}
 		leave.setLedgerId(null);
 		leave.record(TimeOffRequest.Event.builder()
@@ -751,7 +776,7 @@ public class TimeOffRequestService {
 		if (ledgerId != null) {
 			TimeOffType type = types.require(person, leave.getTypeId());
 			if (type.countsAgainstBalance()) {
-				book(person, person, type, leave.getFrom(), eaten.milliDays(), leave.getId(), ledgerId);
+				book(person, person, type, leave.getFrom(), give, leave.getId(), ledgerId);
 			}
 		}
 		if (shorten) {
@@ -763,7 +788,7 @@ public class TimeOffRequestService {
 		// were ill" would hand a lead a health fact through a side door (R10, R11).
 		notifications.notifyTimeOffShortened(person, new LinkedHashSet<>(leave.getApproverIds()),
 				person.getDisplayName(), "/absences/requests");
-		return eaten.milliDays();
+		return give;
 	}
 
 	private TimeOffLedgerEntry book(User actor, User person, TimeOffType type, LocalDate on, int milliDays,
@@ -784,13 +809,50 @@ public class TimeOffRequestService {
 				.build());
 	}
 
+	/** A stored day portion, or a whole day where a request named none. */
+	private static int portionOrWhole(Integer milliDays) {
+		return milliDays == null || milliDays <= 0 ? TimeOffSpan.DAY : milliDays;
+	}
+
+	/** Who decides a request for [type] filed by [person], and whether anybody has to. */
+	private record Routing(Set<String> audience, boolean decidesItself) {
+	}
+
+	/**
+	 * Asked when a request is filed and again when it is edited, because an edit may hand it to
+	 * somebody else: a type that needs no approval — or approves automatically — is decided as it
+	 * arrives, and a type whose approvers come to nobody goes to the administrators.
+	 */
+	private Routing routingFor(TimeOffType type, User person) {
+		boolean decidesItself = !type.requiresApproval() || type.approverRule() == TimeOffType.ApproverRule.AUTO;
+		Set<String> audience = new LinkedHashSet<>(approvers.of(type, person));
+		if (audience.isEmpty()) {
+			// `of` answers nobody for AUTO on purpose — there is nothing to route. Stored, that
+			// would be a request no inbox can ever find, and an automatic approval that fails for
+			// any reason would leave exactly such a request behind. The administrators are the
+			// floor here as everywhere else.
+			audience = approvers.adminIds();
+			audience.remove(person.getId());
+		}
+		return new Routing(audience, decidesItself);
+	}
+
 	// ------------------------------------------------------------------ rules
 
-	private TimeOffSpan.Result span(User person, TimeOffType type, Draft draft) {
+	/**
+	 * The day a draft ends on: the one it names, or the day it starts on. A client that asks for a
+	 * single day sends only a start, and a request stored without an end is one no calendar covers,
+	 * no index finds and no approval can book.
+	 */
+	private static LocalDate lastDayOf(Draft draft) {
+		return draft.to() == null ? draft.from() : draft.to();
+	}
+
+	private TimeOffSpan.Result span(User person, Draft draft) {
 		if (draft.from() == null) {
 			throw ApiException.badRequest("error.timeOff.spanInvalid");
 		}
-		LocalDate to = draft.to() == null ? draft.from() : draft.to();
+		LocalDate to = lastDayOf(draft);
 		TimeOffSpan.Result span = workingDays.of(person.getId(), draft.from(), to,
 				portion(draft.first()), portion(draft.last()));
 		if (span.milliDays() <= 0) {

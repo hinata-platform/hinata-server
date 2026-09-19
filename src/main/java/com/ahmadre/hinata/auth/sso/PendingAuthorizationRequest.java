@@ -42,9 +42,13 @@ public class PendingAuthorizationRequest {
 	private String callbackKey;
 
 	/**
-	 * Where the callback sent the browser — the app link with its handoff code, or the error. Kept for
-	 * the minute in which a duplicate of the same callback may still arrive and must get the same
-	 * answer; the handoff code in it is single-use either way.
+	 * Where the callback sent the browser — the app link with its handoff code, or the error. Kept
+	 * for the seconds in which the duplicate of the same callback may still arrive and must get the
+	 * same answer. Handed out exactly once and unset as it goes: the answer carries a handoff code,
+	 * and a callback URL that leaked afterwards must not be able to fetch a second copy of it.
 	 */
 	private String replayTarget;
+
+	/** When the duplicate took the answer, so a third arrival is turned away rather than waiting. */
+	private Instant replayedAt;
 }

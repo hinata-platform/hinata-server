@@ -85,14 +85,29 @@ public class TimeOffApprovers {
 	 * what it may reach. Inventing a second kind of lead for absences would mean two lists to keep
 	 * in step, and the day they disagreed somebody would be approving leave for a team they no
 	 * longer run.
+	 *
+	 * <p>Only teams an administrator or an absence keeper created, though: see below.
 	 */
 	private Set<String> teamLeadsOf(User person) {
 		List<Team> membership = teams.findByMembersUserId(person.getId());
 		Set<String> leads = new LinkedHashSet<>();
 		int seen = 0;
+		Set<String> sanctioned = null;
 		for (Team team : membership) {
 			if (seen++ >= TEAMS_MAX) {
 				break;
+			}
+			// Only a team an administrator or an absence keeper set up counts. Anybody may make a
+			// team and add anybody to it without being asked — that is what teams are for — so a
+			// team whose creator is neither would let one person become the approver of another
+			// person's statutory leave by pressing "new team" and "add member". Where the rule
+			// finds no such team, `of` falls back to the administrators.
+			if (sanctioned == null) {
+				sanctioned = new LinkedHashSet<>(adminIds());
+				sanctioned.addAll(settings.absenceManagers());
+			}
+			if (team.getCreatedBy() == null || !sanctioned.contains(team.getCreatedBy())) {
+				continue;
 			}
 			for (TeamMembership member : team.getMembers()) {
 				if (member.isAdmin()) {

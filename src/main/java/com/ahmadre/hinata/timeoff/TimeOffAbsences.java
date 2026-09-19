@@ -8,8 +8,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
-import java.util.List;
-import java.util.Optional;
 
 /**
  * The absences an approved request leaves behind: written, shortened, taken back.
@@ -30,10 +28,6 @@ public class TimeOffAbsences {
 
 	private final TimeOffService absences;
 	private final TimeOffRepository repository;
-
-	/** An absence as the approval flow needs to see it: when it runs, and nothing else. */
-	public record Span(String id, LocalDate from, LocalDate to, boolean halfDay) {
-	}
 
 	/**
 	 * Writes the absence an approved request earned, and returns its id.
@@ -70,27 +64,5 @@ public class TimeOffAbsences {
 	public void endOn(User actor, String absenceId, LocalDate lastDay) {
 		absences.updateForRequest(actor, absenceId,
 				new TimeOffService.Patch(null, null, null, lastDay, null, null));
-	}
-
-	/** What [absenceId] currently spans, or empty when it is gone. */
-	public Optional<Span> spanOf(String absenceId) {
-		if (absenceId == null || absenceId.isBlank()) {
-			return Optional.empty();
-		}
-		return repository.findById(absenceId)
-				.map(found -> new Span(found.getId(), found.getFrom(), found.getTo(), found.isHalfDay()));
-	}
-
-	/**
-	 * Absences of [userId] that touch [from]–[to] — the § 9 BUrlG lookup.
-	 *
-	 * <p>Overlap is {@code to >= from AND from <= to}, which is the order the {@code user_to_from}
-	 * index is built in, so this is a range read rather than a scan of everything the person was
-	 * ever away for.
-	 */
-	public List<Span> touching(String userId, LocalDate from, LocalDate to) {
-		return repository.findByUserIdAndToGreaterThanEqualAndFromLessThanEqual(userId, from, to).stream()
-				.map(each -> new Span(each.getId(), each.getFrom(), each.getTo(), each.isHalfDay()))
-				.toList();
 	}
 }
