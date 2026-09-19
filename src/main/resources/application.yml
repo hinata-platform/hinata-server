@@ -123,6 +123,7 @@ hinata:
     enabled: ${HINATA_RATE_LIMIT_ENABLED:true}
     api-per-minute: ${HINATA_RATE_LIMIT_API:300}
     auth-per-minute: ${HINATA_RATE_LIMIT_AUTH:10}
+    sso-per-minute: ${HINATA_RATE_LIMIT_SSO:60}
     mcp-per-minute: ${HINATA_RATE_LIMIT_MCP:120}
     max-login-failures: ${HINATA_MAX_LOGIN_FAILURES:5}
     login-block-minutes: ${HINATA_LOGIN_BLOCK_MINUTES:15}
