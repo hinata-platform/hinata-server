@@ -59,6 +59,16 @@ class TimesheetNotificationTest {
 		mail = mock(MailService.class);
 		push = mock(PushService.class);
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
+		// The fan-out reads its audience in one go; every stub above is a `findById`, so this
+		// answers from them rather than making each test repeat itself.
+		lenient().when(users.findAllById(org.mockito.ArgumentMatchers.<Iterable<String>>any()))
+				.thenAnswer(call -> {
+					java.util.List<com.ahmadre.hinata.user.User> found = new java.util.ArrayList<>();
+					for (String id : call.<Iterable<String>>getArgument(0)) {
+						users.findById(id).ifPresent(found::add);
+					}
+					return found;
+				});
 		lenient().when(users.findById(owner.getId())).thenReturn(Optional.of(owner));
 		lenient().when(users.findById(approver.getId())).thenReturn(Optional.of(approver));
 		RichTextService richText = new RichTextService();

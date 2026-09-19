@@ -1105,33 +1105,40 @@ public class NotificationService {
 		Map<Locale, String> titles = new HashMap<>();
 		Map<Locale, String> bodies = new HashMap<>();
 		Map<Locale, String> pushBodies = new HashMap<>();
-		for (String userId : userIds) {
-			if (userId == null) continue;
-			users.findById(userId).filter(User::isActive).ifPresent(user -> {
-				Locale locale = words.localeOf(user);
-				String t = titles.computeIfAbsent(locale, title::of);
-				String b = bodies.computeIfAbsent(locale, body::of);
-				String userLink = linkFor(user, link, linkProjectId, canFollowLink);
-				String eventId = routing.eventFor().apply(user.getId());
-				// The in-app (bell) notification is always recorded; e-mail and push
-				// are gated by the recipient's per-event channel preferences.
-				notifications.save(Notification.builder()
-						.userId(user.getId()).type(type).title(t).body(b).link(userLink).build());
-				NotificationPreferences prefs = prefsOf(user);
-				// In-app notifications keep the relative route; the e-mail button gets
-				// an absolute deep link that the native app intercepts as a
-				// Universal/App Link, straight to the issue.
-				if (prefs.deliversEmail(eventId) && !routing.emailSink().takeOver(user)) {
-					mail.sendNotification(user.getEmail(), mail.subjectPrefix() + t, t, b, appLink(userLink),
-							buttonLabel(locale), localeOf(user), eyebrowKey(type),
-							routing.changeLines().apply(locale));
-				}
-				if (prefs.deliversPush(eventId)) {
-					push.sendToUser(user.getId(), t,
-							pushBodies.computeIfAbsent(locale, pushBody::of), userLink,
-							Map.of("type", type.name()));
-				}
-			});
+		// One read for the whole audience rather than one per recipient: an absence request goes to
+		// every administrator, and a sick report tells the deciders of every leave it shortened, so
+		// this loop runs tens of times for a single click.
+		List<String> wanted = userIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+		if (wanted.isEmpty()) {
+			return;
+		}
+		for (User user : users.findAllById(wanted)) {
+			if (!user.isActive()) {
+				continue;
+			}
+			Locale locale = words.localeOf(user);
+			String t = titles.computeIfAbsent(locale, title::of);
+			String b = bodies.computeIfAbsent(locale, body::of);
+			String userLink = linkFor(user, link, linkProjectId, canFollowLink);
+			String eventId = routing.eventFor().apply(user.getId());
+			// The in-app (bell) notification is always recorded; e-mail and push
+			// are gated by the recipient's per-event channel preferences.
+			notifications.save(Notification.builder()
+					.userId(user.getId()).type(type).title(t).body(b).link(userLink).build());
+			NotificationPreferences prefs = prefsOf(user);
+			// In-app notifications keep the relative route; the e-mail button gets
+			// an absolute deep link that the native app intercepts as a
+			// Universal/App Link, straight to the issue.
+			if (prefs.deliversEmail(eventId) && !routing.emailSink().takeOver(user)) {
+				mail.sendNotification(user.getEmail(), mail.subjectPrefix() + t, t, b, appLink(userLink),
+						buttonLabel(locale), localeOf(user), eyebrowKey(type),
+						routing.changeLines().apply(locale));
+			}
+			if (prefs.deliversPush(eventId)) {
+				push.sendToUser(user.getId(), t,
+						pushBodies.computeIfAbsent(locale, pushBody::of), userLink,
+						Map.of("type", type.name()));
+			}
 		}
 	}
 

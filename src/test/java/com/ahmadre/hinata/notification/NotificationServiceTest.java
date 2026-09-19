@@ -55,6 +55,16 @@ class NotificationServiceTest {
 		push = mock(PushService.class);
 		reach = mock(ProjectReach.class);
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
+		// The fan-out reads its audience in one go; every stub above is a `findById`, so this
+		// answers from them rather than making each test repeat itself.
+		lenient().when(users.findAllById(org.mockito.ArgumentMatchers.<Iterable<String>>any()))
+				.thenAnswer(call -> {
+					java.util.List<com.ahmadre.hinata.user.User> found = new java.util.ArrayList<>();
+					for (String id : call.<Iterable<String>>getArgument(0)) {
+						users.findById(id).ifPresent(found::add);
+					}
+					return found;
+				});
 		service = new NotificationService(notifications, users, mail, push,
 				mock(GatewayService.class), richText, reach,
 				new IssueChangeRenderer(users, mock(SprintRepository.class),

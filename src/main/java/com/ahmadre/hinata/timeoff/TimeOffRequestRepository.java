@@ -66,6 +66,4 @@ public interface TimeOffRequestRepository extends MongoRepository<TimeOffRequest
 	 * record of who was granted what, the same reasoning that keeps approved timesheets.
 	 */
 	long deleteByUserIdAndStatusIn(String userId, Collection<TimeOffRequest.Status> statuses);
-
-	List<TimeOffRequest> findByUserId(String userId);
 }

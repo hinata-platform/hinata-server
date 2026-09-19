@@ -9,6 +9,10 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.notification.Notification;
 import com.ahmadre.hinata.setup.ServerSettings;
+import com.ahmadre.hinata.team.Team;
+import com.ahmadre.hinata.team.TeamMembership;
+import com.ahmadre.hinata.team.TeamRepository;
+import com.ahmadre.hinata.team.TeamRole;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
@@ -90,6 +94,9 @@ class TimeOffRequestIntegrationTest {
 	private SettingsService settings;
 	@Autowired
 	private UserRepository users;
+
+	@Autowired
+	private TeamRepository teams;
 	@Autowired
 	private TimeOffRequestService requests;
 	@Autowired
@@ -324,6 +331,38 @@ class TimeOffRequestIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a team anybody could have made does not make its maker an approver")
+	void onlyASanctionedTeamCarriesApprovalWeight() {
+		vacation.setApproverRule(TimeOffType.ApproverRule.TEAM_LEAD);
+		typeRepository.save(vacation);
+		// Any user may make a team and add anybody to it without being asked. If that were enough,
+		// this is all it would take to become the person who decides somebody else's leave.
+		User outsider = user("mallory", Role.MEMBER);
+		teams.save(Team.builder().key("SELF").name("Self made").createdBy(outsider.getId())
+				.members(List.of(
+						TeamMembership.builder().userId(outsider.getId()).role(TeamRole.ADMIN).build(),
+						TeamMembership.builder().userId(member.getId()).role(TeamRole.MEMBER).build()))
+				.build());
+
+		TimeOffRequest filed = requests.submit(member, week(3));
+
+		assertThat(filed.getApproverIds()).doesNotContain(outsider.getId());
+		assertThat(filed.getApproverIds()).containsExactlyInAnyOrder(admin.getId(), secondAdmin.getId());
+		assertThatThrownBy(() -> requests.approve(filed.getId(), null, outsider))
+				.isInstanceOf(ApiException.class);
+
+		// The same team, set up by an administrator, does carry the weight.
+		teams.deleteAll();
+		teams.save(Team.builder().key("REAL").name("Kept by the office").createdBy(admin.getId())
+				.members(List.of(
+						TeamMembership.builder().userId(outsider.getId()).role(TeamRole.ADMIN).build(),
+						TeamMembership.builder().userId(member.getId()).role(TeamRole.MEMBER).build()))
+				.build());
+
+		assertThat(requests.submit(member, week(4)).getApproverIds()).containsExactly(outsider.getId());
+	}
+
+	@Test
 	@DisplayName("a rejection without a reason is refused (§ 7 Abs. 1 BUrlG)")
 	void rejectingNeedsAReason() {
 		TimeOffRequest filed = requests.submit(member, week(3));
@@ -505,6 +544,80 @@ class TimeOffRequestIntegrationTest {
 				new TimeOffService.Patch(TimeOff.Type.VACATION, null, null, null, null, null)))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.approvalRequired");
+	}
+
+	@Test
+	@DisplayName("§ 9 BUrlG: half a day of leave gives half a day back, not a whole one")
+	void sicknessGivesBackWhatTheLeaveCost() {
+		// Half a day off next Monday: 500 milliDays, not 1000.
+		TimeOffRequest filed = requests.submit(member, new TimeOffRequestService.Draft(
+				vacation.getId(), monday(1), monday(1), 500, null, null, null));
+		requests.approve(filed.getId(), null, admin);
+		assertThat(filed.milliDays()).isEqualTo(DAY / 2);
+		assertThat(remaining()).isEqualTo(20 * DAY - DAY / 2);
+
+		TimeOffRequestService.Sick reported = requests.reportSick(member, monday(1), monday(1), false, null);
+
+		// Exactly what it cost comes back. Counting the sick day at full rate would hand the
+		// person half a day of leave they never had — twenty-five cycles a day of free vacation.
+		assertThat(reported.returnedMilliDays()).isEqualTo(DAY / 2);
+		assertThat(remaining()).isEqualTo(20 * DAY);
+	}
+
+	@Test
+	@DisplayName("§ 9 BUrlG: sickness in the middle takes the rest of the leave with it")
+	void sicknessInsideLeaveReturnsEverythingBehindIt() {
+		TimeOffRequest filed = requests.submit(member, draft(monday(1), monday(1).plusDays(4)));
+		requests.approve(filed.getId(), null, admin);
+		assertThat(remaining()).isEqualTo(15 * DAY);
+
+		// Ill on the Wednesday alone. Thursday and Friday were leave behind it; the leave is cut
+		// at the Tuesday, so those two days go back rather than staying booked on days off
+		// nobody is taking.
+		TimeOffRequestService.Sick reported =
+				requests.reportSick(member, monday(1).plusDays(2), monday(1).plusDays(2), false, null);
+
+		assertThat(reported.returnedMilliDays()).isEqualTo(3 * DAY);
+		assertThat(remaining()).isEqualTo(18 * DAY);
+		TimeOffRequest shortened = requestRepository.findById(filed.getId()).orElseThrow();
+		assertThat(shortened.getTo()).isEqualTo(monday(1).plusDays(1));
+		assertThat(shortened.milliDays()).isEqualTo(2 * DAY);
+		assertThat(absences.findById(shortened.getTimeOffId()).orElseThrow().getTo())
+				.isEqualTo(monday(1).plusDays(1));
+	}
+
+	@Test
+	@DisplayName("only the person who asked withdraws, and only while nobody has decided")
+	void onlyTheOwnerWithdrawsAWaitingRequest() {
+		TimeOffRequest filed = requests.submit(member, week(3));
+
+		// Somebody else's request is not theirs to take back, and not theirs to find either.
+		for (User stranger : List.of(keeper, admin)) {
+			assertThatThrownBy(() -> requests.withdraw(filed.getId(), stranger))
+					.isInstanceOf(ApiException.class)
+					.hasMessageContaining("error.notFound");
+		}
+
+		TimeOffRequest withdrawn = requests.withdraw(filed.getId(), member);
+		assertThat(withdrawn.getStatus()).isEqualTo(TimeOffRequest.Status.WITHDRAWN);
+		assertThat(absences.count()).isZero();
+		assertThat(remaining()).isEqualTo(20 * DAY);
+
+		// And once it is out of the queue there is nothing left to take back.
+		assertThatThrownBy(() -> requests.withdraw(filed.getId(), member))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.timeOff.requestDecided");
+	}
+
+	@Test
+	@DisplayName("a day portion outside a day is refused rather than counted")
+	void aPortionHasToBePartOfADay() {
+		for (Integer portion : java.util.Arrays.asList(0, -1, TimeOffSpan.DAY + 1)) {
+			assertThatThrownBy(() -> requests.submit(member, new TimeOffRequestService.Draft(
+					vacation.getId(), monday(2), monday(2), portion, null, null, null)))
+					.isInstanceOf(ApiException.class)
+					.hasMessageContaining("error.timeOff.portionInvalid");
+		}
 	}
 
 	@Test
