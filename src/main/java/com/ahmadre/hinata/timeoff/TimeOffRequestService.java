@@ -7,6 +7,7 @@ import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -48,6 +49,7 @@ import java.util.stream.Collectors;
  * permission (R11). It is also where § 9 BUrlG lives: sickness that falls inside approved leave
  * gives the leave back.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class TimeOffRequestService {
@@ -60,6 +62,9 @@ public class TimeOffRequestService {
 
 	/** How many other people a clash line will name before it stops counting them out. */
 	static final int CONFLICTS_MAX = 50;
+
+	/** How many overlapping leaves one sick report will give back before it stops looking. */
+	static final int OVERLAP_MAX = 20;
 
 	private final TimeOffRequestRepository requests;
 	private final TimeOffTypeService types;
@@ -330,8 +335,16 @@ public class TimeOffRequestService {
 		TimeOffSpan.Result span = span(person, type, draft);
 		assertWithinTypeRules(type, span, draft);
 
-		Set<String> audience = new LinkedHashSet<>(approvers.of(type, person));
 		boolean decidesItself = !type.requiresApproval() || type.approverRule() == TimeOffType.ApproverRule.AUTO;
+		Set<String> audience = new LinkedHashSet<>(approvers.of(type, person));
+		if (audience.isEmpty()) {
+			// `of` answers nobody for AUTO on purpose — there is nothing to route. Stored, that
+			// would be a request no inbox can ever find, and an automatic approval that fails for
+			// any reason would leave exactly such a request behind. The administrators are the
+			// floor here as everywhere else.
+			audience = approvers.adminIds();
+			audience.remove(person.getId());
+		}
 
 		TimeOffRequest request = TimeOffRequest.builder()
 				.userId(person.getId())
@@ -356,7 +369,7 @@ public class TimeOffRequestService {
 		audited(AuditAction.TIME_OFF_REQUEST_SUBMITTED, saved, person);
 
 		if (decidesItself) {
-			return decideInternally(saved, person, person, TimeOffRequest.Status.APPROVED, null, true);
+			return decideInternally(saved, person, person, TimeOffRequest.Status.APPROVED, null, true, type);
 		}
 		notifications.notifyTimeOffRequested(audience, person.getDisplayName(), "/absences/inbox");
 		notifySubstitute(saved, person);
@@ -367,7 +380,7 @@ public class TimeOffRequestService {
 	public TimeOffRequest approve(String id, String note, User decider) {
 		TimeOffRequest request = decidable(id, decider);
 		User person = personOf(request);
-		return decideInternally(request, person, decider, TimeOffRequest.Status.APPROVED, note, false);
+		return decideInternally(request, person, decider, TimeOffRequest.Status.APPROVED, note, false, null);
 	}
 
 	/**
@@ -384,7 +397,7 @@ public class TimeOffRequestService {
 		}
 		TimeOffRequest request = decidable(id, decider);
 		User person = personOf(request);
-		return decideInternally(request, person, decider, TimeOffRequest.Status.REJECTED, reason, false);
+		return decideInternally(request, person, decider, TimeOffRequest.Status.REJECTED, reason, false, null);
 	}
 
 	/** Takes a request back, before anybody has decided it. Only the person who made it. */
@@ -423,11 +436,15 @@ public class TimeOffRequestService {
 			throw ApiException.forbidden("error.timeOff.cancelNotYours");
 		}
 		User person = personOf(request);
-		absences.remove(actor, request.getTimeOffId());
-		returnDays(request, person, actor, request.milliDays());
+		// The claim first, for the same reason as a decision: two cancellations that both reversed
+		// before either saved would credit the days back twice.
+		String absenceId = request.getTimeOffId();
 		request.setTimeOffId(null);
 		TimeOffRequest saved = transition(request, actor, TimeOffRequest.Status.CANCELLED, note,
 				AuditAction.TIME_OFF_REQUEST_CANCELLED);
+		absences.remove(actor, absenceId);
+		returnDays(saved, person, actor, saved.milliDays());
+		requests.save(saved);
 		notifications.notifyTimeOffCancelled(actor.getId().equals(person.getId()) ? null : person,
 				othersOf(saved, actor), person.getDisplayName(), "/absences/requests");
 		return saved;
@@ -477,23 +494,29 @@ public class TimeOffRequestService {
 	/**
 	 * The one place a request changes hands.
 	 *
-	 * <p>Approving writes the absence and the booking before the status moves, so a failure
-	 * anywhere in there leaves a request still waiting rather than a request marked approved with
-	 * nothing behind it.
+	 * <p><b>The claim comes first.</b> The status moves under the version guard before anything is
+	 * written because of it, so two people pressing approve in the same second produce one winner
+	 * and one 409 — and the loser writes nothing. The other order reads better and is wrong: both
+	 * would pass the status check, both would enter an absence and book a week off a balance, and
+	 * only then would one of the saves fail. A balance that lost two weeks for one is a balance
+	 * nobody can be asked to trust, and there is no transaction here to undo the second.
+	 *
+	 * <p>The price is the other end: a claim that succeeds and a write that then fails would leave
+	 * a request marked approved with nothing behind it. That one is compensated — the claim is put
+	 * back and the refusal travels on — which is possible precisely because only one thread ever
+	 * gets there.
 	 */
 	private TimeOffRequest decideInternally(TimeOffRequest request, User person, User decider,
-			TimeOffRequest.Status target, String note, boolean automatic) {
+			TimeOffRequest.Status target, String note, boolean automatic, TimeOffType known) {
+		TimeOffType type = null;
 		if (target == TimeOffRequest.Status.APPROVED) {
-			TimeOffType type = types.require(person, request.getTypeId());
+			type = known != null ? known : types.require(person, request.getTypeId());
+			// Before the claim: a refusal is not a decision, and a request refused for a balance
+			// has to stay exactly where it was.
 			assertBalanceCovers(person, type, request);
-			String absenceId = absences.enter(decider, person, type.getId(), request.getFrom(), request.getTo(),
-					isHalfDay(request), request.getNote());
-			request.setTimeOffId(absenceId);
-			if (type.countsAgainstBalance() && request.milliDays() > 0) {
-				request.setLedgerId(book(decider, person, type, request.getFrom(), -request.milliDays(),
-						request.getId(), null).getId());
-			}
 		}
+		TimeOffRequest.Status before = request.getStatus();
+		int steps = request.getHistory() == null ? 0 : request.getHistory().size();
 		request.setDecidedBy(decider.getId());
 		request.setDecidedAt(clock.instant());
 		request.setDecisionNote(note(note));
@@ -501,6 +524,22 @@ public class TimeOffRequestService {
 				note, target == TimeOffRequest.Status.APPROVED
 						? AuditAction.TIME_OFF_REQUEST_APPROVED
 						: AuditAction.TIME_OFF_REQUEST_REJECTED);
+		if (target == TimeOffRequest.Status.APPROVED) {
+			try {
+				String absenceId = absences.enter(decider, person, type.getId(), saved.getFrom(), saved.getTo(),
+						isHalfDay(saved), saved.getNote());
+				saved.setTimeOffId(absenceId);
+				if (type.countsAgainstBalance() && saved.milliDays() > 0) {
+					saved.setLedgerId(book(decider, person, type, saved.getFrom(), -saved.milliDays(),
+							saved.getId(), null).getId());
+				}
+				saved = requests.save(saved);
+			}
+			catch (RuntimeException failed) {
+				unclaim(saved, before, steps);
+				throw failed;
+			}
+		}
 		if (automatic) {
 			notifications.notifyTimeOffAutoApproved(person, "/absences/requests");
 			notifySubstitute(saved, person);
@@ -515,6 +554,34 @@ public class TimeOffRequestService {
 			}
 		}
 		return saved;
+	}
+
+	/**
+	 * Puts a claim back when what it was claimed for could not be written.
+	 *
+	 * <p>The step is dropped rather than followed by a second one: it did not happen, and a history
+	 * that said "approved, then un-approved" would invite the question of what was approved. Best
+	 * effort — if even this write fails there is nothing further to try, and a request stuck as
+	 * approved with no absence behind it is visible to the person and to whoever decided it.
+	 */
+	private void unclaim(TimeOffRequest request, TimeOffRequest.Status before, int steps) {
+		try {
+			request.setStatus(before);
+			request.setDecidedBy(null);
+			request.setDecidedAt(null);
+			request.setDecisionNote(null);
+			if (request.getHistory() != null) {
+				while (request.getHistory().size() > steps) {
+					request.getHistory().removeLast();
+				}
+			}
+			request.setUpdatedAt(clock.instant());
+			requests.save(request);
+		}
+		catch (RuntimeException lost) {
+			log.warn("[timeoff] could not put back the claim on request {}: {}",
+					request.getId(), lost.toString());
+		}
 	}
 
 	/** Moves the status, records the step, and answers a race with 409 rather than a second write. */
@@ -562,34 +629,66 @@ public class TimeOffRequestService {
 		List<TimeOffRequest> approved = requests.findByUserIdAndStatusAndToGreaterThanEqualAndFromLessThanEqual(
 				person.getId(), TimeOffRequest.Status.APPROVED, from, to);
 		int returned = 0;
-		for (TimeOffRequest leave : approved) {
-			LocalDate overlapFrom = leave.getFrom().isBefore(from) ? from : leave.getFrom();
-			LocalDate overlapTo = leave.getTo().isAfter(to) ? to : leave.getTo();
-			TimeOffSpan.Result eaten = workingDays.of(person.getId(), overlapFrom, overlapTo,
-					TimeOffSpan.DAY, TimeOffSpan.DAY);
-			if (eaten.milliDays() <= 0) {
-				continue;
+		// Normally none or one. Bounded anyway: this runs inside a report nothing may refuse, and
+		// a loop whose length comes from stored data is a loop somebody can make long.
+		for (TimeOffRequest leave : approved.stream().limit(OVERLAP_MAX).toList()) {
+			try {
+				returned += giveBack(leave, person, from, to);
 			}
-			returnDays(leave, person, person, eaten.milliDays());
-			returned += eaten.milliDays();
-			if (overlapFrom.isAfter(leave.getFrom())) {
-				absences.endOn(person, leave.getTimeOffId(), overlapFrom.minusDays(1));
-				leave.setTo(overlapFrom.minusDays(1));
-			} else {
-				absences.remove(person, leave.getTimeOffId());
-				leave.setTimeOffId(null);
+			catch (RuntimeException failed) {
+				// § 5 EFZG knows a notification, not a permission: there is no path through here
+				// that may answer no. A give-back that could not be written is a balance somebody
+				// has to correct by hand, which is a smaller wrong than a refused sick report.
+				log.warn("[timeoff] could not give back leave {} for a sick report: {}",
+						leave.getId(), failed.toString());
 			}
-			leave.record(TimeOffRequest.Event.builder()
-					.at(clock.instant()).from(TimeOffRequest.Status.APPROVED)
-					.to(TimeOffRequest.Status.APPROVED).build());
-			leave.setUpdatedAt(clock.instant());
-			requests.save(leave);
-			// The deciders learn that the leave got shorter and never why: "shortened because they
-			// were ill" would hand a lead a health fact through a side door (R10, R11).
-			notifications.notifyTimeOffShortened(person, new LinkedHashSet<>(leave.getApproverIds()),
-					person.getDisplayName(), "/absences/requests");
 		}
 		return returned;
+	}
+
+	/** One leave the sickness fell on: shortened, its days returned, everybody it concerns told. */
+	private int giveBack(TimeOffRequest leave, User person, LocalDate from, LocalDate to) {
+		LocalDate overlapFrom = leave.getFrom().isBefore(from) ? from : leave.getFrom();
+		LocalDate overlapTo = leave.getTo().isAfter(to) ? to : leave.getTo();
+		TimeOffSpan.Result eaten = workingDays.of(person.getId(), overlapFrom, overlapTo,
+				TimeOffSpan.DAY, TimeOffSpan.DAY);
+		if (eaten.milliDays() <= 0) {
+			return 0;
+		}
+		String absenceId = leave.getTimeOffId();
+		boolean shorten = overlapFrom.isAfter(leave.getFrom());
+		String ledgerId = leave.getLedgerId();
+		// The claim first, as everywhere else: the document is written under its version guard
+		// before anything is booked, so a second pass over the same leave finds nothing left to
+		// give back rather than crediting the days twice.
+		if (shorten) {
+			leave.setTo(overlapFrom.minusDays(1));
+		} else {
+			leave.setTimeOffId(null);
+		}
+		leave.setLedgerId(null);
+		leave.record(TimeOffRequest.Event.builder()
+				.at(clock.instant()).from(TimeOffRequest.Status.APPROVED)
+				.to(TimeOffRequest.Status.APPROVED).build());
+		leave.setUpdatedAt(clock.instant());
+		requests.save(leave);
+
+		if (ledgerId != null) {
+			TimeOffType type = types.require(person, leave.getTypeId());
+			if (type.countsAgainstBalance()) {
+				book(person, person, type, leave.getFrom(), eaten.milliDays(), leave.getId(), ledgerId);
+			}
+		}
+		if (shorten) {
+			absences.endOn(person, absenceId, overlapFrom.minusDays(1));
+		} else {
+			absences.remove(person, absenceId);
+		}
+		// The deciders learn that the leave got shorter and never why: "shortened because they
+		// were ill" would hand a lead a health fact through a side door (R10, R11).
+		notifications.notifyTimeOffShortened(person, new LinkedHashSet<>(leave.getApproverIds()),
+				person.getDisplayName(), "/absences/requests");
+		return eaten.milliDays();
 	}
 
 	private TimeOffLedgerEntry book(User actor, User person, TimeOffType type, LocalDate on, int milliDays,
@@ -717,10 +816,17 @@ public class TimeOffRequestService {
 		return request;
 	}
 
+	/**
+	 * Whether [viewer] may read this request: the person, whoever may decide it, or a keeper.
+	 *
+	 * <p><b>Not the stand-in.</b> They are told the name and the dates, which is the whole of what
+	 * standing in for somebody requires (see {@code NotificationService.notifyTimeOffSubstitute}).
+	 * The document carries the note the person wrote and the sentence a rejection gave, and being
+	 * named on a form is not a reason to be handed either.
+	 */
 	private boolean concerns(TimeOffRequest request, User viewer) {
 		return request.getUserId().equals(viewer.getId())
 				|| request.getApproverIds().contains(viewer.getId())
-				|| viewer.getId().equals(request.getSubstituteId())
 				|| access.isKeeper(viewer);
 	}
 

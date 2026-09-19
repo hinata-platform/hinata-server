@@ -44,15 +44,29 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Document("time_off_requests")
-// The person's own list: their requests, newest first, optionally narrowed to one status.
+// The person's own list, narrowed to one status.
 @CompoundIndex(name = "user_status_from", def = "{'userId': 1, 'status': 1, 'from': -1, '_id': -1}")
+// The same list with no status filter, which is how both screens open. Without it `status` is a
+// gap between the equality prefix and the sort key, and Mongo cannot walk one index order to get
+// "newest first across every status" — it sorts the result in memory instead.
+@CompoundIndex(name = "user_from", def = "{'userId': 1, 'from': -1, '_id': -1}")
 // The inbox. `approverIds` is an array, so this is a multikey index and has to lead with it —
 // equality first, then the status it is narrowed by, then the order it is read in (ESR).
 @CompoundIndex(name = "approver_status_from", def = "{'approverIds': 1, 'status': 1, 'from': -1, '_id': -1}")
-// Who else is away in a span: read by a decider looking for a clash, and by the yearly report.
+// And the unfiltered inbox, for the same reason as `user_from`.
+@CompoundIndex(name = "approver_from", def = "{'approverIds': 1, 'from': -1, '_id': -1}")
+// One decider's clash query: which of the requests they may see touch a span. `to` is in it
+// because the overlap is two ranges — `to >= from AND from <= to` — and an index that carried
+// only one of them would bound one end and walk that approver's whole history for the other.
+@CompoundIndex(name = "approver_status_to_from", def = "{'approverIds': 1, 'status': 1, 'to': 1, 'from': 1}")
+// The same question for a keeper, who asks it of everybody.
 @CompoundIndex(name = "status_from_to", def = "{'status': 1, 'from': 1, 'to': 1}")
-// A type cannot be retired while requests still point at it.
-@CompoundIndex(name = "type_from", def = "{'typeId': 1, 'from': 1}")
+// § 9 BUrlG: one person's approved leave touching a span. Both ends again, and for the same
+// reason as above.
+@CompoundIndex(name = "user_status_to_from", def = "{'userId': 1, 'status': 1, 'to': 1, 'from': 1}")
+// A type cannot be retired while requests still point at it. The id alone: nothing asks this
+// question with a date, and a second key here would be paid for on every write for nothing.
+@CompoundIndex(name = "type", def = "{'typeId': 1}")
 public class TimeOffRequest {
 
 	/** As long an explanation as a request carries, matching a ledger reason. */
