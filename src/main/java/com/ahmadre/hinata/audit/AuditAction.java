@@ -223,7 +223,14 @@ public enum AuditAction {
 	// Copying a whole project, with the source, the copy and how much came along. DATA and on
 	// by default: a copy carries descriptions and files out of one project into another, and
 	// "where did this second project come from" has to have an answer.
-	PROJECT_COPIED(DATA, NOTICE, true);
+	PROJECT_COPIED(DATA, NOTICE, true),
+	// Marking a project as a template, and unmarking it. CONFIGURATION: it changes where the
+	// project is listed for everybody and offers a button that creates whole projects.
+	PROJECT_TEMPLATE_MARKED(CONFIGURATION, NOTICE, true),
+	// Creating a project from a template in one step. Its own name beside PROJECT_COPIED,
+	// because "where did our twelve event projects come from" is a different question from
+	// "who copied this one project".
+	PROJECT_INSTANTIATED(DATA, NOTICE, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

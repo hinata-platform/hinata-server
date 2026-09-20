@@ -30,6 +30,12 @@ public record ProjectUpdateRequest(
 		 * through {@code POST /api/v1/projects/{id}/schedule/apply} after a preview.
 		 */
 		String workdayCalendarId,
+		/**
+		 * Whether the project is offered as a template rather than listed among the running
+		 * ones. Refused while {@code project_templates} is off, so a switched-off instance
+		 * cannot acquire templates it has no way of showing.
+		 */
+		Boolean template,
 		/** Maps a to-be-deleted workflow-state id to the surviving state id its
 		 * issues should be migrated into. Required when deleting a state that
 		 * still has issues assigned. */

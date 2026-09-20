@@ -53,6 +53,11 @@ public class ProjectService {
 	private static final String ISSUE_KEY = "issueKey";
 
 	private final ProjectRepository projects;
+	/**
+	 * What the template marker means, answered by the module that owns templates. Asked for one
+	 * field of one request; everything else about a project is decided here.
+	 */
+	private final ProjectTemplatePolicy templates;
 	private final MongoTemplate mongo;
 	// Injected as a repository (not TeamService) so project gating can read team
 	// access without forming a bean cycle (TeamService depends on this service).
@@ -334,6 +339,16 @@ public class ProjectService {
 		if (req.workdayCalendarId() != null) {
 			project.setWorkdayCalendarId(
 					req.workdayCalendarId().isBlank() ? null : req.workdayCalendarId());
+		}
+		if (req.template() != null && req.template() != project.isTemplate()) {
+			// Not the interceptor's business: this endpoint has to keep working while the
+			// module is off, because a project nobody can rename is a broken product. Only
+			// the one field that would not exist without the module is refused.
+			if (!templates.offered()) {
+				throw ApiException.badRequest("error.feature.disabled");
+			}
+			project.setTemplate(req.template());
+			templates.recordMarked(project, user);
 		}
 
 		String previousKey = project.getKey();
