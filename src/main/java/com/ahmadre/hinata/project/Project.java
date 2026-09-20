@@ -1,10 +1,14 @@
 package com.ahmadre.hinata.project;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -14,6 +18,7 @@ import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -85,6 +90,51 @@ public class Project {
 
 	@Builder.Default
 	private boolean archived = false;
+
+	/**
+	 * The one date the project's relative deadlines are counted from — the day of the event, the
+	 * action day, the party. Null while nobody has set one, which is the normal state of a
+	 * template: its issues carry offsets and no dates at all until a project is made from it.
+	 *
+	 * <p>One date per project rather than an offset to some milestone issue, because that is the
+	 * case the feature was asked for and anything else would be a dependency calculation nobody
+	 * requested. Only read while {@code project_templates} is on; a stored value on an instance
+	 * that switched the module off is kept and simply not acted on.
+	 */
+	private LocalDate eventDate;
+
+	/**
+	 * Which holiday calendar a working-day offset skips, or null for weekends alone.
+	 *
+	 * <p>A calendar, never a person: the question is "is this a working day here", not "is
+	 * anybody available". A deadline must not move because somebody booked leave.
+	 */
+	private String workdayCalendarId;
+
+	/**
+	 * Whether this project is offered as a template rather than listed among the running ones.
+	 *
+	 * <p>A marker, not a second kind of object: same rights, same search, same boards. The only
+	 * difference is where it appears and that it offers "create a project from this", which is
+	 * exactly why there is no parallel world of permissions to maintain.
+	 *
+	 * <p>Stored as a wrapper because every project written before this field existed lacks it,
+	 * and Spring Data's constructor mapping rejects a null for a primitive. The accessors below
+	 * keep the boolean API.
+	 */
+	@Builder.Default
+	@Getter(AccessLevel.NONE)
+	@Setter(AccessLevel.NONE)
+	private Boolean template = false;
+
+	@JsonProperty("template")
+	public boolean isTemplate() {
+		return Boolean.TRUE.equals(template);
+	}
+
+	public void setTemplate(boolean template) {
+		this.template = template;
+	}
 
 	/** Monotonic counter backing per-project issue numbers. */
 	@Builder.Default

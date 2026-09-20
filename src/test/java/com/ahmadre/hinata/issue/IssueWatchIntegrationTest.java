@@ -335,6 +335,6 @@ class IssueWatchIntegrationTest {
 	/** Only what the request names is replaced; the rest of the project stands. */
 	private ProjectUpdateRequest memberUpdate(List<String> memberIds) {
 		return new ProjectUpdateRequest(null, null, null, null, List.of(member.getId()), memberIds,
-				null, null, null, null, null, null);
+				null, null, null, null, null, null, null);
 	}
 }

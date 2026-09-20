@@ -201,7 +201,7 @@ class ProjectAvatarControllerTest {
 		// Every field the PATCH endpoint can carry, set at once.
 		Project saved = projectService.applyUpdate("p1", new ProjectUpdateRequest(
 				"HIN", "Renamed", "new description", "lead", List.of("lead"),
-				List.of("lead", "member"), null, null, null, "#FFFFFF", false, null),
+				List.of("lead", "member"), null, null, null, "#FFFFFF", false, null, null),
 				user("lead"));
 
 		assertThat(saved.getAvatarUrl()).isEqualTo("/api/v1/projects/p1/avatar?v=1&bh=LEHV6nWB");

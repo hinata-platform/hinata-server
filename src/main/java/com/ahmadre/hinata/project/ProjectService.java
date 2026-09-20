@@ -321,6 +321,10 @@ public class ProjectService {
 		if (req.description() != null) project.setDescription(req.description());
 		if (req.color() != null) project.setColor(req.color());
 		if (req.archived() != null) project.setArchived(req.archived());
+		if (req.workdayCalendarId() != null) {
+			project.setWorkdayCalendarId(
+					req.workdayCalendarId().isBlank() ? null : req.workdayCalendarId());
+		}
 
 		String previousKey = project.getKey();
 		// Snapshot members before the wholesale replace so we can notify only the

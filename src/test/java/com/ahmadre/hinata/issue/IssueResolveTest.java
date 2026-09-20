@@ -57,7 +57,10 @@ class IssueResolveTest {
 				mock(com.ahmadre.hinata.audit.AuditService.class), mongo,
 				mock(com.ahmadre.hinata.board.AgileBoardRepository.class),
 				mock(com.ahmadre.hinata.board.SprintRepository.class),
-				mock(com.ahmadre.hinata.user.UserRepository.class));
+				mock(com.ahmadre.hinata.user.UserRepository.class),
+				// Offsets are a module that can be switched off; this test is about
+				// everything else, so the policy answers nothing.
+				mock(IssueDeadlinePolicy.class));
 	}
 
 	private Query capturedQuery() {

@@ -215,7 +215,11 @@ public enum AuditAction {
 	// Switching the module on or off for the whole instance. CONFIGURATION and on
 	// by default, like every other master switch: a feature that can copy whole
 	// projects appearing or disappearing is a decision worth being able to trace.
-	PROJECT_TEMPLATES_POLICY_CHANGED(CONFIGURATION, WARNING, true);
+	PROJECT_TEMPLATES_POLICY_CHANGED(CONFIGURATION, WARNING, true),
+	// Moving a project's event date, with the number of deadlines that followed it and the
+	// number left where somebody put them by hand. DATA rather than CONFIGURATION: it rewrites
+	// dates people planned around, and "why is this due a week later" has to be answerable.
+	PROJECT_SCHEDULE_SHIFTED(DATA, NOTICE, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

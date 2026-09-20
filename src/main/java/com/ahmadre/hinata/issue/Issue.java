@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.common.RelativeDate;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -255,6 +256,23 @@ public class Issue {
 	/** Planning fields for Gantt / scheduling. */
 	private LocalDate startDate;
 	private LocalDate dueDate;
+
+	/**
+	 * The rule behind {@link #startDate} and {@link #dueDate} when the project keeps its dates
+	 * relative to an event: "four weeks before", "three days after".
+	 *
+	 * <p><b>The date stays written.</b> An issue with an offset still carries the resolved
+	 * {@code LocalDate}, and every reader that asks for a deadline today — the board, the Gantt
+	 * chart, the reports, the reminder job, the published store app that can no longer be taught
+	 * anything — goes on reading exactly that field. The offset is the rule, the date is its
+	 * result; computing the date at read time would mean teaching all of them the arithmetic.
+	 *
+	 * <p>Null is the ordinary case and stays the ordinary case: an issue whose date somebody typed
+	 * has no offset, and setting a date by hand clears one. A project without an event date keeps
+	 * the offsets it has and leaves the dates empty, which is what a template looks like.
+	 */
+	private RelativeDate startOffset;
+	private RelativeDate dueOffset;
 
 	/**
 	 * The {@link #dueDate} value the "due soon" reminder was last sent for. The

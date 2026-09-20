@@ -64,6 +64,7 @@ class ModuleBoundaryTest {
 	private static final String ROOT = "com.ahmadre.hinata";
 	private static final String TIME = ROOT + ".timetracking";
 	private static final String TIME_OFF = ROOT + ".timeoff";
+	private static final String TEMPLATE = ROOT + ".template";
 
 	/** The module and the three packages that hang off it. */
 	private static final String[] MODULE_PACKAGES = {
@@ -148,7 +149,7 @@ class ModuleBoundaryTest {
 		// a write: a marking must never turn into a refusal (R9).
 		noClasses()
 				.that(resideOutsideOfPackages("..availability..", "..timetracking..", "..timeoff..",
-						"..schedule.."))
+						"..schedule..", "..template.."))
 				.should().dependOnClassesThat().resideInAnyPackage("..availability..")
 				.because("capacity is read by time tracking and shift planning, and by nobody else")
 				.check(PRODUCTION);
@@ -238,7 +239,13 @@ class ModuleBoundaryTest {
 			TIME_OFF + ".TimeOffApprovalGuard",
 			// Answers the other question availability asks: whether somebody keeps absences
 			// without being an administrator (HIN-116's named circle). It reads no absence either.
-			TIME_OFF + ".TimeOffKeeperBridge");
+			TIME_OFF + ".TimeOffKeeperBridge",
+			// Which days a holiday calendar marks, so a working-day deadline can skip them
+			// (HIN-122). A calendar, never a person: it asks holidaysOf(calendarId, year) and
+			// nothing else, reads no working pattern, no capacity and no absence. A deadline
+			// four working days before an event must not move because somebody booked leave,
+			// which is exactly why this is the only class of the module that may ask.
+			TEMPLATE + ".HolidayCalendars");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
@@ -255,7 +262,14 @@ class ModuleBoundaryTest {
 			TIME_OFF + ".TimeOffApprovalGuard", TIME_OFF + ".TimeOffKeeperBridge",
 			// The approval flow: it calls the readers above and holds nothing of availability
 			// itself, which is why TimeOffAbsences exists at all.
-			TIME_OFF + ".TimeOffRequestService");
+			TIME_OFF + ".TimeOffRequestService",
+			// The two classes that turn a holiday calendar into a date: the answer an issue
+			// write asks for, and the rewrite after an event date moves. Both go through
+			// HolidayCalendars and neither names availability itself.
+			TEMPLATE + ".ProjectDeadlines", TEMPLATE + ".ProjectScheduleService",
+			// And the door itself: it holds a nested calendar that caches one year's holidays,
+			// so it accesses its own reader.
+			TEMPLATE + ".HolidayCalendars");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {
