@@ -73,6 +73,14 @@ import java.util.List;
 // so a page comes off the index sorted.
 @CompoundIndex(name = "board_by_dates",
 		def = "{'projectId': 1, 'archived': 1, 'startDate': 1, 'dueDate': 1, '_id': 1, 'type': 1, 'state': 1, 'priority': 1, 'searchText': 1}")
+// The issues of a project whose deadline is a rule rather than a day (HIN-120). Without these
+// the schedule preview reads every issue in the project to find the handful that carry one, and
+// the count of hand-set deadlines fetches every document to evaluate a negation. The second one
+// carries dueDate as well: with the equality on dueOffset in front of it, "has a date and no
+// rule" is answered off the keys and reads no document at all.
+@CompoundIndex(name = "proj_start_offset", def = "{'projectId': 1, 'archived': 1, 'startOffset': 1}")
+@CompoundIndex(name = "proj_due_offset",
+		def = "{'projectId': 1, 'archived': 1, 'dueOffset': 1, 'startOffset': 1, 'dueDate': 1}")
 // A filter by assignee, reporter or label: equality on the value, then the state and board
 // order, so one person's or one label's cards are counted off the keys and paged without
 // reading anybody else's. They also hand the filter its values: the reporters by a distinct

@@ -13,9 +13,11 @@ import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.BulkOperations;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -44,7 +46,15 @@ public class ProjectScheduleService {
 	/** How many moved deadlines a preview names before it only counts them. */
 	public static final int PREVIEW_LIMIT = 20;
 
+	/**
+	 * The most a client may ask to have named, whatever it sends. The rows are only there to
+	 * recognise the shape of a move; a client asking for all of them would make a read route's
+	 * response grow with the project.
+	 */
+	public static final int PREVIEW_LIMIT_MAX = 200;
+
 	private final ProjectService projects;
+	private final ProjectTemplateSettings settings;
 	private final MongoTemplate mongo;
 	private final IssueActivityRepository activities;
 	private final HolidayCalendars calendars;
@@ -59,10 +69,6 @@ public class ProjectScheduleService {
 			START, DUE
 		}
 
-		/** Days between the two, for a client that wants to say "+7" without parsing dates. */
-		public long shiftDays() {
-			return from == null || to == null ? 0 : from.toEpochDay() - to.toEpochDay();
-		}
 	}
 
 	/**
@@ -72,22 +78,47 @@ public class ProjectScheduleService {
 	 *              {@link #PREVIEW_LIMIT}, which is what the sheet shows before "and n more".
 	 */
 	public Preview preview(String projectId, LocalDate eventDate, Integer limit, User user) {
+		requireModule();
 		Project project = projects.get(projectId);
 		projects.assertLeadOrAdmin(project, user);
 		return previewOf(project, eventDate, limit);
 	}
 
+	/**
+	 * Refuses when the module is off.
+	 *
+	 * <p>The interceptor already answers every HTTP route, so this is the second lock on the same
+	 * door — for the callers that reach a service another way, which is the rule this module set
+	 * itself and the one a future MCP tool would otherwise land on the wrong side of.
+	 */
+	private void requireModule() {
+		if (!settings.enabled()) {
+			throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND,
+					ProjectTemplateGate.DISABLED_KEY);
+		}
+	}
+
 	/** The preview for a project already loaded and already permitted. */
 	public Preview previewOf(Project project, LocalDate eventDate, Integer limit) {
-		int named = limit == null || limit <= 0 ? PREVIEW_LIMIT : limit;
-		WorkdayCalendar calendar = calendars.of(project);
+		return previewOf(project, eventDate, limit, withOffsets(project.getId()),
+				calendars.of(project));
+	}
+
+	/**
+	 * The preview over a plan and a calendar the caller already holds.
+	 *
+	 * <p>{@code apply} reads both once and hands them to the preview and to the write, so moving
+	 * a date is one pass over the project rather than three.
+	 */
+	private Preview previewOf(Project project, LocalDate eventDate, Integer limit,
+			List<Issue> plan, WorkdayCalendar calendar) {
+		int named = limit == null || limit <= 0
+				? PREVIEW_LIMIT : Math.min(limit, PREVIEW_LIMIT_MAX);
 		List<Move> moves = new ArrayList<>();
 		int moved = 0;
 		int unchanged = 0;
 		int pending = 0;
-		int manual = 0;
-		for (Issue issue : withOffsets(project.getId())) {
-			boolean touched = false;
+		for (Issue issue : plan) {
 			for (Move.Field field : Move.Field.values()) {
 				RelativeDate offset = offsetOf(issue, field);
 				if (offset == null) {
@@ -106,19 +137,18 @@ public class ProjectScheduleService {
 					unchanged++;
 					continue;
 				}
-				touched = true;
+				// Counted per deadline, not per issue: an issue whose start and due both move
+				// contributes two rows below, and a headline that counted issues over a list of
+				// fields would not add up.
+				moved++;
 				if (moves.size() < named) {
 					moves.add(new Move(issue.getId(), issue.getReadableId(), issue.getTitle(),
 							field, before, after));
 				}
 			}
-			if (touched) {
-				moved++;
-			}
 		}
-		manual = countManual(project.getId());
 		return new Preview(project.getEventDate(), eventDate, shift(project.getEventDate(), eventDate),
-				moved, unchanged, pending, manual, moves.size(), moves);
+				moved, unchanged, pending, countManual(project.getId()), moves);
 	}
 
 	/**
@@ -129,17 +159,22 @@ public class ProjectScheduleService {
 	 * hundred round trips would make an ordinary reschedule feel like an import.
 	 */
 	public Result apply(String projectId, LocalDate eventDate, User user) {
+		requireModule();
 		Project project = projects.get(projectId);
 		projects.assertLeadOrAdmin(project, user);
 
 		LocalDate previous = project.getEventDate();
-		Preview preview = previewOf(project, eventDate, Integer.MAX_VALUE);
+		// Read once and hand both down. Asking again for the write would walk the project a
+		// second time and fetch the same holiday years over again, for one decision.
+		WorkdayCalendar calendar = calendars.of(project);
+		List<Issue> plan = withOffsets(project.getId());
+		Preview preview = previewOf(project, eventDate, Integer.MAX_VALUE, plan, calendar);
 		project.setEventDate(eventDate);
 		projects.save(project);
 
 		int written = 0;
 		if (eventDate != null) {
-			written = writeDeadlines(project, eventDate);
+			written = writeDeadlines(plan, eventDate, calendar);
 		}
 		recordActivities(preview.moves(), user);
 		audit.event(AuditAction.PROJECT_SCHEDULE_SHIFTED).actor(user)
@@ -161,23 +196,34 @@ public class ProjectScheduleService {
 	 */
 	public LocalDate resolve(String projectId, LocalDate eventDate, RelativeDate offset,
 			User user) {
+		requireModule();
 		Project project = projects.get(projectId);
 		projects.assertMember(project, user);
 		if (offset == null) {
 			return null;
 		}
 		if (!offset.withinLimits()) {
-			throw ApiException.badRequest("error.issue.offsetOutOfRange");
+			throw ApiException.badRequest("error.issue.offsetOutOfRange",
+					RelativeDate.MAX_DAYS, RelativeDate.MAX_WEEKS);
 		}
 		LocalDate anchor = eventDate != null ? eventDate : project.getEventDate();
 		return RelativeDates.resolve(anchor, offset, calendars.of(project));
 	}
 
-	/** Every issue of the project that carries at least one offset. */
+	/**
+	 * Every issue of the project that carries at least one offset, earliest deadline first.
+	 *
+	 * <p>Sorted because the preview names only the first few and the sheet presents them as the
+	 * front of the timeline; an arbitrary six of forty described as ordered is worse than an
+	 * unordered sample. Archived issues are left out for the reason the copy leaves them out:
+	 * they are the project's history, and nobody is waiting on their dates.
+	 */
 	private List<Issue> withOffsets(String projectId) {
 		Query query = Query.query(Criteria.where("projectId").is(projectId)
+				.and("archived").ne(true)
 				.orOperator(Criteria.where("startOffset").ne(null),
-						Criteria.where("dueOffset").ne(null)));
+						Criteria.where("dueOffset").ne(null)))
+				.with(Sort.by("dueDate", "startDate"));
 		return mongo.find(query, Issue.class);
 	}
 
@@ -186,15 +232,18 @@ public class ProjectScheduleService {
 	 * deadlines stay where they are" instead of leaving the difference unexplained.
 	 */
 	private int countManual(String projectId) {
+		// A type predicate rather than {@code $ne: null}: the negation forces every candidate to
+		// be fetched to be evaluated, while "is a date" is a bound the index can answer on its
+		// own. The equality on dueOffset comes first for the same reason.
 		Query query = Query.query(Criteria.where("projectId").is(projectId)
-				.and("dueDate").ne(null).and("dueOffset").is(null));
+				.and("dueOffset").is(null)
+				.and("startOffset").is(null)
+				.and("dueDate").type(JsonSchemaObject.Type.dateType()));
 		return (int) mongo.count(query, Issue.class);
 	}
 
 	/** Writes every resolved date, in batches. Returns how many deadlines were written. */
-	private int writeDeadlines(Project project, LocalDate eventDate) {
-		WorkdayCalendar calendar = calendars.of(project);
-		List<Issue> issues = withOffsets(project.getId());
+	private int writeDeadlines(List<Issue> issues, LocalDate eventDate, WorkdayCalendar calendar) {
 		int written = 0;
 		BulkOperations bulk = mongo.bulkOps(BulkOperations.BulkMode.UNORDERED, Issue.class);
 		int pending = 0;
@@ -204,6 +253,7 @@ public class ProjectScheduleService {
 			LocalDate start = RelativeDates.resolve(eventDate, issue.getStartOffset(), calendar);
 			if (start != null && !start.equals(issue.getStartDate())) {
 				update.set("startDate", start);
+				written++;
 				touched = true;
 			}
 			LocalDate due = RelativeDates.resolve(eventDate, issue.getDueOffset(), calendar);
@@ -212,13 +262,13 @@ public class ProjectScheduleService {
 				// So the reminder job re-arms for the new day rather than staying silent
 				// because it once reminded about the old one.
 				update.unset("dueReminderFor");
+				written++;
 				touched = true;
 			}
 			if (!touched) {
 				continue;
 			}
 			bulk.updateOne(Query.query(Criteria.where("_id").is(issue.getId())), update);
-			written++;
 			if (++pending >= BATCH) {
 				bulk.execute();
 				bulk = mongo.bulkOps(BulkOperations.BulkMode.UNORDERED, Issue.class);
@@ -238,19 +288,21 @@ public class ProjectScheduleService {
 	 * which is the complaint every silent bulk edit eventually produces.
 	 */
 	private void recordActivities(List<Move> moves, User user) {
-		List<IssueActivity> entries = new ArrayList<>(moves.size());
-		for (Move move : moves) {
-			entries.add(IssueActivity.builder()
-					.issueId(move.issueId())
-					.actorId(user == null ? null : user.getId())
-					.field(move.field() == Move.Field.START
-							? IssueActivity.Field.START_DATE : IssueActivity.Field.DUE_DATE)
-					.fromValue(text(move.from()))
-					.toValue(text(move.to()))
-					.build());
-		}
-		if (!entries.isEmpty()) {
-			activities.saveAll(entries);
+		// In the same batches the deadlines are written in, so one very large reschedule does
+		// not build the whole list in memory before the first insert.
+		for (int from = 0; from < moves.size(); from += BATCH) {
+			List<IssueActivity> slice = new ArrayList<>(BATCH);
+			for (Move move : moves.subList(from, Math.min(from + BATCH, moves.size()))) {
+				slice.add(IssueActivity.builder()
+						.issueId(move.issueId())
+						.actorId(user == null ? null : user.getId())
+						.field(move.field() == Move.Field.START
+								? IssueActivity.Field.START_DATE : IssueActivity.Field.DUE_DATE)
+						.fromValue(text(move.from()))
+						.toValue(text(move.to()))
+						.build());
+			}
+			activities.saveAll(slice);
 		}
 	}
 
@@ -282,11 +334,12 @@ public class ProjectScheduleService {
 	}
 
 	/**
-	 * What a move would do. {@code moved} counts issues, {@code named} counts the rows below —
-	 * the client shows those and says "and n more" about the rest.
+	 * What a move would do. Every count is of <em>deadlines</em>, not of issues: an issue whose
+	 * start and due both move counts twice, because the sheet lists one row per date. {@code
+	 * moves} holds the first few by name and the client says "and n more" about the rest.
 	 */
 	public record Preview(LocalDate eventDate, LocalDate newEventDate, Long shiftDays,
-			int moved, int unchanged, int pending, int manual, int named, List<Move> moves) {
+			int moved, int unchanged, int pending, int manual, List<Move> moves) {
 	}
 
 	/** What a move did. */

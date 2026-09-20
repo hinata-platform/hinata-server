@@ -189,5 +189,19 @@ class RelativeDatesTest {
 			// both rely on.
 			assertThat(weeks(-4).days()).isEqualTo(-28);
 		}
+
+		@Test
+		@DisplayName("the one value Math.abs cannot negate is refused too")
+		void theMostNegativeIntIsOutOfBounds() {
+			// abs(MIN_VALUE) is MIN_VALUE, so a one-sided check passes it and the deadline lands
+			// somewhere around the year -5 877 584. Under WORKING it is worse than wrong: the
+			// walk never runs and the anchor comes back unchanged, with no error at all.
+			assertThat(new RelativeDate(Integer.MIN_VALUE, RelativeDate.Unit.DAYS,
+					RelativeDate.Basis.CALENDAR).withinLimits()).isFalse();
+			assertThat(new RelativeDate(Integer.MIN_VALUE, RelativeDate.Unit.WEEKS,
+					RelativeDate.Basis.CALENDAR).withinLimits()).isFalse();
+			assertThat(new RelativeDate(Integer.MAX_VALUE, RelativeDate.Unit.DAYS,
+					RelativeDate.Basis.CALENDAR).withinLimits()).isFalse();
+		}
 	}
 }

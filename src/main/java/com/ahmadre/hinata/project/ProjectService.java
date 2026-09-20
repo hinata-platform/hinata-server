@@ -397,7 +397,12 @@ public class ProjectService {
 	 * the actor who performed it. Best-effort: a notification failure must never
 	 * fail the settings save.
 	 */
-	private void notifyNewMembers(Project saved, Set<String> previousMembers, User actor) {
+	/**
+	 * Tells everybody this save added to the project. Package-visible so the copy of HIN-120 can
+	 * use it: {@link #create} sends nothing, which is right for a project somebody creates empty
+	 * and wrong for one that arrives with a team already in it.
+	 */
+	public void notifyNewMembers(Project saved, Set<String> previousMembers, User actor) {
 		try {
 			for (String userId : saved.getMemberIds()) {
 				if (userId == null || previousMembers.contains(userId)

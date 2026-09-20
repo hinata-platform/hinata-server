@@ -59,7 +59,8 @@ public class ProjectInstantiateController {
 		ProjectCopyService.Options options = new ProjectCopyService.Options(
 				request.name(),
 				request.key(),
-				ProjectScheduleService.checked(request.eventDate()),
+				// Bounded in the service, which is what every protocol goes through.
+				request.eventDate(),
 				true, false, true, false, false);
 		ProjectCopyService.Result result = copies.copy(id, options, currentUser.require());
 		// Its own record beside PROJECT_COPIED, which the copy already wrote: "where did our

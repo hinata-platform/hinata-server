@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.template;
 
-import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueDeadlinePolicy;
 import com.ahmadre.hinata.project.Project;
@@ -35,6 +34,12 @@ public class ProjectDeadlines implements IssueDeadlinePolicy {
 
 	@Override
 	public void resolveDates(Issue issue, Project project) {
+		// Asked first, and not only for tidiness: an instance that switched the module off would
+		// otherwise go on rewriting the dates of every issue that still carries a rule, for as
+		// long as the data exists and with no way for an administrator to stop it.
+		if (!settings.enabled()) {
+			return;
+		}
 		if (issue == null || (issue.getStartOffset() == null && issue.getDueOffset() == null)) {
 			return;
 		}
@@ -42,23 +47,15 @@ public class ProjectDeadlines implements IssueDeadlinePolicy {
 			return;
 		}
 		WorkdayCalendar calendar = calendars.of(project);
-		LocalDate start = resolve(project.getEventDate(), issue.getStartOffset(), calendar);
+		LocalDate start = RelativeDates.resolve(project.getEventDate(),
+				issue.getStartOffset(), calendar);
 		if (start != null) {
 			issue.setStartDate(start);
 		}
-		LocalDate due = resolve(project.getEventDate(), issue.getDueOffset(), calendar);
+		LocalDate due = RelativeDates.resolve(project.getEventDate(),
+				issue.getDueOffset(), calendar);
 		if (due != null) {
 			issue.setDueDate(due);
 		}
-	}
-
-	/** One offset resolved, or null when there is none to resolve. */
-	public LocalDate resolve(LocalDate anchor, RelativeDate offset, WorkdayCalendar calendar) {
-		return RelativeDates.resolve(anchor, offset, calendar);
-	}
-
-	/** The calendar a project's working-day offsets are counted against. */
-	public WorkdayCalendar calendarOf(Project project) {
-		return calendars.of(project);
 	}
 }

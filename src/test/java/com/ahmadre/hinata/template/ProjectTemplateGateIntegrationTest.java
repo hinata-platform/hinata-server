@@ -46,8 +46,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * disabled feature into a broken product, and the shipped store app would lose projects entirely.
  *
  * <p>Over real HTTP, because the layering is the subject: the request passes the security chain
- * first, the interceptor runs although no controller is mapped under the new paths yet, and the
- * refusal comes back as the ordinary localized error body.
+ * first, the interceptor answers before any handler is reached, and the refusal comes back as the
+ * ordinary localized error body. The probe below stands in for the module's own handlers so that
+ * "the gate opened" reads as a 200 rather than as a different 404.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
 		"hinata.mongodb.tls.enabled=false",

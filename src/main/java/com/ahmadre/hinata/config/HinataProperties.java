@@ -213,6 +213,15 @@ public class HinataProperties {
 		 * keeping a deadline as an offset from the project's event date.
 		 */
 		private boolean enabled = false;
+
+		/**
+		 * How many projects one person may copy per hour. Zero or less switches the budget off.
+		 *
+		 * <p>A budget rather than a rule about who may copy: one copy is already bounded at 500
+		 * issues and 100 MB of files, and what nothing bounded was the number of copies. Set
+		 * generously — somebody planning a term's events makes a handful in a sitting.
+		 */
+		private int copiesPerHour = 20;
 	}
 
 	/**

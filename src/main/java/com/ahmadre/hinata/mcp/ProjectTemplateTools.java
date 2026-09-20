@@ -26,8 +26,9 @@ import java.util.Locale;
  *
  * <p>One of the two named bridges into {@code template} — the module is otherwise closed, and this
  * class exists so that a second protocol reaches the same service the REST route reaches rather
- * than reimplementing its rules. Everything it can refuse, the service refuses: the flag, the
- * membership, the issue limit, the file budget.
+ * than reimplementing its rules. Every refusal is the service's — the flag, the membership, the
+ * issue limit, the file budget, the bounds on the name and the date — so this tool cannot be a
+ * way around one of them.
  *
  * <p>An instance with the module switched off answers both tools with the same 404
  * {@code error.feature.disabled} its routes answer. A connected client keeps seeing the names in
@@ -124,7 +125,8 @@ public class ProjectTemplateTools {
 				parseEnum(unit, RelativeDate.Unit.class, RelativeDate.Unit.DAYS, "unit"),
 				parseEnum(basis, RelativeDate.Basis.class, RelativeDate.Basis.CALENDAR, "basis"));
 		if (offset != null && !offset.withinLimits()) {
-			throw ApiException.badRequest("error.issue.offsetOutOfRange");
+			throw ApiException.badRequest("error.issue.offsetOutOfRange",
+					RelativeDate.MAX_DAYS, RelativeDate.MAX_WEEKS);
 		}
 		Issue resolved = issues.getForUser(idOrReadableId, user);
 		Issue saved = issues.update(resolved.getId(), issue -> {

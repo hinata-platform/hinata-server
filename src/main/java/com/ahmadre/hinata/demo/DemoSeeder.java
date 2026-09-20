@@ -544,11 +544,19 @@ public class DemoSeeder {
 				"Beers for Queers", "BFQ", event, true, false, true, false, false), admin);
 	}
 
-	/** One template issue: a rule, no date, and no assignee to imply somebody already owns it. */
-	private Issue offsetIssue(Project p, String title, Issue parent, User assignee, int amount,
+	/**
+	 * One template issue: a rule instead of a date, and nobody assigned.
+	 *
+	 * <p>The assignment is cleared deliberately. A template is a plan waiting to be used, and a
+	 * demo that showed every task already owned would be demonstrating the wrong thing — as well
+	 * as contradicting what a copy does, which is to leave the names behind.
+	 */
+	private Issue offsetIssue(Project p, String title, Issue parent, User author, int amount,
 			RelativeDate.Unit unit, RelativeDate.Basis basis, int rank) {
-		Issue issue = issue(p, title, Issue.Type.TASK, Issue.Priority.NORMAL, "Backlog", assignee,
+		Issue issue = issue(p, title, Issue.Type.TASK, Issue.Priority.NORMAL, "Backlog", author,
 				null, 0, 0, 0, List.of(), null, rank, parent.getId());
+		issue.setAssigneeId(null);
+		issue.setAssigneeIds(new ArrayList<>());
 		issue.setDueOffset(new RelativeDate(amount, unit, basis));
 		return issues.save(issue);
 	}

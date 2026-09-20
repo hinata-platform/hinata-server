@@ -15,7 +15,12 @@ import com.ahmadre.hinata.timetracking.ProjectTimeSettings;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.AccumulatorOperators;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.ArrayOperators;
+import org.springframework.data.mongodb.core.aggregation.ConditionalOperators;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
@@ -33,6 +38,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Turning one project into a second project: the same plan, none of the history.
@@ -68,6 +74,9 @@ public class ProjectCopyService {
 	/** How many issue documents go into the database per round trip. */
 	private static final int BATCH = 200;
 
+	/** The longest name a copy may carry, matching the bound on the REST body. */
+	private static final int MAX_NAME_CHARS = 120;
+
 	/** The same file budget the issue clone holds to, for the same reasons. */
 	static final int MAX_COPIED_FILES = 50;
 	static final long MAX_COPIED_BYTES = 100L * 1024 * 1024;
@@ -80,11 +89,11 @@ public class ProjectCopyService {
 			// --- Project: the plan and how it is presented ---
 			"key", "name", "description", "color", "avatarUrl", "workflowStates",
 			"resolvedStates", "labels", "leadId", "leadIds", "memberIds", "eventDate",
-			"workdayCalendarId", "template", "archived", "issueCounter",
+			"workdayCalendarId", "template",
 			// --- Issue: the work itself ---
 			"projectId", "title", "description", "descriptionDoc", "type", "priority", "tags",
 			"parentId", "estimateMinutes", "storyPoints", "startDate", "dueDate",
-			"startOffset", "dueOffset", "assigneeId", "assigneeIds", "attachments",
+			"startOffset", "dueOffset", "attachments",
 			"dependsOnIds", "state", "rank", "numberInProject", "readableId", "id",
 			"searchText", "createdAt", "updatedAt");
 
@@ -104,8 +113,15 @@ public class ProjectCopyService {
 	 *   <li>{@code sprintId}: sprints hang off the board, not the project, and a sprint without
 	 *       its dates is not a sprint;
 	 *   <li>history and progress — {@code spentMinutes}, {@code resolvedAt}, {@code archived} and
-	 *       {@code archivedAt} on the issue, {@code dueReminderFor}, {@code formerReadableIds}:
-	 *       none of it happened to the copy;
+	 *       {@code archivedAt}, {@code dueReminderFor}, {@code formerReadableIds}: none of it
+	 *       happened to the copy. {@code archived} covers both entities: a copy of an archived
+	 *       project is refused outright, and archived issues never join the plan;
+	 *   <li>{@code issueCounter}: raised to match what the copy actually wrote, once the issues
+	 *       are in, rather than inherited from a project with a different number of them;
+	 *   <li>{@code assigneeId} / {@code assigneeIds}: a copy is work to <em>do</em>, and putting
+	 *       somebody's name on it is a claim nobody made. It would also be their first news of
+	 *       the project: the reminder job mails assignees, so an inherited assignment turns into
+	 *       a "due soon" mail about a project they were never told they had joined;
 	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount}: never stored, computed per request.
 	 * </ul>
 	 *
@@ -114,11 +130,12 @@ public class ProjectCopyService {
 	 */
 	static final List<String> LEFT_BEHIND = List.of(
 			// --- Project ---
-			"git", "extraRepos",
+			"git", "extraRepos", "archived", "issueCounter",
 			// --- Issue ---
 			"formerReadableIds", "reporterId", "reporterEmail", "inboundMessageId",
 			"inboundSubject", "ingestConnectionId", "watcherIds", "sprintId", "spentMinutes",
-			"resolvedAt", "archivedAt", "dueReminderFor", "subtaskCount", "subtaskDoneCount");
+			"resolvedAt", "archivedAt", "dueReminderFor", "assigneeId", "assigneeIds",
+			"subtaskCount", "subtaskDoneCount");
 
 	private final ProjectService projects;
 	private final MongoTemplate mongo;
@@ -126,6 +143,7 @@ public class ProjectCopyService {
 	private final AuditService audit;
 	private final ProjectTemplateSettings settings;
 	private final HolidayCalendars calendars;
+	private final ProjectCopyLimiter limiter;
 
 	/** What the copy sheet lets a caller decide. */
 	public record Options(String name, String key, LocalDate eventDate, boolean includeMembers,
@@ -148,23 +166,43 @@ public class ProjectCopyService {
 	 * computed by the server rather than guessed by the app.
 	 */
 	public Scope scopeOf(String projectId, User user) {
+		requireModule();
 		Project source = projects.get(projectId);
 		projects.assertMember(source, user);
-		List<Issue> issues = planOf(source.getId());
-		int subtasks = (int) issues.stream().filter(issue -> issue.getParentId() != null).count();
-		int files = 0;
-		long bytes = 0;
-		for (Issue issue : issues) {
-			if (issue.getAttachments() == null) {
-				continue;
-			}
-			files += issue.getAttachments().size();
-			for (Issue.Attachment attachment : issue.getAttachments()) {
-				bytes += attachment.getSize();
-			}
-		}
-		return new Scope(issues.size(), subtasks, files, bytes, suggestKey(source),
-				issues.size() <= MAX_ISSUES);
+		// Counted in the database rather than in the heap. This is a read route any member can
+		// call on every sheet open, and loading a large project's issues — Lexical documents and
+		// all — to produce four integers is the kind of cost nobody sees until it is an outage.
+		Criteria plan = Criteria.where("projectId").is(source.getId()).and("archived").ne(true);
+		int issues = (int) mongo.count(Query.query(plan), Issue.class);
+		int subtasks = (int) mongo.count(
+				Query.query(Criteria.where("projectId").is(source.getId())
+						.and("archived").ne(true).and("parentId").ne(null)), Issue.class);
+		// The files are the one pair a count cannot answer, so they are summed where they are.
+		Aggregation totals = Aggregation.newAggregation(
+				Aggregation.match(plan),
+				Aggregation.project()
+						.and(ArrayOperators.Size.lengthOfArray(
+								ConditionalOperators.ifNull("attachments").then(List.of())))
+								.as("fileCount")
+						.and(AccumulatorOperators.Sum.sumOf("attachments.size")).as("fileBytes"),
+				Aggregation.group()
+						.sum("fileCount").as("files")
+						.sum("fileBytes").as("bytes"));
+		Document files = mongo.aggregate(totals, Issue.class, Document.class)
+				.getUniqueMappedResult();
+		return new Scope(issues, subtasks, number(files, "files"), longNumber(files, "bytes"),
+				suggestKey(source), issues <= MAX_ISSUES);
+	}
+
+	/** One aggregated number, or zero for a project with no issues at all. */
+	private static int number(Document counts, String field) {
+		Object value = counts == null ? null : counts.get(field);
+		return value instanceof Number n ? n.intValue() : 0;
+	}
+
+	private static long longNumber(Document counts, String field) {
+		Object value = counts == null ? null : counts.get(field);
+		return value instanceof Number n ? n.longValue() : 0L;
 	}
 
 	/**
@@ -177,14 +215,26 @@ public class ProjectCopyService {
 	 * could not read.
 	 */
 	public Result copy(String sourceId, Options options, User user) {
-		if (!settings.enabled()) {
-			throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND,
-					ProjectTemplateGate.DISABLED_KEY);
-		}
+		requireModule();
+		limiter.consume(user);
 		Project source = projects.get(sourceId);
 		projects.assertMember(source, user);
+		if (source.isArchived()) {
+			// A project is archived because it is finished, or because it is sitting out a
+			// retention period. Either way its content reappearing inside a live project is not
+			// a copy of a plan, it is an archive nobody closed.
+			throw ApiException.badRequest("error.project.copyArchived");
+		}
+		// Bounds the controllers used to hold on their own, which left the MCP tool outside them.
+		LocalDate eventDate = ProjectScheduleService.checked(options.eventDate());
+		String name = checkedName(options.name(), source);
 
-		List<Issue> plan = planOf(source.getId());
+		long total = countPlan(source.getId());
+		if (total > MAX_ISSUES) {
+			throw ApiException.badRequest("error.project.copyTooLarge", total, MAX_ISSUES);
+		}
+		// One more than the budget, so a refusal never costs the price of the thing refused.
+		List<Issue> plan = planOf(source.getId(), MAX_ISSUES + 1);
 		if (plan.size() > MAX_ISSUES) {
 			throw ApiException.badRequest("error.project.copyTooLarge", plan.size(), MAX_ISSUES);
 		}
@@ -192,11 +242,15 @@ public class ProjectCopyService {
 			assertWithinFileBudget(plan);
 		}
 
-		Project copy = newProject(source, options, user);
+		Project copy = newProject(source, options, name, eventDate, user);
 		Trace trace = new Trace();
 		try {
 			Project created = projects.create(copy, user);
 			trace.projectId = created.getId();
+			// Everybody the copy arrived with hears about it. `create` sends nothing, which is
+			// right for a project somebody starts empty and wrong for one that lands with a team
+			// already in it — the first thing they would otherwise hear is a deadline reminder.
+			projects.notifyNewMembers(created, Set.of(user.getId()), user);
 			Copied copied = copyIssues(source, created, plan, options, trace);
 			copyLinks(source.getId(), copied.idMap(), trace);
 			if (options.includeBoard()) {
@@ -238,10 +292,42 @@ public class ProjectCopyService {
 	 * and a copy is the plan, not the history. Carrying them would also make a copy of a
 	 * long-running project mostly consist of work nobody intends to do again.
 	 */
-	private List<Issue> planOf(String projectId) {
+	private List<Issue> planOf(String projectId, int cap) {
 		Query query = Query.query(Criteria.where("projectId").is(projectId)
 				.and("archived").ne(true));
+		if (cap > 0) {
+			query.limit(cap);
+		}
 		return mongo.find(query, Issue.class);
+	}
+
+	/** How many issues the plan holds, without reading one of them. */
+	private long countPlan(String projectId) {
+		return mongo.count(Query.query(Criteria.where("projectId").is(projectId)
+				.and("archived").ne(true)), Issue.class);
+	}
+
+	/** Refuses when the module is off — the second lock, for the callers no interceptor sees. */
+	private void requireModule() {
+		if (!settings.enabled()) {
+			throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND,
+					ProjectTemplateGate.DISABLED_KEY);
+		}
+	}
+
+	/**
+	 * The name the copy gets, held to the same length the REST body is.
+	 *
+	 * <p>Checked here rather than only on the request record, because the MCP tool builds its
+	 * options by hand and would otherwise store a name of any length, which then renders in the
+	 * project list of everybody the copy enrolled.
+	 */
+	private static String checkedName(String name, Project source) {
+		String chosen = name == null || name.isBlank() ? source.getName() + " (copy)" : name.trim();
+		if (chosen.length() > MAX_NAME_CHARS) {
+			throw ApiException.badRequest("error.project.nameTooLong", MAX_NAME_CHARS);
+		}
+		return chosen;
 	}
 
 	/** A project key nobody is using yet, derived from the source's. */
@@ -249,9 +335,18 @@ public class ProjectCopyService {
 		String base = source.getKey() == null ? "COPY" : source.getKey().toUpperCase(Locale.ROOT);
 		// Room for the two digits appended below, inside the ten characters a key may hold.
 		String stem = base.length() > 8 ? base.substring(0, 8) : base;
+		// Every key that could collide in one round trip. Asking per candidate was up to
+		// ninety-eight queries, each a full scan of the key index, on a route the sheet calls
+		// every time it opens.
+		Query taken = Query.query(Criteria.where("key")
+				.regex("^" + Pattern.quote(stem) + "\\d{1,2}$", "i"));
+		taken.fields().include("key");
+		Set<String> used = new LinkedHashSet<>();
+		mongo.find(taken, Project.class).forEach(project ->
+				used.add(project.getKey() == null ? "" : project.getKey().toUpperCase(Locale.ROOT)));
 		for (int suffix = 2; suffix <= 99; suffix++) {
 			String candidate = stem + suffix;
-			if (!projects.keyTaken(candidate)) {
+			if (!used.contains(candidate)) {
 				return candidate;
 			}
 		}
@@ -260,9 +355,8 @@ public class ProjectCopyService {
 		return "P" + Instant.now().toEpochMilli() % 1_000_000_000L;
 	}
 
-	private Project newProject(Project source, Options options, User user) {
-		String name = options.name() == null || options.name().isBlank()
-				? source.getName() + " (copy)" : options.name().trim();
+	private Project newProject(Project source, Options options, String name, LocalDate eventDate,
+			User user) {
 		String key = options.key() == null || options.key().isBlank()
 				? suggestKey(source) : options.key().trim().toUpperCase(Locale.ROOT);
 		List<String> leads = new ArrayList<>(List.of(user.getId()));
@@ -292,7 +386,7 @@ public class ProjectCopyService {
 				.leadId(user.getId())
 				.leadIds(leads)
 				.memberIds(members)
-				.eventDate(options.eventDate())
+				.eventDate(eventDate)
 				.workdayCalendarId(source.getWorkdayCalendarId())
 				.template(options.asTemplate())
 				.build();
@@ -368,8 +462,10 @@ public class ProjectCopyService {
 					// exactly what a template looks like.
 					.startDate(start != null ? start : keptDate(original.getStartDate(), original.getStartOffset()))
 					.dueDate(due != null ? due : keptDate(original.getDueDate(), original.getDueOffset()))
-					.assigneeIds(options.includeMembers()
-							? new ArrayList<>(nonNull(original.getAssigneeIds())) : new ArrayList<>())
+					// Nobody is assigned. A copy is work to do, and a name on it is a claim
+					// nobody made — one the reminder job would mail them about before anybody
+					// told them the project existed.
+					.assigneeIds(new ArrayList<>())
 					.dependsOnIds(remap(original.getDependsOnIds(), idMap))
 					.attachments(attachments)
 					.rank(original.getRank())
@@ -548,9 +644,18 @@ public class ProjectCopyService {
 		if (stored == null) {
 			return;
 		}
-		ProjectTimeSettings copy = stored.toBuilder()
+		// Field by field, like everything else here. `toBuilder()` would carry whatever the
+		// document grows next, and the coverage test only watches Project and Issue — so a new
+		// field would travel silently. It would also carry the original's `updatedBy` and its
+		// lock date into a project where nothing has been approved or invoiced yet.
+		ProjectTimeSettings copy = ProjectTimeSettings.builder()
 				.id(UUID.randomUUID().toString())
 				.projectId(copyId)
+				.budgetMinutes(stored.getBudgetMinutes())
+				.defaultBillable(stored.getDefaultBillable())
+				.approvalRequired(stored.getApprovalRequired())
+				.approvalPeriod(stored.getApprovalPeriod())
+				.alertThresholds(stored.getAlertThresholds())
 				.build();
 		mongo.insert(copy);
 		trace.timeSettingsIds.add(copy.getId());

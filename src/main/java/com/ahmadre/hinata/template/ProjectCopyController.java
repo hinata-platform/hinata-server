@@ -68,7 +68,8 @@ public class ProjectCopyController {
 		ProjectCopyService.Options options = new ProjectCopyService.Options(
 				request.name(),
 				request.key(),
-				ProjectScheduleService.checked(request.eventDate()),
+				// Bounded again in the service, so the MCP tool inherits the same refusal.
+				request.eventDate(),
 				// Members and the project's time settings default to on, attachments and the
 				// board to off: the first two describe who works on the plan and how its hours
 				// are counted, the second two are bulk that a copy usually does not want.

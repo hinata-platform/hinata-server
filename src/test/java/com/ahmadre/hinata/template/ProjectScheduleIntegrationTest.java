@@ -146,6 +146,8 @@ class ProjectScheduleIntegrationTest {
 				schedule.preview(project.getId(), EVENT.plusDays(7), null, lead);
 
 		assertThat(preview.shiftDays()).isEqualTo(7);
+		// One deadline, and the count is of deadlines: an issue whose start and due both move
+		// counts twice, because the sheet lists one row per date.
 		assertThat(preview.moved()).isEqualTo(1);
 		assertThat(preview.manual()).isEqualTo(1);
 		assertThat(preview.moves()).singleElement().satisfies(move -> {
@@ -287,20 +289,38 @@ class ProjectScheduleIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("the module answers whether offsets exist at all")
-	void theFlagIsWhatTheIssueRouteAsks() {
-		assertThat(deadlines.offsetsEnabled()).isTrue();
+	@DisplayName("with the module off nothing recomputes a date, and the rule is kept")
+	void theFlagClosesTheWritePathToo() {
+		Issue room = issue("Book the room", weeks(-6));
+		assertThat(room.getDueDate()).isEqualTo(LocalDate.of(2026, 10, 1));
+		moduleOff();
+		assertThat(deadlines.offsetsEnabled()).isFalse();
 
+		// An ordinary edit of an issue that still carries a rule. Without the guard the write
+		// path would go on resolving it for as long as the data exists, on an instance whose
+		// administrator switched the feature off.
+		issues.update(room.getId(), issue -> issue.setTitle("Book the room again"), lead);
+
+		assertThat(stored(room).getDueDate()).isEqualTo(LocalDate.of(2026, 10, 1));
+		assertThat(stored(room).getDueOffset()).isEqualTo(weeks(-6));
+
+		// And the schedule routes are closed to every caller, not only over HTTP.
+		assertThatThrownBy(() -> schedule.apply(project.getId(), EVENT.plusDays(7), lead))
+				.isInstanceOfSatisfying(ApiException.class, ex ->
+						assertThat(ex.getMessageKey())
+								.isEqualTo(ProjectTemplateGate.DISABLED_KEY));
+
+		ServerSettings stored = settings.get();
+		stored.setProjectTemplates(null);
+		settings.save(stored);
+		assertThat(deadlines.offsetsEnabled()).isTrue();
+	}
+
+	private void moduleOff() {
 		ServerSettings stored = settings.get();
 		ServerSettings.ProjectTemplates block = new ServerSettings.ProjectTemplates();
 		block.setEnabled(false);
 		stored.setProjectTemplates(block);
-		settings.save(stored);
-
-		assertThat(deadlines.offsetsEnabled()).isFalse();
-
-		stored = settings.get();
-		stored.setProjectTemplates(null);
 		settings.save(stored);
 	}
 

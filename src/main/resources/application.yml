@@ -282,6 +282,9 @@ hinata:
     # `project_templates` client flag, and the switch in the admin area takes
     # precedence over this value.
     enabled: ${HINATA_PROJECT_TEMPLATES_ENABLED:false}
+    # Copies one person may make per hour; 0 switches the budget off. One copy is
+    # already bounded (500 issues, 50 files, 100 MB) — this bounds how many.
+    copies-per-hour: ${HINATA_PROJECT_TEMPLATES_COPIES_PER_HOUR:20}
 
 springdoc:
   api-docs:

@@ -53,10 +53,16 @@ public record RelativeDate(int amount, Unit unit, Basis basis) {
 		basis = basis == null ? Basis.CALENDAR : basis;
 	}
 
-	/** Whether the distance is inside the bounds an offset is allowed to span. */
+	/**
+	 * Whether the distance is inside the bounds an offset is allowed to span.
+	 *
+	 * <p>Compared on both sides rather than through {@code Math.abs}: {@code abs(MIN_VALUE)} is
+	 * {@code MIN_VALUE}, so the one value that matters would pass a one-sided check and land a
+	 * deadline somewhere around the year −5 877 584.
+	 */
 	public boolean withinLimits() {
 		int limit = unit == Unit.WEEKS ? MAX_WEEKS : MAX_DAYS;
-		return Math.abs(amount) <= limit;
+		return amount >= -limit && amount <= limit;
 	}
 
 	/** The same distance counted in days; a week is seven of them. */

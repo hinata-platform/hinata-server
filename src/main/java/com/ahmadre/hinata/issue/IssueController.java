@@ -52,7 +52,8 @@ public class IssueController {
 			throw ApiException.badRequest("error.feature.disabled");
 		}
 		if (!offset.withinLimits()) {
-			throw ApiException.badRequest("error.issue.offsetOutOfRange");
+			throw ApiException.badRequest("error.issue.offsetOutOfRange",
+					RelativeDate.MAX_DAYS, RelativeDate.MAX_WEEKS);
 		}
 		return offset;
 	}
