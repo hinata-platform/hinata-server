@@ -82,6 +82,12 @@ public final class IssueChangeDiff {
 	 *       computed per response and never stored at all.</li>
 	 *   <li>{@code searchText}: derived from the key, the title and the labels, for
 	 *       the board search.</li>
+	 *   <li>{@code startOffset} / {@code dueOffset} — the rule behind a date rather
+	 *       than the date itself. What a watcher cares about is the day the work is
+	 *       due, and that is reported as {@link #START_DATE} / {@link #DUE_DATE},
+	 *       which the rule writes. Reporting both would announce one change twice,
+	 *       and a project-wide reschedule would send every watcher two mails per
+	 *       issue instead of one.</li>
 	 * </ul>
 	 */
 	public static final List<String> EXCLUDED = List.of(
@@ -89,7 +95,8 @@ public final class IssueChangeDiff {
 			"assigneeId", "reporterId", "reporterEmail", "inboundMessageId", "inboundSubject",
 			"ingestConnectionId", "watcherIds", "spentMinutes", "dueReminderFor", "attachments",
 			"rank", "resolvedAt", "archivedAt", "createdAt", "updatedAt",
-			"subtaskCount", "subtaskDoneCount", "searchText");
+			"subtaskCount", "subtaskDoneCount", "searchText",
+			"startOffset", "dueOffset");
 
 	/**
 	 * One whitelisted field and how a change to it is read off two snapshots.

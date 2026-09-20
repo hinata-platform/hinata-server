@@ -59,7 +59,8 @@ class ProjectAvatarControllerTest {
 		// A real ProjectService over a real ProjectReach: together they *are* the
 		// reach and lead rules, so stubbing them out would stub out the behaviour
 		// under test.
-		projectService = new ProjectService(projects, mock(MongoTemplate.class), teams,
+		projectService = new ProjectService(projects, mock(ProjectTemplatePolicy.class),
+				mock(MongoTemplate.class), teams,
 				mock(NotificationService.class), mock(IssueWatcherCleanup.class),
 				new ProjectReach(projects, teams, mock(UserRepository.class)));
 		controller = new ProjectAvatarController(projectService, avatars,
@@ -201,7 +202,7 @@ class ProjectAvatarControllerTest {
 		// Every field the PATCH endpoint can carry, set at once.
 		Project saved = projectService.applyUpdate("p1", new ProjectUpdateRequest(
 				"HIN", "Renamed", "new description", "lead", List.of("lead"),
-				List.of("lead", "member"), null, null, null, "#FFFFFF", false, null),
+				List.of("lead", "member"), null, null, null, "#FFFFFF", false, null, null, null),
 				user("lead"));
 
 		assertThat(saved.getAvatarUrl()).isEqualTo("/api/v1/projects/p1/avatar?v=1&bh=LEHV6nWB");

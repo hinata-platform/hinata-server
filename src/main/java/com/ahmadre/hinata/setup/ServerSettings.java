@@ -85,6 +85,13 @@ public class ServerSettings {
 	 */
 	@Valid
 	private TimeTracking timeTracking;
+	/**
+	 * Project-template overrides. Not initialised, for the reason
+	 * {@link #timeTracking} is not: an absent block has to arrive as null so the
+	 * settings PUT can tell "the caller left this section out" from "the caller
+	 * cleared the switch".
+	 */
+	private ProjectTemplates projectTemplates;
 	private Audit audit = new Audit();
 
 	@LastModifiedDate
@@ -700,6 +707,33 @@ public class ServerSettings {
 						|| entryPurgeMonths >= TimePolicy.ENTRY_RETENTION_MIN_MONTHS;
 			}
 		}
+	}
+
+	/**
+	 * Project templates and relative deadlines (HIN-120). One nullable switch:
+	 * null means "no opinion here — use {@code hinata.project-templates.enabled}",
+	 * which is what "Use the environment default" writes when an administrator
+	 * clears the field.
+	 *
+	 * <p>The effective value is resolved by
+	 * {@code template.ProjectTemplateSettings}, which caches it; nothing reads
+	 * this block directly to decide anything.
+	 */
+	@Data
+	public static class ProjectTemplates {
+
+		/** Master switch override; null ⇒ {@code hinata.project-templates.enabled}. */
+		private Boolean enabled;
+
+		/**
+		 * What the switch currently resolves to, for the admin area to show
+		 * beside the field it edits. Never stored — filled by the module itself
+		 * on the way out, like {@link TimeTracking#getEffective()}.
+		 */
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		@JsonInclude(JsonInclude.Include.NON_NULL)
+		private ProjectTemplates effective;
 	}
 
 	/**

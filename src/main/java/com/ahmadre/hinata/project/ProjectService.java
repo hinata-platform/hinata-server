@@ -53,6 +53,11 @@ public class ProjectService {
 	private static final String ISSUE_KEY = "issueKey";
 
 	private final ProjectRepository projects;
+	/**
+	 * What the template marker means, answered by the module that owns templates. Asked for one
+	 * field of one request; everything else about a project is decided here.
+	 */
+	private final ProjectTemplatePolicy templates;
 	private final MongoTemplate mongo;
 	// Injected as a repository (not TeamService) so project gating can read team
 	// access without forming a bean cycle (TeamService depends on this service).
@@ -233,6 +238,7 @@ public class ProjectService {
 		return projects.save(project);
 	}
 
+
 	/**
 	 * Raises the project's {@code issueCounter} to at least [floor] if it has
 	 * fallen behind the real data (e.g. imported/seeded issues). Uses Mongo's
@@ -321,6 +327,20 @@ public class ProjectService {
 		if (req.description() != null) project.setDescription(req.description());
 		if (req.color() != null) project.setColor(req.color());
 		if (req.archived() != null) project.setArchived(req.archived());
+		if (req.workdayCalendarId() != null) {
+			project.setWorkdayCalendarId(
+					req.workdayCalendarId().isBlank() ? null : req.workdayCalendarId());
+		}
+		if (req.template() != null && req.template() != project.isTemplate()) {
+			// Not the interceptor's business: this endpoint has to keep working while the
+			// module is off, because a project nobody can rename is a broken product. Only
+			// the one field that would not exist without the module is refused.
+			if (!templates.offered()) {
+				throw ApiException.badRequest("error.feature.disabled");
+			}
+			project.setTemplate(req.template());
+			templates.recordMarked(project, user);
+		}
 
 		String previousKey = project.getKey();
 		// Snapshot members before the wholesale replace so we can notify only the
@@ -368,7 +388,12 @@ public class ProjectService {
 	 * the actor who performed it. Best-effort: a notification failure must never
 	 * fail the settings save.
 	 */
-	private void notifyNewMembers(Project saved, Set<String> previousMembers, User actor) {
+	/**
+	 * Tells everybody this save added to the project. Package-visible so the copy of HIN-120 can
+	 * use it: {@link #create} sends nothing, which is right for a project somebody creates empty
+	 * and wrong for one that arrives with a team already in it.
+	 */
+	public void notifyNewMembers(Project saved, Set<String> previousMembers, User actor) {
 		try {
 			for (String userId : saved.getMemberIds()) {
 				if (userId == null || previousMembers.contains(userId)

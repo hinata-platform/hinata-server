@@ -2,6 +2,7 @@ package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -36,6 +37,31 @@ public class IssueController {
 	private final CommentEvents commentEvents;
 	private final CurrentUser currentUser;
 	private final RichTextService richText;
+	private final IssueDeadlinePolicy deadlines;
+
+	/**
+	 * An offset a client may actually store.
+	 *
+	 * <p>Two refusals. The module may be off — this endpoint is not gated, because a project
+	 * whose issues could not be edited while templates are switched off would be a broken
+	 * product, so the field is refused rather than the request. And the distance is bounded, so
+	 * an offset cannot quietly reach across a decade.
+	 */
+	private RelativeDate checkedOffset(RelativeDate offset) {
+		if (!deadlines.offsetsEnabled()) {
+			throw ApiException.badRequest("error.feature.disabled");
+		}
+		if (!offset.withinLimits()) {
+			throw ApiException.badRequest("error.issue.offsetOutOfRange",
+					RelativeDate.MAX_DAYS, RelativeDate.MAX_WEEKS);
+		}
+		return offset;
+	}
+
+	/** The same checks for a create, where an absent offset is the ordinary case. */
+	private RelativeDate offsetOrNull(RelativeDate offset) {
+		return offset == null ? null : checkedOffset(offset);
+	}
 
 	public record CreateIssueRequest(
 			@NotBlank String projectId,
@@ -54,6 +80,9 @@ public class IssueController {
 			List<String> tags,
 			LocalDate startDate,
 			LocalDate dueDate,
+			/** The deadline as a distance from the project's event date; the date is derived. */
+			RelativeDate startOffset,
+			RelativeDate dueOffset,
 			Integer estimateMinutes,
 			Integer storyPoints) {
 	}
@@ -90,6 +119,13 @@ public class IssueController {
 			List<String> dependsOnIds,
 			LocalDate startDate,
 			LocalDate dueDate,
+			/**
+			 * The deadline as a distance from the project's event date instead of a fixed day.
+			 * Setting one computes the date; setting a date clears the offset, because a day
+			 * somebody typed is a decision the next event move must not overwrite.
+			 */
+			RelativeDate startOffset,
+			RelativeDate dueOffset,
 			Integer estimateMinutes,
 			Integer storyPoints,
 			Double rank,
@@ -97,6 +133,8 @@ public class IssueController {
 			// so clearing a value requires its own signal.
 			Boolean clearStartDate,
 			Boolean clearDueDate,
+			Boolean clearStartOffset,
+			Boolean clearDueOffset,
 			Boolean clearStoryPoints) {
 	}
 
@@ -231,6 +269,10 @@ public class IssueController {
 				.tags(request.tags() != null ? request.tags() : List.of())
 				.startDate(request.startDate())
 				.dueDate(request.dueDate())
+				// A date typed into the same form wins over an offset, as it does on every
+				// later edit; the service fills the date in from whichever offset survives.
+				.startOffset(request.startDate() != null ? null : offsetOrNull(request.startOffset()))
+				.dueOffset(request.dueDate() != null ? null : offsetOrNull(request.dueOffset()))
 				.estimateMinutes(request.estimateMinutes())
 				.storyPoints(request.storyPoints())
 				.build();
@@ -283,15 +325,34 @@ public class IssueController {
 			}
 			if (request.tags() != null) issue.setTags(request.tags());
 			if (request.dependsOnIds() != null) issue.setDependsOnIds(request.dependsOnIds());
+			// Offsets first, so a request that sends both a date and an offset ends with the
+			// date winning — which is the rule everywhere else in this feature.
+			if (Boolean.TRUE.equals(request.clearStartOffset())) {
+				issue.setStartOffset(null);
+			} else if (request.startOffset() != null) {
+				issue.setStartOffset(checkedOffset(request.startOffset()));
+			}
+			if (Boolean.TRUE.equals(request.clearDueOffset())) {
+				issue.setDueOffset(null);
+			} else if (request.dueOffset() != null) {
+				issue.setDueOffset(checkedOffset(request.dueOffset()));
+			}
 			if (Boolean.TRUE.equals(request.clearStartDate())) {
 				issue.setStartDate(null);
+				issue.setStartOffset(null);
 			} else if (request.startDate() != null) {
 				issue.setStartDate(request.startDate());
+				// A hand-set date wins and takes the rule with it. Without this the next
+				// event-date move would quietly overwrite a deliberate decision, which is the
+				// one thing a schedule feature must never do.
+				issue.setStartOffset(null);
 			}
 			if (Boolean.TRUE.equals(request.clearDueDate())) {
 				issue.setDueDate(null);
+				issue.setDueOffset(null);
 			} else if (request.dueDate() != null) {
 				issue.setDueDate(request.dueDate());
+				issue.setDueOffset(null);
 			}
 			if (request.estimateMinutes() != null) issue.setEstimateMinutes(request.estimateMinutes());
 			if (Boolean.TRUE.equals(request.clearStoryPoints())) {

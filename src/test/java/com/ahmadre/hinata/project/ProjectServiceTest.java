@@ -43,9 +43,13 @@ class ProjectServiceTest {
 		when(teams.findByMembersUserId(any())).thenReturn(List.of());
 		when(projects.save(any(Project.class))).thenAnswer(i -> i.getArgument(0));
 		NotificationService notifications = mock(NotificationService.class);
+		ProjectTemplatePolicy templates = mock(ProjectTemplatePolicy.class);
 		// A real ProjectReach over the same mocks: it *is* the membership rule, so
 		// stubbing it out would stub out the access behaviour under test.
-		service = new ProjectService(projects, mongo, teams, notifications,
+		// The module that owns the template marker, switched on: this file is about the
+		// rest of the settings write, not about the flag.
+		when(templates.offered()).thenReturn(true);
+		service = new ProjectService(projects, templates, mongo, teams, notifications,
 				mock(IssueWatcherCleanup.class),
 				new ProjectReach(projects, teams, mock(UserRepository.class)));
 	}
@@ -73,7 +77,7 @@ class ProjectServiceTest {
 
 	private ProjectUpdateRequest req(List<Project.WorkflowState> states, List<String> resolved) {
 		return new ProjectUpdateRequest(
-				null, null, null, null, null, null, states, resolved, null, null, null, null);
+				null, null, null, null, null, null, states, resolved, null, null, null, null, null, null);
 	}
 
 	@Test
@@ -118,7 +122,7 @@ class ProjectServiceTest {
 	void rejectsRemovingTheLastLead() {
 		sampleProject();
 		ProjectUpdateRequest update = new ProjectUpdateRequest(
-				null, null, null, null, List.of(), null, null, null, null, null, null, null);
+				null, null, null, null, List.of(), null, null, null, null, null, null, null, null, null);
 		assertThatThrownBy(() -> service.applyUpdate("p1", update, user("u1")))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.project.leadRequired");
@@ -130,7 +134,7 @@ class ProjectServiceTest {
 		when(projects.findByKeyIgnoreCase("API"))
 				.thenReturn(Optional.of(Project.builder().id("other").build()));
 		ProjectUpdateRequest update = new ProjectUpdateRequest(
-				"API", null, null, null, null, null, null, null, null, null, null, null);
+				"API", null, null, null, null, null, null, null, null, null, null, null, null, null);
 		assertThatThrownBy(() -> service.applyUpdate("p1", update, user("u1")))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.project.keyExists");
@@ -140,7 +144,7 @@ class ProjectServiceTest {
 	void nonLeadMemberCannotEditSettings() {
 		sampleProject();
 		ProjectUpdateRequest update = new ProjectUpdateRequest(
-				null, "Renamed", null, null, null, null, null, null, null, null, null, null);
+				null, "Renamed", null, null, null, null, null, null, null, null, null, null, null, null);
 		assertThatThrownBy(() -> service.applyUpdate("p1", update, user("u2")))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.project.notLead");
@@ -156,7 +160,7 @@ class ProjectServiceTest {
 		ProjectUpdateRequest update = new ProjectUpdateRequest(
 				null, null, null, null, null, null, null, null,
 				List.of(Project.Label.builder().id("lb1").name("bug").hue(20).build()),
-				null, null, null);
+				null, null, null, null, null);
 		Project saved = service.applyUpdate("p1", update, user("admin", Role.ADMIN));
 
 		assertThat(saved.labelNames()).containsExactly("bug");
@@ -184,14 +188,14 @@ class ProjectServiceTest {
 
 		// Deleting "Open" without naming a migration target is rejected.
 		ProjectUpdateRequest noMigration = new ProjectUpdateRequest(
-				null, null, null, null, null, null, withoutOpen, null, null, null, null, null);
+				null, null, null, null, null, null, withoutOpen, null, null, null, null, null, null, null);
 		assertThatThrownBy(() -> service.applyUpdate("p1", noMigration, user("u1")))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.project.stateHasIssues");
 
 		// Migrating Open (s1) -> Doing (s2) succeeds and reassigns the issues.
 		ProjectUpdateRequest withMigration = new ProjectUpdateRequest(
-				null, null, null, null, null, null, withoutOpen, null, null, null, null,
+				null, null, null, null, null, null, withoutOpen, null, null, null, null, null, null,
 				java.util.Map.of("s1", "s2"));
 		Project saved = service.applyUpdate("p1", withMigration, user("u1"));
 
@@ -228,7 +232,7 @@ class ProjectServiceTest {
 
 	private ProjectUpdateRequest labels(Project.Label... labels) {
 		return new ProjectUpdateRequest(
-				null, null, null, null, null, null, null, null, List.of(labels), null, null, null);
+				null, null, null, null, null, null, null, null, List.of(labels), null, null, null, null, null);
 	}
 
 	@Test

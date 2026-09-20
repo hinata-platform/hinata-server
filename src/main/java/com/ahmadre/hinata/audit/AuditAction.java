@@ -209,7 +209,28 @@ public enum AuditAction {
 	MCP_SPRINT_STARTED(INTEGRATION, NOTICE, true),
 	MCP_SPRINT_COMPLETED(INTEGRATION, NOTICE, true),
 	MCP_ATTACHMENT_READ(INTEGRATION, INFO, true),
-	MCP_OAUTH_AUTHORIZED(INTEGRATION, NOTICE, true);
+	MCP_OAUTH_AUTHORIZED(INTEGRATION, NOTICE, true),
+
+	// --- Project templates (HIN-120) -------------------------------------------
+	// Switching the module on or off for the whole instance. CONFIGURATION and on
+	// by default, like every other master switch: a feature that can copy whole
+	// projects appearing or disappearing is a decision worth being able to trace.
+	PROJECT_TEMPLATES_POLICY_CHANGED(CONFIGURATION, WARNING, true),
+	// Moving a project's event date, with the number of deadlines that followed it and the
+	// number left where somebody put them by hand. DATA rather than CONFIGURATION: it rewrites
+	// dates people planned around, and "why is this due a week later" has to be answerable.
+	PROJECT_SCHEDULE_SHIFTED(DATA, NOTICE, true),
+	// Copying a whole project, with the source, the copy and how much came along. DATA and on
+	// by default: a copy carries descriptions and files out of one project into another, and
+	// "where did this second project come from" has to have an answer.
+	PROJECT_COPIED(DATA, NOTICE, true),
+	// Marking a project as a template, and unmarking it. CONFIGURATION: it changes where the
+	// project is listed for everybody and offers a button that creates whole projects.
+	PROJECT_TEMPLATE_MARKED(CONFIGURATION, NOTICE, true),
+	// Creating a project from a template in one step. Its own name beside PROJECT_COPIED,
+	// because "where did our twelve event projects come from" is a different question from
+	// "who copied this one project".
+	PROJECT_INSTANTIATED(DATA, NOTICE, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

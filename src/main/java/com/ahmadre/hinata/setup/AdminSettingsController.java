@@ -236,7 +236,7 @@ public class AdminSettingsController {
 		// The PUT is a whole-document write. The published 10.3.3 client keeps the
 		// settings as the raw map it read, so it hands sections it does not know
 		// back untouched — but a deployment script, a curl body or any client
-		// built from a typed model omits what it does not model. For these three
+		// built from a typed model omits what it does not model. For these four
 		// blocks every field means "null ⇒ the environment decides", so an
 		// omission would not be stored as an omission: it would be resolved to the
 		// environment default and take effect. MCP would switch itself back on, an
@@ -251,6 +251,9 @@ public class AdminSettingsController {
 		}
 		if (updated.getSecurity() == null) {
 			updated.setSecurity(current.getSecurity());
+		}
+		if (updated.getProjectTemplates() == null) {
+			updated.setProjectTemplates(current.getProjectTemplates());
 		}
 		// An upload the admin has just switched away from: the stored object would
 		// otherwise shadow the new URL in the /meta/logo proxy and linger as an

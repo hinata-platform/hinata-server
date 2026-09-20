@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.common.RelativeDate;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -72,6 +73,14 @@ import java.util.List;
 // so a page comes off the index sorted.
 @CompoundIndex(name = "board_by_dates",
 		def = "{'projectId': 1, 'archived': 1, 'startDate': 1, 'dueDate': 1, '_id': 1, 'type': 1, 'state': 1, 'priority': 1, 'searchText': 1}")
+// The issues of a project whose deadline is a rule rather than a day (HIN-120). Without these
+// the schedule preview reads every issue in the project to find the handful that carry one, and
+// the count of hand-set deadlines fetches every document to evaluate a negation. The second one
+// carries dueDate as well: with the equality on dueOffset in front of it, "has a date and no
+// rule" is answered off the keys and reads no document at all.
+@CompoundIndex(name = "proj_start_offset", def = "{'projectId': 1, 'archived': 1, 'startOffset': 1}")
+@CompoundIndex(name = "proj_due_offset",
+		def = "{'projectId': 1, 'archived': 1, 'dueOffset': 1, 'startOffset': 1, 'dueDate': 1}")
 // A filter by assignee, reporter or label: equality on the value, then the state and board
 // order, so one person's or one label's cards are counted off the keys and paged without
 // reading anybody else's. They also hand the filter its values: the reporters by a distinct
@@ -255,6 +264,23 @@ public class Issue {
 	/** Planning fields for Gantt / scheduling. */
 	private LocalDate startDate;
 	private LocalDate dueDate;
+
+	/**
+	 * The rule behind {@link #startDate} and {@link #dueDate} when the project keeps its dates
+	 * relative to an event: "four weeks before", "three days after".
+	 *
+	 * <p><b>The date stays written.</b> An issue with an offset still carries the resolved
+	 * {@code LocalDate}, and every reader that asks for a deadline today — the board, the Gantt
+	 * chart, the reports, the reminder job, the published store app that can no longer be taught
+	 * anything — goes on reading exactly that field. The offset is the rule, the date is its
+	 * result; computing the date at read time would mean teaching all of them the arithmetic.
+	 *
+	 * <p>Null is the ordinary case and stays the ordinary case: an issue whose date somebody typed
+	 * has no offset, and setting a date by hand clears one. A project without an event date keeps
+	 * the offsets it has and leaves the dates empty, which is what a template looks like.
+	 */
+	private RelativeDate startOffset;
+	private RelativeDate dueOffset;
 
 	/**
 	 * The {@link #dueDate} value the "due soon" reminder was last sent for. The

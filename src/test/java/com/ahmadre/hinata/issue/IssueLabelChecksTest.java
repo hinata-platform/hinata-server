@@ -59,7 +59,10 @@ class IssueLabelChecksTest {
 				mock(IssueLinkRepository.class), mock(IssueLinkEvents.class), mock(CommentEvents.class), projects,
 				mock(NotificationService.class), mock(StorageService.class), mock(WorkItemRepository.class),
 				mock(AuditService.class), mongo, mock(AgileBoardRepository.class),
-				mock(SprintRepository.class), mock(UserRepository.class));
+				mock(SprintRepository.class), mock(UserRepository.class),
+				// Offsets are a module that can be switched off; this test is about
+				// everything else, so the policy answers nothing.
+				mock(IssueDeadlinePolicy.class));
 	}
 
 	@Test

@@ -54,12 +54,19 @@ public class ProjectController {
 	@GetMapping
 	public List<Project> list(
 			@RequestParam(required = false, defaultValue = "false") boolean archived,
-			@RequestParam(required = false) String q) {
+			@RequestParam(required = false) String q,
+			/**
+			 * Only templates, or only the running projects. Absent means both, which is what
+			 * the published store app asks for and must keep getting: a client that never
+			 * heard of templates would otherwise lose whichever half it was not told about.
+			 */
+			@RequestParam(required = false) Boolean template) {
 		User user = currentUser.require();
 		List<Project> visible = archived ? projectService.archivedVisibleTo(user)
 				: projectService.visibleTo(user);
 		String needle = q == null ? null : q.trim().toLowerCase();
 		return visible.stream()
+				.filter(p -> template == null || p.isTemplate() == template)
 				.filter(p -> needle == null || needle.isEmpty()
 						|| (p.getName() != null && p.getName().toLowerCase().contains(needle))
 						|| (p.getKey() != null && p.getKey().toLowerCase().contains(needle)))

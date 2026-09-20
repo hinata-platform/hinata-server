@@ -65,7 +65,10 @@ class IssueUpdateNotificationTest {
 				mock(StorageService.class), mock(WorkItemRepository.class),
 				mock(AuditService.class, RETURNS_DEEP_STUBS), mock(MongoTemplate.class),
 				mock(AgileBoardRepository.class), mock(SprintRepository.class),
-				mock(UserRepository.class));
+				mock(UserRepository.class),
+				// Offsets are a module that can be switched off; this test is about
+				// everything else, so the policy answers nothing.
+				mock(IssueDeadlinePolicy.class));
 		when(issues.save(any(Issue.class))).thenAnswer(call -> call.getArgument(0));
 	}
 

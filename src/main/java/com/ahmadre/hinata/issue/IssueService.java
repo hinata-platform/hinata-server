@@ -76,6 +76,13 @@ public class IssueService {
 	private final SprintRepository sprintRepo;
 	private final UserRepository userRepo;
 
+	/**
+	 * What a relative deadline resolves to, answered by the module that owns offsets
+	 * ({@code template}). Asked after every write so the stored {@code dueDate} is always the
+	 * offset's result, and a no-op for the issues that carry none — which is nearly all of them.
+	 */
+	private final IssueDeadlinePolicy deadlines;
+
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
 	/** Audio MIME types accepted for voice comments (per recording platform). */
@@ -178,6 +185,9 @@ public class IssueService {
 		}
 		validateHierarchy(issue);
 		issue.setRank(Instant.now().toEpochMilli());
+		// Before the write, so an issue created with an offset arrives with its date already
+		// filled in rather than a beat later.
+		deadlines.resolveDates(issue, project);
 		Issue saved = saveWithNumberRetry(issue, project);
 		mergeProjectLabels(project, saved.getTags());
 		activities.save(IssueActivity.builder()
@@ -275,6 +285,10 @@ public class IssueService {
 				? (issue.getResolvedAt() != null ? issue.getResolvedAt() : Instant.now())
 				: null);
 
+		// The offset is the rule and the date is its result, so the result is written here on
+		// every save rather than computed by each reader. An issue whose date somebody typed has
+		// had its offset cleared by then and is left alone.
+		deadlines.resolveDates(issue, project);
 		Issue saved = issues.save(issue);
 		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);

@@ -73,6 +73,11 @@ public class IssueCloneService {
 	static final List<String> CARRIED = List.of(
 			"projectId", "title", "description", "descriptionDoc", "type", "priority", "tags",
 			"parentId", "estimateMinutes", "storyPoints", "startDate", "dueDate",
+			// The rule behind the two dates above, where there is one. A clone stays in the
+			// same project and therefore under the same event date, so "four weeks before"
+			// still means the same day — and leaving the rule behind would quietly turn a
+			// deadline that follows the event into one that no longer does.
+			"startOffset", "dueOffset",
 			"assigneeId", "assigneeIds", "attachments", "sprintId", "dependsOnIds");
 
 	/**
