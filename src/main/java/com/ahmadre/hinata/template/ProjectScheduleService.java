@@ -99,9 +99,23 @@ public class ProjectScheduleService {
 	}
 
 	/** The preview for a project already loaded and already permitted. */
-	public Preview previewOf(Project project, LocalDate eventDate, Integer limit) {
-		return previewOf(project, eventDate, limit, withOffsets(project.getId()),
+	private Preview previewOf(Project project, LocalDate eventDate, Integer limit) {
+		return previewOf(project, eventDate, namedLimit(limit), withOffsets(project.getId()),
 				calendars.of(project));
+	}
+
+	/**
+	 * How many moves a <em>client</em> may have named. Bounded, because the rows only exist to
+	 * recognise the shape of a move and a response that grew with the project would be a read
+	 * route anybody could turn into a download.
+	 *
+	 * <p>Deliberately not applied to what {@code apply} asks for: that call feeds the activity
+	 * log, which needs one line per moved deadline. Clamping it there wrote two hundred history
+	 * entries for five thousand changed dates and left the rest moving with no trace — the exact
+	 * silence {@code recordActivities} exists to prevent.
+	 */
+	private static int namedLimit(Integer limit) {
+		return limit == null || limit <= 0 ? PREVIEW_LIMIT : Math.min(limit, PREVIEW_LIMIT_MAX);
 	}
 
 	/**
@@ -110,10 +124,8 @@ public class ProjectScheduleService {
 	 * <p>{@code apply} reads both once and hands them to the preview and to the write, so moving
 	 * a date is one pass over the project rather than three.
 	 */
-	private Preview previewOf(Project project, LocalDate eventDate, Integer limit,
+	private Preview previewOf(Project project, LocalDate eventDate, int named,
 			List<Issue> plan, WorkdayCalendar calendar) {
-		int named = limit == null || limit <= 0
-				? PREVIEW_LIMIT : Math.min(limit, PREVIEW_LIMIT_MAX);
 		List<Move> moves = new ArrayList<>();
 		int moved = 0;
 		int unchanged = 0;
@@ -168,6 +180,7 @@ public class ProjectScheduleService {
 		// second time and fetch the same holiday years over again, for one decision.
 		WorkdayCalendar calendar = calendars.of(project);
 		List<Issue> plan = withOffsets(project.getId());
+		// Every move, not a page of them: each one becomes a line in its issue's own history.
 		Preview preview = previewOf(project, eventDate, Integer.MAX_VALUE, plan, calendar);
 		project.setEventDate(eventDate);
 		projects.save(project);
@@ -197,6 +210,10 @@ public class ProjectScheduleService {
 	public LocalDate resolve(String projectId, LocalDate eventDate, RelativeDate offset,
 			User user) {
 		requireModule();
+		// The same bound preview and apply hold to. Without it a date like +999999999-12-31
+		// reaches plusDays and throws out of the arithmetic: a 500 and a stack trace per
+		// request, on a route any member may call in a loop.
+		LocalDate proposed = checked(eventDate);
 		Project project = projects.get(projectId);
 		projects.assertMember(project, user);
 		if (offset == null) {
@@ -206,7 +223,7 @@ public class ProjectScheduleService {
 			throw ApiException.badRequest("error.issue.offsetOutOfRange",
 					RelativeDate.MAX_DAYS, RelativeDate.MAX_WEEKS);
 		}
-		LocalDate anchor = eventDate != null ? eventDate : project.getEventDate();
+		LocalDate anchor = proposed != null ? proposed : project.getEventDate();
 		return RelativeDates.resolve(anchor, offset, calendars.of(project));
 	}
 

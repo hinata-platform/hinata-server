@@ -238,15 +238,6 @@ public class ProjectService {
 		return projects.save(project);
 	}
 
-	/**
-	 * Whether a project key is already in use, case-insensitively.
-	 *
-	 * <p>Asked by the copy path while it looks for a free key to suggest. The uniqueness rule
-	 * itself stays in {@link #create}: this is the question, not a second answer to it.
-	 */
-	public boolean keyTaken(String key) {
-		return key != null && projects.existsByKeyIgnoreCase(key);
-	}
 
 	/**
 	 * Raises the project's {@code issueCounter} to at least [floor] if it has

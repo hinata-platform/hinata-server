@@ -77,6 +77,13 @@ public class ProjectCopyService {
 	/** The longest name a copy may carry, matching the bound on the REST body. */
 	private static final int MAX_NAME_CHARS = 120;
 
+	/**
+	 * How many people a copy tells about itself. Past this the notice is skipped: a copy is one
+	 * request, and a mail and a push each to several hundred people is not what somebody pressing
+	 * "copy" is asking for.
+	 */
+	private static final int MAX_NOTIFIED_MEMBERS = 50;
+
 	/** The same file budget the issue clone holds to, for the same reasons. */
 	static final int MAX_COPIED_FILES = 50;
 	static final long MAX_COPIED_BYTES = 100L * 1024 * 1024;
@@ -231,7 +238,7 @@ public class ProjectCopyService {
 
 		long total = countPlan(source.getId());
 		if (total > MAX_ISSUES) {
-			throw ApiException.badRequest("error.project.copyTooLarge", total, MAX_ISSUES);
+			throw ApiException.badRequest("error.project.copyTooLarge", (int) total, MAX_ISSUES);
 		}
 		// One more than the budget, so a refusal never costs the price of the thing refused.
 		List<Issue> plan = planOf(source.getId(), MAX_ISSUES + 1);
@@ -244,13 +251,10 @@ public class ProjectCopyService {
 
 		Project copy = newProject(source, options, name, eventDate, user);
 		Trace trace = new Trace();
+		Result result;
 		try {
 			Project created = projects.create(copy, user);
 			trace.projectId = created.getId();
-			// Everybody the copy arrived with hears about it. `create` sends nothing, which is
-			// right for a project somebody starts empty and wrong for one that lands with a team
-			// already in it — the first thing they would otherwise hear is a deadline reminder.
-			projects.notifyNewMembers(created, Set.of(user.getId()), user);
 			Copied copied = copyIssues(source, created, plan, options, trace);
 			copyLinks(source.getId(), copied.idMap(), trace);
 			if (options.includeBoard()) {
@@ -272,7 +276,7 @@ public class ProjectCopyService {
 					.meta("eventDate", options.eventDate() == null
 							? "none" : options.eventDate().toString())
 					.log();
-			return new Result(created, copied.issues(), copied.subtasks(),
+			result = new Result(created, copied.issues(), copied.subtasks(),
 					trace.objectKeys.size(), copied.deadlines());
 		}
 		catch (RuntimeException failed) {
@@ -281,6 +285,31 @@ public class ProjectCopyService {
 			rollback(trace);
 			throw failed;
 		}
+		// Outside the rollback window on purpose. A bell entry, a mail and a push cannot be
+		// unsent, so telling people about a project before it is certainly there means telling
+		// them about one that may be removed a moment later, with a deep link that 404s.
+		announce(result.project(), user);
+		return result;
+	}
+
+	/**
+	 * Tells the people the copy arrived with. {@code create} sends nothing, which is right for a
+	 * project somebody starts empty and wrong for one that lands with a team already in it — the
+	 * first thing they would otherwise hear about it is a deadline reminder.
+	 *
+	 * <p>Bounded, because this is a fan-out a member can ask for twenty times an hour: a copy of
+	 * a five-hundred-person project would otherwise be five hundred bell entries, mails and
+	 * pushes per request. Above the threshold the copy is silent and says so in the log; whoever
+	 * made it can still tell the project who it belongs to.
+	 */
+	private void announce(Project created, User user) {
+		List<String> members = nonNull(created.getMemberIds());
+		if (members.size() > MAX_NOTIFIED_MEMBERS) {
+			log.info("Copy {} reached {} members; not notifying them individually",
+					created.getKey(), members.size());
+			return;
+		}
+		projects.notifyNewMembers(created, Set.of(user.getId()), user);
 	}
 
 	// --- the plan -------------------------------------------------------------
@@ -323,11 +352,19 @@ public class ProjectCopyService {
 	 * project list of everybody the copy enrolled.
 	 */
 	private static String checkedName(String name, Project source) {
-		String chosen = name == null || name.isBlank() ? source.getName() + " (copy)" : name.trim();
-		if (chosen.length() > MAX_NAME_CHARS) {
-			throw ApiException.badRequest("error.project.nameTooLong", MAX_NAME_CHARS);
+		if (name != null && !name.isBlank()) {
+			String chosen = name.trim();
+			if (chosen.length() > MAX_NAME_CHARS) {
+				throw ApiException.badRequest("error.project.nameTooLong", MAX_NAME_CHARS);
+			}
+			return chosen;
 		}
-		return chosen;
+		// Nobody named it, so nobody can be refused for the length: a project whose own name is
+		// long enough that "… (copy)" overruns the bound gets a shortened one rather than an
+		// error about a field the request never filled in.
+		String suffixed = source.getName() + " (copy)";
+		return suffixed.length() <= MAX_NAME_CHARS
+				? suffixed : suffixed.substring(0, MAX_NAME_CHARS);
 	}
 
 	/** A project key nobody is using yet, derived from the source's. */
@@ -338,6 +375,8 @@ public class ProjectCopyService {
 		// Every key that could collide in one round trip. Asking per candidate was up to
 		// ninety-eight queries, each a full scan of the key index, on a route the sheet calls
 		// every time it opens.
+		// Quoted for the *database*, not for java.util.regex: Mongo's PCRE2 understands \Q…\E,
+		// and the stem comes from a key that is [A-Z0-9] by construction either way.
 		Query taken = Query.query(Criteria.where("key")
 				.regex("^" + Pattern.quote(stem) + "\\d{1,2}$", "i"));
 		taken.fields().include("key");

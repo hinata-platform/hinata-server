@@ -26,6 +26,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -226,6 +228,47 @@ class ProjectScheduleIntegrationTest {
 		// Otherwise the job stays silent about the new date because it once spoke about the old
 		// one, and a deadline moves without anybody being told.
 		assertThat(stored(room).getDueReminderFor()).isNull();
+	}
+
+	@Test
+	@DisplayName("every moved deadline gets a history line, past the preview's own page size")
+	void theHistoryIsNotPagedLikeThePreview() {
+		// The preview names a handful of rows because a sheet is a decision, not a report. The
+		// activity log is the opposite: one line per moved date, or an issue's date changes with
+		// nothing anywhere saying who moved it. Clamping both with one number silently wrote
+		// PREVIEW_LIMIT_MAX lines for however many dates actually moved.
+		int count = ProjectScheduleService.PREVIEW_LIMIT_MAX + 25;
+		for (int i = 0; i < count; i++) {
+			issue("Bulk " + i, weeks(-2));
+		}
+
+		ProjectScheduleService.Result result =
+				schedule.apply(project.getId(), EVENT.plusDays(7), lead);
+
+		assertThat(result.deadlinesMoved()).isEqualTo(count);
+		// Only the date lines: creating the issues wrote a CREATED entry each.
+		assertThat(mongo.count(Query.query(
+				Criteria.where("field").is(IssueActivity.Field.DUE_DATE)), IssueActivity.class))
+				.isEqualTo(count);
+		// And what a client asks for is still bounded.
+		ProjectScheduleService.Preview preview = schedule.preview(project.getId(),
+				EVENT.plusDays(14), Integer.MAX_VALUE, lead);
+		assertThat(preview.moves()).hasSize(ProjectScheduleService.PREVIEW_LIMIT_MAX);
+		assertThat(preview.moved()).isEqualTo(count);
+	}
+
+	@Test
+	@DisplayName("a date nobody could have meant is refused rather than thrown out of")
+	void anImpossibleDateIsRefused() {
+		// Without the bound this reaches plusDays and throws out of the arithmetic: a 500 and a
+		// stack trace per request, on a route any member may call in a loop.
+		LocalDate absurd = LocalDate.of(999_999_999, 12, 31);
+
+		assertThatThrownBy(() -> schedule.resolve(project.getId(), absurd,
+				weeks(-1), member))
+				.isInstanceOfSatisfying(ApiException.class, ex ->
+						assertThat(ex.getMessageKey())
+								.isEqualTo("error.project.eventDateOutOfRange"));
 	}
 
 	// --- the cases that must not lose anything -------------------------------

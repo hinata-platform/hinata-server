@@ -40,6 +40,12 @@ public final class RelativeDates {
 		if (anchor == null || offset == null) {
 			return null;
 		}
+		if (!offset.withinLimits()) {
+			// No write path can store one of these any more, but a document written while the
+			// bound was one-sided still can hold ±2 147 483 648. Refusing to compute is the only
+			// answer that does not put the year −5 877 584 on somebody's board.
+			return null;
+		}
 		return switch (offset.basis()) {
 			case CALENDAR -> anchor.plusDays(offset.days());
 			case WORKING -> workdays(anchor, offset.days(),
