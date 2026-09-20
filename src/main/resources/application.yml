@@ -275,6 +275,13 @@ hinata:
     # their own. Spelled out here because relaxed binding would only read the
     # variable without the underscores inside the property name.
     default-weekday-minutes: ${HINATA_AVAILABILITY_DEFAULT_WEEKDAY_MINUTES:480,480,480,480,480,0,0}
+  project-templates:
+    # Master switch for project templates, copying a project and deadlines kept
+    # as an offset from the project's event date. Off by default; an instance
+    # that upgrades keeps exactly the projects it had. Also published as the
+    # `project_templates` client flag, and the switch in the admin area takes
+    # precedence over this value.
+    enabled: ${HINATA_PROJECT_TEMPLATES_ENABLED:false}
 
 springdoc:
   api-docs:

@@ -209,7 +209,13 @@ public enum AuditAction {
 	MCP_SPRINT_STARTED(INTEGRATION, NOTICE, true),
 	MCP_SPRINT_COMPLETED(INTEGRATION, NOTICE, true),
 	MCP_ATTACHMENT_READ(INTEGRATION, INFO, true),
-	MCP_OAUTH_AUTHORIZED(INTEGRATION, NOTICE, true);
+	MCP_OAUTH_AUTHORIZED(INTEGRATION, NOTICE, true),
+
+	// --- Project templates (HIN-120) -------------------------------------------
+	// Switching the module on or off for the whole instance. CONFIGURATION and on
+	// by default, like every other master switch: a feature that can copy whole
+	// projects appearing or disappearing is a decision worth being able to trace.
+	PROJECT_TEMPLATES_POLICY_CHANGED(CONFIGURATION, WARNING, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

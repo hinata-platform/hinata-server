@@ -82,6 +82,7 @@ public class HinataProperties {
 	private Ics ics = new Ics();
 	@Valid
 	private Availability availability = new Availability();
+	private ProjectTemplates projectTemplates = new ProjectTemplates();
 
 	/** Tuning for the notification fan-out that is not a per-user preference. */
 	@Getter
@@ -191,6 +192,27 @@ public class HinataProperties {
 		 */
 		@Size(min = 7, max = 7)
 		private List<@Min(0) @Max(1440) Integer> defaultWeekdayMinutes = List.of(480, 480, 480, 480, 480, 0, 0);
+	}
+
+	/**
+	 * Project templates and deadlines kept relative to a project's event date
+	 * (HIN-120).
+	 *
+	 * <p>Off by default, like every module that brings routes and screens of its
+	 * own: an instance that upgrades keeps exactly the projects it had until
+	 * somebody chooses otherwise. Also published as the {@code project_templates}
+	 * client flag, and an administrator's stored value in
+	 * {@code ServerSettings.ProjectTemplates} wins over what is set here.
+	 */
+	@Getter
+	@Setter
+	public static class ProjectTemplates {
+
+		/**
+		 * Master switch for copying projects, marking one as a template and
+		 * keeping a deadline as an offset from the project's event date.
+		 */
+		private boolean enabled = false;
 	}
 
 	/**
