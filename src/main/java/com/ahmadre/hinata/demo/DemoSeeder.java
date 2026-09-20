@@ -21,8 +21,11 @@ import com.ahmadre.hinata.issue.IssueLinkRepository;
 import com.ahmadre.hinata.issue.IssueLinkType;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.me.NotificationPreferences;
+import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
+import com.ahmadre.hinata.template.ProjectCopyService;
+import com.ahmadre.hinata.template.ProjectTemplateSettings;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.space.Space;
@@ -112,6 +115,9 @@ public class DemoSeeder {
 	private final GitService gitService;
 	private final GitDevInfoRepository gitDevInfos;
 	private final TokenCipher tokenCipher;
+	/** The two halves of HIN-120 the seeder needs: whether the module is on, and the copy. */
+	private final ProjectTemplateSettings templates;
+	private final ProjectCopyService copies;
 
 	private final Map<String, Long> counters = new LinkedHashMap<>();
 
@@ -191,6 +197,12 @@ public class DemoSeeder {
 
 		// --- knowledge base (real articles, cross-linked to issues/people) --
 		seedKnowledge(core, dsgn, hin, inf, admin, tomas, lena, amara, mei, jonas);
+
+		// --- a template, and a project made from it -------------------------
+		// Only where the module is on. Seeded rather than described, because
+		// "a deadline four weeks before the event" is a thing people understand
+		// in one look at a real project and not in a paragraph.
+		seedEventTemplate(admin, everyone);
 
 		// --- security audit log (real, back-dated events) ------------------
 		seedAuditLog(admin, tomas, lena, amara, mei, jonas);
@@ -482,6 +494,63 @@ public class DemoSeeder {
 				"Done", lead, null, 1, 60, 55, daysAgo(8));
 		backlog(p, "Localize push notification copy", Issue.Type.TASK, qa, 4, List.of());
 		backlog(p, "Add staging environment to CI", Issue.Type.TASK, b, 5, List.of());
+	}
+
+	/**
+	 * A template for a recurring event, and one project created from it.
+	 *
+	 * <p>The template carries no dates at all: its issues hold rules — six weeks before, three
+	 * weeks before, a week before, three days after — and the project made from it turns those
+	 * into days. That pair is the feature in one look, which a paragraph of documentation is not.
+	 *
+	 * <p>Skipped where the module is off, so an instance that never switches it on does not find
+	 * two projects it cannot explain.
+	 */
+	private void seedEventTemplate(User admin, List<User> everyone) {
+		if (!templates.enabled()) {
+			return;
+		}
+		Project template = project("EVENT", "Event (template)",
+				"The chain of tasks behind every action day: room, money, posters, posts, the "
+						+ "settlement afterwards. Copy it and give the copy a date.",
+				"#C9A8F0", admin, everyone);
+		template.setTemplate(true);
+		projects.save(template);
+
+		Issue prepare = epic(template, "Prepare the event", admin, 100);
+		offsetIssue(template, "Book the room", prepare, admin, -6, RelativeDate.Unit.WEEKS,
+				RelativeDate.Basis.CALENDAR, 101);
+		Issue money = offsetIssue(template, "Apply for the budget", prepare, admin, -5,
+				RelativeDate.Unit.WEEKS, RelativeDate.Basis.CALENDAR, 102);
+		subtask(template, "Collect the quotes", admin, "Backlog", money, 90);
+		subtask(template, "Hand the form in", admin, "Backlog", money, 30);
+		offsetIssue(template, "Design the poster", prepare, admin, -4, RelativeDate.Unit.WEEKS,
+				RelativeDate.Basis.CALENDAR, 103);
+		// Working days, because a print shop is shut at the weekend and this is the one
+		// deadline where that difference is the whole point.
+		offsetIssue(template, "Send the poster to print", prepare, admin, -7,
+				RelativeDate.Unit.DAYS, RelativeDate.Basis.WORKING, 104);
+		offsetIssue(template, "Announce it on Instagram", prepare, admin, -1,
+				RelativeDate.Unit.WEEKS, RelativeDate.Basis.CALENDAR, 105);
+		offsetIssue(template, "Brief the helpers", prepare, admin, -2, RelativeDate.Unit.DAYS,
+				RelativeDate.Basis.CALENDAR, 106);
+		offsetIssue(template, "Settle the bill", prepare, admin, 3, RelativeDate.Unit.DAYS,
+				RelativeDate.Basis.CALENDAR, 107);
+
+		// And the project somebody made from it, five weeks out, so the deadlines on screen are
+		// dates a reader can check against the rules above.
+		LocalDate event = LocalDate.now(ZoneOffset.UTC).plusWeeks(5);
+		copies.copy(template.getId(), new ProjectCopyService.Options(
+				"Beers for Queers", "BFQ", event, true, false, true, false, false), admin);
+	}
+
+	/** One template issue: a rule, no date, and no assignee to imply somebody already owns it. */
+	private Issue offsetIssue(Project p, String title, Issue parent, User assignee, int amount,
+			RelativeDate.Unit unit, RelativeDate.Basis basis, int rank) {
+		Issue issue = issue(p, title, Issue.Type.TASK, Issue.Priority.NORMAL, "Backlog", assignee,
+				null, 0, 0, 0, List.of(), null, rank, parent.getId());
+		issue.setDueOffset(new RelativeDate(amount, unit, basis));
+		return issues.save(issue);
 	}
 
 	// ---- issue helpers -----------------------------------------------------

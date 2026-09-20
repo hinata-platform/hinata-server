@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.template;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.project.Project;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -42,6 +43,33 @@ public class ProjectScheduleController {
 			@RequestParam(required = false) Integer limit) {
 		return schedule.preview(id, ProjectScheduleService.checked(request.eventDate()), limit,
 				currentUser.require());
+	}
+
+	/**
+	 * One offset resolved against the project's event date: the date the form shows beside the
+	 * field while somebody is still typing into it.
+	 *
+	 * <p>The client could almost compute this itself, and that is the reason it does not.
+	 * "Almost" is weekends and the holidays of whichever calendar the project names, and a second
+	 * implementation of those would agree with this one on every day of the year except the ones
+	 * people plan around.
+	 */
+	@PostMapping("/resolve")
+	public ResolveResponse resolve(@PathVariable String id,
+			@RequestBody @Valid ResolveRequest request) {
+		return new ResolveResponse(schedule.resolve(id, request.eventDate(), request.offset(),
+				currentUser.require()));
+	}
+
+	/**
+	 * The offset to resolve, and optionally a date to resolve it against instead of the project's
+	 * own — what the copy sheet needs, where the date is being chosen in the same breath.
+	 */
+	public record ResolveRequest(LocalDate eventDate, RelativeDate offset) {
+	}
+
+	/** The resulting day, or null when the project has no event date and none was given. */
+	public record ResolveResponse(LocalDate date) {
 	}
 
 	/** Sets the date and writes the deadlines that follow from it. */

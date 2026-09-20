@@ -152,6 +152,27 @@ public class ProjectScheduleService {
 		return new Result(project, written, preview.manual());
 	}
 
+	/**
+	 * One offset against a date: the project's own, or one the caller is proposing.
+	 *
+	 * <p>A read, so seeing the project is enough — this says nothing a member cannot already see
+	 * by opening an issue, and refusing it to everyone but the lead would only mean the form
+	 * shows nothing while somebody fills it in.
+	 */
+	public LocalDate resolve(String projectId, LocalDate eventDate, RelativeDate offset,
+			User user) {
+		Project project = projects.get(projectId);
+		projects.assertMember(project, user);
+		if (offset == null) {
+			return null;
+		}
+		if (!offset.withinLimits()) {
+			throw ApiException.badRequest("error.issue.offsetOutOfRange");
+		}
+		LocalDate anchor = eventDate != null ? eventDate : project.getEventDate();
+		return RelativeDates.resolve(anchor, offset, calendars.of(project));
+	}
+
 	/** Every issue of the project that carries at least one offset. */
 	private List<Issue> withOffsets(String projectId) {
 		Query query = Query.query(Criteria.where("projectId").is(projectId)

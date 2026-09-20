@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.template;
 
+import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
@@ -7,6 +8,9 @@ import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.Set;
+
+import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,13 +47,36 @@ class TemplateBoundaryTest {
 				.doesNotContain(ROOT + ".template.TemplateBoundaryTest");
 	}
 
+	/**
+	 * The classes allowed to reach into the module, each for a stated reason. Both are adapters:
+	 * they exist so that another protocol reaches the same service the REST route reaches,
+	 * rather than reimplementing its rules.
+	 */
+	private static final Set<String> BRIDGES = Set.of(
+			// The MCP tools for copying a project and for keeping a deadline as an offset.
+			ROOT + ".mcp.ProjectTemplateTools",
+			// The demo workspace, which seeds a template and a project made from it so the
+			// feature is visible on a first start rather than only described.
+			ROOT + ".demo.DemoSeeder");
+
+	private static DescribedPredicate<JavaClass> named(Set<String> names, String description) {
+		return DescribedPredicate.describe(description, javaClass -> {
+			String fullName = javaClass.getFullName();
+			return names.stream().anyMatch(
+					name -> fullName.equals(name) || fullName.startsWith(name + "$"));
+		});
+	}
+
 	@Test
-	@DisplayName("nothing outside the module depends on it")
+	@DisplayName("nothing outside the module depends on it, bar the two named bridges")
 	void nothingOutsideReachesIn() {
 		// Including the core packages it reads: a project and an issue know nothing about
 		// templates, which is what makes the feature removable by deleting one package.
 		noClasses()
-				.that().resideOutsideOfPackage("..template..")
+				.that(DescribedPredicate.describe("outside the module",
+						(JavaClass javaClass) -> !javaClass.getPackageName()
+								.startsWith(ROOT + ".template"))
+						.and(not(named(BRIDGES, "one of the named bridges"))))
 				.should().dependOnClassesThat().resideInAnyPackage("..template..")
 				.because("project templates have to be switchable off by an administrator")
 				.check(PRODUCTION);

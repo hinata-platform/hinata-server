@@ -267,6 +267,9 @@ class ModuleBoundaryTest {
 			// write asks for, and the rewrite after an event date moves. Both go through
 			// HolidayCalendars and neither names availability itself.
 			TEMPLATE + ".ProjectDeadlines", TEMPLATE + ".ProjectScheduleService",
+			// And the copy, which resolves the new project's deadlines against its own event
+			// date as it writes them — the one moment a copy needs to know about holidays.
+			TEMPLATE + ".ProjectCopyService",
 			// And the door itself: it holds a nested calendar that caches one year's holidays,
 			// so it accesses its own reader.
 			TEMPLATE + ".HolidayCalendars");

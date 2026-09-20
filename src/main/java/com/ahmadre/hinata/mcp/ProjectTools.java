@@ -15,6 +15,7 @@ import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -125,7 +126,10 @@ public class ProjectTools {
 			String id, String key, String name, String description,
 			String leadId, List<String> leadIds, int memberCount,
 			List<String> workflowStates, List<String> resolvedStates, List<String> labels,
-			String color, boolean archived, Instant createdAt, Instant updatedAt) {
+			String color, boolean archived,
+			/** Whether the project is offered as a template, and the date its deadlines hang off. */
+			boolean template, LocalDate eventDate,
+			Instant createdAt, Instant updatedAt) {
 
 		static ProjectView of(Project p) {
 			return new ProjectView(
@@ -133,7 +137,8 @@ public class ProjectTools {
 					p.getLeadId(), p.getLeadIds(),
 					p.getMemberIds() == null ? 0 : p.getMemberIds().size(),
 					p.workflowStateNames(), p.getResolvedStates(), p.labelNames(),
-					p.getColor(), p.isArchived(), p.getCreatedAt(), p.getUpdatedAt());
+					p.getColor(), p.isArchived(), p.isTemplate(), p.getEventDate(),
+					p.getCreatedAt(), p.getUpdatedAt());
 		}
 	}
 }

@@ -24,6 +24,12 @@ public final class Scopes {
 	public static final String ISSUES_READ = "issues:read";
 	public static final String ISSUES_WRITE = "issues:write";
 	public static final String PROJECTS_READ = "projects:read";
+	/**
+	 * Creating a project from an existing one: the copy and the template routes of HIN-120.
+	 * Deliberately not "edit any project setting" — nothing behind this scope renames, archives
+	 * or reconfigures a project that already exists.
+	 */
+	public static final String PROJECTS_WRITE = "projects:write";
 	public static final String BOARDS_READ = "boards:read";
 	public static final String SPRINTS_WRITE = "sprints:write";
 	public static final String TEAMS_READ = "teams:read";
@@ -37,7 +43,7 @@ public final class Scopes {
 
 	/** Every scope a token may be granted. */
 	public static final Set<String> ALL = Set.of(
-			ISSUES_READ, ISSUES_WRITE, PROJECTS_READ,
+			ISSUES_READ, ISSUES_WRITE, PROJECTS_READ, PROJECTS_WRITE,
 			BOARDS_READ, SPRINTS_WRITE, TEAMS_READ, USERS_READ,
 			KB_READ, KB_WRITE, WORKLOG_READ, WORKLOG_WRITE,
 			SEARCH_READ, NOTIFICATIONS_READ);
