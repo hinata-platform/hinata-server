@@ -40,12 +40,29 @@ public class RateLimitFilter extends OncePerRequestFilter {
 	private static final Set<String> PUBLIC_AUTH_LOOKUPS = Set.of(
 			"/api/v1/auth/sso/providers");
 
+	/**
+	 * Presenting a signed token this server issued is not a sign-in attempt, so it does not
+	 * compete with one for the strict budget.
+	 *
+	 * <p>The strict bucket exists to slow somebody guessing a password. A refresh token cannot be
+	 * guessed — it is refused by its signature before anything is looked up — so the ten a minute
+	 * bought nothing here and cost a great deal: every client on one address shares the bucket,
+	 * and a machine running the phone simulator, the desktop app and a browser tab spends it in
+	 * seconds. The refresh that lands on the eleventh request comes back 429, and to a client that
+	 * is indistinguishable from "your session is over".
+	 *
+	 * <p>It stays on its own budget rather than the general one, wide enough that no honest client
+	 * reaches it and narrow enough to bound the work a flood of forged tokens can ask for.
+	 */
+	private static final String REFRESH_PATH = "/api/v1/auth/refresh";
+
 	private final HinataProperties properties;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final ClientIpResolver clientIpResolver;
 	private final MessageSource messages;
 	private final Map<String, Bucket> apiBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> authBuckets = new ConcurrentHashMap<>();
+	private final Map<String, Bucket> refreshBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> mcpBuckets = new ConcurrentHashMap<>();
 	private final Map<String, Bucket> ssoBuckets = new ConcurrentHashMap<>();
 
@@ -84,6 +101,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
 		if (uri.startsWith("/mcp")) {
 			bucket = mcpBuckets.computeIfAbsent(ip,
 					k -> newBucket(properties.getRateLimit().getMcpPerMinute()));
+		}
+		else if (REFRESH_PATH.equals(uri)) {
+			bucket = refreshBuckets.computeIfAbsent(ip,
+					k -> newBucket(properties.getRateLimit().getRefreshPerMinute()));
 		}
 		else if (uri.startsWith("/api/v1/auth/") && !PUBLIC_AUTH_LOOKUPS.contains(uri)) {
 			bucket = authBuckets.computeIfAbsent(ip,

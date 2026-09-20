@@ -28,6 +28,7 @@ class RateLimitFilterTest {
 
 	private static final String LOGIN = "/api/v1/auth/login";
 	private static final String SSO_PROVIDERS = "/api/v1/auth/sso/providers";
+	private static final String REFRESH = "/api/v1/auth/refresh";
 
 	private HinataProperties properties;
 	private RateLimitFilter filter;
@@ -38,6 +39,7 @@ class RateLimitFilterTest {
 	void setUp() {
 		properties = new HinataProperties();
 		properties.getRateLimit().setAuthPerMinute(3);
+		properties.getRateLimit().setRefreshPerMinute(8);
 		properties.getRateLimit().setApiPerMinute(10);
 		SettingsService settings = Mockito.mock(SettingsService.class);
 		Mockito.when(settings.get()).thenReturn(new ServerSettings());
@@ -64,6 +66,24 @@ class RateLimitFilterTest {
 
 		assertThat(call(LOGIN)).isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
 		assertThat(passed.get()).isEqualTo(3);
+	}
+
+	@Test
+	void refreshingATokenIsNotASignInAttempt() throws Exception {
+		// Presenting a token this server signed is not a guess at a password: it is refused by its
+		// signature before anything is looked up, so the strict budget bought nothing here and cost
+		// a great deal. Every client on one address shares the bucket, and a machine running the
+		// phone simulator, the desktop app and a browser tab spent it in seconds — after which the
+		// refresh that happened to land next came back 429, which a client could not tell apart
+		// from "your session is over".
+		for (int i = 0; i < 8; i++) {
+			assertThat(call(REFRESH)).isEqualTo(HttpStatus.OK.value());
+		}
+
+		// Its own budget, though — not the general one.
+		assertThat(call(REFRESH)).isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
+		// And spending it leaves the sign-in budget untouched, so somebody can still sign in.
+		assertThat(call(LOGIN)).isEqualTo(HttpStatus.OK.value());
 	}
 
 	@Test
