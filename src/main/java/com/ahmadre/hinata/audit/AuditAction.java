@@ -219,7 +219,11 @@ public enum AuditAction {
 	// Moving a project's event date, with the number of deadlines that followed it and the
 	// number left where somebody put them by hand. DATA rather than CONFIGURATION: it rewrites
 	// dates people planned around, and "why is this due a week later" has to be answerable.
-	PROJECT_SCHEDULE_SHIFTED(DATA, NOTICE, true);
+	PROJECT_SCHEDULE_SHIFTED(DATA, NOTICE, true),
+	// Copying a whole project, with the source, the copy and how much came along. DATA and on
+	// by default: a copy carries descriptions and files out of one project into another, and
+	// "where did this second project come from" has to have an answer.
+	PROJECT_COPIED(DATA, NOTICE, true);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;
