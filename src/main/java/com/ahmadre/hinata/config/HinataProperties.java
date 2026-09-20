@@ -333,6 +333,13 @@ public class HinataProperties {
 		@Min(3)
 		private int authPerMinute = 10;
 		/**
+		 * Token refreshes a minute, per client IP. Its own budget, because a refresh presents a
+		 * token this server signed rather than a guess at a password — see
+		 * {@code RateLimitFilter.REFRESH_PATH}.
+		 */
+		@Min(10)
+		private int refreshPerMinute = 60;
+		/**
 		 * Requests per minute per client IP for the browser redirects of a single sign-on: the one
 		 * that starts the handshake and the one the identity provider comes back to. Its own budget
 		 * because a whole office behind one address signs in through it — the password endpoints'
