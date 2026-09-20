@@ -35,6 +35,14 @@ public class TimeOffCatalogueBridge implements TimeOffCatalogue {
 		return types.findById(typeId).filter(TimeOffType::isActive).map(TimeOffCatalogueBridge::storedKind);
 	}
 
+	@Override
+	public Optional<TimeOff.Type> builtInKindOf(String typeId) {
+		if (!settings.enabled() || typeId == null || typeId.isBlank()) {
+			return Optional.empty();
+		}
+		return types.findById(typeId).filter(TimeOffType::isSystem).map(TimeOffCatalogueBridge::storedKind);
+	}
+
 	/**
 	 * Vacation is vacation and sickness is sickness; everything else an operator invents is
 	 * {@code OTHER}, which is what a client that has never heard of it will show.

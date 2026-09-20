@@ -26,6 +26,21 @@ public interface TimeOffCatalogue {
 	 */
 	Optional<TimeOff.Type> kindOf(String typeId);
 
+	/**
+	 * The stored kind for [typeId] when that type is one of the three an instance cannot delete,
+	 * and empty for a type an operator defined (or when there is no catalogue).
+	 *
+	 * <p>Asked when somebody filters a list by type. An absence entered before the catalogue
+	 * existed — and every absence on an instance that never switched absence management on —
+	 * carries no type id at all, only its kind. Filtering on the id alone hid exactly those rows:
+	 * a person filtering for leave saw the one holiday they had booked since and none of the ones
+	 * before it. The built-in types are what those rows belong to, so for them the list asks for
+	 * the kind as well; a type an operator invented has no such history and stays exact.
+	 */
+	default Optional<TimeOff.Type> builtInKindOf(String typeId) {
+		return Optional.empty();
+	}
+
 	/** The answer when there is no catalogue: nothing is known about any id. */
 	static TimeOffCatalogue unknown() {
 		return typeId -> Optional.empty();

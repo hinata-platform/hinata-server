@@ -135,7 +135,7 @@ public class TimeOffService {
 				criteria = criteria.and("note").regex(java.util.regex.Pattern.quote(words), "i");
 			}
 			if (filter.typeId() != null && !filter.typeId().isBlank()) {
-				criteria = criteria.and("typeId").is(filter.typeId().strip());
+				criteria = criteria.andOperator(ofType(filter.typeId().strip()));
 			}
 			else if (filter.type() != null) {
 				criteria = criteria.and("type").is(filter.type());
@@ -147,6 +147,23 @@ public class TimeOffService {
 		List<TimeOff> rows = mongo.find(Query.of(query).with(request), TimeOff.class);
 		return new Listing(PageableExecutionUtils.getPage(rows, request,
 				() -> mongo.count(Query.of(query), TimeOff.class)), visible.sight());
+	}
+
+	/**
+	 * What "this type" means to a list somebody is filtering.
+	 *
+	 * <p>For a type an operator defined, exactly the rows entered under it. For one of the three
+	 * built-ins, those rows <b>and</b> the rows that name no type at all: an absence entered before
+	 * the catalogue existed carries only its kind, and filtering on the id alone hid every one of
+	 * them — a person asking for their leave saw the holiday they booked last week and none of the
+	 * ones before it.
+	 */
+	private Criteria ofType(String typeId) {
+		Criteria entered = Criteria.where("typeId").is(typeId);
+		return catalogue().builtInKindOf(typeId)
+				.map(kind -> new Criteria().orOperator(entered,
+						Criteria.where("typeId").is(null).and("type").is(kind)))
+				.orElse(entered);
 	}
 
 	/**

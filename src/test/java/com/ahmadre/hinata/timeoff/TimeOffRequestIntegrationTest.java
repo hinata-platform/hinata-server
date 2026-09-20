@@ -518,6 +518,36 @@ class TimeOffRequestIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("filtering for a built-in type finds the absences entered before the catalogue")
+	void aBuiltInTypeFindsTheRowsThatNameNoType() {
+		// What an instance holds after switching absence management on: rows written by the older
+		// screen, which knew three kinds and no ids, beside rows entered under a type.
+		absences.save(TimeOff.builder().userId(member.getId()).type(TimeOff.Type.VACATION)
+				.from(monday(1)).to(monday(1).plusDays(2)).build());
+		vacation.setApprovalRequired(false);
+		typeRepository.save(vacation);
+		availability.create(member, new TimeOffService.Draft(member.getId(), null, vacation.getId(),
+				monday(3), monday(3).plusDays(4), null, null));
+
+		TimeOffService.Listing leave = availability.page(member, member.getId(), null, null,
+				new TimeOffService.Filter(null, vacation.getId(), null, false), 0, 50);
+
+		assertThat(leave.page().getContent()).as("both are leave, whether or not they name the type")
+				.hasSize(2);
+
+		// A type an operator invented has no such history, so it stays exact: the old rows are not
+		// "parental leave" just because that type is stored as OTHER too.
+		TimeOffType parental = typeRepository.save(TimeOffType.builder().key("parental")
+				.kind(TimeOffType.Kind.PARENTAL).active(true).build());
+		absences.save(TimeOff.builder().userId(member.getId()).type(TimeOff.Type.OTHER)
+				.from(monday(5)).to(monday(5)).build());
+
+		assertThat(availability.page(member, member.getId(), null, null,
+				new TimeOffService.Filter(null, parental.getId(), null, false), 0, 50)
+				.page().getContent()).isEmpty();
+	}
+
+	@Test
 	@DisplayName("a type nobody has to approve is still entered the old way")
 	void theDirectEntryPathStaysOpenForEverythingElse() {
 		vacation.setApprovalRequired(false);
