@@ -153,7 +153,7 @@ public class TimeOffBalanceService {
 	 */
 	public record Standing(String userId, int entitledMilliDays, int accruedMilliDays,
 			int adjustedMilliDays, int takenMilliDays, int plannedMilliDays, int remainingMilliDays,
-			boolean granted, LocalDate hiredOn, LocalDate leftOn) {
+			boolean granted, LocalDate hiredOn, LocalDate leftOn, int carriedInMilliDays) {
 	}
 
 	// --- balances --------------------------------------------------------------
@@ -250,12 +250,12 @@ public class TimeOffBalanceService {
 				? TimeOffBalances.Reason.WAITING_PERIOD : TimeOffBalances.Reason.FULL;
 	}
 
-	/** When what is carried out of [year] runs out, for a type that carries anything at all. */
+	/** When what was carried into [year] runs out, for a type that carries anything at all. */
 	private static LocalDate carryoverExpiry(TimeOffType type, int year) {
 		if (type.carryover() == TimeOffType.Carryover.NONE) {
 			return null;
 		}
-		return TimeOffBalances.carryoverDeadline(type.carryoverExpiresOn(), year, type.yearAnchor());
+		return TimeOffBalances.carryoverDeadline(type.carryoverExpiresOn(), year - 1, type.yearAnchor());
 	}
 
 	/** Every kind's total for a person and year, in one indexed aggregation. */
@@ -341,7 +341,7 @@ public class TimeOffBalanceService {
 				: users.searchActive(Pattern.quote(term), pageable);
 		List<String> ids = people.getContent().stream().map(User::getId).toList();
 		if (ids.isEmpty()) {
-			return people.map(person -> new Standing(person.getId(), 0, 0, 0, 0, 0, 0, false, null, null));
+			return people.map(person -> new Standing(person.getId(), 0, 0, 0, 0, 0, 0, false, null, null, 0));
 		}
 		Map<String, Map<TimeOffLedgerEntry.Kind, Integer>> sums = sumsByUser(ids, typeId, year);
 		Map<String, Integer> planned = plannedByUser(ids, typeId, year);
@@ -365,7 +365,7 @@ public class TimeOffBalanceService {
 					balance.accruedMilliDays(), balance.adjustedMilliDays(), balance.takenMilliDays(),
 					balance.plannedMilliDays(), balance.remainingMilliDays(), balance.granted(),
 					dates == null ? null : dates.getHiredOn(),
-					dates == null ? null : dates.getLeftOn());
+					dates == null ? null : dates.getLeftOn(), balance.carriedInMilliDays());
 		});
 	}
 
