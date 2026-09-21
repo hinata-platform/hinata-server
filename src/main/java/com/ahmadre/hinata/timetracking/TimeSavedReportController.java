@@ -79,9 +79,15 @@ public class TimeSavedReportController {
 		return saved.unschedule(currentUser.require(), id);
 	}
 
+	@Operation(summary = "A saved report by id, for its owner or a recipient of its schedule")
+	@GetMapping("/{id}")
+	public TimeSavedReportService.View opened(@PathVariable String id) {
+		return saved.openedById(currentUser.require(), id);
+	}
+
 	@Operation(summary = "The report a share link points to, opened in the caller's own scope")
 	@GetMapping("/shared/{token}")
-	public TimeSavedReportService.View opened(@PathVariable String token) {
+	public TimeSavedReportService.View openedShared(@PathVariable String token) {
 		return saved.opened(currentUser.require(), token);
 	}
 }
