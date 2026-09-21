@@ -99,6 +99,9 @@ import java.util.List;
 // A project's recorded minutes summed from the keys alone, for the budget alerts. Without
 // durationMinutes in an index every entry of the project would be read to add one integer.
 @CompoundIndex(name = WorkItem.PROJECT_DURATION_INDEX, def = "{'projectId': 1, 'durationMinutes': 1}")
+// The entries one CSV import wrote, so taking a failed import back is a lookup. Partial: almost no
+// entry comes from a file, and the index holds only those that did.
+@CompoundIndex(name = "import_id", def = "{'importId': 1}", partialFilter = "{'importId': {'$exists': true}}")
 public class WorkItem {
 
 	/** The index a project's recorded minutes are summed from; named once for the annotation and the hint. */
@@ -186,6 +189,12 @@ public class WorkItem {
 
 	/** The entry this one was copied from, for {@link Source#SHARED}. */
 	private String sharedFromId;
+
+	/**
+	 * The CSV import that wrote this entry (HIN-93), or null. The marker a failed or abandoned
+	 * import is taken back by; see {@code TimeReportImport}.
+	 */
+	private String importId;
 
 	/**
 	 * Documents written before 2.0 carry no {@code source}; they were logged in
