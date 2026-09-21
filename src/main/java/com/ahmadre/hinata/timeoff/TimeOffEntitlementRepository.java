@@ -24,6 +24,10 @@ public interface TimeOffEntitlementRepository extends MongoRepository<TimeOffEnt
 	List<TimeOffEntitlement> findByTypeIdAndYearAndUserIdIn(String typeId, Integer year,
 			Collection<String> userIds);
 
+	/** A type's grants for a year, a page at a time: the monthly accrual walks them (HIN-119). */
+	org.springframework.data.domain.Page<TimeOffEntitlement> findByTypeIdAndYear(String typeId, Integer year,
+			org.springframework.data.domain.Pageable pageable);
+
 	/** Whether a type has been granted to anybody: half of what keeps it from being deleted. */
 	boolean existsByTypeId(String typeId);
 

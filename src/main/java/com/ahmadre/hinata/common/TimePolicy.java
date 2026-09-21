@@ -75,6 +75,31 @@ public final class TimePolicy {
 	 */
 	public static final int ABSENCE_MANAGERS_MAX = 50;
 
+	/**
+	 * How many months a sick absence keeps saying "sick" before it is coarsened to "away
+	 * (other)" (HIN-119). Twelve by default: long enough to answer the questions of the running
+	 * year, short enough that a health fact does not sit in a project tool for good (Art. 5
+	 * Abs. 1 lit. e, Art. 9 DSGVO). The day and its effect on the balance stay.
+	 */
+	public static final int SICK_DETAIL_PURGE_DEFAULT_MONTHS = 12;
+
+	/** Months a refused, withdrawn or cancelled leave request is kept (HIN-119). */
+	public static final int REQUEST_PURGE_DEFAULT_MONTHS = 36;
+
+	/**
+	 * The shortest a leave journal may be kept, in years, when an operator sets a limit at all.
+	 * Three: the regular limitation period for a claim to leave or its payment (§§ 195, 199 BGB),
+	 * which starts only once the employer gave notice (BAG 20.12.2022 – 9 AZR 266/20). A journal
+	 * deleted sooner could no longer answer the claim it records.
+	 */
+	public static final int LEDGER_RETENTION_MIN_YEARS = 3;
+
+	/** Ceiling on a journal retention in years; keeps the value inside what a date expresses. */
+	public static final int LEDGER_RETENTION_MAX_YEARS = 100;
+
+	/** The latest an expiry notice may go out before the day leave lapses, in weeks (HIN-119). */
+	public static final int EXPIRY_NOTICE_WEEKS_MAX = 26;
+
 	/** Longest reason text on an approval decision, a reopen or a lock exception. */
 	public static final int LOCK_NOTE_MAX = 1000;
 

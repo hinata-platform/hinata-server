@@ -631,6 +631,20 @@ public class HinataProperties {
 		/** Workload reports (booked against capacity). Monitoring-capable ⇒ off. */
 		private boolean workloadReportsEnabled = false;
 
+		/** The report "absences and balances" (HIN-119). Off by default. */
+		private boolean absenceReportsEnabled = false;
+
+		/** The absence rate per person in that report, keepers only. Conduct and health data ⇒ off. */
+		private boolean absenceRateEnabled = false;
+
+		/** How long sick details, closed requests and the leave journal are kept. */
+		@Valid
+		private TimeOffRetention timeOffRetention = new TimeOffRetention();
+
+		/** When people are told that leave is about to lapse. */
+		@Valid
+		private ExpiryNotice expiryNotice = new ExpiryNotice();
+
 		/** Budget and estimate alerts to leads. Off by default. */
 		private boolean alertsEnabled = false;
 
@@ -740,6 +754,44 @@ public class HinataProperties {
 			@Min(0)
 			@Max(TimePolicy.RETENTION_MAX_MONTHS)
 			private int entryPurgeMonths = 0;
+		}
+
+		/**
+		 * Retention of absence records (HIN-119). Sick details are coarsened after twelve months
+		 * and closed requests removed after thirty-six; the journal is kept ({@code 0}) unless an
+		 * operator sets a number of years, never fewer than three.
+		 */
+		@Getter
+		@Setter
+		public static class TimeOffRetention {
+			@Min(0)
+			@Max(TimePolicy.RETENTION_MAX_MONTHS)
+			private int sickDetailPurgeMonths = TimePolicy.SICK_DETAIL_PURGE_DEFAULT_MONTHS;
+			@Min(0)
+			@Max(TimePolicy.RETENTION_MAX_MONTHS)
+			private int requestPurgeMonths = TimePolicy.REQUEST_PURGE_DEFAULT_MONTHS;
+			@Min(0)
+			@Max(TimePolicy.LEDGER_RETENTION_MAX_YEARS)
+			private int ledgerPurgeYears = 0;
+		}
+
+		/**
+		 * When people are told that leave is about to lapse: on 1 October, and six weeks before
+		 * the day it lapses. Without such a notice no leave lapses at all (BAG 19.02.2019 –
+		 * 9 AZR 541/15).
+		 */
+		@Getter
+		@Setter
+		public static class ExpiryNotice {
+			@Min(1)
+			@Max(12)
+			private int month = 10;
+			@Min(1)
+			@Max(31)
+			private int day = 1;
+			@Min(1)
+			@Max(TimePolicy.EXPIRY_NOTICE_WEEKS_MAX)
+			private int weeksBefore = 6;
 		}
 	}
 

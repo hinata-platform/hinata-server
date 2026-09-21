@@ -187,6 +187,22 @@ hinata:
       # HINATA_TIME_TRACKING_APPROVAL_ANCHOR_DATE / _APPROVAL_DAYS; both are
       # unset for the monthly default and rejected when they do not fit the type.
     workload-reports-enabled: ${HINATA_TIME_TRACKING_WORKLOAD_REPORTS_ENABLED:false}
+    # The report "absences and balances" and, separately, the absence rate per
+    # person in it (HIN-119). The rate is conduct and health data: its own switch.
+    absence-reports-enabled: ${HINATA_TIME_TRACKING_ABSENCE_REPORTS_ENABLED:false}
+    absence-rate-enabled: ${HINATA_TIME_TRACKING_ABSENCE_RATE_ENABLED:false}
+    time-off-retention:
+      # Months until a sick absence is coarsened to "away (other)", months a
+      # closed request is kept, and years the leave journal is kept (0 = keep;
+      # otherwise at least 3, §§ 195, 199 BGB).
+      sick-detail-purge-months: ${HINATA_TIME_OFF_SICK_DETAIL_PURGE_MONTHS:12}
+      request-purge-months: ${HINATA_TIME_OFF_REQUEST_PURGE_MONTHS:36}
+      ledger-purge-years: ${HINATA_TIME_OFF_LEDGER_PURGE_YEARS:0}
+    expiry-notice:
+      # Once a year on this day, and this many weeks before leave lapses.
+      month: ${HINATA_TIME_OFF_EXPIRY_NOTICE_MONTH:10}
+      day: ${HINATA_TIME_OFF_EXPIRY_NOTICE_DAY:1}
+      weeks-before: ${HINATA_TIME_OFF_EXPIRY_NOTICE_WEEKS_BEFORE:6}
     alerts-enabled: ${HINATA_TIME_TRACKING_ALERTS_ENABLED:false}
     target-reminders-enabled: ${HINATA_TIME_TRACKING_TARGET_REMINDERS_ENABLED:false}
     # Targets offered to people in their reminder settings, in minutes; unset

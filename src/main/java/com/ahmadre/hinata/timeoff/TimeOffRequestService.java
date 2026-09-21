@@ -259,7 +259,8 @@ public class TimeOffRequestService {
 				rows.stream().map(TimeOffRequest::getTypeId).distinct().toList())) {
 			catalogue.put(type.getId(), type);
 		}
-		Set<Integer> years = rows.stream().map(row -> row.getFrom().getYear()).collect(Collectors.toSet());
+		Set<Integer> years = rows.stream().map(row -> leaveYear(catalogue.get(row.getTypeId()), row.getFrom()))
+				.collect(Collectors.toSet());
 		Map<String, Map<String, Map<Integer, Integer>>> remaining =
 				balances.remainingByPerson(userIds, years);
 		Map<TimeOffRequest, Integer> clashes = withClashes ? clashesAcross(rows, viewer) : Map.of();
@@ -283,7 +284,7 @@ public class TimeOffRequestService {
 		}
 		int left = remaining.getOrDefault(row.getUserId(), Map.of())
 				.getOrDefault(row.getTypeId(), Map.of())
-				.getOrDefault(row.getFrom().getYear(), 0);
+				.getOrDefault(leaveYear(type, row.getFrom()), 0);
 		return left - row.milliDays() < 0;
 	}
 
@@ -791,10 +792,12 @@ public class TimeOffRequestService {
 		return balances.book(TimeOffLedgerEntry.builder()
 				.userId(person.getId())
 				.typeId(type.getId())
-				// The leave year the span starts in. A span that crosses New Year belongs to the
-				// year it was taken from, which is the year it was granted against — splitting it
-				// would make one absence two balances and neither of them answerable.
-				.year(on.getYear())
+				// The leave year the span starts in. A span that crosses the anchor day belongs to
+				// the year it was taken from, which is the year it was granted against — splitting
+				// it would make one absence two balances and neither of them answerable. The type's
+				// leave year, not the calendar year: a year anchored on 1 April books April 2027
+				// into 2027 and March 2027 into 2026, and the yearly run carries over by that.
+				.year(leaveYear(type, on))
 				.kind(milliDays < 0 ? TimeOffLedgerEntry.Kind.BOOKED : TimeOffLedgerEntry.Kind.RETURNED)
 				.milliDays(milliDays)
 				.effectiveOn(on)
@@ -886,7 +889,8 @@ public class TimeOffRequestService {
 		if (!type.countsAgainstBalance() || type.isUnlimited()) {
 			return;
 		}
-		int after = balances.remainingMilliDays(person.getId(), type.getId(), request.getFrom().getYear())
+		int after = balances.remainingMilliDays(person.getId(), type.getId(),
+				leaveYear(type, request.getFrom()))
 				- request.milliDays();
 		if (after >= 0) {
 			return;
@@ -906,7 +910,13 @@ public class TimeOffRequestService {
 		if (!type.countsAgainstBalance() || type.isUnlimited()) {
 			return false;
 		}
-		return balances.remainingMilliDays(person.getId(), type.getId(), from.getYear()) - milliDays < 0;
+		return balances.remainingMilliDays(person.getId(), type.getId(), leaveYear(type, from))
+				- milliDays < 0;
+	}
+
+	/** The leave year [day] belongs to under [type]'s anchor; the calendar year for a type unknown. */
+	private static int leaveYear(TimeOffType type, LocalDate day) {
+		return type == null ? day.getYear() : TimeOffBalances.leaveYearOf(day, type.yearAnchor());
 	}
 
 	private boolean shortNotice(TimeOffType type, LocalDate from) {

@@ -286,6 +286,74 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 		return override != null ? override : env().isWorkloadReportsEnabled();
 	}
 
+	/**
+	 * Whether the report "absences and balances" exists, as it is in force: never while absence
+	 * management is not usable, because the report sits under that module (HIN-119).
+	 */
+	public boolean absenceReportsEnabled() {
+		return absenceManagementUsable() && absenceReportsConfigured();
+	}
+
+	/** The stored choice, or the environment's without one — for the admin screen. */
+	public boolean absenceReportsConfigured() {
+		Boolean override = db().getAbsenceReportsEnabled();
+		return override != null ? override : env().isAbsenceReportsEnabled();
+	}
+
+	/**
+	 * Whether keepers see the absence rate per person in that report: only while the report
+	 * itself is in force. Never for leads — that is the report's rule, not this switch's.
+	 */
+	public boolean absenceRateEnabled() {
+		return absenceReportsEnabled() && absenceRateConfigured();
+	}
+
+	/** The stored choice, or the environment's without one — for the admin screen. */
+	public boolean absenceRateConfigured() {
+		Boolean override = db().getAbsenceRateEnabled();
+		return override != null ? override : env().isAbsenceRateEnabled();
+	}
+
+	/**
+	 * How long absence records that are not evidence are kept. {@code 0} keeps them. A journal
+	 * limit below three years is raised to three, like the entry retention is raised to two: the
+	 * environment has nobody to refuse it to, and deleting too early cannot be taken back.
+	 */
+	public TimeOffRetention timeOffRetention() {
+		ServerSettings.TimeTracking.TimeOffRetention override = db().getTimeOffRetention();
+		HinataProperties.TimeTracking.TimeOffRetention fallback = env().getTimeOffRetention();
+		int sick = fallback.getSickDetailPurgeMonths();
+		int requests = fallback.getRequestPurgeMonths();
+		int ledger = fallback.getLedgerPurgeYears();
+		if (override != null) {
+			sick = override.getSickDetailPurgeMonths() != null ? override.getSickDetailPurgeMonths() : sick;
+			requests = override.getRequestPurgeMonths() != null ? override.getRequestPurgeMonths() : requests;
+			ledger = override.getLedgerPurgeYears() != null ? override.getLedgerPurgeYears() : ledger;
+		}
+		if (ledger > 0 && ledger < TimePolicy.LEDGER_RETENTION_MIN_YEARS) {
+			ledger = TimePolicy.LEDGER_RETENTION_MIN_YEARS;
+		}
+		return new TimeOffRetention(sick, requests, ledger);
+	}
+
+	/** When people are told that leave is about to lapse. */
+	public ExpiryNotice expiryNotice() {
+		ServerSettings.TimeTracking.ExpiryNotice override = db().getExpiryNotice();
+		HinataProperties.TimeTracking.ExpiryNotice fallback = env().getExpiryNotice();
+		int month = fallback.getMonth();
+		int day = fallback.getDay();
+		int weeks = fallback.getWeeksBefore();
+		if (override != null) {
+			month = override.getMonth() != null ? override.getMonth() : month;
+			day = override.getDay() != null ? override.getDay() : day;
+			weeks = override.getWeeksBefore() != null ? override.getWeeksBefore() : weeks;
+		}
+		// A day that does not exist in the month (a 31 September from the environment) falls to
+		// the month's last day rather than stopping the job that reads it at night.
+		day = Math.min(day, java.time.Month.of(month).minLength());
+		return new ExpiryNotice(java.time.MonthDay.of(month, day), weeks);
+	}
+
 	/** Whether budget and estimate alerts are sent to leads. */
 	public boolean alertsEnabled() {
 		Boolean override = db().getAlertsEnabled();
@@ -409,6 +477,14 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 	 * for everyone.
 	 */
 	public record Retention(int descriptionPurgeMonths, int entryPurgeMonths) {
+	}
+
+	/** Absence retention: months for sick details and closed requests, years for the journal. */
+	public record TimeOffRetention(int sickDetailPurgeMonths, int requestPurgeMonths, int ledgerPurgeYears) {
+	}
+
+	/** The yearly notice day, and how many weeks before a lapse the second notice goes out. */
+	public record ExpiryNotice(java.time.MonthDay annualOn, int weeksBefore) {
 	}
 
 	// --- resolution ------------------------------------------------------------

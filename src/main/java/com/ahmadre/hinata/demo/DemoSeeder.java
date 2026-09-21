@@ -1348,7 +1348,48 @@ public class DemoSeeder {
 				.append("actorId", admin.getId())
 				.append("createdAt", now));
 
+		// HIN-119: last year's leftover carried into this one, once with the notice that lets it
+		// lapse on 31 March and once without — the second is what the keeper's "not told yet"
+		// list and the person's expiry card are for.
+		carriedDemo(tomas, vacationId, year, 3_000, true, admin, now);
+		carriedDemo(lena, vacationId, year, 2_000, false, admin, now);
+
 		absenceRequests(admin, tomas, lena, vacationId, year, now);
+	}
+
+	/**
+	 * Last year granted, [milliDays] of it carried into [year] the way the yearly run books it, and
+	 * — when [noticed] — the annual notice that went out on 1 October (HIN-119).
+	 */
+	private void carriedDemo(User person, Object typeId, int year, int milliDays, boolean noticed, User admin,
+			java.util.Date now) {
+		grantDemoYear(person, typeId, year - 1, 20_000, 20_000, admin, now);
+		String type = String.valueOf(typeId);
+		mongo.getCollection("time_off_ledger").insertOne(new org.bson.Document()
+				.append("userId", person.getId()).append("typeId", type).append("year", year - 1)
+				.append("kind", "BOOKED").append("milliDays", -(20_000 - milliDays))
+				.append("effectiveOn", utcDay(LocalDate.of(year - 1, 8, 3))).append("createdAt", now));
+		mongo.getCollection("time_off_ledger").insertOne(new org.bson.Document()
+				.append("userId", person.getId()).append("typeId", type).append("year", year - 1)
+				.append("kind", "CARRYOVER_OUT").append("milliDays", -milliDays)
+				.append("effectiveOn", utcDay(LocalDate.of(year - 1, 12, 31)))
+				.append("runKey", "carry-out:" + person.getId() + ":" + type + ":" + (year - 1))
+				.append("createdAt", now));
+		mongo.getCollection("time_off_ledger").insertOne(new org.bson.Document()
+				.append("userId", person.getId()).append("typeId", type).append("year", year)
+				.append("kind", "CARRYOVER_IN").append("milliDays", milliDays)
+				.append("effectiveOn", utcDay(LocalDate.of(year, 1, 1))).append("originYear", year - 1)
+				.append("runKey", "carry-in:" + person.getId() + ":" + type + ":" + year)
+				.append("createdAt", now));
+		if (noticed) {
+			mongo.getCollection("time_off_notices").insertOne(new org.bson.Document()
+					.append("userId", person.getId()).append("typeId", type).append("year", year - 1)
+					.append("kind", "ANNUAL").append("remainingMilliDays", milliDays)
+					.append("expiresOn", utcDay(LocalDate.of(year, 3, 31)))
+					.append("sentAt", java.util.Date.from(LocalDate.of(year - 1, 10, 1).atTime(8, 0)
+							.toInstant(ZoneOffset.UTC)))
+					.append("runKey", "notice:ANNUAL:" + person.getId() + ":" + type + ":" + (year - 1)));
+		}
 	}
 
 	/**

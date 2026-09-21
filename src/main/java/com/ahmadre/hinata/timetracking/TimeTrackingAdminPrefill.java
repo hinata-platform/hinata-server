@@ -89,6 +89,22 @@ public class TimeTrackingAdminPrefill implements SettingsPrefill {
 		view.setApprovalPeriod(periodView);
 
 		view.setWorkloadReportsEnabled(settings.workloadReportsEnabled());
+		// What the switches are set to; the admin screen explains that they need the module.
+		view.setAbsenceReportsEnabled(settings.absenceReportsConfigured());
+		view.setAbsenceRateEnabled(settings.absenceRateConfigured());
+		TimeTrackingSettings.TimeOffRetention timeOff = settings.timeOffRetention();
+		ServerSettings.TimeTracking.TimeOffRetention timeOffView =
+				new ServerSettings.TimeTracking.TimeOffRetention();
+		timeOffView.setSickDetailPurgeMonths(timeOff.sickDetailPurgeMonths());
+		timeOffView.setRequestPurgeMonths(timeOff.requestPurgeMonths());
+		timeOffView.setLedgerPurgeYears(timeOff.ledgerPurgeYears());
+		view.setTimeOffRetention(timeOffView);
+		TimeTrackingSettings.ExpiryNotice notice = settings.expiryNotice();
+		ServerSettings.TimeTracking.ExpiryNotice noticeView = new ServerSettings.TimeTracking.ExpiryNotice();
+		noticeView.setMonth(notice.annualOn().getMonthValue());
+		noticeView.setDay(notice.annualOn().getDayOfMonth());
+		noticeView.setWeeksBefore(notice.weeksBefore());
+		view.setExpiryNotice(noticeView);
 		view.setAlertsEnabled(settings.alertsEnabled());
 		view.setTargetRemindersEnabled(settings.targetRemindersEnabled());
 		// Null here is an answer, not a gap: nothing is suggested.

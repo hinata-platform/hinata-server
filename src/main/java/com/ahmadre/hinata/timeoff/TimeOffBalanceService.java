@@ -66,6 +66,10 @@ public class TimeOffBalanceService {
 	/** Longest page of ledger rows. */
 	public static final int PAGE_MAX = 100;
 
+	/** The kinds that make up what is still ahead: booked days, net of those given back. */
+	static final List<String> AHEAD_KINDS = List.of(TimeOffLedgerEntry.Kind.BOOKED.name(),
+			TimeOffLedgerEntry.Kind.RETURNED.name());
+
 	private static final Sort OLDEST_FIRST =
 			Sort.by(Sort.Order.asc("effectiveOn"), Sort.Order.asc("_id"));
 
@@ -93,7 +97,46 @@ public class TimeOffBalanceService {
 			int carriedInMilliDays, int adjustedMilliDays, int takenMilliDays, int plannedMilliDays,
 			int expiredMilliDays, int paidOutMilliDays, int remainingMilliDays, LocalDate expiresOn,
 			boolean granted, boolean unlimited, TimeOffBalances.Reason reason,
-			boolean belowLegalMinimum, int legalMinimumMilliDays) {
+			boolean belowLegalMinimum, int legalMinimumMilliDays, int expiringMilliDays,
+			LocalDate expiringOn) {
+	}
+
+	/**
+	 * What of a balance lapses next, and on which day, if nothing is taken before then (HIN-119).
+	 *
+	 * <p>Days carried in go first — they are the ones with the nearer deadline, and the days taken
+	 * this year are counted against them first. Then, for a type that carries nothing or only part,
+	 * what the year's end would take. This is the figure the person's card says and the notice
+	 * repeats; whether the days actually lapse is the yearly run's to decide, and it lets nothing
+	 * lapse without a notice behind it.
+	 */
+	record Expiring(int milliDays, LocalDate on) {
+
+		static final Expiring NONE = new Expiring(0, null);
+
+		static Expiring of(TimeOffType type, int year, int carriedIn, int remaining, LocalDate today) {
+			if (type.isUnlimited() || !type.countsAgainstBalance() || remaining <= 0) {
+				return NONE;
+			}
+			int carriedUnused = Math.min(carriedIn, remaining);
+			LocalDate carriedDeadline = TimeOffBalances.carryoverDeadline(type.carryoverExpiresOn(), year - 1,
+					type.yearAnchor());
+			if (carriedUnused > 0 && !today.isAfter(carriedDeadline)) {
+				return new Expiring(carriedUnused, carriedDeadline);
+			}
+			LocalDate yearEnd = TimeOffBalances.yearEnd(year, type.yearAnchor());
+			if (today.isAfter(yearEnd)) {
+				return NONE;
+			}
+			return switch (type.carryover()) {
+				case NONE -> new Expiring(remaining, yearEnd);
+				case CAPPED -> {
+					int cap = type.getCarryoverCapMilliDays() == null ? 0 : type.getCarryoverCapMilliDays();
+					yield remaining > cap ? new Expiring(remaining - cap, yearEnd) : NONE;
+				}
+				case UNLIMITED -> NONE;
+			};
+		}
 	}
 
 	/** What a bulk grant would do, before it does it. */
@@ -176,6 +219,7 @@ public class TimeOffBalanceService {
 		// Bookings are negative; what is "taken" is the part that is already behind the person.
 		int takenTotal = -booked;
 		int remaining = accrual + carriedIn + carriedOut + adjusted + booked + expired + paidOut;
+		Expiring expiring = Expiring.of(type, year, carriedIn, remaining, LocalDate.now(clock));
 		return new Balance(type.getId(), year,
 				granted == null ? 0 : granted.allowanceMilliDays(),
 				accrual, carriedIn, adjusted,
@@ -183,7 +227,8 @@ public class TimeOffBalanceService {
 				carryoverExpiry(type, year), granted != null, type.isUnlimited(),
 				granted == null ? null : reasonOf(granted),
 				TimeOffLegalFloor.fallsShort(type, workingDaysPerWeek),
-				TimeOffLegalFloor.minimumMilliDays(workingDaysPerWeek));
+				TimeOffLegalFloor.minimumMilliDays(workingDaysPerWeek),
+				expiring.milliDays(), expiring.on());
 	}
 
 	/**
@@ -205,12 +250,12 @@ public class TimeOffBalanceService {
 				? TimeOffBalances.Reason.WAITING_PERIOD : TimeOffBalances.Reason.FULL;
 	}
 
-	/** When what is carried into [year] runs out, for a type that carries anything at all. */
+	/** When what is carried out of [year] runs out, for a type that carries anything at all. */
 	private static LocalDate carryoverExpiry(TimeOffType type, int year) {
 		if (type.carryover() == TimeOffType.Carryover.NONE) {
 			return null;
 		}
-		return type.carryoverExpiresOn().atYear(year + 1);
+		return TimeOffBalances.carryoverDeadline(type.carryoverExpiresOn(), year, type.yearAnchor());
 	}
 
 	/** Every kind's total for a person and year, in one indexed aggregation. */
@@ -234,12 +279,16 @@ public class TimeOffBalanceService {
 		return sums;
 	}
 
-	/** What is booked but still ahead of the person: days committed, not days gone. */
+	/**
+	 * What is booked but still ahead of the person: days committed, not days gone. Net of what was
+	 * given back: a cancelled absence books its days back on the day it would have started, so a
+	 * cancellation next month is not still "planned" (HIN-119).
+	 */
 	private Map<String, Integer> plannedByType(String userId, int year) {
 		AggregationResults<Document> results = mongo.aggregate(
 				Aggregation.newAggregation(
 						Aggregation.match(Criteria.where("userId").is(userId).and("year").is(year)
-								.and("kind").is(TimeOffLedgerEntry.Kind.BOOKED.name())
+								.and("kind").in(AHEAD_KINDS)
 								.and("effectiveOn").gt(LocalDate.now(clock))),
 						Aggregation.group("typeId").sum("milliDays").as("total")),
 				TimeOffLedgerEntry.class, Document.class);
@@ -348,7 +397,7 @@ public class TimeOffBalanceService {
 		AggregationResults<Document> results = mongo.aggregate(
 				Aggregation.newAggregation(
 						Aggregation.match(Criteria.where("userId").in(userIds).and("typeId").is(typeId)
-								.and("year").is(year).and("kind").is(TimeOffLedgerEntry.Kind.BOOKED.name())
+								.and("year").is(year).and("kind").in(AHEAD_KINDS)
 								.and("effectiveOn").gt(LocalDate.now(clock))),
 						Aggregation.group("userId").sum("milliDays").as("total")),
 				TimeOffLedgerEntry.class, Document.class);
@@ -425,13 +474,17 @@ public class TimeOffBalanceService {
 			// Two keepers granting the same year from two screens. The index decided.
 			throw ApiException.conflict("error.timeOff.alreadyGranted");
 		}
-		if (accrued.milliDays() > 0) {
+		// A monthly type books what the months so far have earned; the yearly run adds a twelfth
+		// each month after that (HIN-119). An annual type earns the year on its anchor day.
+		int earned = TimeOffBalances.accruedBy(accrued, type.accrual(), type.yearAnchor(), year,
+				LocalDate.now(clock));
+		if (earned > 0) {
 			book(TimeOffLedgerEntry.builder()
 					.userId(person.getId())
 					.typeId(type.getId())
 					.year(year)
 					.kind(TimeOffLedgerEntry.Kind.ACCRUAL)
-					.milliDays(accrued.milliDays())
+					.milliDays(earned)
 					.effectiveOn(TimeOffBalances.yearStart(year, type.yearAnchor()))
 					.refId(saved.getId())
 					.actorId(actor.getId())

@@ -238,6 +238,25 @@ public class TeamAbsenceService {
 	 * nowhere, because rows are built only for the page, and the page is recounted from what is
 	 * visible.
 	 */
+	/**
+	 * The people of a team or project whose sums [viewer] may read in the absence report
+	 * (HIN-119): the same roster the capacity band reads, so a lead gets exactly the group they
+	 * plan — members who worked on a project they lead — and a keeper everybody in it.
+	 */
+	public Members reportGroup(User viewer, String teamId, String projectId) {
+		AvailabilityAccess.Roster roster = access.roster(viewer, teamId, projectId, AvailabilityAccess.Purpose.BAND);
+		return new Members(roster.userIds(), roster.truncated());
+	}
+
+	/** A group's people, handed to the rest of the module without an availability type in it. */
+	public record Members(List<String> userIds, boolean truncated) {
+	}
+
+	/** Whether [viewer] keeps absences for everybody, as the availability side reads it. */
+	public boolean keeps(User viewer) {
+		return access.keeps(viewer);
+	}
+
 	private Set<String> awayAmong(List<String> userIds, LocalDate from, LocalDate to, User viewer,
 			TimePolicy.AbsenceCalendar level) {
 		if (userIds.isEmpty()) {

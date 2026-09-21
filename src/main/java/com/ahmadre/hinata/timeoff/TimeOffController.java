@@ -56,7 +56,8 @@ public class TimeOffController {
 			int accruedMilliDays, int carriedInMilliDays, int adjustedMilliDays, int takenMilliDays,
 			int plannedMilliDays, int expiredMilliDays, int paidOutMilliDays, int remainingMilliDays,
 			LocalDate expiresOn, boolean granted, boolean unlimited, String reason,
-			boolean belowLegalMinimum, int legalMinimumMilliDays) {
+			boolean belowLegalMinimum, int legalMinimumMilliDays, int expiringMilliDays,
+			LocalDate expiringOn) {
 
 		static BalanceResponse from(TimeOffBalanceService.Balance balance) {
 			return new BalanceResponse(balance.typeId(), balance.year(), balance.entitledMilliDays(),
@@ -65,7 +66,7 @@ public class TimeOffController {
 					balance.expiredMilliDays(), balance.paidOutMilliDays(),
 					balance.remainingMilliDays(), balance.expiresOn(), balance.granted(),
 					balance.unlimited(), name(balance.reason()), balance.belowLegalMinimum(),
-					balance.legalMinimumMilliDays());
+					balance.legalMinimumMilliDays(), balance.expiringMilliDays(), balance.expiringOn());
 		}
 	}
 

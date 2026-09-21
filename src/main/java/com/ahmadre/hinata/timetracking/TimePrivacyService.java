@@ -100,9 +100,15 @@ public class TimePrivacyService {
 	 * @param bandForPlanners leads and team admins see what capacity their group has left, as a sum
 	 *                        over at least three people, which counts the person's approved days
 	 *                        and planned hours in
+	 * @param report          the report "absences and balances" exists (HIN-119): the person sees
+	 *                        their own figures, keepers everybody's, and leads — with
+	 *                        {@code leadsSeeSpans} — sums over at least three people, never sickness
+	 * @param rateForKeepers  keepers see the share of working days the person was away
+	 * @param sickDetailMonths after this many months a sick day reads "away (other)"; 0 never
 	 */
 	public record AbsenceVisibility(TimePolicy.AbsenceCalendar calendar, boolean leadsSeeSpans,
-			boolean keepersNamed, boolean bandForPlanners) {
+			boolean keepersNamed, boolean bandForPlanners, boolean report, boolean rateForKeepers,
+			int sickDetailMonths) {
 	}
 
 	/**
@@ -168,7 +174,9 @@ public class TimePrivacyService {
 		}
 		TimePolicy.AbsenceCalendar calendar = policy.absenceCalendarVisibility();
 		return new AbsenceVisibility(calendar, policy.leadsSeeMemberEntries(), !policy.absenceManagers().isEmpty(),
-				calendar != TimePolicy.AbsenceCalendar.OFF && policy.leadsSeeMemberEntries());
+				calendar != TimePolicy.AbsenceCalendar.OFF && policy.leadsSeeMemberEntries(),
+				policy.absenceReportsEnabled(), policy.absenceRateEnabled(),
+				policy.timeOffRetention().sickDetailPurgeMonths());
 	}
 
 	/** The built-in notice in {@code language}, or in English when there is none. */

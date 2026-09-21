@@ -544,6 +544,50 @@ public class NotificationService {
 	}
 
 	/**
+	 * Tells a person how much of a type's leave is still there and on which day it lapses — the
+	 * notice the law asks for before any leave may lapse (HIN-119).
+	 *
+	 * <p>Locked rather than gated: {@code eventId} does not map it, so no preference silences the
+	 * bell, the mail or the push. The person who turned off time-tracking mail did not ask to lose
+	 * leave without being told.
+	 */
+	public void notifyTimeOffExpiry(User person, String typeName, String systemKey, int milliDays,
+			java.time.LocalDate expiresOn) {
+		if (person == null || !person.isActive()) return;
+		Locale locale = words.localeOf(person);
+		String type = typeName != null && !typeName.isBlank() ? typeName
+				: words.in(locale, "timeOff.type." + (systemKey == null ? "other" : systemKey));
+		String title = words.of(person, "notify.timeOff.expiry.title");
+		String body = words.in(locale, "notify.timeOff.expiry.body", type, words.timeOffDays(locale, milliDays),
+				words.date(locale, expiresOn));
+		deliverGated(person, Notification.Type.TIME_OFF_EXPIRY_NOTICE, title, body,
+				words.of(person, "notify.time.pushTitle"), words.of(person, "notify.timeOff.expiry.push"),
+				"/time/absences?scope=balances");
+	}
+
+	/**
+	 * Tells a person what the turn of their leave year did: how much was carried into the new one,
+	 * how much lapsed, and until when the carried days can be taken (HIN-119).
+	 */
+	public void notifyTimeOffBalanceSummary(User person, String typeName, String systemKey, int year,
+			int carriedMilliDays, int lapsedMilliDays, java.time.LocalDate carriedUntil) {
+		if (person == null || !person.isActive()) return;
+		Locale locale = words.localeOf(person);
+		String type = typeName != null && !typeName.isBlank() ? typeName
+				: words.in(locale, "timeOff.type." + (systemKey == null ? "other" : systemKey));
+		String title = words.of(person, "notify.timeOff.summary.title");
+		String body = lapsedMilliDays > 0
+				? words.in(locale, "notify.timeOff.summary.bodyLapsed", type, year,
+						words.timeOffDays(locale, carriedMilliDays), words.timeOffDays(locale, lapsedMilliDays),
+						words.date(locale, carriedUntil))
+				: words.in(locale, "notify.timeOff.summary.body", type, year,
+						words.timeOffDays(locale, carriedMilliDays), words.date(locale, carriedUntil));
+		deliverGated(person, Notification.Type.TIME_OFF_BALANCE_SUMMARY, title, body,
+				words.of(person, "notify.time.pushTitle"), words.of(person, "notify.timeOff.push"),
+				"/time/absences?scope=balances");
+	}
+
+	/**
 	 * Which way a request went, for the one notification that reports a decision.
 	 *
 	 * <p>Two constants and not three: an automatic approval is its own message (a person who
@@ -1294,7 +1338,10 @@ public class NotificationService {
 					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED, TIME_OFF_ENTITLEMENT_CHANGED,
 					TIME_OFF_REQUESTED, TIME_OFF_APPROVED, TIME_OFF_REJECTED, TIME_OFF_AUTO_APPROVED,
 					TIME_OFF_CANCELLED, TIME_OFF_SHORTENED, TIME_OFF_SUBSTITUTE_NAMED,
-					TIME_REPORT_SCHEDULED -> "time";
+					TIME_REPORT_SCHEDULED, TIME_OFF_BALANCE_SUMMARY -> "time";
+			// TIME_OFF_EXPIRY_NOTICE is deliberately absent and therefore locked: it is the notice
+			// without which no leave lapses (BAG 19.02.2019 – 9 AZR 541/15), and a preference that
+			// switched it off would switch off the protection it gives the person.
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

@@ -58,6 +58,10 @@ public class TimeOffPersonalData implements PersonalDataExport {
 		out.put("requests", filed.stream().limit(LEDGER_CAP)
 				.map(request -> request(request, keys)).toList());
 		out.put("requestsTruncated", filed.size() > LEDGER_CAP);
+		// HIN-119: the notices the person received — the same record a lapse rests on — and any
+		// proposal that their leave lapse after an illness, with what a keeper decided.
+		out.put("expiryNotices", noticesOf(user, LEDGER_CAP).stream().map(notice -> notice(notice, keys)).toList());
+		out.put("lapseProposals", proposalsOf(user).stream().map(proposal -> proposal(proposal, keys)).toList());
 		return out;
 	}
 
@@ -106,7 +110,54 @@ public class TimeOffPersonalData implements PersonalDataExport {
 								request.getDecisionNote() == null ? "—" : request.getDecisionNote()))
 						.toList(),
 				filed.size() > TABLE_ROWS ? t(locale, "export.pdf.time.listCapped", TABLE_ROWS) : null);
-		return List.of(entitlements, ledger, asked);
+		List<TimeOffNotice> received = noticesOf(user, TABLE_ROWS + 1);
+		Table told = new Table(t(locale, "export.pdf.timeOff.notices"),
+				List.of(t(locale, "export.pdf.timeOff.sentAt"), t(locale, "export.pdf.timeOff.type"),
+						t(locale, "export.pdf.timeOff.year"), t(locale, "export.pdf.timeOff.days"),
+						t(locale, "export.pdf.timeOff.expiresOn")),
+				new float[]{2.5f, 2.5f, 1.5f, 1.5f, 2},
+				received.stream().limit(TABLE_ROWS)
+						.map(notice -> List.of(String.valueOf(notice.getSentAt()),
+								keys.getOrDefault(notice.getTypeId(), "—"),
+								String.valueOf(notice.getYear()),
+								words.timeOffDays(locale, notice.remainingMilliDays()),
+								words.date(locale, notice.getExpiresOn())))
+						.toList(),
+				received.size() > TABLE_ROWS ? t(locale, "export.pdf.time.listCapped", TABLE_ROWS) : null);
+		return List.of(entitlements, ledger, asked, told);
+	}
+
+	private List<TimeOffNotice> noticesOf(User user, int limit) {
+		return mongo.find(Query.query(Criteria.where("userId").is(user.getId()))
+				.with(Sort.by(Sort.Order.desc("sentAt"))).limit(limit), TimeOffNotice.class);
+	}
+
+	private List<TimeOffProposal> proposalsOf(User user) {
+		return mongo.find(Query.query(Criteria.where("userId").is(user.getId()))
+				.with(Sort.by(Sort.Order.desc("createdAt"))).limit(TABLE_ROWS), TimeOffProposal.class);
+	}
+
+	private static Map<String, Object> notice(TimeOffNotice notice, Map<String, String> keys) {
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("sentAt", String.valueOf(notice.getSentAt()));
+		out.put("kind", String.valueOf(notice.getKind()));
+		out.put("type", keys.get(notice.getTypeId()));
+		out.put("year", notice.getYear());
+		out.put("remainingMilliDays", notice.remainingMilliDays());
+		out.put("expiresOn", String.valueOf(notice.getExpiresOn()));
+		return out;
+	}
+
+	private static Map<String, Object> proposal(TimeOffProposal proposal, Map<String, String> keys) {
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("createdAt", String.valueOf(proposal.getCreatedAt()));
+		out.put("type", keys.get(proposal.getTypeId()));
+		out.put("year", proposal.getYear());
+		out.put("milliDays", proposal.milliDays());
+		out.put("status", String.valueOf(proposal.getStatus()));
+		out.put("decidedAt", proposal.getDecidedAt() == null ? null : String.valueOf(proposal.getDecidedAt()));
+		out.put("decisionReason", proposal.getDecisionReason());
+		return out;
 	}
 
 	// --- reading -----------------------------------------------------------------
