@@ -153,6 +153,20 @@ public class TimeSavedReportService {
 	}
 
 	/**
+	 * A report by id for its owner or for somebody its schedule mails — the link in the mail opens
+	 * it. Anybody else is told it is not there, as for a link that never existed.
+	 */
+	public View openedById(User reader, String id) {
+		TimeSavedReport report = mongo.findById(id, TimeSavedReport.class);
+		boolean recipient = report != null && report.getSchedule() != null
+				&& report.getSchedule().getRecipients().contains(reader.getId());
+		if (report == null || !report.getOwnerId().equals(reader.getId()) && !recipient) {
+			throw ApiException.notFound("savedReport");
+		}
+		return view(report, reader);
+	}
+
+	/**
 	 * Mails the report weekly or monthly to up to {@link TimeSavedReport#RECIPIENTS_MAX} people, each
 	 * of whom reads it in their own scope. Only active accounts; the owner receives it only when
 	 * they put themselves on the list.

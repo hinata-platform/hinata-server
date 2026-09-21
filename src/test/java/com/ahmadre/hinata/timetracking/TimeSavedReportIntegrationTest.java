@@ -144,6 +144,9 @@ class TimeSavedReportIntegrationTest {
 		clock.set(MONDAY_MORNING.plusSeconds(7 * 86_400));
 		mails.run();
 		assertThat(sent()).hasSize(4);
+		// The mail's link opens the report for a recipient, and for nobody else.
+		assertThat(saved.openedById(member, report.id()).owned()).isFalse();
+		assertThatThrownBy(() -> saved.openedById(stranger, report.id())).isInstanceOf(ApiException.class);
 	}
 
 	@Test
