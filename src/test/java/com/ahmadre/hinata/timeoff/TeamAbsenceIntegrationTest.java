@@ -328,6 +328,20 @@ class TeamAbsenceIntegrationTest {
 	}
 
 	@Test
+	void aHolidayIsNotAShortageInTheBand() {
+		policy(TimePolicy.AbsenceCalendar.BUSY_ONLY);
+		HolidayCalendar calendar = mongo.insert(HolidayCalendar.builder().name("NRW").defaultCalendar(true).build());
+		mongo.insert(Holiday.builder().calendarId(calendar.getId()).date(MON.plusDays(2)).name("Feiertag")
+				.halfDay(false).build());
+
+		TeamAbsenceService.Band band = calendars.band(lead, null, project.getId(), MON, MON.plusDays(6), null);
+
+		// Nothing was planned on the holiday, so nothing is short on it.
+		assertThat(band.buckets().get(2).scheduledMinutes()).isZero();
+		assertThat(band.buckets().get(2).capacityMinutes()).isZero();
+	}
+
+	@Test
 	void theBandIsForWhoPlans() {
 		policy(TimePolicy.AbsenceCalendar.TYPE);
 
