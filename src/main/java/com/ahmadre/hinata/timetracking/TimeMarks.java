@@ -43,6 +43,11 @@ class TimeMarks {
 	}
 
 	/** The key of one alert: a subject crossing one threshold. */
+	/** One scheduled report, for one covered period, to one recipient (HIN-93). */
+	static String reportKey(String reportId, java.time.LocalDate periodStart, String recipientId) {
+		return "report:" + reportId + ':' + periodStart + ':' + recipientId;
+	}
+
 	static String alertKey(String kind, String subjectId, int percent) {
 		return "alert:" + kind + ':' + subjectId + ':' + percent;
 	}
