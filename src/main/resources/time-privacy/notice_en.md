@@ -21,7 +21,7 @@ Your time is never used for automated decisions about you. Hints and reminders a
 
 ### Who receives it
 
-You always see your own entries. Administrators of this instance can see every entry. Other members of a project see how much time was booked on an issue, but not who booked it and not the description. Whether project leads see your individual entries, whether timesheets are approved and which reports exist depends on the rules your organisation has switched on. The panel lists them.
+You always see your own entries. Administrators of this instance can see every entry. Other members of a project see how much time was booked on an issue, but not who booked it and not the description. In reports they see the totals of their projects, for example per week or activity, again without names. Administrators can import entries for you from a file, and that is logged. Whether project leads see your individual entries, whether timesheets are approved and which reports exist depends on the rules your organisation has switched on. The panel lists them.
 
 ### How long it is kept
 

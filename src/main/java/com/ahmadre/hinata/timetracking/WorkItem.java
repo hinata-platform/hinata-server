@@ -57,22 +57,17 @@ import java.util.List;
 @CompoundIndex(name = "user_date_started",
 		def = "{'userId': 1, 'date': -1, 'startedAt': -1, '_id': -1}")
 @CompoundIndex(name = "user_project_date", def = "{'userId': 1, 'projectId': 1, 'date': 1}")
-// The admin timesheet and the cross-project time report ask for a window and
+// The admin timesheet and the cross-project time reports ask for a window and
 // nothing else, so there is no equality to lead with and `date` has to. It is
 // the second key in all four indexes above, and a second key is not a prefix —
 // without this one that query has nothing to use and reads the collection.
-// userId and projectId follow because they are what the rows are grouped by.
-//
-// Not covering, deliberately, and worth knowing why: appending durationMinutes
-// would answer the timesheet aggregation from the index alone instead of
-// fetching every matched document to read one integer. It is a real win on an
-// unfiltered admin week — and it cannot be made here. `auto-index-creation` is
-// on, there is no index migration, and Spring Data throws
-// DataIntegrityViolationException when an index of this name already exists with
-// different keys: the two live instances would fail to start. It belongs with
-// HIN-93, where the reporting aggregations land and an index change can carry
-// the migration that drops the old one first.
-@CompoundIndex(name = "date_user_project", def = "{'date': 1, 'userId': 1, 'projectId': 1}")
+// userId and projectId follow because they are what the rows are grouped by, and
+// durationMinutes last so the timesheet's sums over a window come from the index
+// alone instead of a fetch per entry (HIN-93). The name changed with the keys:
+// Spring Data refuses to start over an index of the same name with different
+// keys, so WorkItemIndexMigration drops the old `date_user_project` instead.
+@CompoundIndex(name = WorkItem.DATE_USER_PROJECT_MINUTES_INDEX,
+		def = "{'date': 1, 'userId': 1, 'projectId': 1, 'durationMinutes': 1}")
 // The tag catalogue's three questions: how many entries carry this word, which
 // ones a rename has to rewrite, and which of those are on a day the operator
 // froze. Multikey on `tags`, then the date range — ESR, the same shape the
@@ -80,7 +75,7 @@ import java.util.List;
 // find three entries, and the admin list would read it once per row.
 @CompoundIndex(name = "tags_date", def = "{'tags': 1, 'date': 1}")
 // The retention sweep walks one day at a time and within the day by _id. With
-// date_user_project it would read and sort every remaining entry of the day for
+// date_user_project_minutes it would read and sort every remaining entry of the day for
 // each batch of 500; with this it is a bounded index walk.
 @CompoundIndex(name = "date_id", def = "{'date': 1, '_id': 1}")
 // The descriptions a deleted account left behind. Partial, so it holds only entries
@@ -106,6 +101,8 @@ public class WorkItem {
 
 	/** The index a project's recorded minutes are summed from; named once for the annotation and the hint. */
 	public static final String PROJECT_DURATION_INDEX = "project_duration";
+
+	public static final String DATE_USER_PROJECT_MINUTES_INDEX = "date_user_project_minutes";
 
 	/**
 	 * Where an entry came from. Absent on documents written before 2.0 — read as
