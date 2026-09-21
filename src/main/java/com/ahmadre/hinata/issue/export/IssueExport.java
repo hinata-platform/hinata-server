@@ -1,7 +1,9 @@
 package com.ahmadre.hinata.issue.export;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * One issue, gathered once and shaped for reading rather than for storage —
@@ -68,6 +70,67 @@ public record IssueExport(
 	/** [at] stays an instant: each format stamps it its own way, and the XML
 	 *  stamps it in a shape a machine can read. */
 	public record Activity(Instant at, String actor, String what) {
+	}
+
+	/**
+	 * This issue as a document for {@link PdfDocumentRenderer} and
+	 * {@link DocxDocumentRenderer}: the key above the title, the project under it, the
+	 * head as labelled values, then every section that has something in it. The
+	 * spreadsheet and the XML keep shapes of their own — a sheet per kind of record and
+	 * a published schema — because a program reads them, not a person.
+	 */
+	public ExportDocument document() {
+		List<ExportBlock> blocks = new ArrayList<>();
+		List<ExportBlock.KeyValue> head = fields.stream()
+				.filter(field -> !field.value().isBlank())
+				.map(field -> new ExportBlock.KeyValue(field.label(), field.value()))
+				.toList();
+		if (!head.isEmpty()) {
+			blocks.add(new ExportBlock.Section(words.t("export.section.details")));
+			blocks.add(new ExportBlock.KeyValues(head));
+		}
+		if (!description.isEmpty()) {
+			blocks.add(new ExportBlock.Section(words.t("export.section.description")));
+			blocks.addAll(description);
+		}
+		if (!comments.isEmpty()) {
+			blocks.add(new ExportBlock.Section(words.t("export.section.comments", comments.size())));
+			for (Comment comment : comments) {
+				blocks.add(new ExportBlock.Note(comment.author()
+						+ (comment.at() == null ? "" : " · " + words.instant(comment.at()))));
+				blocks.addAll(comment.body());
+			}
+		}
+		if (!links.isEmpty()) {
+			blocks.add(new ExportBlock.Section(words.t("export.section.links")));
+			for (Link link : links) {
+				blocks.add(new ExportBlock.Paragraph(List.of(
+						new ExportBlock.Span(link.verb(), true, false, false, false),
+						new ExportBlock.Span("  " + link.readableId() + " " + link.title(),
+								false, false, false, false))));
+			}
+		}
+		if (!attachments.isEmpty()) {
+			blocks.add(new ExportBlock.Section(words.t("export.section.attachments")));
+			blocks.add(new ExportBlock.Table(
+					List.of(words.t("export.column.file"), words.t("export.column.type"),
+							words.t("export.column.size"), words.t("export.column.uploadedBy")),
+					attachments.stream().map(file -> List.of(file.fileName(), file.contentType(),
+							file.size(), file.uploader())).toList(),
+					List.of(2.2f, 1.4f, 0.7f, 1.2f), Set.of(2)));
+		}
+		if (!activity.isEmpty()) {
+			blocks.add(new ExportBlock.Section(words.t("export.section.history")));
+			blocks.add(new ExportBlock.Table(
+					List.of(words.t("export.column.date"), words.t("export.column.author"),
+							words.t("export.column.change")),
+					activity.stream().map(entry -> List.of(words.instant(entry.at()), entry.actor(),
+							entry.what())).toList(),
+					List.of(1.2f, 1.1f, 2.7f), Set.of()));
+		}
+		String where = project.isBlank() ? organization
+				: project + (organization.isBlank() ? "" : " · " + organization);
+		return new ExportDocument(readableId, title, where, blocks, organization, logo, generatedAt, words);
 	}
 
 	/** What the caller asked to be included; every section defaults to shown. */

@@ -82,6 +82,11 @@ public class UserWords {
 				.format(date);
 	}
 
+	/** The bundles themselves, for a document that writes more than one label at a time. */
+	public MessageSource messages() {
+		return messages;
+	}
+
 	/** {@code key} rendered for an explicit locale. */
 	public String in(Locale locale, String key, Object... args) {
 		return messages.getMessage(key, args, key, locale == null ? Locale.ENGLISH : locale);

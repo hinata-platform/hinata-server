@@ -166,6 +166,15 @@ final class SmartLinks {
 				}
 				case ExportBlock.Rule ignored -> {
 				}
+				// A document's own blocks, never parsed out of content.
+				case ExportBlock.Section ignored -> {
+				}
+				case ExportBlock.Note ignored -> {
+				}
+				case ExportBlock.KeyValues ignored -> {
+				}
+				case ExportBlock.LongTable ignored -> {
+				}
 			}
 		}
 	}
@@ -220,9 +229,14 @@ final class SmartLinks {
 						table.headers().stream().map(cell -> text(cell, naming)).toList(),
 						table.rows().stream()
 								.map(row -> row.stream().map(cell -> text(cell, naming)).toList())
-								.toList());
+								.toList(),
+						table.widths(), table.endAligned());
 				case ExportBlock.Code code -> code;
 				case ExportBlock.Rule rule -> rule;
+				case ExportBlock.Section section -> section;
+				case ExportBlock.Note note -> note;
+				case ExportBlock.KeyValues values -> values;
+				case ExportBlock.LongTable table -> table;
 			});
 		}
 		return out;
