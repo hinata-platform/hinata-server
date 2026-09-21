@@ -117,8 +117,10 @@ public class TeamAbsenceService {
 	}
 
 	/**
-	 * One day or week of the band. [away] and [requested] are the most people away on any day of
-	 * the bucket — the peak is what a planner has to cover, and an average would hide it.
+	 * One day or week of the band. [scheduledMinutes] is the working time planned, holidays left
+	 * out; [capacityMinutes] what approved absences leave of it. [away] and [requested] are the most
+	 * people away on any day of the bucket — the peak is what a planner has to cover, and an
+	 * average would hide it.
 	 */
 	public record Bucket(LocalDate from, LocalDate to, int scheduledMinutes, int capacityMinutes, int away,
 			int requested) {
@@ -216,7 +218,9 @@ public class TeamAbsenceService {
 			int away = 0;
 			int requested = 0;
 			for (; i < group.capacity().size() && !group.capacity().get(i).date().isAfter(end); i++) {
-				scheduled += group.capacity().get(i).scheduledMinutes();
+				// Planned working time: a holiday is nobody's absence, and counted in it showed
+				// every holiday as a day the group had run out of people (live check).
+				scheduled += group.capacity().get(i).scheduledMinutes() - group.capacity().get(i).holidayMinutes();
 				left += group.capacity().get(i).capacityMinutes();
 				away = Math.max(away, clashes.get(i).away());
 				requested = Math.max(requested, clashes.get(i).requested());
