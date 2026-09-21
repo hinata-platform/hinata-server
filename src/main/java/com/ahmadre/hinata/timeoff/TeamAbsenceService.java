@@ -12,6 +12,7 @@ import org.bson.Document;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Collation;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
@@ -70,6 +71,12 @@ public class TeamAbsenceService {
 	public static final int BAND_DAYS_MAX = 92;
 	public static final int BAND_WEEKS_DAYS_MAX = 366;
 
+	/** The fewest people a band adds up for anybody but a keeper; see {@link #band}. */
+	public static final int BAND_MIN_PEOPLE = 3;
+
+	/** Names in the order people read them: "anna" beside "Anna", not after "Zoe". */
+	private static final Collation BY_NAME = Collation.of("en").strength(Collation.ComparisonLevel.secondary());
+
 	/** Most open requests one calendar read collects across its rows. */
 	static final int REQUESTS_MAX = 2_000;
 
@@ -127,6 +134,10 @@ public class TeamAbsenceService {
 	/**
 	 * A page of the group's rows from [from] to [to]. [awayOnly] keeps only the people with
 	 * something to show in the window — the "away today" card asks for a single day this way.
+	 *
+	 * <p>Both paths page in the database, sorted by name the same way (case does not decide the
+	 * order): who is away is found first, from the absences and open requests that touch the window,
+	 * so only the page that is shown is ever built.
 	 */
 	public CalendarPage calendar(User viewer, String teamId, String projectId, LocalDate from, LocalDate to,
 			boolean awayOnly, int page, int size) {
@@ -136,27 +147,21 @@ public class TeamAbsenceService {
 		int pageIndex = Math.max(0, page);
 		AvailabilityAccess.Roster roster = access.roster(viewer, teamId, projectId,
 				AvailabilityAccess.Purpose.CALENDAR);
-		Catalogue catalogue = new Catalogue();
+		Collection<String> shownPeople = awayOnly ? awayAmong(roster.userIds(), from, to, viewer, level)
+				: roster.userIds();
 
-		if (awayOnly) {
-			CapacityService.Group group = capacity.group(roster.userIds(), from, to);
-			Map<String, List<Entry>> entries = entriesOf(roster.userIds(), group, from, to, viewer, level, catalogue);
-			entries.values().removeIf(List::isEmpty);
-			List<Person> people = namesOf(entries.keySet());
-			int total = people.size();
-			List<Person> slice = people.stream().skip((long) pageIndex * pageSize).limit(pageSize).toList();
-			return pageOf(slice, group, entries, pageIndex, pageSize, total, level, from, to, roster.truncated());
-		}
-
-		Criteria who = Criteria.where("_id").in(roster.userIds()).and("active").ne(false);
+		Criteria who = Criteria.where("_id").in(shownPeople);
 		long total = mongo.count(Query.query(who), User.class);
 		Query query = Query.query(who)
-				.with(PageRequest.of(pageIndex, pageSize, Sort.by(Sort.Order.asc("displayName"), Sort.Order.asc("_id"))));
+				.with(PageRequest.of(pageIndex, pageSize, Sort.by(Sort.Order.asc("displayName"), Sort.Order.asc("_id"))))
+				.collation(BY_NAME);
 		List<Person> slice = people(query).toList();
 		List<String> ids = slice.stream().map(Person::id).toList();
 		CapacityService.Group group = capacity.group(ids, from, to);
-		Map<String, List<Entry>> entries = entriesOf(ids, group, from, to, viewer, level, catalogue);
-		return pageOf(slice, group, entries, pageIndex, pageSize, total, level, from, to, roster.truncated());
+		List<TimeOffRequest> open = openRequests(ids, from, to);
+		Map<String, List<Entry>> entries = entriesOf(ids, group.absences(), open, viewer, level, new Catalogue());
+		boolean truncated = roster.truncated() || group.absencesTruncated() || open.size() >= REQUESTS_MAX;
+		return pageOf(slice, group, entries, viewer, pageIndex, pageSize, total, level, from, to, truncated);
 	}
 
 	// ------------------------------------------------------------------ band
@@ -167,20 +172,38 @@ public class TeamAbsenceService {
 	 * <p>For who plans only (a lead of the project, an admin of the team, a keeper) and only with the
 	 * calendar policy on — the band adds up the same days the calendar shows, so it exists exactly
 	 * when the calendar does.
+	 *
+	 * <p>Anybody but a keeper also needs two more things, because a sum of few people is a way to
+	 * read one person. Leads must see their members' absences anyway ({@code leadsSeeMemberEntries}):
+	 * the capacity counts every approved absence, a type kept private included, and without that
+	 * policy it would tell a lead what the calendar hides. And the group has at least
+	 * {@link #BAND_MIN_PEOPLE} people: a sum over two, one of them the reader, is the other person's
+	 * working hours. The counts of people away use the same sight as the calendar rows, so the band
+	 * never says "one away" on a day the calendar shows nobody.
 	 */
 	public Band band(User viewer, String teamId, String projectId, LocalDate from, LocalDate to,
 			Resolution resolution) {
-		requireCalendar();
+		TimePolicy.AbsenceCalendar level = requireCalendar();
 		Resolution step = resolution == null ? Resolution.DAY : resolution;
 		assertSpan(from, to, step == Resolution.DAY ? BAND_DAYS_MAX : BAND_WEEKS_DAYS_MAX);
 		AvailabilityAccess.Roster roster = access.roster(viewer, teamId, projectId,
 				AvailabilityAccess.Purpose.BAND);
+		if (!access.keeps(viewer)) {
+			if (!settings.leadsSeeMemberEntries()) {
+				throw ApiException.forbidden("error.availability.forbidden");
+			}
+			if (roster.userIds().size() < BAND_MIN_PEOPLE) {
+				throw ApiException.forbidden("error.timeOff.bandTooSmall", BAND_MIN_PEOPLE);
+			}
+		}
 		CapacityService.Group group = capacity.group(roster.userIds(), from, to);
+		List<TimeOffRequest> open = openRequests(roster.userIds(), from, to);
 
+		Map<String, List<Entry>> visible = entriesOf(roster.userIds(), group.absences(), open, viewer, level,
+				new Catalogue());
 		List<TimeOffConflicts.Span> spans = new ArrayList<>();
-		group.absences().forEach(off -> spans.add(new TimeOffConflicts.Span(off.userId(), off.from(), off.to(), true)));
-		openRequests(roster.userIds(), from, to).forEach(request -> spans.add(
-				new TimeOffConflicts.Span(request.getUserId(), request.getFrom(), request.getTo(), false)));
+		visible.forEach((person, entries) -> entries.forEach(entry -> spans.add(
+				new TimeOffConflicts.Span(person, entry.from(), entry.to(), !entry.requested()))));
 		List<TimeOffConflicts.Day> clashes = TimeOffConflicts.perDay(spans, from, to);
 
 		List<Bucket> buckets = new ArrayList<>();
@@ -200,7 +223,37 @@ public class TeamAbsenceService {
 			}
 			buckets.add(new Bucket(start, end, scheduled, left, away, requested));
 		}
-		return new Band(from, to, step, roster.userIds().size(), roster.truncated(), List.copyOf(buckets));
+		boolean truncated = roster.truncated() || group.absencesTruncated() || open.size() >= REQUESTS_MAX;
+		return new Band(from, to, step, roster.userIds().size(), truncated, List.copyOf(buckets));
+	}
+
+	/**
+	 * Who of [userIds] has an absence or an open request touching the window — found in the database,
+	 * so the page after it is built for those people only. Whether the reader may see any of it is
+	 * decided per entry afterwards; a person whose only absence is private then shows an empty row
+	 * nowhere, because rows are built only for the page, and the page is recounted from what is
+	 * visible.
+	 */
+	private Set<String> awayAmong(List<String> userIds, LocalDate from, LocalDate to, User viewer,
+			TimePolicy.AbsenceCalendar level) {
+		if (userIds.isEmpty()) {
+			return Set.of();
+		}
+		Set<String> away = new HashSet<>(mongo.findDistinct(Query.query(Criteria.where("userId").in(userIds)
+				.and("to").gte(from).and("from").lte(to)), "userId", TimeOff.class, String.class));
+		away.addAll(mongo.findDistinct(Query.query(Criteria.where("userId").in(userIds)
+				.and("status").is(TimeOffRequest.Status.SUBMITTED).and("to").gte(from).and("from").lte(to)),
+				"userId", TimeOffRequest.class, String.class));
+		away.remove(null);
+		if (away.isEmpty()) {
+			return away;
+		}
+		// Only who has something the reader may see: a private type alone leaves no row.
+		List<String> ids = List.copyOf(away);
+		Map<String, List<Entry>> entries = entriesOf(ids, capacity.absencesOf(ids, from, to),
+				openRequests(ids, from, to), viewer, level, new Catalogue());
+		entries.values().removeIf(List::isEmpty);
+		return entries.keySet();
 	}
 
 	// ------------------------------------------------------------------ helpers
@@ -227,17 +280,6 @@ public class TeamAbsenceService {
 	private record Person(String id, String name, String avatarUrl) {
 	}
 
-	/** Names for [ids], in the order the rows are shown: by name, never by anything else (R10). */
-	private List<Person> namesOf(Collection<String> ids) {
-		if (ids.isEmpty()) {
-			return List.of();
-		}
-		return people(Query.query(Criteria.where("_id").in(ids).and("active").ne(false)))
-				.sorted(Comparator.comparing((Person person) -> person.name() == null ? "" : person.name(),
-						String.CASE_INSENSITIVE_ORDER).thenComparing(Person::id))
-				.toList();
-	}
-
 	/** The name and picture of each person [query] finds, and nothing else of their account. */
 	private java.util.stream.Stream<Person> people(Query query) {
 		query.fields().include("_id").include("displayName").include("avatarUrl");
@@ -246,13 +288,20 @@ public class TeamAbsenceService {
 						user.getString("avatarUrl")));
 	}
 
+	/**
+	 * The rows of a page. A holiday on somebody else's row carries its day and no name: "Reformation
+	 * Day" or "Corpus Christi" says which region a person works in, and planning needs only that the
+	 * day is off.
+	 */
 	private CalendarPage pageOf(List<Person> slice, CapacityService.Group group, Map<String, List<Entry>> entries,
-			int page, int size, long total, TimePolicy.AbsenceCalendar level, LocalDate from, LocalDate to,
-			boolean truncated) {
+			User viewer, int page, int size, long total, TimePolicy.AbsenceCalendar level, LocalDate from,
+			LocalDate to, boolean truncated) {
 		List<Row> rows = slice.stream()
 				.map(person -> new Row(person.id(), person.name(), person.avatarUrl(),
 						group.holidays().getOrDefault(person.id(), List.of()).stream()
-								.map(mark -> new HolidayEntry(mark.date(), mark.name(), mark.halfDay())).toList(),
+								.map(mark -> new HolidayEntry(mark.date(),
+										person.id().equals(viewer.getId()) ? mark.name() : null, mark.halfDay()))
+								.toList(),
 						entries.getOrDefault(person.id(), List.of())))
 				.toList();
 		int pages = total == 0 ? 0 : (int) ((total + size - 1) / size);
@@ -263,20 +312,19 @@ public class TeamAbsenceService {
 	 * Every entry of [userIds] a reader may see from [from] to [to], absences and open requests, each
 	 * already coarsened. A person with nothing visible maps to an empty list.
 	 */
-	private Map<String, List<Entry>> entriesOf(List<String> userIds, CapacityService.Group group, LocalDate from,
-			LocalDate to, User viewer, TimePolicy.AbsenceCalendar level, Catalogue catalogue) {
+	private Map<String, List<Entry>> entriesOf(List<String> userIds, List<CapacityService.PersonAbsence> absences,
+			List<TimeOffRequest> open, User viewer, TimePolicy.AbsenceCalendar level, Catalogue catalogue) {
 		Map<String, List<Entry>> entries = new LinkedHashMap<>();
 		userIds.forEach(id -> entries.put(id, new ArrayList<>()));
 		if (userIds.isEmpty()) {
 			return entries;
 		}
-		List<TimeOffRequest> open = openRequests(userIds, from, to);
 		Set<String> typeIds = new HashSet<>();
-		group.absences().forEach(off -> typeIds.add(off.typeId()));
+		absences.forEach(off -> typeIds.add(off.typeId()));
 		open.forEach(request -> typeIds.add(request.getTypeId()));
 		catalogue.load(typeIds);
 
-		for (CapacityService.PersonAbsence off : group.absences()) {
+		for (CapacityService.PersonAbsence off : absences) {
 			TimeOffType type = off.typeId() != null ? catalogue.byId(off.typeId()) : catalogue.system(off.type());
 			shown(level, type, off.type() == TimeOff.Type.SICK, off.userId().equals(viewer.getId()))
 					.ifPresent(sight -> entries.get(off.userId()).add(

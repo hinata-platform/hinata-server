@@ -149,7 +149,10 @@ public class TeamService {
 		}
 		if (added.isEmpty()) return team;
 		Team saved = teams.save(team);
-		syncProjectMembership(new HashSet<>(saved.getProjectIds()), new HashSet<>(added));
+		// Adding grants and never takes away: passing the new members as removal candidates dropped
+		// anybody who was a direct member of an attached project and joined with no access to it —
+		// joining a team cost them the project (found in HIN-118).
+		syncProjectMembership(new HashSet<>(saved.getProjectIds()), Set.of());
 		for (String userId : added) {
 			logActivity(saved, actor, TeamActivity.Verb.ADDED_MEMBER, userId, role.name());
 			notifications.notifyAddedToTeam(userId, saved.getId(), saved.getName());
@@ -229,6 +232,18 @@ public class TeamService {
 	}
 
 	public Team detachProject(Team team, User actor, String projectId) {
+		return detach(team, actor, projectId);
+	}
+
+	/**
+	 * Takes back an attachment the old, unchecked {@link #attachProjects} let through (HIN-118) —
+	 * the one-time repair has no user to name, so the activity row carries none.
+	 */
+	Team detachUnsanctioned(Team team, String projectId) {
+		return detach(team, null, projectId);
+	}
+
+	private Team detach(Team team, User actor, String projectId) {
 		if (!team.getProjectIds().contains(projectId)) {
 			throw ApiException.notFound("project");
 		}
@@ -373,7 +388,7 @@ public class TeamService {
 			String extra) {
 		activity.save(TeamActivity.builder()
 				.teamId(team.getId())
-				.actorId(actor.getId())
+				.actorId(actor == null ? null : actor.getId())
 				.verb(verb)
 				.objectLabel(objectLabel)
 				.extra(extra)

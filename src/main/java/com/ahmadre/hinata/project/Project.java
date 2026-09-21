@@ -31,6 +31,10 @@ import java.util.UUID;
 // COLLSCANs over the whole projects collection.
 @CompoundIndex(name = "member_archived", def = "{'memberIds': 1, 'archived': 1}")
 @CompoundIndex(name = "archived_idx", def = "{'archived': 1}")
+// "Which projects does this person lead?" (the team calendar's own groups and its band,
+// HIN-118): without these an $or over memberIds, leadIds and leadId scanned every project.
+@CompoundIndex(name = "lead_ids", def = "{'leadIds': 1}")
+@CompoundIndex(name = "lead_id", def = "{'leadId': 1}", sparse = true)
 public class Project {
 
 	/** The most labels a project's vocabulary holds. */

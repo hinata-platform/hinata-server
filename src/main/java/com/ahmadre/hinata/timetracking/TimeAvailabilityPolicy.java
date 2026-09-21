@@ -67,13 +67,15 @@ public class TimeAvailabilityPolicy implements AvailabilityPolicy {
 
 	/**
 	 * The same two questions for many people: which issues they booked themselves, grouped so every
-	 * issue carries the people who booked it, then which of those issues never moved. Two queries
-	 * whatever the number of people; the group is as large as the number of issues, not of entries.
+	 * issue carries the people who booked it, then which of those issues never moved and in which
+	 * project they are. Two queries whatever the number of people; the group is as large as the
+	 * number of issues, not of entries.
 	 */
 	@Override
-	public Set<String> whoWorkedOn(Collection<String> userIds, Set<String> among, LocalDate since) {
+	public Map<String, Set<String>> projectsWorkedOnBy(Collection<String> userIds, Set<String> among,
+			LocalDate since) {
 		if (userIds == null || userIds.isEmpty() || among.isEmpty()) {
-			return Set.of();
+			return Map.of();
 		}
 		Map<String, Set<String>> bookersByIssue = new HashMap<>();
 		mongo.aggregate(Aggregation.newAggregation(
@@ -83,15 +85,18 @@ public class TimeAvailabilityPolicy implements AvailabilityPolicy {
 				.forEach(row -> bookersByIssue.put(String.valueOf(row.get("_id")),
 						new HashSet<>(row.getList("userIds", String.class))));
 		if (bookersByIssue.isEmpty()) {
-			return Set.of();
+			return Map.of();
 		}
-		Set<String> workers = new HashSet<>();
+		Map<String, Set<String>> projectsByUser = new HashMap<>();
 		Query unmoved = neverMoved(List.copyOf(bookersByIssue.keySet()), among);
-		unmoved.fields().include("_id");
-		mongo.query(Issue.class).as(Document.class).matching(unmoved).all()
-				.forEach(issue -> workers.addAll(
-						bookersByIssue.getOrDefault(String.valueOf(issue.get("_id")), Set.of())));
-		return Set.copyOf(workers);
+		unmoved.fields().include("_id").include("projectId");
+		mongo.query(Issue.class).as(Document.class).matching(unmoved).all().forEach(issue -> {
+			String projectId = issue.getString("projectId");
+			for (String userId : bookersByIssue.getOrDefault(String.valueOf(issue.get("_id")), Set.of())) {
+				projectsByUser.computeIfAbsent(userId, id -> new HashSet<>()).add(projectId);
+			}
+		});
+		return projectsByUser;
 	}
 
 	/**

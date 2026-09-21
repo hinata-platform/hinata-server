@@ -136,10 +136,15 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 	 * policy sits under that module and does not exist without it.
 	 */
 	public TimePolicy.AbsenceCalendar absenceCalendarVisibility() {
-		if (!advancedEnabled() || !absenceManagementConfigured()) {
-			return TimePolicy.AbsenceCalendar.OFF;
-		}
-		return absenceCalendarConfigured();
+		return absenceManagementUsable() ? absenceCalendarConfigured() : TimePolicy.AbsenceCalendar.OFF;
+	}
+
+	/**
+	 * Whether absence management is in force: switched on over an extended module that is on. The
+	 * same answer as {@code timeoff.TimeOffSettings.enabled()}, which this module cannot ask.
+	 */
+	public boolean absenceManagementUsable() {
+		return advancedEnabled() && absenceManagementConfigured();
 	}
 
 	/** The stored choice, or the environment's without one — for the admin screen. */

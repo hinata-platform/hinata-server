@@ -228,21 +228,21 @@ public class CapacityService {
 						.with(Sort.by(Sort.Order.asc("userId"), Sort.Order.desc("validFrom"))), WorkingSchedule.class)
 				.forEach(pattern -> patterns.computeIfAbsent(pattern.getUserId(), id -> new ArrayList<>()).add(pattern));
 		String defaultCalendarId = defaultCalendarId();
-		Map<String, Holiday> holidays = holidaysOf(
-				patterns.values().stream().flatMap(List::stream).toList(), defaultCalendarId, from, to);
-		Plan any = new Plan(List.of(), defaultCalendarId, holidays);
+		int days = (int) ChronoUnit.DAYS.between(from, to) + 1;
+		// Each calendar's holidays by day of the window, so the loop below looks a day up by index
+		// rather than building a key per person and day.
+		Map<String, Holiday[]> holidaysByCalendar = new HashMap<>();
+		holidaysOf(patterns.values().stream().flatMap(List::stream).toList(), defaultCalendarId, from, to).values()
+				.forEach(holiday -> holidaysByCalendar.computeIfAbsent(holiday.getCalendarId(), id -> new Holiday[days])
+						[(int) ChronoUnit.DAYS.between(from, holiday.getDate())] = holiday);
 
-		List<TimeOff> found = mongo.find(Query
-				.query(Criteria.where("userId").in(people).and("to").gte(from).and("from").lte(to))
-				.with(Sort.by(Sort.Order.asc("from"), Sort.Order.asc("_id")))
-				.limit(GROUP_ABSENCES_MAX + 1), TimeOff.class);
+		List<TimeOff> found = absencesTouching(people, from, to);
 		boolean truncated = found.size() > GROUP_ABSENCES_MAX;
 		List<TimeOff> absences = truncated ? found.subList(0, GROUP_ABSENCES_MAX) : found;
 		Map<String, List<Capacity.Absence>> absencesByUser = new HashMap<>();
 		absences.forEach(off -> absencesByUser.computeIfAbsent(off.getUserId(), id -> new ArrayList<>())
 				.add(new Capacity.Absence(off.getFrom(), off.getTo(), off.isHalfDay())));
 
-		int days = (int) ChronoUnit.DAYS.between(from, to) + 1;
 		int[] scheduledSum = new int[days];
 		int[] holidaySum = new int[days];
 		int[] absenceSum = new int[days];
@@ -252,10 +252,12 @@ public class CapacityService {
 			Map<LocalDate, Integer> minutesByDay = new HashMap<>();
 			Map<LocalDate, Boolean> halfDays = new HashMap<>();
 			List<HolidayMark> marks = new ArrayList<>();
-			for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
+			for (int index = 0; index < days; index++) {
+				LocalDate day = from.plusDays(index);
 				WorkingSchedule pattern = patternOn(own, day);
 				minutesByDay.put(day, minutesOn(pattern, day));
-				Holiday holiday = any.holidayOn(pattern, day);
+				Holiday[] calendar = holidaysByCalendar.get(calendarIdOf(pattern, defaultCalendarId));
+				Holiday holiday = calendar == null ? null : calendar[index];
 				if (holiday != null) {
 					halfDays.put(day, holiday.isHalfDay());
 					marks.add(new HolidayMark(day, holiday.getName(), holiday.isHalfDay()));
@@ -277,11 +279,36 @@ public class CapacityService {
 			capacity.add(new Capacity.Day(from.plusDays(i), scheduledSum[i], holidaySum[i], absenceSum[i],
 					scheduledSum[i] - holidaySum[i] - absenceSum[i]));
 		}
-		List<PersonAbsence> marks = absences.stream()
-				.map(off -> new PersonAbsence(off.getUserId(), off.getId(), off.getType(), off.getTypeId(),
-						off.getFrom(), off.getTo(), off.isHalfDay()))
-				.toList();
-		return new Group(Map.copyOf(holidayMarks), marks, List.copyOf(capacity), truncated);
+		return new Group(Map.copyOf(holidayMarks), absences.stream().map(CapacityService::mark).toList(),
+				List.copyOf(capacity), truncated);
+	}
+
+	/**
+	 * The absences of [userIds] touching the window, without holidays or minutes: what a group read
+	 * needs to learn who is away before it builds anybody's row. At most {@link #GROUP_ABSENCES_MAX}.
+	 */
+	public List<PersonAbsence> absencesOf(Collection<String> userIds, LocalDate from, LocalDate to) {
+		assertWindow(from, to);
+		if (userIds == null || userIds.isEmpty()) {
+			return List.of();
+		}
+		if (userIds.size() > GROUP_MAX) {
+			throw ApiException.badRequest("error.availability.groupTooLarge", GROUP_MAX);
+		}
+		List<TimeOff> found = absencesTouching(userIds, from, to);
+		return found.stream().limit(GROUP_ABSENCES_MAX).map(CapacityService::mark).toList();
+	}
+
+	private List<TimeOff> absencesTouching(Collection<String> userIds, LocalDate from, LocalDate to) {
+		return mongo.find(Query
+				.query(Criteria.where("userId").in(userIds).and("to").gte(from).and("from").lte(to))
+				.with(Sort.by(Sort.Order.asc("from"), Sort.Order.asc("_id")))
+				.limit(GROUP_ABSENCES_MAX + 1), TimeOff.class);
+	}
+
+	private static PersonAbsence mark(TimeOff off) {
+		return new PersonAbsence(off.getUserId(), off.getId(), off.getType(), off.getTypeId(), off.getFrom(),
+				off.getTo(), off.isHalfDay());
 	}
 
 	/**
