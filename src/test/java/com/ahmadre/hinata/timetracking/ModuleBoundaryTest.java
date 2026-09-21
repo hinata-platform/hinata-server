@@ -229,6 +229,9 @@ class ModuleBoundaryTest {
 			// window for the person's own pattern and their holidays, throws the minutes and the
 			// absences away, and answers in days.
 			TIME_OFF + ".TimeOffWorkingDays",
+			// Booked time against capacity per person (HIN-93): the roster through
+			// AvailabilityAccess, capacity added up per person, behind workloadReportsEnabled.
+			TIME + ".TimeWorkloadReport",
 			// The team absence calendar and its capacity band (HIN-118): a group read through
 			// AvailabilityAccess.roster, coarsened by policy and type before a row is built.
 			TIME_OFF + ".TeamAbsenceService",
@@ -258,7 +261,7 @@ class ModuleBoundaryTest {
 	private static final Set<String> READERS_AND_THEIR_ROUTES = Set.of(
 			TIME + ".TimeCalendarLayers", TIME + ".TimeHintsService", TIME + ".TimeAvailabilityPolicy",
 			TIME + ".TimeReminders", TIME + ".TimeEntryController", TIME + ".TimeHintsController",
-			TIME + ".TimeReminderJob",
+			TIME + ".TimeReminderJob", TIME + ".TimeWorkloadReport", TIME + ".TimeReportController",
 			TIME_OFF + ".TimeOffWorkWeek", TIME_OFF + ".TimeOffBalanceService",
 			TIME_OFF + ".TimeOffCatalogueBridge",
 			TIME_OFF + ".TimeOffWorkingDays", TIME_OFF + ".TimeOffAbsences",

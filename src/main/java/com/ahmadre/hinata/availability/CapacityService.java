@@ -214,15 +214,90 @@ public class CapacityService {
 	 */
 	public Group group(Collection<String> userIds, LocalDate from, LocalDate to) {
 		assertWindow(from, to);
-		Set<String> people = new HashSet<>(userIds == null ? Set.of() : userIds);
-		people.remove(null);
+		Set<String> people = people(userIds);
 		if (people.isEmpty()) {
 			return new Group(Map.of(), List.of(), Capacity.of(from, to, day -> 0, Map.of(), List.of()).days(),
 					false);
 		}
+		int days = (int) ChronoUnit.DAYS.between(from, to) + 1;
+		int[] scheduledSum = new int[days];
+		int[] holidaySum = new int[days];
+		int[] absenceSum = new int[days];
+		Map<String, List<HolidayMark>> holidayMarks = new HashMap<>();
+		List<TimeOff> found = walk(people, from, to, (userId, personal, marks) -> {
+			if (!marks.isEmpty()) {
+				holidayMarks.put(userId, List.copyOf(marks));
+			}
+			for (int i = 0; i < days; i++) {
+				scheduledSum[i] += personal.get(i).scheduledMinutes();
+				holidaySum[i] += personal.get(i).holidayMinutes();
+				absenceSum[i] += personal.get(i).absenceMinutes();
+			}
+		});
+		boolean truncated = found.size() > GROUP_ABSENCES_MAX;
+		List<TimeOff> absences = truncated ? found.subList(0, GROUP_ABSENCES_MAX) : found;
+		List<Capacity.Day> capacity = new ArrayList<>(days);
+		for (int i = 0; i < days; i++) {
+			capacity.add(new Capacity.Day(from.plusDays(i), scheduledSum[i], holidaySum[i], absenceSum[i],
+					scheduledSum[i] - holidaySum[i] - absenceSum[i]));
+		}
+		return new Group(Map.copyOf(holidayMarks), absences.stream().map(CapacityService::mark).toList(),
+				List.copyOf(capacity), truncated);
+	}
+
+	/**
+	 * One person's capacity over a window, added up: planned, lost to holidays, lost to absences,
+	 * and what is left. The workload report's column (HIN-93).
+	 */
+	public record PersonTotal(int scheduledMinutes, int holidayMinutes, int absenceMinutes, int capacityMinutes) {
+	}
+
+	/**
+	 * Each of [userIds]' capacity over the window, in the same four queries as {@link #group} and by
+	 * the same arithmetic — one number per person instead of one sum per day. Who may see which of
+	 * these people is not decided here.
+	 */
+	public Map<String, PersonTotal> totals(Collection<String> userIds, LocalDate from, LocalDate to) {
+		assertWindow(from, to);
+		Set<String> people = people(userIds);
+		if (people.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, PersonTotal> totals = new HashMap<>();
+		walk(people, from, to, (userId, personal, marks) -> {
+			int scheduled = 0;
+			int holiday = 0;
+			int absence = 0;
+			for (Capacity.Day day : personal) {
+				scheduled += day.scheduledMinutes();
+				holiday += day.holidayMinutes();
+				absence += day.absenceMinutes();
+			}
+			totals.put(userId, new PersonTotal(scheduled, holiday, absence, scheduled - holiday - absence));
+		});
+		return Map.copyOf(totals);
+	}
+
+	private static Set<String> people(Collection<String> userIds) {
+		Set<String> people = new HashSet<>(userIds == null ? Set.of() : userIds);
+		people.remove(null);
 		if (people.size() > GROUP_MAX) {
 			throw ApiException.badRequest("error.availability.groupTooLarge", GROUP_MAX);
 		}
+		return people;
+	}
+
+	/** What {@link #walk} hands over per person: their days, and the holidays among them. */
+	private interface PersonDays {
+		void accept(String userId, List<Capacity.Day> days, List<HolidayMark> holidays);
+	}
+
+	/**
+	 * Every person's days over the window, read in four queries whatever the group's size:
+	 * patterns, the default calendar, holidays and absences. Returns the absences it read, at most
+	 * one past {@link #GROUP_ABSENCES_MAX} so a caller can tell they were cut.
+	 */
+	private List<TimeOff> walk(Set<String> people, LocalDate from, LocalDate to, PersonDays visitor) {
 		Map<String, List<WorkingSchedule>> patterns = new HashMap<>();
 		mongo.find(Query.query(Criteria.where("userId").in(people).and("validFrom").lte(to))
 						.with(Sort.by(Sort.Order.asc("userId"), Sort.Order.desc("validFrom"))), WorkingSchedule.class)
@@ -237,16 +312,11 @@ public class CapacityService {
 						[(int) ChronoUnit.DAYS.between(from, holiday.getDate())] = holiday);
 
 		List<TimeOff> found = absencesTouching(people, from, to);
-		boolean truncated = found.size() > GROUP_ABSENCES_MAX;
-		List<TimeOff> absences = truncated ? found.subList(0, GROUP_ABSENCES_MAX) : found;
+		List<TimeOff> counted = found.size() > GROUP_ABSENCES_MAX ? found.subList(0, GROUP_ABSENCES_MAX) : found;
 		Map<String, List<Capacity.Absence>> absencesByUser = new HashMap<>();
-		absences.forEach(off -> absencesByUser.computeIfAbsent(off.getUserId(), id -> new ArrayList<>())
+		counted.forEach(off -> absencesByUser.computeIfAbsent(off.getUserId(), id -> new ArrayList<>())
 				.add(new Capacity.Absence(off.getFrom(), off.getTo(), off.isHalfDay())));
 
-		int[] scheduledSum = new int[days];
-		int[] holidaySum = new int[days];
-		int[] absenceSum = new int[days];
-		Map<String, List<HolidayMark>> holidayMarks = new HashMap<>();
 		for (String userId : people) {
 			List<WorkingSchedule> own = patterns.getOrDefault(userId, List.of());
 			Map<LocalDate, Integer> minutesByDay = new HashMap<>();
@@ -263,24 +333,10 @@ public class CapacityService {
 					marks.add(new HolidayMark(day, holiday.getName(), holiday.isHalfDay()));
 				}
 			}
-			if (!marks.isEmpty()) {
-				holidayMarks.put(userId, List.copyOf(marks));
-			}
-			List<Capacity.Day> personal = Capacity.of(from, to, minutesByDay::get, halfDays,
-					absencesByUser.getOrDefault(userId, List.of())).days();
-			for (int i = 0; i < days; i++) {
-				scheduledSum[i] += personal.get(i).scheduledMinutes();
-				holidaySum[i] += personal.get(i).holidayMinutes();
-				absenceSum[i] += personal.get(i).absenceMinutes();
-			}
+			visitor.accept(userId, Capacity.of(from, to, minutesByDay::get, halfDays,
+					absencesByUser.getOrDefault(userId, List.of())).days(), marks);
 		}
-		List<Capacity.Day> capacity = new ArrayList<>(days);
-		for (int i = 0; i < days; i++) {
-			capacity.add(new Capacity.Day(from.plusDays(i), scheduledSum[i], holidaySum[i], absenceSum[i],
-					scheduledSum[i] - holidaySum[i] - absenceSum[i]));
-		}
-		return new Group(Map.copyOf(holidayMarks), absences.stream().map(CapacityService::mark).toList(),
-				List.copyOf(capacity), truncated);
+		return found;
 	}
 
 	/**
