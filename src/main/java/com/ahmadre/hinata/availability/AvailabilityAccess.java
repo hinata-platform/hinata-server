@@ -3,6 +3,9 @@ package com.ahmadre.hinata.availability;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectReach;
+import com.ahmadre.hinata.team.Team;
+import com.ahmadre.hinata.team.TeamMembership;
+import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +20,8 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.Period;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -58,6 +63,7 @@ public class AvailabilityAccess {
 	private final MongoTemplate mongo;
 	private final ProjectReach reach;
 	private final UserRepository users;
+	private final TeamRepository teams;
 	private final Clock clock;
 
 	public enum Sight {
@@ -121,6 +127,133 @@ public class AvailabilityAccess {
 	 */
 	public static TimeOff.Type typeFor(TimeOff.Type type, Sight sight) {
 		return sight != Sight.FULL && type == TimeOff.Type.SICK ? TimeOff.Type.OTHER : type;
+	}
+
+	/** Why a group is read: to show who is away, or to add up what capacity is left. */
+	public enum Purpose {
+		CALENDAR, BAND
+	}
+
+	/**
+	 * The people of a group a viewer may read together (HIN-118), capped at
+	 * {@link CapacityService#GROUP_MAX}, sorted so a cut is the same cut every time.
+	 */
+	public record Roster(List<String> userIds, boolean truncated) {
+	}
+
+	/**
+	 * Whose absences [viewer] may read as a group: the team named by [teamId], the project named by
+	 * [projectId], or with neither the people of the viewer's own projects.
+	 *
+	 * <p><b>Nobody appears in a group through a relationship somebody else can make.</b> Whoever
+	 * creates a project leads it, whoever creates a team manages it, and both can add anybody
+	 * without asking. So a person counts in a group only by time they recorded themselves within
+	 * {@link #WORKED_ON} on a project of that group ({@link AvailabilityPolicy#whoWorkedOn}) — the
+	 * same anchor a lead's view of one person has ({@link #of}). A keeper already sees everybody's
+	 * absences one by one, and gets the group without that filter.
+	 *
+	 * <p>Reading a group is narrower than being in one. The calendar is for anybody who can see the
+	 * project or belongs to the team; the capacity band, which adds everybody's days up, is for
+	 * who plans: a lead of the project, an admin of the team, a keeper. A project or team the viewer
+	 * cannot see answers 404, as if it were not there.
+	 */
+	public Roster roster(User viewer, String teamId, String projectId, Purpose purpose) {
+		boolean hasTeam = teamId != null && !teamId.isBlank();
+		boolean hasProject = projectId != null && !projectId.isBlank();
+		if (hasTeam && hasProject) {
+			throw ApiException.badRequest("error.availability.scopeInvalid");
+		}
+		boolean keeper = keeps(viewer);
+		Set<String> candidates = new HashSet<>();
+		Set<String> projectIds = new HashSet<>();
+		if (hasProject) {
+			Project project = mongo.findById(projectId, Project.class);
+			if (project == null || !keeper && !reach.canSee(project, viewer)) {
+				throw ApiException.notFound("project");
+			}
+			if (purpose == Purpose.BAND && !keeper && !leads(project, viewer)) {
+				throw ApiException.forbidden("error.availability.forbidden");
+			}
+			addPeople(candidates, project);
+			projectIds.add(project.getId());
+		}
+		else if (hasTeam) {
+			Team team = teams.findById(teamId).orElse(null);
+			TeamMembership membership = team == null ? null : team.membership(viewer.getId());
+			if (team == null || !keeper && membership == null) {
+				throw ApiException.notFound("team");
+			}
+			if (purpose == Purpose.BAND && !keeper && !membership.isAdmin()) {
+				throw ApiException.forbidden("error.availability.forbidden");
+			}
+			team.getMembers().forEach(member -> candidates.add(member.getUserId()));
+			projectIds.addAll(team.getProjectIds());
+		}
+		else {
+			Criteria mine = purpose == Purpose.BAND
+					? new Criteria().orOperator(Criteria.where("leadIds").is(viewer.getId()),
+							Criteria.where("leadId").is(viewer.getId()))
+					: new Criteria().orOperator(Criteria.where("memberIds").is(viewer.getId()),
+							Criteria.where("leadIds").is(viewer.getId()),
+							Criteria.where("leadId").is(viewer.getId()));
+			Query query = Query.query(mine).limit(LED_PROJECTS_MAX);
+			query.fields().include("_id").include("memberIds").include("leadIds").include("leadId");
+			for (Document project : mongo.query(Project.class).as(Document.class).matching(query).all()) {
+				projectIds.add(String.valueOf(project.get("_id")));
+				Optional.ofNullable(project.getList("memberIds", String.class)).ifPresent(candidates::addAll);
+				Optional.ofNullable(project.getList("leadIds", String.class)).ifPresent(candidates::addAll);
+				Optional.ofNullable(project.getString("leadId")).ifPresent(candidates::add);
+			}
+		}
+		candidates.remove(null);
+		Set<String> people = keeper ? candidates
+				: new HashSet<>(policyOrNone().whoWorkedOn(candidates, projectIds, LocalDate.now(clock).minus(WORKED_ON)));
+		if (candidates.contains(viewer.getId())) {
+			people.add(viewer.getId());
+		}
+		List<String> sorted = people.stream().sorted().toList();
+		boolean truncated = sorted.size() > CapacityService.GROUP_MAX;
+		return new Roster(truncated ? sorted.subList(0, CapacityService.GROUP_MAX) : sorted, truncated);
+	}
+
+	/** The policy, or one that knows nobody worked anywhere: without it no group has anybody in it. */
+	private AvailabilityPolicy policyOrNone() {
+		AvailabilityPolicy current = policy.getIfAvailable();
+		return current != null ? current : NOBODY_WORKED;
+	}
+
+	private static final AvailabilityPolicy NOBODY_WORKED = new AvailabilityPolicy() {
+		@Override
+		public boolean leadsSeeMemberAbsences() {
+			return false;
+		}
+
+		@Override
+		public Set<String> projectsWorkedOn(String userId, Set<String> among, LocalDate since) {
+			return Set.of();
+		}
+
+		@Override
+		public Set<String> whoWorkedOn(java.util.Collection<String> userIds, Set<String> among, LocalDate since) {
+			return Set.of();
+		}
+	};
+
+	private static void addPeople(Set<String> into, Project project) {
+		if (project.getMemberIds() != null) {
+			into.addAll(project.getMemberIds());
+		}
+		if (project.getLeadIds() != null) {
+			into.addAll(project.getLeadIds());
+		}
+		if (project.getLeadId() != null) {
+			into.add(project.getLeadId());
+		}
+	}
+
+	private static boolean leads(Project project, User viewer) {
+		return viewer.getId().equals(project.getLeadId())
+				|| project.getLeadIds() != null && project.getLeadIds().contains(viewer.getId());
 	}
 
 	/**

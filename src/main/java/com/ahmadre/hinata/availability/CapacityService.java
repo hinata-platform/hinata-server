@@ -179,6 +179,111 @@ public class CapacityService {
 		return working;
 	}
 
+	/** Most people one {@link #group} reads: the roster cap of the team calendar. */
+	public static final int GROUP_MAX = 1_000;
+
+	/** Most absences one {@link #group} reads, across everybody in it. */
+	static final int GROUP_ABSENCES_MAX = 20_000;
+
+	/**
+	 * An absence of one person in a group. No note: a group is read by other people, and the note
+	 * is the person's own.
+	 */
+	public record PersonAbsence(String userId, String id, TimeOff.Type type, String typeId, LocalDate from,
+			LocalDate to, boolean halfDay) {
+	}
+
+	/**
+	 * What a group of people looks like over a window: every person's holidays (by the calendar they
+	 * follow on each day), their absences, and the capacity of all of them added up per day.
+	 *
+	 * <p>[capacity] is a sum and never a list of people. Only absences that were entered count —
+	 * a request nobody decided yet is not an absence, so it lowers nothing ("beantragt zeigt,
+	 * genehmigt zählt").
+	 */
+	public record Group(Map<String, List<HolidayMark>> holidays, List<PersonAbsence> absences,
+			List<Capacity.Day> capacity, boolean absencesTruncated) {
+	}
+
+	/**
+	 * The {@link Group} of [userIds] from [from] to [to], in four queries whatever its size:
+	 * patterns, the default calendar, holidays and absences. The same arithmetic as {@link #window},
+	 * in {@link Capacity}, once per person.
+	 *
+	 * <p>Who may see which of these people is not decided here ({@link AvailabilityAccess#roster}).
+	 */
+	public Group group(Collection<String> userIds, LocalDate from, LocalDate to) {
+		assertWindow(from, to);
+		Set<String> people = new HashSet<>(userIds == null ? Set.of() : userIds);
+		people.remove(null);
+		if (people.isEmpty()) {
+			return new Group(Map.of(), List.of(), Capacity.of(from, to, day -> 0, Map.of(), List.of()).days(),
+					false);
+		}
+		if (people.size() > GROUP_MAX) {
+			throw ApiException.badRequest("error.availability.groupTooLarge", GROUP_MAX);
+		}
+		Map<String, List<WorkingSchedule>> patterns = new HashMap<>();
+		mongo.find(Query.query(Criteria.where("userId").in(people).and("validFrom").lte(to))
+						.with(Sort.by(Sort.Order.asc("userId"), Sort.Order.desc("validFrom"))), WorkingSchedule.class)
+				.forEach(pattern -> patterns.computeIfAbsent(pattern.getUserId(), id -> new ArrayList<>()).add(pattern));
+		String defaultCalendarId = defaultCalendarId();
+		Map<String, Holiday> holidays = holidaysOf(
+				patterns.values().stream().flatMap(List::stream).toList(), defaultCalendarId, from, to);
+		Plan any = new Plan(List.of(), defaultCalendarId, holidays);
+
+		List<TimeOff> found = mongo.find(Query
+				.query(Criteria.where("userId").in(people).and("to").gte(from).and("from").lte(to))
+				.with(Sort.by(Sort.Order.asc("from"), Sort.Order.asc("_id")))
+				.limit(GROUP_ABSENCES_MAX + 1), TimeOff.class);
+		boolean truncated = found.size() > GROUP_ABSENCES_MAX;
+		List<TimeOff> absences = truncated ? found.subList(0, GROUP_ABSENCES_MAX) : found;
+		Map<String, List<Capacity.Absence>> absencesByUser = new HashMap<>();
+		absences.forEach(off -> absencesByUser.computeIfAbsent(off.getUserId(), id -> new ArrayList<>())
+				.add(new Capacity.Absence(off.getFrom(), off.getTo(), off.isHalfDay())));
+
+		int days = (int) ChronoUnit.DAYS.between(from, to) + 1;
+		int[] scheduledSum = new int[days];
+		int[] holidaySum = new int[days];
+		int[] absenceSum = new int[days];
+		Map<String, List<HolidayMark>> holidayMarks = new HashMap<>();
+		for (String userId : people) {
+			List<WorkingSchedule> own = patterns.getOrDefault(userId, List.of());
+			Map<LocalDate, Integer> minutesByDay = new HashMap<>();
+			Map<LocalDate, Boolean> halfDays = new HashMap<>();
+			List<HolidayMark> marks = new ArrayList<>();
+			for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
+				WorkingSchedule pattern = patternOn(own, day);
+				minutesByDay.put(day, minutesOn(pattern, day));
+				Holiday holiday = any.holidayOn(pattern, day);
+				if (holiday != null) {
+					halfDays.put(day, holiday.isHalfDay());
+					marks.add(new HolidayMark(day, holiday.getName(), holiday.isHalfDay()));
+				}
+			}
+			if (!marks.isEmpty()) {
+				holidayMarks.put(userId, List.copyOf(marks));
+			}
+			List<Capacity.Day> personal = Capacity.of(from, to, minutesByDay::get, halfDays,
+					absencesByUser.getOrDefault(userId, List.of())).days();
+			for (int i = 0; i < days; i++) {
+				scheduledSum[i] += personal.get(i).scheduledMinutes();
+				holidaySum[i] += personal.get(i).holidayMinutes();
+				absenceSum[i] += personal.get(i).absenceMinutes();
+			}
+		}
+		List<Capacity.Day> capacity = new ArrayList<>(days);
+		for (int i = 0; i < days; i++) {
+			capacity.add(new Capacity.Day(from.plusDays(i), scheduledSum[i], holidaySum[i], absenceSum[i],
+					scheduledSum[i] - holidaySum[i] - absenceSum[i]));
+		}
+		List<PersonAbsence> marks = absences.stream()
+				.map(off -> new PersonAbsence(off.getUserId(), off.getId(), off.getType(), off.getTypeId(),
+						off.getFrom(), off.getTo(), off.isHalfDay()))
+				.toList();
+		return new Group(Map.copyOf(holidayMarks), marks, List.copyOf(capacity), truncated);
+	}
+
 	/**
 	 * The pattern that applies on [day] to each of [userIds], without the rest of their history: the
 	 * newest per person, taken first off user_valid_from, so a person with fifty past patterns costs

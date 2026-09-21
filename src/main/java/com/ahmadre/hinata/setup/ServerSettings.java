@@ -447,6 +447,13 @@ public class ServerSettings {
 		@Size(max = TimePolicy.ABSENCE_MANAGERS_MAX, message = "error.timeOff.managersTooMany")
 		private List<String> absenceManagers;
 
+		/**
+		 * How much of other people's absences the team calendar shows (HIN-118);
+		 * null ⇒ {@code hinata.time-tracking.absence-calendar-visibility}, which
+		 * defaults to {@code OFF}. Only in force while absence management is.
+		 */
+		private TimePolicy.AbsenceCalendar absenceCalendarVisibility;
+
 		/** Which fields an entry must carry; null fields ⇒ env defaults. */
 		@Valid
 		private RequiredFields requiredFields;

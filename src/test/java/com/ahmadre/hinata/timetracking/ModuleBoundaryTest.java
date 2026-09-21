@@ -229,6 +229,9 @@ class ModuleBoundaryTest {
 			// window for the person's own pattern and their holidays, throws the minutes and the
 			// absences away, and answers in days.
 			TIME_OFF + ".TimeOffWorkingDays",
+			// The team absence calendar and its capacity band (HIN-118): a group read through
+			// AvailabilityAccess.roster, coarsened by policy and type before a row is built.
+			TIME_OFF + ".TeamAbsenceService",
 			// The whole contact surface between the approval flow and the calendar an approval
 			// writes into: enter, shorten, remove. One named class rather than five, so the
 			// question "who may learn that somebody is away?" has one place to be asked.
@@ -260,6 +263,7 @@ class ModuleBoundaryTest {
 			TIME_OFF + ".TimeOffCatalogueBridge",
 			TIME_OFF + ".TimeOffWorkingDays", TIME_OFF + ".TimeOffAbsences",
 			TIME_OFF + ".TimeOffApprovalGuard", TIME_OFF + ".TimeOffKeeperBridge",
+			TIME_OFF + ".TeamAbsenceService", TIME_OFF + ".TeamAbsenceController",
 			// The approval flow: it calls the readers above and holds nothing of availability
 			// itself, which is why TimeOffAbsences exists at all.
 			TIME_OFF + ".TimeOffRequestService",

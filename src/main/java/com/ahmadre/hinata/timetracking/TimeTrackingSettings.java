@@ -130,6 +130,28 @@ public class TimeTrackingSettings implements FeatureFlags.Module {
 		return managers == null ? List.of() : List.copyOf(managers);
 	}
 
+	/**
+	 * How much of other people's absences the team calendar shows, as it is in
+	 * force: {@code OFF} whenever absence management is not usable, because the
+	 * policy sits under that module and does not exist without it.
+	 */
+	public TimePolicy.AbsenceCalendar absenceCalendarVisibility() {
+		if (!advancedEnabled() || !absenceManagementConfigured()) {
+			return TimePolicy.AbsenceCalendar.OFF;
+		}
+		return absenceCalendarConfigured();
+	}
+
+	/** The stored choice, or the environment's without one — for the admin screen. */
+	public TimePolicy.AbsenceCalendar absenceCalendarConfigured() {
+		TimePolicy.AbsenceCalendar override = db().getAbsenceCalendarVisibility();
+		if (override != null) {
+			return override;
+		}
+		TimePolicy.AbsenceCalendar fallback = env().getAbsenceCalendarVisibility();
+		return fallback == null ? TimePolicy.AbsenceCalendar.OFF : fallback;
+	}
+
 	// --- policies ------------------------------------------------------------
 
 	/** Which fields an entry must carry to be accepted (enforced from stage 6). */

@@ -254,6 +254,31 @@ class TimePrivacyIntegrationTest {
 	}
 
 	@Test
+	void theAbsenceSectionNamesTheModuleAndTheCalendarLevelInForce() {
+		// Absence management off: the panel has nothing to say about absences, whatever is stored.
+		policy(block -> block.setAbsenceCalendarVisibility(TimePolicy.AbsenceCalendar.TYPE));
+		as(member);
+		assertThat(privacy.privacy().visibility().absences()).isNull();
+
+		for (TimePolicy.AbsenceCalendar level : TimePolicy.AbsenceCalendar.values()) {
+			policy(block -> {
+				block.setAbsenceManagementEnabled(true);
+				block.setAbsenceCalendarVisibility(level);
+				block.setLeadsSeeMemberEntries(level == TimePolicy.AbsenceCalendar.TYPE);
+				block.setAbsenceManagers(level == TimePolicy.AbsenceCalendar.OFF ? List.of() : List.of(admin.getId()));
+			});
+			TimePrivacyService.AbsenceVisibility absences = privacy.privacy().visibility().absences();
+			assertThat(absences.calendar()).as("%s", level).isEqualTo(level);
+			assertThat(absences.leadsSeeSpans()).as("%s", level).isEqualTo(level == TimePolicy.AbsenceCalendar.TYPE);
+			assertThat(absences.keepersNamed()).as("%s", level).isEqualTo(level != TimePolicy.AbsenceCalendar.OFF);
+		}
+
+		// The extended module off takes the calendar with it, as the gate does.
+		policy(block -> block.setAdvancedEnabled(false));
+		assertThat(privacy.privacy().visibility().absences()).isNull();
+	}
+
+	@Test
 	void theNoticeIsTheTemplateInTheReadersLanguageUntilTheOperatorWritesTheirOwn() {
 		as(member);
 		TimePrivacyService.Privacy builtIn = privacy.privacy();

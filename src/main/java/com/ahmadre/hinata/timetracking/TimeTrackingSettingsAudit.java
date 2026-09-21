@@ -87,6 +87,8 @@ public class TimeTrackingSettingsAudit implements SettingsAudit {
 		compare(changes, "absenceManagers", was, now,
 				block -> block.getAbsenceManagers() == null ? null
 						: String.join(",", block.getAbsenceManagers()));
+		compare(changes, "absenceCalendarVisibility", was, now,
+				ServerSettings.TimeTracking::getAbsenceCalendarVisibility);
 		compare(changes, "requiredFields", was, now,
 				block -> block.getRequiredFields() == null ? null
 						: "project=" + block.getRequiredFields().getProject()

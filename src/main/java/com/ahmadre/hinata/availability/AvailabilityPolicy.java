@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.availability;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.Set;
 
 /**
@@ -24,4 +25,12 @@ public interface AvailabilityPolicy {
 	 * to it.
 	 */
 	Set<String> projectsWorkedOn(String userId, Set<String> among, LocalDate since);
+
+	/**
+	 * Which of [userIds] recorded time on one of [among] from [since] on, by the same rule as
+	 * {@link #projectsWorkedOn}: only time nobody else could have put there, only on issues that
+	 * never changed project. For a view of many people at once (the team calendar of HIN-118), in
+	 * a fixed number of queries rather than one pair per person.
+	 */
+	Set<String> whoWorkedOn(Collection<String> userIds, Set<String> among, LocalDate since);
 }

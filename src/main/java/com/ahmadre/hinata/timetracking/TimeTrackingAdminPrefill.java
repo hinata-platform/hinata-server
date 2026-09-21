@@ -51,6 +51,7 @@ public class TimeTrackingAdminPrefill implements SettingsPrefill {
 		view.setAbsenceManagementEnabled(settings.absenceManagementConfigured());
 		// Empty is an answer here too: it is what "administrators only" looks like.
 		view.setAbsenceManagers(settings.absenceManagers());
+		view.setAbsenceCalendarVisibility(settings.absenceCalendarConfigured());
 
 		TimeTrackingSettings.RequiredFields required = settings.requiredFields();
 		ServerSettings.TimeTracking.RequiredFields requiredView =

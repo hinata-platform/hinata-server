@@ -312,16 +312,11 @@ public class TimeOffRequestService {
 			// query is bounded to avoid. The cards then simply carry no count.
 			return counts;
 		}
-		List<Clash> around = conflicts(viewer, first, last);
+		List<TimeOffConflicts.Span> around = conflicts(viewer, first, last).stream()
+				.map(clash -> new TimeOffConflicts.Span(clash.userId(), clash.from(), clash.to(), clash.approved()))
+				.toList();
 		for (TimeOffRequest row : rows) {
-			int count = 0;
-			for (Clash clash : around) {
-				if (!clash.userId().equals(row.getUserId())
-						&& !clash.from().isAfter(row.getTo()) && !clash.to().isBefore(row.getFrom())) {
-					count++;
-				}
-			}
-			counts.put(row, count);
+			counts.put(row, TimeOffConflicts.clashesWith(around, row.getUserId(), row.getFrom(), row.getTo()));
 		}
 		return counts;
 	}
