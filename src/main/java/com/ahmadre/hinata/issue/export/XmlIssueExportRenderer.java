@@ -162,6 +162,16 @@ class XmlIssueExportRenderer implements IssueExportRenderer {
 					indent(xml, depth);
 					xml.append("<rule/>\n");
 				}
+				// The blocks a document adds around content never come out of an issue's
+				// markdown, and schema version 2 has no element for them.
+				case ExportBlock.Section ignored -> {
+				}
+				case ExportBlock.Note ignored -> {
+				}
+				case ExportBlock.KeyValues ignored -> {
+				}
+				case ExportBlock.LongTable ignored -> {
+				}
 			}
 		}
 	}

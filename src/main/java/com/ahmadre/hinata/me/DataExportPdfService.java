@@ -6,37 +6,31 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueCommentRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
+import com.ahmadre.hinata.issue.export.ExportBlock;
+import com.ahmadre.hinata.issue.export.ExportDocument;
+import com.ahmadre.hinata.issue.export.ExportFonts;
+import com.ahmadre.hinata.issue.export.ExportWords;
+import com.ahmadre.hinata.issue.export.PdfDocumentRenderer;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.user.User;
-import com.lowagie.text.Chunk;
-import com.lowagie.text.Document;
-import com.lowagie.text.Element;
-import com.ahmadre.hinata.issue.export.ExportFonts;
-import com.lowagie.text.Font;
-import com.lowagie.text.Image;
-import com.lowagie.text.PageSize;
-import com.lowagie.text.Paragraph;
-import com.lowagie.text.Phrase;
-import com.lowagie.text.Rectangle;
-import com.lowagie.text.pdf.PdfPCell;
-import com.lowagie.text.pdf.PdfPTable;
-import com.lowagie.text.pdf.PdfWriter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.text.Normalizer;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Renders a complete, human-readable PDF of a user's personal data for the GDPR
@@ -49,63 +43,15 @@ import java.util.Map;
  * already sends the reader there with any question about the processing. A
  * masthead naming the software would name a different party than the one the
  * document holds answerable.
+ *
+ * <p>Laid out by {@link PdfDocumentRenderer}, the server's one PDF layout (HIN-93): this
+ * class decides what the report says, the renderer how it looks — the same letterhead and
+ * the same fonts an exported issue or a time report has.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class DataExportPdfService {
-
-	private static final Color NAVY = new Color(0x2D, 0x2B, 0x55);
-	private static final Color AMBER = new Color(0xD9, 0xA0, 0x32);
-	private static final Color INK = new Color(0x23, 0x22, 0x3F);
-	private static final Color MUTED = new Color(0x6B, 0x6A, 0x85);
-	private static final Color HEAD_BG = new Color(0xF4, 0xF3, 0xEF);
-	private static final Color LINE = new Color(0xE7, 0xE5, 0xDE);
-
-	// The face is chosen from the text being drawn rather than fixed here: the
-	// built-in PDF fonts hold Latin-1 only, so a Chinese label set in Helvetica
-	// does not fail, it comes out blank. See ExportFonts.
-	private static Font brand(String text) {
-		return ExportFonts.forText(text, 12, Font.BOLD, AMBER);
-	}
-
-	private static Font hTitle(String text) {
-		return ExportFonts.forText(text, 22, Font.BOLD, NAVY);
-	}
-
-	private static Font hSection(String text) {
-		return ExportFonts.forText(text, 13, Font.BOLD, NAVY);
-	}
-
-	private static Font body(String text) {
-		return ExportFonts.forText(text, 10, Font.NORMAL, INK);
-	}
-
-	private static Font bodyMuted(String text) {
-		return ExportFonts.forText(text, 9, Font.NORMAL, MUTED);
-	}
-
-	private static Font credit(String text) {
-		return ExportFonts.forText(text, 8, Font.NORMAL, MUTED);
-	}
-
-	private static Font th(String text) {
-		return ExportFonts.forText(text, 8, Font.BOLD, NAVY);
-	}
-
-	private static Font td(String text) {
-		return ExportFonts.forText(text, 9, Font.NORMAL, INK);
-	}
-
-	/**
-	 * The box the organization's mark is contained in, in points. Contained, never
-	 * fitted: a 6:1 wordmark and a square signet arrive through the same setting,
-	 * so bounding both edges is the only rule that leaves an unknown aspect ratio
-	 * recognizable. Matches the issue export, so the two documents this server
-	 * produces share one letterhead.
-	 */
-	private static final float LOGO_MAX_H = 34f;
-	private static final float LOGO_MAX_W = 220f;
 
 	/** What heads and names the file on an instance whose organization has none. */
 	private static final String PRODUCT = "Hinata";
@@ -114,6 +60,8 @@ public class DataExportPdfService {
 	private static final int MAX_SLUG = 48;
 
 	private static final DateTimeFormatter DT = PersonalDataExport.INSTANT;
+
+	private static final String NONE = "—";
 
 	private final MeService me;
 	private final SessionService sessions;
@@ -125,6 +73,8 @@ public class DataExportPdfService {
 	private final com.ahmadre.hinata.common.UserWords words;
 	/** The modules holding personal data of their own; see {@link PersonalDataExport}. */
 	private final List<PersonalDataExport> personalData;
+	/** Stateless; one layout for every document, see the class comment. */
+	private final PdfDocumentRenderer renderer = new PdfDocumentRenderer();
 
 	/**
 	 * A suggested, filesystem-safe download name for {@code user}'s export. The
@@ -143,32 +93,36 @@ public class DataExportPdfService {
 	public byte[] build(User user) {
 		// The reader's language, unless a PDF cannot carry its script — a complete
 		// report in English beats a correctly-labelled one with every label blank.
-		Locale locale = com.ahmadre.hinata.issue.export.ExportFonts.renderableLocale(
+		Locale locale = ExportFonts.renderableLocale(
 				words.localeOf(user), t(words.localeOf(user), "export.pdf.title"));
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		Document doc = new Document(PageSize.A4, 48, 48, 56, 48);
-		try {
-			PdfWriter.getInstance(doc, out);
-			doc.open();
-
-			header(doc, user, locale);
-			profileSection(doc, user, locale);
-			securitySection(doc, user, locale);
-			notificationSection(doc, user, locale);
-			sessionsSection(doc, user, locale);
-			membershipsSection(doc, user, locale);
-			issuesSection(doc, user, locale);
-			commentsSection(doc, user, locale);
-			activitySection(doc, user, locale);
-			for (PersonalDataExport module : personalData) {
-				for (PersonalDataExport.Table table : module.tables(user, locale)) {
-					moduleTable(doc, table, locale);
-				}
+		List<ExportBlock> blocks = new ArrayList<>();
+		meta(blocks, user, locale);
+		profileSection(blocks, user, locale);
+		securitySection(blocks, user, locale);
+		notificationSection(blocks, user, locale);
+		sessionsSection(blocks, user, locale);
+		membershipsSection(blocks, user, locale);
+		issuesSection(blocks, user, locale);
+		commentsSection(blocks, user, locale);
+		activitySection(blocks, user, locale);
+		for (PersonalDataExport module : personalData) {
+			for (PersonalDataExport.Table table : module.tables(user, locale)) {
+				moduleTable(blocks, table, locale);
 			}
-			footer(doc, locale);
+		}
+		closing(blocks, locale);
 
-			doc.close();
-		} catch (Exception e) {
+		String controller = organizationName();
+		// UTC, as every timestamp in this report: the rows below are stamped by
+		// PersonalDataExport.INSTANT, and a footer on another clock would disagree with them.
+		ExportDocument document = new ExportDocument(controller, t(locale, "export.pdf.title"),
+				t(locale, "export.pdf.subtitle"), blocks, controller, logo(), Instant.now(),
+				new ExportWords(words.messages(), locale, ZoneOffset.UTC));
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try {
+			renderer.render(document, out);
+		}
+		catch (RuntimeException e) {
 			throw new IllegalStateException("Failed to render data-export PDF", e);
 		}
 		return out.toByteArray();
@@ -176,304 +130,169 @@ public class DataExportPdfService {
 
 	// --- Sections -------------------------------------------------------------
 
-	private void header(Document doc, User user, Locale locale) {
-		masthead(doc);
-
-		Paragraph title = new Paragraph(t(locale, "export.pdf.title"), hTitle(t(locale, "export.pdf.title")));
-		doc.add(title);
-
-		Paragraph sub = new Paragraph(t(locale, "export.pdf.subtitle"), bodyMuted(t(locale, "export.pdf.subtitle")));
-		sub.setSpacingAfter(10);
-		doc.add(sub);
-
-		PdfPTable meta = new PdfPTable(2);
-		meta.setWidthPercentage(100);
-		try {
-			meta.setWidths(new int[]{1, 3});
-		} catch (Exception ignored) {
-			// fixed widths are best-effort; default layout is acceptable
-		}
-		metaRow(meta, t(locale, "export.pdf.account"), nullSafe(user.getDisplayName()));
-		metaRow(meta, t(locale, "export.pdf.username"), nullSafe(user.getUsername()));
-		metaRow(meta, t(locale, "export.pdf.email"), nullSafe(user.getEmail()));
-		metaRow(meta, t(locale, "export.pdf.generated"), DT.format(Instant.now()));
-		meta.setSpacingBefore(6);
-		meta.setSpacingAfter(8);
-		doc.add(meta);
-		doc.add(rule());
+	private void meta(List<ExportBlock> blocks, User user, Locale locale) {
+		blocks.add(new ExportBlock.KeyValues(List.of(
+				kv(t(locale, "export.pdf.account"), user.getDisplayName()),
+				kv(t(locale, "export.pdf.username"), user.getUsername()),
+				kv(t(locale, "export.pdf.email"), user.getEmail()),
+				kv(t(locale, "export.pdf.generated"), DT.format(Instant.now())))));
+		blocks.add(new ExportBlock.Rule());
 	}
 
-	private void profileSection(Document doc, User user, Locale locale) {
-		section(doc, t(locale, "export.pdf.profile"));
-		PdfPTable t = kvTable();
-		kv(t, "ID", user.getId());
-		kv(t, t(locale, "export.pdf.displayName"), nullSafe(user.getDisplayName()));
-		kv(t, t(locale, "export.pdf.username"), nullSafe(user.getUsername()));
-		kv(t, t(locale, "export.pdf.jobTitle"), nullSafe(user.getTitle()));
-		kv(t, t(locale, "export.pdf.pronouns"), nullSafe(user.getPronouns()));
-		kv(t, t(locale, "export.pdf.email"), nullSafe(user.getEmail()));
-		kv(t, t(locale, "export.pdf.emailVerified"), yesNo(user.isEmailVerified(), locale));
+	private void profileSection(List<ExportBlock> blocks, User user, Locale locale) {
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.profile")));
+		List<ExportBlock.KeyValue> rows = new ArrayList<>();
+		rows.add(kv("ID", user.getId()));
+		rows.add(kv(t(locale, "export.pdf.displayName"), user.getDisplayName()));
+		rows.add(kv(t(locale, "export.pdf.username"), user.getUsername()));
+		rows.add(kv(t(locale, "export.pdf.jobTitle"), user.getTitle()));
+		rows.add(kv(t(locale, "export.pdf.pronouns"), user.getPronouns()));
+		rows.add(kv(t(locale, "export.pdf.email"), user.getEmail()));
+		rows.add(kv(t(locale, "export.pdf.emailVerified"), yesNo(user.isEmailVerified(), locale)));
 		if (user.getPendingEmail() != null) {
-			kv(t, t(locale, "export.pdf.pendingEmail"), user.getPendingEmail());
+			rows.add(kv(t(locale, "export.pdf.pendingEmail"), user.getPendingEmail()));
 		}
-		kv(t, t(locale, "export.pdf.locale"), nullSafe(user.getLocale()));
-		kv(t, t(locale, "export.pdf.origin"), user.getOrigin() == null ? "—" : user.getOrigin().name());
-		kv(t, t(locale, "export.pdf.roles"),
-				String.join(", ", user.getRoles().stream().map(Enum::name).sorted().toList()));
-		kv(t, t(locale, "export.pdf.active"), yesNo(user.isActive(), locale));
-		kv(t, t(locale, "export.pdf.accountCreated"), fmt(user.getCreatedAt()));
-		doc.add(t);
+		rows.add(kv(t(locale, "export.pdf.locale"), user.getLocale()));
+		rows.add(kv(t(locale, "export.pdf.origin"), user.getOrigin() == null ? NONE : user.getOrigin().name()));
+		rows.add(kv(t(locale, "export.pdf.roles"),
+				String.join(", ", user.getRoles().stream().map(Enum::name).sorted().toList())));
+		rows.add(kv(t(locale, "export.pdf.active"), yesNo(user.isActive(), locale)));
+		rows.add(kv(t(locale, "export.pdf.accountCreated"), fmt(user.getCreatedAt())));
+		blocks.add(new ExportBlock.KeyValues(rows));
 	}
 
-	private void securitySection(Document doc, User user, Locale locale) {
-		section(doc, t(locale, "export.pdf.security"));
-		PdfPTable t = kvTable();
-		kv(t, t(locale, "export.pdf.passwordChanged"), fmt(user.getPasswordChangedAt()));
-		kv(t, t(locale, "export.pdf.twoFactor"),
-				user.isTotpEnabled() ? t(locale, "export.pdf.enabled") : t(locale, "export.pdf.disabled"));
+	private void securitySection(List<ExportBlock> blocks, User user, Locale locale) {
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.security")));
+		List<ExportBlock.KeyValue> rows = new ArrayList<>();
+		rows.add(kv(t(locale, "export.pdf.passwordChanged"), fmt(user.getPasswordChangedAt())));
+		rows.add(kv(t(locale, "export.pdf.twoFactor"),
+				user.isTotpEnabled() ? t(locale, "export.pdf.enabled") : t(locale, "export.pdf.disabled")));
 		if (user.isTotpEnabled()) {
-			kv(t, t(locale, "export.pdf.twoFactorAt"), fmt(user.getTotpEnabledAt()));
+			rows.add(kv(t(locale, "export.pdf.twoFactorAt"), fmt(user.getTotpEnabledAt())));
 		}
-		doc.add(t);
+		blocks.add(new ExportBlock.KeyValues(rows));
 	}
 
-	private void notificationSection(Document doc, User user, Locale locale) {
-		section(doc, t(locale, "export.pdf.notifications"));
+	private void notificationSection(List<ExportBlock> blocks, User user, Locale locale) {
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.notifications")));
 		NotificationPreferences prefs = me.notificationPreferences(user);
-		PdfPTable head = kvTable();
-		kv(head, t(locale, "export.pdf.emailGlobally"), yesNo(prefs.isEmailEnabled(), locale));
-		kv(head, t(locale, "export.pdf.pushGlobally"), yesNo(prefs.isPushEnabled(), locale));
-		doc.add(head);
-
-		PdfPTable t = new PdfPTable(3);
-		t.setWidthPercentage(100);
-		t.setSpacingBefore(4);
-		th(t, t(locale, "export.pdf.event"));
-		th(t, "E-Mail");
-		th(t, "Push");
+		blocks.add(new ExportBlock.KeyValues(List.of(
+				kv(t(locale, "export.pdf.emailGlobally"), yesNo(prefs.isEmailEnabled(), locale)),
+				kv(t(locale, "export.pdf.pushGlobally"), yesNo(prefs.isPushEnabled(), locale)))));
 		Map<String, NotificationPreferences.Channel> events = prefs.getEvents();
+		List<List<String>> rows = new ArrayList<>();
 		for (String id : NotificationPreferences.EVENTS) {
 			NotificationPreferences.Channel c = events == null ? null : events.get(id);
-			td(t, id);
-			td(t, yesNo(c != null && c.isEmail(), locale));
-			td(t, yesNo(c != null && c.isPush(), locale));
+			rows.add(List.of(id, yesNo(c != null && c.isEmail(), locale), yesNo(c != null && c.isPush(), locale)));
 		}
-		doc.add(t);
+		blocks.add(table(List.of(t(locale, "export.pdf.event"), "E-Mail", "Push"), rows, List.of(1f, 1f, 1f)));
 	}
 
-	private void sessionsSection(Document doc, User user, Locale locale) {
+	private void sessionsSection(List<ExportBlock> blocks, User user, Locale locale) {
 		List<RefreshSession> list = sessions.list(user.getId());
-		section(doc, t(locale, "export.pdf.sessions") + " (" + list.size() + ")");
-		if (list.isEmpty()) {
-			doc.add(emptyNote(locale));
-			return;
-		}
-		PdfPTable t = new PdfPTable(new float[]{2, 3, 3, 3, 3});
-		t.setWidthPercentage(100);
-		th(t, t(locale, "export.pdf.type"));
-		th(t, t(locale, "export.pdf.os"));
-		th(t, t(locale, "export.pdf.client"));
-		th(t, t(locale, "export.pdf.location"));
-		th(t, t(locale, "export.pdf.lastActive"));
-		for (RefreshSession s : list) {
-			td(t, s.getKind() == null ? "—" : s.getKind().name());
-			td(t, nullSafe(s.getOs()));
-			td(t, nullSafe(s.getClient()));
-			td(t, nullSafe(s.getLocation()));
-			td(t, fmt(s.getLastActiveAt()));
-		}
-		doc.add(t);
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.sessions") + " (" + list.size() + ")"));
+		tableOrEmpty(blocks, locale, List.of(t(locale, "export.pdf.type"), t(locale, "export.pdf.os"),
+						t(locale, "export.pdf.client"), t(locale, "export.pdf.location"),
+						t(locale, "export.pdf.lastActive")),
+				list.stream().map(s -> List.of(s.getKind() == null ? NONE : s.getKind().name(), orNone(s.getOs()),
+						orNone(s.getClient()), orNone(s.getLocation()), fmt(s.getLastActiveAt()))).toList(),
+				List.of(2f, 3f, 3f, 3f, 3f));
 	}
 
-	private void membershipsSection(Document doc, User user, Locale locale) {
+	private void membershipsSection(List<ExportBlock> blocks, User user, Locale locale) {
 		List<Team> teams = me.teamsOf(user.getId());
-		section(doc, t(locale, "export.pdf.teams") + " (" + teams.size() + ")");
-		if (teams.isEmpty()) {
-			doc.add(emptyNote(locale));
-		} else {
-			PdfPTable t = new PdfPTable(new float[]{1, 3});
-			t.setWidthPercentage(100);
-			th(t, t(locale, "export.pdf.key"));
-			th(t, t(locale, "export.pdf.name"));
-			for (Team team : teams) {
-				td(t, nullSafe(team.getKey()));
-				td(t, nullSafe(team.getName()));
-			}
-			doc.add(t);
-		}
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.teams") + " (" + teams.size() + ")"));
+		tableOrEmpty(blocks, locale, List.of(t(locale, "export.pdf.key"), t(locale, "export.pdf.name")),
+				teams.stream().map(team -> List.of(orNone(team.getKey()), orNone(team.getName()))).toList(),
+				List.of(1f, 3f));
 
 		List<Project> projects = me.projectsOf(user);
-		section(doc, t(locale, "export.pdf.projects") + " (" + projects.size() + ")");
-		if (projects.isEmpty()) {
-			doc.add(emptyNote(locale));
-			return;
-		}
-		PdfPTable t = new PdfPTable(new float[]{1, 3, 2});
-		t.setWidthPercentage(100);
-		th(t, t(locale, "export.pdf.key"));
-		th(t, t(locale, "export.pdf.name"));
-		th(t, t(locale, "export.pdf.role"));
-		for (Project p : projects) {
-			td(t, nullSafe(p.getKey()));
-			td(t, nullSafe(p.getName()));
-			td(t, me.projectRole(p, user.getId()));
-		}
-		doc.add(t);
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.projects") + " (" + projects.size() + ")"));
+		tableOrEmpty(blocks, locale, List.of(t(locale, "export.pdf.key"), t(locale, "export.pdf.name"),
+						t(locale, "export.pdf.role")),
+				projects.stream().map(p -> List.of(orNone(p.getKey()), orNone(p.getName()),
+						orNone(me.projectRole(p, user.getId())))).toList(),
+				List.of(1f, 3f, 2f));
 	}
 
-	private void issuesSection(Document doc, User user, Locale locale) {
+	private void issuesSection(List<ExportBlock> blocks, User user, Locale locale) {
 		List<Issue> reported = issues.findByReporterIdOrderByCreatedAtDesc(user.getId());
 		List<Issue> assigned = issues.findByAssigneeIdsContainsOrderByCreatedAtDesc(user.getId());
 
-		section(doc, t(locale, "export.pdf.issuesReported") + " (" + reported.size() + ")");
-		issueTable(doc, reported, locale);
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.issuesReported") + " (" + reported.size() + ")"));
+		issueTable(blocks, reported, locale);
 
-		section(doc, t(locale, "export.pdf.issuesAssigned") + " (" + assigned.size() + ")");
-		issueTable(doc, assigned, locale);
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.issuesAssigned") + " (" + assigned.size() + ")"));
+		issueTable(blocks, assigned, locale);
 	}
 
-	private void issueTable(Document doc, List<Issue> list, Locale locale) {
-		if (list.isEmpty()) {
-			doc.add(emptyNote(locale));
-			return;
-		}
-		PdfPTable t = new PdfPTable(new float[]{2, 5, 2, 2, 3});
-		t.setWidthPercentage(100);
-		th(t, "ID");
-		th(t, t(locale, "export.pdf.jobTitle"));
-		th(t, t(locale, "export.pdf.type"));
-		th(t, t(locale, "export.pdf.issueState"));
-		th(t, t(locale, "export.pdf.created"));
-		for (Issue i : list) {
-			td(t, nullSafe(i.getReadableId()));
-			td(t, nullSafe(i.getTitle()));
-			td(t, i.getType() == null ? "—" : i.getType().name());
-			td(t, nullSafe(i.getState()));
-			td(t, fmt(i.getCreatedAt()));
-		}
-		doc.add(t);
+	private void issueTable(List<ExportBlock> blocks, List<Issue> list, Locale locale) {
+		tableOrEmpty(blocks, locale, List.of("ID", t(locale, "export.pdf.jobTitle"), t(locale, "export.pdf.type"),
+						t(locale, "export.pdf.issueState"), t(locale, "export.pdf.created")),
+				list.stream().map(i -> List.of(orNone(i.getReadableId()), orNone(i.getTitle()),
+						i.getType() == null ? NONE : i.getType().name(), orNone(i.getState()),
+						fmt(i.getCreatedAt()))).toList(),
+				List.of(2f, 5f, 2f, 2f, 3f));
 	}
 
-	private void commentsSection(Document doc, User user, Locale locale) {
+	private void commentsSection(List<ExportBlock> blocks, User user, Locale locale) {
 		List<IssueComment> list = comments.findByAuthorIdOrderByCreatedAtDesc(user.getId());
-		section(doc, t(locale, "export.pdf.comments") + " (" + list.size() + ")");
-		if (list.isEmpty()) {
-			doc.add(emptyNote(locale));
-			return;
-		}
-		PdfPTable t = new PdfPTable(new float[]{3, 7});
-		t.setWidthPercentage(100);
-		th(t, t(locale, "export.pdf.created"));
-		th(t, t(locale, "export.pdf.comment"));
-		for (IssueComment c : list) {
-			td(t, fmt(c.getCreatedAt()));
-			td(t, nullSafe(c.getText()));
-		}
-		doc.add(t);
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.comments") + " (" + list.size() + ")"));
+		tableOrEmpty(blocks, locale, List.of(t(locale, "export.pdf.created"), t(locale, "export.pdf.comment")),
+				list.stream().map(c -> List.of(fmt(c.getCreatedAt()), orNone(c.getText()))).toList(),
+				List.of(3f, 7f));
 	}
 
-	private void activitySection(Document doc, User user, Locale locale) {
+	private void activitySection(List<ExportBlock> blocks, User user, Locale locale) {
 		List<AuditLog> logs = auditLogs.findTop200ByActorIdOrderByTimestampDesc(user.getId());
-		section(doc, t(locale, "export.pdf.activity") + " (" + logs.size() + ")");
-		if (logs.isEmpty()) {
-			doc.add(emptyNote(locale));
-			return;
-		}
-		PdfPTable t = new PdfPTable(new float[]{3, 4, 2});
-		t.setWidthPercentage(100);
-		th(t, t(locale, "export.pdf.time"));
-		th(t, t(locale, "export.pdf.action"));
-		th(t, t(locale, "export.pdf.outcome"));
-		for (AuditLog l : logs) {
-			td(t, fmt(l.getTimestamp()));
-			td(t, l.getAction() == null ? "—" : l.getAction().name());
-			td(t, l.getOutcome() == null ? "—" : l.getOutcome().name());
-		}
-		doc.add(t);
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.activity") + " (" + logs.size() + ")"));
+		tableOrEmpty(blocks, locale, List.of(t(locale, "export.pdf.time"), t(locale, "export.pdf.action"),
+						t(locale, "export.pdf.outcome")),
+				logs.stream().map(l -> List.of(fmt(l.getTimestamp()),
+						l.getAction() == null ? NONE : l.getAction().name(),
+						l.getOutcome() == null ? NONE : l.getOutcome().name())).toList(),
+				List.of(3f, 4f, 2f));
 	}
 
 	/** A table a module contributed, in this document's letterhead and type. */
-	private void moduleTable(Document doc, PersonalDataExport.Table table, Locale locale) {
-		section(doc, table.title() + " (" + table.rows().size() + ")");
-		if (table.rows().isEmpty()) {
-			doc.add(emptyNote(locale));
+	private void moduleTable(List<ExportBlock> blocks, PersonalDataExport.Table table, Locale locale) {
+		blocks.add(new ExportBlock.Section(table.title() + " (" + table.rows().size() + ")"));
+		List<Float> widths = new ArrayList<>(table.widths().length);
+		for (float width : table.widths()) {
+			widths.add(width);
 		}
-		else {
-			PdfPTable t = new PdfPTable(table.widths());
-			t.setWidthPercentage(100);
-			table.headers().forEach(header -> th(t, header));
-			for (List<String> row : table.rows()) {
-				row.forEach(cell -> td(t, cell));
-			}
-			doc.add(t);
-		}
+		tableOrEmpty(blocks, locale, table.headers(),
+				table.rows().stream().map(row -> row.stream().map(DataExportPdfService::orNone).toList()).toList(),
+				widths);
 		if (table.note() != null) {
-			Paragraph note = new Paragraph(table.note(), bodyMuted(table.note()));
-			note.setSpacingBefore(4);
-			doc.add(note);
+			blocks.add(new ExportBlock.Note(table.note()));
 		}
 	}
 
-	private void footer(Document doc, Locale locale) {
-		doc.add(rule());
-		String controller = organizationName();
-		Paragraph p = new Paragraph(t(locale, "export.pdf.intro", controller),
-				bodyMuted(t(locale, "export.pdf.intro", controller)));
-		p.setSpacingBefore(8);
-		doc.add(p);
-
-		// The credit the masthead gave up. The reader still needs to know what
-		// produced the file — just not to mistake it for who answers for it.
-		Paragraph credit = new Paragraph(
-				t(locale, "export.pdf.credit", PRODUCT), credit(t(locale, "export.pdf.credit", PRODUCT)));
-		credit.setSpacingBefore(4);
-		doc.add(credit);
+	/**
+	 * Who answers for the processing, and what produced the file: the reader still needs to
+	 * know the software, just not to mistake it for the controller the masthead names.
+	 */
+	private void closing(List<ExportBlock> blocks, Locale locale) {
+		blocks.add(new ExportBlock.Rule());
+		blocks.add(new ExportBlock.Note(t(locale, "export.pdf.intro", organizationName())));
+		blocks.add(new ExportBlock.Note(t(locale, "export.pdf.credit", PRODUCT)));
 	}
 
 	// --- organization branding ------------------------------------------------
 
 	/**
-	 * Who is issuing this document: the organization's logo, its name when there
-	 * is no usable logo, and only then the product — an instance that never
-	 * completed its setup still has to be able to answer an Art. 15 request.
+	 * The configured logo, or null. Failure is silence on purpose: a logo an admin mistyped
+	 * — or a host that changed the bytes underneath us — must not be what stops someone
+	 * exercising a right. The renderer is as forgiving about bytes it cannot draw.
 	 */
-	/**
-	 * The logo, if there is one, and the controller's name in every case.
-	 *
-	 * <p>The name is not optional here the way it is on a marketing surface: under
-	 * Art. 15 the reader has to be able to tell who issued the document, and a
-	 * picture-only signet — a crest, a hexagon, an initial — names nobody. The
-	 * closing paragraph already points them at "the data controller"; this is
-	 * where that controller is identified.
-	 */
-	private void masthead(Document doc) {
-		logo(doc);
-		Paragraph brand = new Paragraph(organizationName(), brand(organizationName()));
-		brand.setSpacingAfter(2);
-		doc.add(brand);
-	}
-
-	/**
-	 * Places the configured logo and reports whether it made it onto the page.
-	 * Failure is silence on purpose: {@link #build} turns anything thrown into a
-	 * failed download, and a logo an admin mistyped — or a host that changed the
-	 * bytes underneath us — must not be what stops someone exercising a right.
-	 */
-	private boolean logo(Document doc) {
+	private byte[] logo() {
 		try {
-			byte[] png = brandLogo.raster().orElse(null);
-			if (png == null || png.length == 0) {
-				return false;
-			}
-			Image image = Image.getInstance(png);
-			image.scaleToFit(LOGO_MAX_W, LOGO_MAX_H);
-			image.setAlignment(Element.ALIGN_LEFT);
-			image.setSpacingAfter(6);
-			doc.add(image);
-			return true;
-		} catch (Exception e) {
+			return brandLogo.raster().orElse(null);
+		}
+		catch (Exception e) {
 			log.warn("The organization logo was left out of the data export: {}", e.toString());
-			return false;
+			return null;
 		}
 	}
 
@@ -512,74 +331,22 @@ public class DataExportPdfService {
 
 	// --- Building blocks ------------------------------------------------------
 
-	private void section(Document doc, String title) {
-		Paragraph p = new Paragraph(title, hSection(title));
-		p.setSpacingBefore(16);
-		p.setSpacingAfter(6);
-		doc.add(p);
+	private static ExportBlock.KeyValue kv(String label, String value) {
+		return new ExportBlock.KeyValue(label, orNone(value));
 	}
 
-	private PdfPTable kvTable() {
-		PdfPTable t = new PdfPTable(new float[]{2, 5});
-		t.setWidthPercentage(100);
-		return t;
+	private static ExportBlock.Table table(List<String> headers, List<List<String>> rows, List<Float> widths) {
+		return new ExportBlock.Table(headers, rows, widths, Set.of());
 	}
 
-	private void kv(PdfPTable t, String key, String value) {
-		PdfPCell k = new PdfPCell(new Phrase(key, bodyMuted(key)));
-		k.setBorder(Rectangle.BOTTOM);
-		k.setBorderColor(LINE);
-		k.setPadding(5);
-		PdfPCell v = new PdfPCell(new Phrase(value == null || value.isBlank() ? "—" : value, body(value)));
-		v.setBorder(Rectangle.BOTTOM);
-		v.setBorderColor(LINE);
-		v.setPadding(5);
-		t.addCell(k);
-		t.addCell(v);
+	private void tableOrEmpty(List<ExportBlock> blocks, Locale locale, List<String> headers,
+			List<List<String>> rows, List<Float> widths) {
+		blocks.add(rows.isEmpty() ? new ExportBlock.Note(t(locale, "export.pdf.empty"))
+				: table(headers, rows, widths));
 	}
 
-	private void metaRow(PdfPTable t, String key, String value) {
-		PdfPCell k = new PdfPCell(new Phrase(key, bodyMuted(key)));
-		k.setBorder(Rectangle.NO_BORDER);
-		k.setPadding(2);
-		PdfPCell v = new PdfPCell(new Phrase(value, body(value)));
-		v.setBorder(Rectangle.NO_BORDER);
-		v.setPadding(2);
-		t.addCell(k);
-		t.addCell(v);
-	}
-
-	private void th(PdfPTable t, String label) {
-		PdfPCell c = new PdfPCell(new Phrase(label, th(label)));
-		c.setBackgroundColor(HEAD_BG);
-		c.setBorderColor(LINE);
-		c.setPadding(5);
-		t.addCell(c);
-	}
-
-	private void td(PdfPTable t, String value) {
-		PdfPCell c = new PdfPCell(new Phrase(value == null || value.isBlank() ? "—" : value, td(value)));
-		c.setBorderColor(LINE);
-		c.setPadding(5);
-		c.setVerticalAlignment(Element.ALIGN_TOP);
-		t.addCell(c);
-	}
-
-	private Paragraph emptyNote(Locale locale) {
-		Paragraph p = new Paragraph(t(locale, "export.pdf.empty"), bodyMuted(t(locale, "export.pdf.empty")));
-		p.setSpacingBefore(2);
-		return p;
-	}
-
-	private Paragraph rule() {
-		Paragraph p = new Paragraph(new Chunk(new com.lowagie.text.pdf.draw.LineSeparator(
-				0.6f, 100, LINE, Element.ALIGN_CENTER, -2)));
-		p.setSpacingBefore(6);
-		return p;
-	}
-
-	private String fmt(Instant instant) {
-		return instant == null ? "—" : DT.format(instant);
+	private static String fmt(Instant instant) {
+		return instant == null ? NONE : DT.format(instant);
 	}
 
 	private String yesNo(boolean value, Locale locale) {
@@ -591,7 +358,7 @@ public class DataExportPdfService {
 		return words.in(locale, key, args);
 	}
 
-	private String nullSafe(String s) {
-		return s == null || s.isBlank() ? "—" : s;
+	private static String orNone(String s) {
+		return s == null || s.isBlank() ? NONE : s;
 	}
 }

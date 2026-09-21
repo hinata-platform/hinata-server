@@ -124,36 +124,9 @@ class XlsxIssueExportRenderer implements IssueExportRenderer {
 		}
 	}
 
-	/**
-	 * A sheet name Excel will accept: no {@code : \\ / ? * [ ]}, at most 31
-	 * characters, never blank, and not one this workbook already uses.
-	 *
-	 * <p>Needed only because the names are translated now. They used to be two
-	 * ASCII literals that could not offend anything; a translation is a string
-	 * from a bundle, and a bundle that ever gained a colon or a long phrase would
-	 * turn every export of every issue into a 500. Sanitised rather than
-	 * validated, because a slightly shortened tab name is a far better outcome
-	 * than a failed download.
-	 */
+	/** A sheet name Excel accepts; see {@link XlsxDocumentRenderer#sheetName}. */
 	private static String sheetName(Workbook workbook, String wanted) {
-		String cleaned = wanted == null ? "" : wanted.replaceAll("[\\\\/:*?\\[\\]]", " ").trim();
-		if (cleaned.isEmpty()) {
-			cleaned = "Sheet";
-		}
-		if (cleaned.length() > 31) {
-			cleaned = cleaned.substring(0, 31).trim();
-		}
-		if (workbook.getSheet(cleaned) == null) {
-			return cleaned;
-		}
-		String stem = cleaned.length() > 29 ? cleaned.substring(0, 29) : cleaned;
-		for (int i = 2; i < 100; i++) {
-			String candidate = stem + " " + i;
-			if (workbook.getSheet(candidate) == null) {
-				return candidate;
-			}
-		}
-		return stem + " x";
+		return XlsxDocumentRenderer.sheetName(workbook, wanted);
 	}
 
 	// --- cells ---------------------------------------------------------------
@@ -232,6 +205,12 @@ class XlsxIssueExportRenderer implements IssueExportRenderer {
 					yield rows.toString();
 				}
 				case ExportBlock.Rule ignored -> "—";
+				case ExportBlock.Section section -> section.title();
+				case ExportBlock.Note note -> note.text();
+				case ExportBlock.KeyValues values -> String.join("\n", values.rows().stream()
+						.map(row -> row.label() + ": " + row.value()).toList());
+				// Never part of an issue's text: a long table is what a report streams.
+				case ExportBlock.LongTable ignored -> "";
 			};
 			if (!line.isBlank()) {
 				out.append(line).append("\n\n");

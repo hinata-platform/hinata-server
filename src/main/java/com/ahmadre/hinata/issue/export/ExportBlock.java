@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.issue.export;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * The description, in the shape every export format can render: a flat list of
@@ -50,11 +51,49 @@ public sealed interface ExportBlock {
 	record Quote(List<Span> spans) implements ExportBlock {
 	}
 
-	/** A table whose first row is its header. Cells are plain text — a cell is a
-	 *  line by construction, so there is no emphasis left to carry. */
-	record Table(List<String> headers, List<List<String>> rows) implements ExportBlock {
+	/**
+	 * A table whose first row is its header. Cells are plain text — a cell is a
+	 * line by construction, so there is no emphasis left to carry.
+	 *
+	 * @param widths     relative column widths, or empty for equal columns
+	 * @param endAligned the columns that hold figures and line up on their end
+	 */
+	record Table(List<String> headers, List<List<String>> rows, List<Float> widths,
+			Set<Integer> endAligned) implements ExportBlock {
+
+		public Table(List<String> headers, List<List<String>> rows) {
+			this(headers, rows, List.of(), Set.of());
+		}
+	}
+
+	/**
+	 * A table read while it is written: the rows come from a database cursor and are
+	 * never held together in memory. For the exports that run to tens of thousands of
+	 * lines; the renderers walk [rows] exactly once, so it may be a cursor.
+	 */
+	record LongTable(List<String> headers, Iterable<List<String>> rows, List<Float> widths,
+			Set<Integer> endAligned) implements ExportBlock {
 	}
 
 	record Rule() implements ExportBlock {
+	}
+
+	/**
+	 * A heading the document itself owns — "Comments", "Profile", "Summary" —
+	 * rather than one in the content it carries. Drawn in the letterhead's colour,
+	 * and in a spreadsheet the start of a new sheet.
+	 */
+	record Section(String title) implements ExportBlock {
+	}
+
+	/** Labelled values, one per line: an issue's head, an account's profile. */
+	record KeyValues(List<KeyValue> rows) implements ExportBlock {
+	}
+
+	record KeyValue(String label, String value) {
+	}
+
+	/** A quiet line: a byline, an empty section, the note that a file was cut short. */
+	record Note(String text) implements ExportBlock {
 	}
 }
