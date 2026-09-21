@@ -516,6 +516,27 @@ public class ServerSettings {
 		/** Workload reports (booked against capacity); null ⇒ env default. */
 		private Boolean workloadReportsEnabled;
 
+		/**
+		 * The report "absences and balances" (HIN-119); null ⇒ env default, which is off. Only in
+		 * force while absence management is.
+		 */
+		private Boolean absenceReportsEnabled;
+
+		/**
+		 * The absence rate per person in that report, for keepers only; null ⇒ env default, which
+		 * is off. A share of days away is conduct data and, with sickness in it, health data — its
+		 * own co-determined decision rather than a column that comes with the report.
+		 */
+		private Boolean absenceRateEnabled;
+
+		/** How long sick details, closed requests and the leave journal are kept; null ⇒ env. */
+		@Valid
+		private TimeOffRetention timeOffRetention;
+
+		/** When people are told that leave is about to lapse; null fields ⇒ env defaults. */
+		@Valid
+		private ExpiryNotice expiryNotice;
+
 		/** Budget and estimate alerts to leads; null ⇒ env default. */
 		private Boolean alertsEnabled;
 
@@ -712,6 +733,63 @@ public class ServerSettings {
 			public boolean isEntryPurgeLongEnough() {
 				return entryPurgeMonths == null || entryPurgeMonths == 0
 						|| entryPurgeMonths >= TimePolicy.ENTRY_RETENTION_MIN_MONTHS;
+			}
+		}
+
+		/**
+		 * How long the absence records that are not evidence are kept (HIN-119). {@code 0} keeps
+		 * them. Approved absences and the notices behind a lapse are evidence and are never
+		 * purged by this.
+		 */
+		@Data
+		public static class TimeOffRetention {
+			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
+			@Max(value = TimePolicy.RETENTION_MAX_MONTHS,
+					message = "error.timeTracking.retentionInvalid")
+			private Integer sickDetailPurgeMonths;
+			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
+			@Max(value = TimePolicy.RETENTION_MAX_MONTHS,
+					message = "error.timeTracking.retentionInvalid")
+			private Integer requestPurgeMonths;
+			@Min(value = 0, message = "error.timeTracking.retentionInvalid")
+			@Max(value = TimePolicy.LEDGER_RETENTION_MAX_YEARS,
+					message = "error.timeTracking.retentionInvalid")
+			private Integer ledgerPurgeYears;
+
+			/** Never (0) or at least three years; see {@link TimePolicy#LEDGER_RETENTION_MIN_YEARS}. */
+			@AssertTrue(message = "error.timeTracking.ledgerRetentionTooShort")
+			@JsonIgnore
+			public boolean isLedgerPurgeLongEnough() {
+				return ledgerPurgeYears == null || ledgerPurgeYears == 0
+						|| ledgerPurgeYears >= TimePolicy.LEDGER_RETENTION_MIN_YEARS;
+			}
+		}
+
+		/**
+		 * The two moments people are told about leave that is about to lapse: once a year on a
+		 * fixed day, and a number of weeks before the lapse itself (HIN-119).
+		 */
+		@Data
+		public static class ExpiryNotice {
+			@Min(value = 1, message = "error.timeTracking.expiryNoticeInvalid")
+			@Max(value = 12, message = "error.timeTracking.expiryNoticeInvalid")
+			private Integer month;
+			@Min(value = 1, message = "error.timeTracking.expiryNoticeInvalid")
+			@Max(value = 31, message = "error.timeTracking.expiryNoticeInvalid")
+			private Integer day;
+			@Min(value = 1, message = "error.timeTracking.expiryNoticeInvalid")
+			@Max(value = TimePolicy.EXPIRY_NOTICE_WEEKS_MAX,
+					message = "error.timeTracking.expiryNoticeInvalid")
+			private Integer weeksBefore;
+
+			/** A day that exists in every year: no 30 February, and no 29 February either. */
+			@AssertTrue(message = "error.timeTracking.expiryNoticeInvalid")
+			@JsonIgnore
+			public boolean isDayValid() {
+				if (month == null || day == null) {
+					return true;
+				}
+				return day <= java.time.Month.of(month).minLength();
 			}
 		}
 	}

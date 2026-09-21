@@ -44,6 +44,12 @@ import java.time.LocalDate;
 // Whether a type has any history at all, which is what stands between deleting one and switching
 // it off. Also the reach of the yearly run in A4, which walks a type's year.
 @CompoundIndex(name = "type_year", def = "{'typeId': 1, 'year': 1}")
+// What the yearly run booked, once each: the key names the rule, the person, the type and the year,
+// and a second instance — or the same run again after a restart — collides here instead of booking
+// the same carryover twice. Partial, because every booking a person made has no key and must not
+// collide with every other.
+@CompoundIndex(name = "run_key", def = "{'runKey': 1}", unique = true,
+		partialFilter = "{'runKey': {$exists: true}}")
 public class TimeOffLedgerEntry {
 
 	/** Longest reason a booking may carry. Room for a sentence, not for a case file. */
@@ -108,6 +114,20 @@ public class TimeOffLedgerEntry {
 
 	/** The booking this one takes back, where it takes one back. */
 	private String reversalOf;
+
+	/**
+	 * What made the yearly run book this row, as a key that exists once: {@code carry-in:<user>:
+	 * <type>:<year>} and the like. Null on everything a person booked (HIN-119).
+	 */
+	private String runKey;
+
+	/**
+	 * On a carryover arriving: the oldest leave year the days in it come from. Days that could not
+	 * lapse because nobody was told they would are carried on rather than lost, and after fifteen
+	 * months the question is whose year they were (EuGH C-214/10 <i>KHS</i>) — which this answers
+	 * without walking the journal back through every carryover.
+	 */
+	private Integer originYear;
 
 	@CreatedDate
 	private Instant createdAt;

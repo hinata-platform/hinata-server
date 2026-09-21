@@ -34,6 +34,7 @@ public class TimeOffErasure {
 
 	private final TimeOffEmploymentRepository employment;
 	private final TimeOffRequestRepository requests;
+	private final TimeOffProposalRepository proposals;
 
 	/** The states in which a request never decided anything, so nothing is lost by dropping it. */
 	private static final List<TimeOffRequest.Status> UNDECIDED = List.of(
@@ -44,6 +45,9 @@ public class TimeOffErasure {
 		try {
 			long removed = employment.deleteByUserId(event.userId());
 			long dropped = requests.deleteByUserIdAndStatusIn(event.userId(), UNDECIDED);
+			// An open proposal asks a keeper to decide about somebody who is gone. Notices stay: they
+			// are the evidence a claim to leave is argued over, pseudonymous like the journal.
+			proposals.deleteByUserIdAndStatus(event.userId(), TimeOffProposal.Status.OPEN);
 			if (removed > 0 || dropped > 0) {
 				log.info("[timeoff] employment dates and {} open requests removed for deleted user {}",
 						dropped, event.userId());

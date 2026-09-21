@@ -109,7 +109,7 @@ public class TimePolicyController {
 			boolean arbzgHintsEnabled, Integer lateEntryHintDays,
 			List<BackfillGrantResponse> myBackfillGrants, TargetRemindersResponse targetReminders,
 			boolean alertsEnabled, TimePolicy.AbsenceCalendar absenceCalendarVisibility,
-			boolean workloadReportsEnabled) {
+			boolean workloadReportsEnabled, boolean absenceReportsEnabled) {
 	}
 
 	/**
@@ -156,6 +156,9 @@ public class TimePolicyController {
 				settings.absenceCalendarVisibility(),
 				// HIN-93: whether the workload report exists at all, so a client offers the tab
 				// only where it answers. Who may read it the route decides.
-				settings.workloadReportsEnabled());
+				settings.workloadReportsEnabled(),
+				// HIN-119: the same for the report on absences and balances, which only exists while
+				// absence management does.
+				settings.absenceReportsEnabled());
 	}
 }

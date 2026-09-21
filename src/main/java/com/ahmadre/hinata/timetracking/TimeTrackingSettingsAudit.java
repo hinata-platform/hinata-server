@@ -109,6 +109,19 @@ public class TimeTrackingSettingsAudit implements SettingsAudit {
 						: String.valueOf(block.getApprovalPeriod().getType()));
 		compare(changes, "workloadReportsEnabled", was, now,
 				ServerSettings.TimeTracking::getWorkloadReportsEnabled);
+		compare(changes, "absenceReportsEnabled", was, now,
+				ServerSettings.TimeTracking::getAbsenceReportsEnabled);
+		compare(changes, "absenceRateEnabled", was, now,
+				ServerSettings.TimeTracking::getAbsenceRateEnabled);
+		compare(changes, "timeOffRetention", was, now,
+				block -> block.getTimeOffRetention() == null ? null
+						: "sick=" + block.getTimeOffRetention().getSickDetailPurgeMonths()
+								+ "/requests=" + block.getTimeOffRetention().getRequestPurgeMonths()
+								+ "/ledger=" + block.getTimeOffRetention().getLedgerPurgeYears());
+		compare(changes, "expiryNotice", was, now,
+				block -> block.getExpiryNotice() == null ? null
+						: block.getExpiryNotice().getMonth() + "-" + block.getExpiryNotice().getDay()
+								+ "/weeks=" + block.getExpiryNotice().getWeeksBefore());
 		compare(changes, "alertsEnabled", was, now, ServerSettings.TimeTracking::getAlertsEnabled);
 		compare(changes, "targetRemindersEnabled", was, now,
 				ServerSettings.TimeTracking::getTargetRemindersEnabled);

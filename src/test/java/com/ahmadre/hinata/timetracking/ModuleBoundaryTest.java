@@ -270,6 +270,10 @@ class ModuleBoundaryTest {
 			// The approval flow: it calls the readers above and holds nothing of availability
 			// itself, which is why TimeOffAbsences exists at all.
 			TIME_OFF + ".TimeOffRequestService",
+			// HIN-119: the yearly run counts sick days for a proposal after a long illness, the
+			// retention coarsens old sick absences, and the report reads the share of time away
+			// and a lead's group. None of them writes an entry or holds an availability type.
+			TIME_OFF + ".TimeOffYearRun", TIME_OFF + ".TimeOffRetention", TIME_OFF + ".TimeOffReportService",
 			// The two classes that turn a holiday calendar into a date: the answer an issue
 			// write asks for, and the rewrite after an event date moves. Both go through
 			// HolidayCalendars and neither names availability itself.

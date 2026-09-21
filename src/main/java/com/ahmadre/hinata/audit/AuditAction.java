@@ -197,6 +197,22 @@ public enum AuditAction {
 	// has no decision to record — only that a report was made, for whom and when.
 	TIME_OFF_SICK_REPORTED(DATA, NOTICE, true),
 
+	// --- Absence management 2.0 (HIN-119) --------------------------------------
+	// The notice that leave is about to lapse is the evidence a lapse needs (BAG
+	// 19.02.2019 – 9 AZR 541/15): who was told, how much and by when. Kept out of
+	// the audit retention for that reason — AuditRetentionJob never deletes it.
+	TIME_OFF_EXPIRY_NOTICE_SENT(DATA, NOTICE, true),
+	// A keeper confirming or dismissing a proposed lapse after long illness: a
+	// decision about one person's claim, with the reason kept on the proposal.
+	TIME_OFF_PROPOSAL_DECIDED(DATA, WARNING, true),
+	// The report on absences and balances left the system as a file: format, rows
+	// and a fingerprint of the filter, never the names in it.
+	TIME_OFF_REPORT_EXPORTED(DATA, INFO, true),
+	// One night's yearly run and one night's absence retention: what they booked
+	// and what they removed, as counts.
+	TIME_OFF_YEAR_RUN(DATA, NOTICE, true),
+	TIME_OFF_RETENTION_RUN(DATA, NOTICE, true),
+
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),
 	PAT_REVOKED(INTEGRATION, NOTICE, true),

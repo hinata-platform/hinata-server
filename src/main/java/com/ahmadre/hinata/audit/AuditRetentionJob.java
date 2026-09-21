@@ -19,6 +19,14 @@ import java.time.Instant;
 @RequiredArgsConstructor
 public class AuditRetentionJob {
 
+	/**
+	 * Records the sweep never deletes, however old. A notice that leave is about to lapse is the
+	 * evidence the lapse rests on, and the limitation period of the claim it concerns starts only
+	 * with that notice (§§ 195, 199 BGB; BAG 20.12.2022 – 9 AZR 266/20): a sweep taking it after a
+	 * year would take the employer's only proof while the claim is still open.
+	 */
+	static final java.util.Set<AuditAction> KEPT = java.util.EnumSet.of(AuditAction.TIME_OFF_EXPIRY_NOTICE_SENT);
+
 	private final AuditLogRepository repository;
 	private final SettingsService settings;
 
@@ -30,7 +38,7 @@ public class AuditRetentionJob {
 			return; // keep forever
 		}
 		Instant cutoff = Instant.now().minus(Duration.ofDays(days));
-		long removed = repository.deleteByTimestampBefore(cutoff);
+		long removed = repository.deleteByTimestampBeforeAndActionNotIn(cutoff, KEPT);
 		if (removed > 0) {
 			log.info("[audit] retention sweep removed {} record(s) older than {} day(s)", removed, days);
 		}

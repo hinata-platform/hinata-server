@@ -92,6 +92,28 @@ public final class TimeOffBalances {
 		return date.isBefore(yearStart(date.getYear(), anchor)) ? date.getYear() - 1 : date.getYear();
 	}
 
+	/**
+	 * The last day the days carried out of leave year [fromYear] can be taken: the first
+	 * [expiresOn] on or after the next leave year starts. For a calendar year and the default
+	 * 31 March that is the end of March in the year after; for a year anchored on 1 April it is not
+	 * 31 March of the same year, which would be before the carried days had even arrived.
+	 */
+	public static LocalDate carryoverDeadline(MonthDay expiresOn, int fromYear, MonthDay anchor) {
+		LocalDate arrives = yearStart(fromYear + 1, anchor);
+		LocalDate deadline = expiresOn.atYear(arrives.getYear());
+		return deadline.isBefore(arrives) ? expiresOn.atYear(arrives.getYear() + 1) : deadline;
+	}
+
+	/**
+	 * The day [on] falls on inside leave year [year]: an annual notice day such as 1 October,
+	 * placed in the year that runs from the anchor, not in the calendar year.
+	 */
+	public static LocalDate dayInYear(MonthDay on, int year, MonthDay anchor) {
+		LocalDate start = yearStart(year, anchor);
+		LocalDate day = on.atYear(start.getYear());
+		return day.isBefore(start) ? on.atYear(start.getYear() + 1) : day;
+	}
+
 	// --- what a year is worth ----------------------------------------------------
 
 	/**
