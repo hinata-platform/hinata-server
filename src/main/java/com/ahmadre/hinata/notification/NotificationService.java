@@ -850,6 +850,32 @@ public class NotificationService {
 	}
 
 	/**
+	 * A scheduled time report (HIN-93), computed in the recipient's own scope. The bell and the
+	 * mail carry the report's name and numbers — they reach only the recipient. The push says
+	 * neither: a lock screen is read by whoever is near the phone, and a report's name can name a
+	 * person. No attachment: the mail summarises and links into the app, where the report runs
+	 * again for whoever opens it.
+	 */
+	public void notifyTimeReport(User user, String title, String body, java.util.Map<String, Object> model,
+			String link) {
+		if (user == null || !user.isActive()) return;
+		notifications.save(Notification.builder()
+				.userId(user.getId()).type(Notification.Type.TIME_REPORT_SCHEDULED)
+				.title(title).body(body).link(link).build());
+		NotificationPreferences prefs = prefsOf(user);
+		String eventId = eventId(Notification.Type.TIME_REPORT_SCHEDULED);
+		if (prefs.deliversEmail(eventId)) {
+			model.put("ctaLink", appLink(link));
+			mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/time-report", model);
+		}
+		if (prefs.deliversPush(eventId)) {
+			push.sendToUser(user.getId(), words.of(user, "notify.timeReport.pushTitle"),
+					words.of(user, "notify.timeReport.pushBody"), link,
+					Map.of("type", Notification.Type.TIME_REPORT_SCHEDULED.name()));
+		}
+	}
+
+	/**
 	 * Security alert (new sign-in, password / e-mail change, 2FA change). Maps to
 	 * the locked {@code security} event, so it always reaches the user on every
 	 * channel — in-app, e-mail and push. Title/body are pre-localized by the caller.
@@ -1267,7 +1293,8 @@ public class NotificationService {
 					TIME_CORRECTION_ANSWERED, TIME_BACKFILL_REQUESTED, TIME_TARGET_REMINDER,
 					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED, TIME_OFF_ENTITLEMENT_CHANGED,
 					TIME_OFF_REQUESTED, TIME_OFF_APPROVED, TIME_OFF_REJECTED, TIME_OFF_AUTO_APPROVED,
-					TIME_OFF_CANCELLED, TIME_OFF_SHORTENED, TIME_OFF_SUBSTITUTE_NAMED -> "time";
+					TIME_OFF_CANCELLED, TIME_OFF_SHORTENED, TIME_OFF_SUBSTITUTE_NAMED,
+					TIME_REPORT_SCHEDULED -> "time";
 			default -> NotificationPreferences.LOCKED;
 		};
 	}

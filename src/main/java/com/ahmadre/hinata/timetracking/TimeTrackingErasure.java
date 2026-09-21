@@ -4,6 +4,10 @@ import com.ahmadre.hinata.user.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -55,6 +59,7 @@ public class TimeTrackingErasure {
 	private final TimeCorrectionRequestRepository corrections;
 	private final TimeBackfillGrantRepository grants;
 	private final TimeMarks marks;
+	private final MongoTemplate mongo;
 	private final Clock clock;
 
 	@EventListener
@@ -71,6 +76,15 @@ public class TimeTrackingErasure {
 		step("correction request(s)", userId, () -> corrections.deleteByUserId(userId));
 		step("backfill grant(s)", userId, () -> grants.deleteByUserId(userId));
 		step("reminder mark(s)", userId, () -> marks.forget(userId));
+		// A saved report is its owner's question; nobody else can open or change it, so it goes.
+		// Somebody else's schedule loses the person as a recipient and keeps everybody else.
+		step("saved report(s)", userId, () -> mongo.remove(Query.query(Criteria.where("ownerId").is(userId)),
+				TimeSavedReport.class).getDeletedCount());
+		step("report recipient entr(y/ies)", userId, () -> mongo.updateMulti(
+				Query.query(Criteria.where("schedule.recipients").is(userId)),
+				new Update().pull("schedule.recipients", userId), TimeSavedReport.class).getModifiedCount());
+		step("pending import(s)", userId, () -> mongo.remove(Query.query(Criteria.where("ownerId").is(userId)),
+				TimeImport.class).getDeletedCount());
 		step("pseudonym record", userId, () -> recordDeparture(userId));
 	}
 

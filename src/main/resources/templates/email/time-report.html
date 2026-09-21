@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!--/*
+  A scheduled time report (HIN-93): the period, the totals and the largest groups, computed in
+  the recipient's own scope. No attachment and no list of entries — the button opens the report
+  in the app, where it runs again for whoever opens it.
+
+  Model is built by TimeReportMails; NotificationService#notifyTimeReport injects the CTA.
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{email/_layout :: page(
+          #{email.timeReport.eyebrow},
+          ${reportName},
+          #{email.timeReport.intro(${period})},
+          #{email.timeReport.footer},
+          ~{::content})}">
+<body>
+<th:block th:fragment="content">
+
+  <div class="hn-mono"
+       style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;
+              font-weight:500;color:#B9831F;margin:-8px 0 16px 0"
+       th:text="${period}">Mar 2 – Mar 8</div>
+
+  <th:block th:replace="~{email/_layout :: copy(#{email.greeting(${displayName})})}"/>
+  <th:block th:replace="~{email/_layout :: copy(#{email.timeReport.intro(${period})})}"/>
+
+  <!--/* Three figures, the same tiles the weekly summary uses. */-->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 4px 0">
+    <tr>
+      <td class="hn-stat" width="33.33%" style="padding:0 5px 0 0;vertical-align:top">
+        <div class="hn-panel"
+             style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:15px 16px">
+          <div style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                      font-size:29px;font-weight:600;line-height:1;color:#23223F" th:text="${total}">32:15</div>
+          <div class="hn-faint"
+               style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;
+                      line-height:1.4;color:#9A99B0;margin-top:6px" th:text="#{email.timeReport.total}">Hours</div>
+        </div>
+      </td>
+      <td class="hn-stat" width="33.33%" style="padding:0 5px;vertical-align:top">
+        <div class="hn-panel"
+             style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:15px 16px">
+          <div style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                      font-size:29px;font-weight:600;line-height:1;color:#946A16" th:text="${billable}">20:00</div>
+          <div class="hn-faint"
+               style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;
+                      line-height:1.4;color:#9A99B0;margin-top:6px" th:text="#{email.timeReport.billable}">Billable</div>
+        </div>
+      </td>
+      <td class="hn-stat" width="33.33%" style="padding:0 0 0 5px;vertical-align:top">
+        <div class="hn-panel"
+             style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:15px 16px">
+          <div style="font-family:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+                      font-size:29px;font-weight:600;line-height:1;color:#5B86D6" th:text="${entries}">41</div>
+          <div class="hn-faint"
+               style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;
+                      line-height:1.4;color:#9A99B0;margin-top:6px" th:text="#{email.timeReport.entries}">Entries</div>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <table th:if="${groups.isEmpty()}" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="margin:12px 0 0 0">
+    <tr>
+      <td class="hn-panel" align="center"
+          style="background:#FAF9F6;border:1px solid #E7E5DE;border-radius:12px;padding:18px 16px">
+        <span class="hn-soft"
+              style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:14px;
+                     color:#6B6A85" th:text="#{email.timeReport.empty}">Nothing was recorded in this period.</span>
+      </td>
+    </tr>
+  </table>
+
+  <th:block th:unless="${groups.isEmpty()}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(${groupsLabel})}"/>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr th:each="g, s : ${groups}">
+        <td class="hn-sep" th:styleappend="${s.last} ? ';border-bottom:0' : ''"
+            style="padding:9px 0;border-bottom:1px solid #EFEDE6">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td class="hn-ink" dir="auto"
+                  style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:14.5px;
+                         color:#23223F" th:text="${g.label}">Apollo</td>
+              <td align="right" class="hn-mono"
+                  style="white-space:nowrap;padding-left:10px;font-family:'IBM Plex Mono',ui-monospace,'SF Mono',
+                         Menlo,Consolas,monospace;font-size:13px;font-weight:600;color:#23223F"
+                  th:text="${g.hours}">12:30</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+    <div th:if="${moreGroups > 0}" class="hn-faint"
+         style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;font-size:12.5px;
+                color:#9A99B0;margin:2px 0 0 2px"
+         th:text="#{email.timeReport.more(${moreGroups})}">3 more in the app</div>
+  </th:block>
+
+  <th:block th:replace="~{email/_layout :: cta(${ctaLink}, #{email.timeReport.cta})}"/>
+</th:block>
+</body>
+</html>

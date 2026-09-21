@@ -517,7 +517,7 @@ public class TimeReportService {
 	}
 
 	/** The first day of a week bucket: the approval rhythm's, which the timesheet already follows. */
-	private DayOfWeek weekStart() {
+	DayOfWeek weekStart() {
 		TimeTrackingSettings.ApprovalPeriod period = policy.approvalPeriod();
 		return period == null || period.weekStartsOn() == null ? DayOfWeek.MONDAY : period.weekStartsOn();
 	}

@@ -30,7 +30,7 @@ class TimeTrackingErasureTest {
 	private final TimeMarks marks = mock(TimeMarks.class);
 
 	private final TimeTrackingErasure erasure = new TimeTrackingErasure(timers, approvals, departed,
-			corrections, grants, marks, Clock.fixed(Instant.parse("2026-09-13T10:00:00Z"), ZoneOffset.UTC));
+			corrections, grants, marks, mock(org.springframework.data.mongodb.core.MongoTemplate.class), Clock.fixed(Instant.parse("2026-09-13T10:00:00Z"), ZoneOffset.UTC));
 
 	@Test
 	void aPseudonymRecordThatFailsOnceIsWrittenOnTheNextTry() {
