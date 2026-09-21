@@ -61,6 +61,13 @@ public enum AuditAction {
 	ISSUE_MOVED(DATA, NOTICE, true),
 	ISSUE_CLONED(DATA, INFO, true),
 	ISSUE_EXPORTED(DATA, INFO, true),
+	// A time report taken out of the platform as a file (HIN-93): the format, a hash of the
+	// filter and how many rows left. A file holds other people's working time wherever the
+	// reader's scope reaches that far, and a copy outside the platform is out of its control.
+	TIME_REPORT_EXPORTED(DATA, INFO, true),
+	// Entries written from a CSV file. Always for an import on somebody else's behalf, which only
+	// an administrator may do; an import of one's own entries is the ordinary use of the feature.
+	TIME_ENTRIES_IMPORTED(DATA, NOTICE, true),
 	ISSUE_WATCHED(DATA, INFO, true),
 	ISSUE_UNWATCHED(DATA, INFO, true),
 	// A lead or admin changing or removing someone else's logged time. Editing

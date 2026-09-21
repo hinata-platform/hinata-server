@@ -209,15 +209,7 @@ public class TimeEntryCsvExport {
 	}
 
 	private static void writeRow(Writer out, List<String> cells) throws IOException {
-		for (int i = 0; i < cells.size(); i++) {
-			if (i > 0) {
-				out.write(',');
-			}
-			out.write('"');
-			out.write(ExportText.forSpreadsheet(cells.get(i)).replace("\"", "\"\""));
-			out.write('"');
-		}
-		out.write("\r\n");
+		ExportText.csvRow(out, cells);
 	}
 
 	/** The resolved name, or empty — an entry without a project or issue has no key to look up. */
