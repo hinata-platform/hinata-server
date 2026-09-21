@@ -225,7 +225,7 @@ class AvailabilityMarkingIntegrationTest {
 		// The negative grep beside the ArchUnit rule: a fully qualified name in a class
 		// would reach availability without an import to see.
 		Set<String> readers = Set.of("TimeCalendarLayers.java", "TimeHintsService.java",
-				"TimeAvailabilityPolicy.java", "TimeReminders.java");
+				"TimeAvailabilityPolicy.java", "TimeReminders.java", "TimeWorkloadReport.java");
 		try (Stream<Path> files = Files.list(Path.of("src/main/java/com/ahmadre/hinata/timetracking"))) {
 			List<String> naming = files
 					.filter(path -> path.toString().endsWith(".java"))

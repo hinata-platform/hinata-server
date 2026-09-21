@@ -50,7 +50,7 @@ public class TimeTrackingController {
 			LocalDate date, int durationMinutes, String activityType, String description,
 			Instant createdAt, Instant startedAt, Instant endedAt, boolean billable,
 			List<String> tags, WorkItem.Source source, Instant updatedAt, String updatedBy,
-			String sharedFromId, boolean hidden) {
+			String sharedFromId, String importId, boolean hidden) {
 
 		public static WorkItemResponse from(WorkItem item) {
 			return from(item, true);
@@ -71,14 +71,14 @@ public class TimeTrackingController {
 				return new WorkItemResponse(item.getId(), item.getIssueId(), item.getProjectId(),
 						null, item.getDate(), item.getDurationMinutes(), item.getActivityType(), null,
 						null, null, null, item.isBillable(), List.of(), item.getSource(), null, null,
-						null, true);
+						null, null, true);
 			}
 			return new WorkItemResponse(item.getId(), item.getIssueId(), item.getProjectId(),
 					item.getUserId(), item.getDate(), item.getDurationMinutes(),
 					item.getActivityType(), item.getDescription(), item.getCreatedAt(),
 					item.getStartedAt(), item.getEndedAt(), item.isBillable(), item.getTags(),
 					item.getSource(), item.getUpdatedAt(), item.getUpdatedBy(),
-					item.getSharedFromId(), false);
+					item.getSharedFromId(), item.getImportId(), false);
 		}
 	}
 
