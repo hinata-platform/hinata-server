@@ -17,12 +17,17 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Period;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Who may see and who may keep somebody's availability. The services and the routes ask here, so
@@ -141,21 +146,43 @@ public class AvailabilityAccess {
 	public record Roster(List<String> userIds, boolean truncated) {
 	}
 
+	/** How long a roster is reused: the calendar, its band and the next page ask within seconds. */
+	static final Duration ROSTER_TTL = Duration.ofSeconds(60);
+
+	/** Most rosters held at once; beyond it the cache starts over rather than growing. */
+	static final int ROSTER_CACHE_MAX = 2_000;
+
+	private record RosterKey(String viewerId, String teamId, String projectId, Purpose purpose) {
+	}
+
+	private record CachedRoster(Roster roster, Instant until) {
+	}
+
+	private final Map<RosterKey, CachedRoster> rosters = new ConcurrentHashMap<>();
+
 	/**
 	 * Whose absences [viewer] may read as a group: the team named by [teamId], the project named by
-	 * [projectId], or with neither the people of the viewer's own projects.
+	 * [projectId], or with neither the people of the viewer's own projects — for the band, of the
+	 * projects the viewer leads.
 	 *
 	 * <p><b>Nobody appears in a group through a relationship somebody else can make.</b> Whoever
 	 * creates a project leads it, whoever creates a team manages it, and both can add anybody
-	 * without asking. So a person counts in a group only by time they recorded themselves within
-	 * {@link #WORKED_ON} on a project of that group ({@link AvailabilityPolicy#whoWorkedOn}) — the
-	 * same anchor a lead's view of one person has ({@link #of}). A keeper already sees everybody's
-	 * absences one by one, and gets the group without that filter.
+	 * without asking. So a person counts only through a project of the group they <em>still belong
+	 * to</em> and recorded time on themselves within {@link #WORKED_ON}
+	 * ({@link AvailabilityPolicy#projectsWorkedOnBy}), checked per project: a project somebody left
+	 * cannot speak for a team they were put into afterwards. The same anchor a lead's view of one
+	 * person has ({@link #of}). A keeper already reads everybody's absences one by one and gets the
+	 * current members without the time filter. The viewer is in their own group when they belong to
+	 * it, and deactivated accounts are in nobody's.
 	 *
 	 * <p>Reading a group is narrower than being in one. The calendar is for anybody who can see the
-	 * project or belongs to the team; the capacity band, which adds everybody's days up, is for
-	 * who plans: a lead of the project, an admin of the team, a keeper. A project or team the viewer
-	 * cannot see answers 404, as if it were not there.
+	 * project, or who belongs to the team and can see one of its projects; the capacity band, which
+	 * adds everybody's days up, is for who plans: a lead of the project, an admin of the team, a
+	 * keeper. A project or team the viewer cannot see answers 404, as if it were not there.
+	 *
+	 * <p>Reused for {@link #ROSTER_TTL}, because the calendar, its band and every further page ask
+	 * the same question within seconds, and answering it reads a year of time entries. A person
+	 * leaving a project shows in the calendar at most that much later.
 	 */
 	public Roster roster(User viewer, String teamId, String projectId, Purpose purpose) {
 		boolean hasTeam = teamId != null && !teamId.isBlank();
@@ -163,57 +190,129 @@ public class AvailabilityAccess {
 		if (hasTeam && hasProject) {
 			throw ApiException.badRequest("error.availability.scopeInvalid");
 		}
+		RosterKey key = new RosterKey(viewer.getId(), hasTeam ? teamId : null, hasProject ? projectId : null,
+				purpose);
+		Instant now = clock.instant();
+		CachedRoster cached = rosters.get(key);
+		if (cached != null && cached.until().isAfter(now)) {
+			return cached.roster();
+		}
+		Roster roster = computeRoster(viewer, key);
+		if (rosters.size() >= ROSTER_CACHE_MAX) {
+			rosters.clear();
+		}
+		rosters.put(key, new CachedRoster(roster, now.plus(ROSTER_TTL)));
+		return roster;
+	}
+
+	private Roster computeRoster(User viewer, RosterKey key) {
 		boolean keeper = keeps(viewer);
 		Set<String> candidates = new HashSet<>();
-		Set<String> projectIds = new HashSet<>();
-		if (hasProject) {
-			Project project = mongo.findById(projectId, Project.class);
+		Map<String, Set<String>> membersByProject = new HashMap<>();
+		if (key.projectId() != null) {
+			Project project = mongo.findById(key.projectId(), Project.class);
 			if (project == null || !keeper && !reach.canSee(project, viewer)) {
 				throw ApiException.notFound("project");
 			}
-			if (purpose == Purpose.BAND && !keeper && !leads(project, viewer)) {
+			if (key.purpose() == Purpose.BAND && !keeper && !leads(project, viewer)) {
 				throw ApiException.forbidden("error.availability.forbidden");
 			}
-			addPeople(candidates, project);
-			projectIds.add(project.getId());
+			membersByProject.put(project.getId(), peopleOf(project.getMemberIds(), project.getLeadIds(),
+					project.getLeadId()));
+			candidates.addAll(membersByProject.get(project.getId()));
 		}
-		else if (hasTeam) {
-			Team team = teams.findById(teamId).orElse(null);
+		else if (key.teamId() != null) {
+			Team team = teams.findById(key.teamId()).orElse(null);
 			TeamMembership membership = team == null ? null : team.membership(viewer.getId());
 			if (team == null || !keeper && membership == null) {
 				throw ApiException.notFound("team");
 			}
-			if (purpose == Purpose.BAND && !keeper && !membership.isAdmin()) {
+			if (key.purpose() == Purpose.BAND && !keeper && !membership.isAdmin()) {
 				throw ApiException.forbidden("error.availability.forbidden");
 			}
+			membersByProject.putAll(membersOf(Criteria.where("_id").in(team.getProjectIds())));
+			// A member who reaches none of the team's projects has no business reading about the
+			// people who work on them: team membership alone is somebody else's decision.
+			if (!keeper && membersByProject.values().stream().noneMatch(people -> people.contains(viewer.getId()))) {
+				throw ApiException.notFound("team");
+			}
 			team.getMembers().forEach(member -> candidates.add(member.getUserId()));
-			projectIds.addAll(team.getProjectIds());
 		}
 		else {
-			Criteria mine = purpose == Purpose.BAND
-					? new Criteria().orOperator(Criteria.where("leadIds").is(viewer.getId()),
-							Criteria.where("leadId").is(viewer.getId()))
-					: new Criteria().orOperator(Criteria.where("memberIds").is(viewer.getId()),
-							Criteria.where("leadIds").is(viewer.getId()),
-							Criteria.where("leadId").is(viewer.getId()));
-			Query query = Query.query(mine).limit(LED_PROJECTS_MAX);
-			query.fields().include("_id").include("memberIds").include("leadIds").include("leadId");
-			for (Document project : mongo.query(Project.class).as(Document.class).matching(query).all()) {
-				projectIds.add(String.valueOf(project.get("_id")));
-				Optional.ofNullable(project.getList("memberIds", String.class)).ifPresent(candidates::addAll);
-				Optional.ofNullable(project.getList("leadIds", String.class)).ifPresent(candidates::addAll);
-				Optional.ofNullable(project.getString("leadId")).ifPresent(candidates::add);
-			}
+			Criteria leads = new Criteria().orOperator(Criteria.where("leadIds").is(viewer.getId()),
+					Criteria.where("leadId").is(viewer.getId()));
+			membersByProject.putAll(membersOf(key.purpose() == Purpose.BAND ? leads
+					: new Criteria().orOperator(Criteria.where("memberIds").is(viewer.getId()), leads)));
+			membersByProject.values().forEach(candidates::addAll);
 		}
 		candidates.remove(null);
-		Set<String> people = keeper ? candidates
-				: new HashSet<>(policyOrNone().whoWorkedOn(candidates, projectIds, LocalDate.now(clock).minus(WORKED_ON)));
-		if (candidates.contains(viewer.getId())) {
-			people.add(viewer.getId());
+
+		Set<String> people = new HashSet<>();
+		if (keeper) {
+			// Current members only: for a team, those who reach one of its projects.
+			for (String person : candidates) {
+				if (key.teamId() == null || membersByProject.values().stream().anyMatch(p -> p.contains(person))) {
+					people.add(person);
+				}
+			}
 		}
+		else {
+			Map<String, Set<String>> worked = policyOrNone().projectsWorkedOnBy(candidates, membersByProject.keySet(),
+					LocalDate.now(clock).minus(WORKED_ON));
+			worked.forEach((person, projects) -> {
+				if (candidates.contains(person) && projects.stream()
+						.anyMatch(project -> membersByProject.getOrDefault(project, Set.of()).contains(person))) {
+					people.add(person);
+				}
+			});
+			if (membersByProject.values().stream().anyMatch(p -> p.contains(viewer.getId()))) {
+				people.add(viewer.getId());
+			}
+		}
+		people.retainAll(active(people));
 		List<String> sorted = people.stream().sorted().toList();
 		boolean truncated = sorted.size() > CapacityService.GROUP_MAX;
 		return new Roster(truncated ? sorted.subList(0, CapacityService.GROUP_MAX) : sorted, truncated);
+	}
+
+	/** The members and leads of the projects [which] finds, at most {@link #LED_PROJECTS_MAX}. */
+	private Map<String, Set<String>> membersOf(Criteria which) {
+		Query query = Query.query(which).limit(LED_PROJECTS_MAX);
+		query.fields().include("_id").include("memberIds").include("leadIds").include("leadId");
+		Map<String, Set<String>> members = new HashMap<>();
+		for (Document project : mongo.query(Project.class).as(Document.class).matching(query).all()) {
+			members.put(String.valueOf(project.get("_id")), peopleOf(project.getList("memberIds", String.class),
+					project.getList("leadIds", String.class), project.getString("leadId")));
+		}
+		return members;
+	}
+
+	private static Set<String> peopleOf(List<String> memberIds, List<String> leadIds, String leadId) {
+		Set<String> people = new HashSet<>();
+		if (memberIds != null) {
+			people.addAll(memberIds);
+		}
+		if (leadIds != null) {
+			people.addAll(leadIds);
+		}
+		if (leadId != null) {
+			people.add(leadId);
+		}
+		people.remove(null);
+		return people;
+	}
+
+	/** Which of [ids] belong to accounts that are still active. */
+	private Set<String> active(Collection<String> ids) {
+		if (ids.isEmpty()) {
+			return Set.of();
+		}
+		Query query = Query.query(Criteria.where("_id").in(ids).and("active").is(true));
+		query.fields().include("_id");
+		Set<String> found = new HashSet<>();
+		mongo.query(User.class).as(Document.class).matching(query).all()
+				.forEach(user -> found.add(String.valueOf(user.get("_id"))));
+		return found;
 	}
 
 	/** The policy, or one that knows nobody worked anywhere: without it no group has anybody in it. */
@@ -234,22 +333,11 @@ public class AvailabilityAccess {
 		}
 
 		@Override
-		public Set<String> whoWorkedOn(java.util.Collection<String> userIds, Set<String> among, LocalDate since) {
-			return Set.of();
+		public Map<String, Set<String>> projectsWorkedOnBy(Collection<String> userIds, Set<String> among,
+				LocalDate since) {
+			return Map.of();
 		}
 	};
-
-	private static void addPeople(Set<String> into, Project project) {
-		if (project.getMemberIds() != null) {
-			into.addAll(project.getMemberIds());
-		}
-		if (project.getLeadIds() != null) {
-			into.addAll(project.getLeadIds());
-		}
-		if (project.getLeadId() != null) {
-			into.add(project.getLeadId());
-		}
-	}
 
 	private static boolean leads(Project project, User viewer) {
 		return viewer.getId().equals(project.getLeadId())

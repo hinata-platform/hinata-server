@@ -9,7 +9,13 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.availability.Holiday;
+import com.ahmadre.hinata.availability.HolidayCalendar;
 import com.ahmadre.hinata.team.Team;
+import com.ahmadre.hinata.team.TeamActivity;
+import com.ahmadre.hinata.team.TeamAttachmentRepair;
+import com.ahmadre.hinata.team.TeamRepository;
+import com.ahmadre.hinata.team.TeamRole;
 import com.ahmadre.hinata.team.TeamService;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.Role;
@@ -90,6 +96,10 @@ class TeamAbsenceIntegrationTest {
 	@Autowired
 	private TeamService teams;
 	@Autowired
+	private TeamRepository teamRepository;
+	@Autowired
+	private TeamAttachmentRepair repair;
+	@Autowired
 	private TeamAbsenceService calendars;
 	@Autowired
 	private TimeOffTypeService types;
@@ -111,8 +121,9 @@ class TeamAbsenceIntegrationTest {
 
 	@BeforeEach
 	void seed() {
-		for (String collection : List.of("users", "projects", "issues", "work_items", "teams", "time_off_types",
-				"time_off_requests", "time_off", "working_schedules", "holidays", "server_settings")) {
+		for (String collection : List.of("users", "projects", "issues", "work_items", "teams", "team_activity",
+				"time_off_types", "time_off_requests", "time_off", "working_schedules", "holidays",
+				"holiday_calendars", "server_settings", "migrations")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		lead = user("lead", Role.MEMBER);
@@ -150,7 +161,7 @@ class TeamAbsenceIntegrationTest {
 	// --- off by default ---------------------------------------------------------------
 
 	@Test
-	void withThePolicyOffNeitherRouteExistsForAnybody() {
+	void withThePolicyOffNeitherReadAnswersForAnybody() {
 		for (User reader : List.of(lead, ann, admin)) {
 			assertThatThrownBy(() -> calendars.calendar(reader, null, project.getId(), MON, MON.plusDays(6), false, 0, 50))
 					.isInstanceOfSatisfying(ApiException.class, error -> {
@@ -284,6 +295,39 @@ class TeamAbsenceIntegrationTest {
 	}
 
 	@Test
+	void withoutLeadsSeeingAbsencesTheBandIsForKeepersOnly() {
+		// The band counts private and sick days into its capacity; a lead may read that sum only
+		// where they may see their members' absences anyway.
+		policy(TimePolicy.AbsenceCalendar.TYPE, false);
+
+		assertThatThrownBy(() -> calendars.band(lead, null, project.getId(), MON, MON.plusDays(6), null))
+				.hasMessage("error.availability.forbidden");
+		assertThat(calendars.band(admin, null, project.getId(), MON, MON.plusDays(6), null).people()).isEqualTo(4);
+	}
+
+	@Test
+	void aBandOverTooFewPeopleWouldBeOnePersonsHours() {
+		policy(TimePolicy.AbsenceCalendar.TYPE);
+		Project pair = projects.save(Project.builder().key("TWO").name("Two")
+				.leadId(lead.getId()).leadIds(new ArrayList<>(List.of(lead.getId())))
+				.memberIds(new ArrayList<>(List.of(lead.getId(), ann.getId()))).build());
+		worked(ann, pair);
+
+		assertThatThrownBy(() -> calendars.band(lead, null, pair.getId(), MON, MON.plusDays(6), null))
+				.hasMessage("error.timeOff.bandTooSmall");
+	}
+
+	@Test
+	void theBandCountsOnlyWhatTheCalendarShows() {
+		policy(TimePolicy.AbsenceCalendar.BUSY_ONLY);
+
+		TeamAbsenceService.Band band = calendars.band(lead, null, project.getId(), MON, MON.plusDays(6), null);
+
+		// Friday: Ann's private type. The calendar shows nobody, so the band counts nobody away.
+		assertThat(band.buckets().get(4).away()).isZero();
+	}
+
+	@Test
 	void theBandIsForWhoPlans() {
 		policy(TimePolicy.AbsenceCalendar.TYPE);
 
@@ -294,14 +338,87 @@ class TeamAbsenceIntegrationTest {
 		assertThat(calendars.band(admin, null, project.getId(), MON, MON.plusDays(6), null).people()).isEqualTo(4);
 	}
 
+	@Test
+	void sicknessIsOnlyAwayEvenOnOnesOwnRow() {
+		policy(TimePolicy.AbsenceCalendar.TYPE);
+
+		TeamAbsenceService.CalendarPage own =
+				calendars.calendar(bob, null, project.getId(), MON, MON.plusDays(6), false, 0, 50);
+
+		assertThat(row(own, "bob").entries()).singleElement()
+				.satisfies(entry -> assertThat(entry.typeId()).isNull());
+	}
+
+	@Test
+	void aHolidayNamesItselfOnlyOnOnesOwnRow() {
+		policy(TimePolicy.AbsenceCalendar.TYPE);
+		HolidayCalendar calendar = mongo.insert(HolidayCalendar.builder().name("NRW").defaultCalendar(true).build());
+		mongo.insert(Holiday.builder().calendarId(calendar.getId()).date(MON.plusDays(3)).name("Fronleichnam")
+				.halfDay(false).build());
+
+		TeamAbsenceService.CalendarPage page =
+				calendars.calendar(ann, null, project.getId(), MON, MON.plusDays(6), false, 0, 50);
+
+		assertThat(row(page, "ann").holidays()).singleElement()
+				.satisfies(holiday -> assertThat(holiday.name()).isEqualTo("Fronleichnam"));
+		assertThat(row(page, "bob").holidays()).singleElement()
+				.satisfies(holiday -> assertThat(holiday.name()).isNull());
+	}
+
+	@Test
+	void somebodyWhoLeftAProjectIsNotBroughtBackThroughATeam() {
+		policy(TimePolicy.AbsenceCalendar.BUSY_ONLY);
+		User fred = user("fred", Role.MEMBER);
+		worked(fred, project); // worked on HIN months ago, is no longer a member
+		Team team = teams.create(lead, "Planning", "PLAN", null, 70, "hexagon");
+		team = teams.attachProjects(team, lead, List.of(project.getId()));
+		team = teams.addMembers(team, lead, List.of(fred.getId(), ann.getId()), TeamRole.MEMBER, null);
+
+		assertThat(names(calendars.calendar(lead, team.getId(), null, MON, MON.plusDays(6), false, 0, 50)))
+				.contains("ann", "lead").doesNotContain("fred");
+		// Joining a team with no access to its project leaves a direct membership where it was.
+		assertThat(projects.findById(project.getId()).orElseThrow().getMemberIds()).contains(ann.getId());
+	}
+
+	@Test
+	void theRepairTakesBackAnAttachmentOnlyItsProjectsLeadCouldHaveMade() {
+		Team own = teams.create(mallory, "Mallory", "MALT", null, 70, "hexagon");
+		// What the old gap left behind: mallory's team holding HIN, and the activity row saying so.
+		own.getProjectIds().add(project.getId());
+		own = teamRepository.save(own);
+		mongo.insert(TeamActivity.builder().teamId(own.getId()).actorId(mallory.getId())
+				.verb(TeamActivity.Verb.ATTACHED_PROJECT).objectLabel("Hinata").build());
+		Team legit = teams.create(lead, "Lead", "LEAD", null, 70, "hexagon");
+		legit = teams.attachProjects(legit, lead, List.of(project.getId()));
+
+		repair.run(null);
+
+		assertThat(teamRepository.findById(own.getId()).orElseThrow().getProjectIds()).isEmpty();
+		assertThat(teamRepository.findById(legit.getId()).orElseThrow().getProjectIds()).containsExactly(project.getId());
+	}
+
 	// --- fixtures ---------------------------------------------------------------------------
 
+	private void worked(User who, Project on) {
+		Issue issue = mongo.insert(Issue.builder().projectId(on.getId()).numberInProject(99)
+				.readableId(on.getKey() + "-99").title("work").formerReadableIds(new ArrayList<>()).build());
+		mongo.insert(WorkItem.builder().userId(who.getId()).projectId(on.getId()).issueId(issue.getId())
+				.date(MON.minusDays(40)).durationMinutes(60).activityType("Development")
+				.source(WorkItem.Source.APP).build());
+	}
+
+	/** The calendar at [level], with leads seeing their members' absences as the band requires. */
 	private void policy(TimePolicy.AbsenceCalendar level) {
+		policy(level, true);
+	}
+
+	private void policy(TimePolicy.AbsenceCalendar level, boolean leadsSee) {
 		ServerSettings current = settings.get();
 		ServerSettings.TimeTracking block = new ServerSettings.TimeTracking();
 		block.setAdvancedEnabled(true);
 		block.setAbsenceManagementEnabled(true);
 		block.setAbsenceCalendarVisibility(level);
+		block.setLeadsSeeMemberEntries(leadsSee);
 		current.setTimeTracking(block);
 		settings.save(current);
 	}

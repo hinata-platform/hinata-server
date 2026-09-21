@@ -97,9 +97,12 @@ public class TimePrivacyService {
 	 * @param keepersNamed    an operator named the people who keep absences; otherwise it is the
 	 *                        administrators. Either way they are the only ones who see a sick day
 	 *                        as a sick day
+	 * @param bandForPlanners leads and team admins see what capacity their group has left, as a sum
+	 *                        over at least three people, which counts the person's approved days
+	 *                        and planned hours in
 	 */
 	public record AbsenceVisibility(TimePolicy.AbsenceCalendar calendar, boolean leadsSeeSpans,
-			boolean keepersNamed) {
+			boolean keepersNamed, boolean bandForPlanners) {
 	}
 
 	/**
@@ -160,11 +163,12 @@ public class TimePrivacyService {
 	 * say beyond what the panel already says about entries.
 	 */
 	private AbsenceVisibility absenceVisibility() {
-		if (!policy.advancedEnabled() || !policy.absenceManagementConfigured()) {
+		if (!policy.absenceManagementUsable()) {
 			return null;
 		}
-		return new AbsenceVisibility(policy.absenceCalendarVisibility(), policy.leadsSeeMemberEntries(),
-				!policy.absenceManagers().isEmpty());
+		TimePolicy.AbsenceCalendar calendar = policy.absenceCalendarVisibility();
+		return new AbsenceVisibility(calendar, policy.leadsSeeMemberEntries(), !policy.absenceManagers().isEmpty(),
+				calendar != TimePolicy.AbsenceCalendar.OFF && policy.leadsSeeMemberEntries());
 	}
 
 	/** The built-in notice in {@code language}, or in English when there is none. */

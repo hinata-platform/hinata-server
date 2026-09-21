@@ -271,6 +271,8 @@ class TimePrivacyIntegrationTest {
 			assertThat(absences.calendar()).as("%s", level).isEqualTo(level);
 			assertThat(absences.leadsSeeSpans()).as("%s", level).isEqualTo(level == TimePolicy.AbsenceCalendar.TYPE);
 			assertThat(absences.keepersNamed()).as("%s", level).isEqualTo(level != TimePolicy.AbsenceCalendar.OFF);
+			// The band exists where the calendar does and leads see their members' absences anyway.
+			assertThat(absences.bandForPlanners()).as("%s", level).isEqualTo(level == TimePolicy.AbsenceCalendar.TYPE);
 		}
 
 		// The extended module off takes the calendar with it, as the gate does.
