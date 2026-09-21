@@ -57,6 +57,23 @@ public final class ExportText {
 	}
 
 	/**
+	 * Writes one CSV line: every cell quoted, quotes doubled, formulas neutralised, CRLF at the
+	 * end (RFC 4180). Quoting every cell rather than only the ones that need it is what keeps a
+	 * description with a comma or a line break in it inside its own column.
+	 */
+	public static void csvRow(java.io.Writer out, java.util.List<String> cells) throws java.io.IOException {
+		for (int i = 0; i < cells.size(); i++) {
+			if (i > 0) {
+				out.write(',');
+			}
+			out.write('"');
+			out.write(forSpreadsheet(cells.get(i)).replace("\"", "\"\""));
+			out.write('"');
+		}
+		out.write("\r\n");
+	}
+
+	/**
 	 * The stem of the download's file name, built from an issue's readable id and
 	 * title.
 	 *
