@@ -13,7 +13,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.query.Collation;
 import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -58,6 +60,8 @@ public class TimeOffReportService {
 
 	/** Most people a group rate is read over; capacity reads no more at once. */
 	static final int RATE_GROUP_MAX = 1_000;
+
+	private static final Collation BY_NAME = Collation.of("en").strength(Collation.ComparisonLevel.secondary());
 
 	private final TimeTrackingSettings policy;
 	private final TimeOffAccess access;
@@ -307,7 +311,13 @@ public class TimeOffReportService {
 		PageRequest request = PageRequest.of(page, size);
 		Page<User> people;
 		if (scope.userIds() == null) {
-			people = users.findByActiveIsTrue(PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "displayName")));
+			// Sorted like the team calendar, where case does not decide the order: "admin" sits among the As.
+			Query active = Query.query(Criteria.where("active").is(true));
+			long total = mongo.count(active, User.class);
+			List<User> slice = mongo.find(active
+					.with(PageRequest.of(page, size, Sort.by(Sort.Order.asc("displayName"), Sort.Order.asc("_id"))))
+					.collation(BY_NAME), User.class);
+			people = new PageImpl<>(slice, request, total);
 		}
 		else {
 			List<User> found = new ArrayList<>(users.findAllById(scope.userIds()));

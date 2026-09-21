@@ -392,6 +392,10 @@ class TimeOffYearRunIntegrationTest {
 		assertThat(figures.remainingMilliDays()).isEqualTo(35 * DAY + DAY / 2);
 		assertThat(figures.expiringMilliDays()).isEqualTo(20 * DAY);
 		assertThat(figures.expiringOn()).isEqualTo(LocalDate.of(2026, 3, 31));
+		// The person's own card names the same deadline for what came in, not next year's.
+		TimeOffBalanceService.Balance own2026 = balances.balances(admin, member.getId(), 2026).stream()
+				.filter(balance -> vacation.getId().equals(balance.typeId())).findFirst().orElseThrow();
+		assertThat(own2026.expiresOn()).isEqualTo(LocalDate.of(2026, 3, 31));
 		// Without its own switch the rate is not blank but absent.
 		assertThat(report.rateVisible()).isFalse();
 		JsonNode json = JSON.valueToTree(figures);
