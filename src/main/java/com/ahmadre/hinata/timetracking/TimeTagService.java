@@ -23,9 +23,11 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -258,6 +260,27 @@ public class TimeTagService {
 			resolved.add(canonical);
 		}
 		return new ArrayList<>(resolved);
+	}
+
+	/**
+	 * Refuses, as {@link #resolve} would, a tag that is not in the catalogue while
+	 * {@code limitTagAccess} is on — and coins nothing. The check an import's preview makes.
+	 */
+	public void assertAllowed(List<String> raw) {
+		List<String> cleaned = TimeTrackingService.normalizeTags(raw);
+		if (cleaned.isEmpty() || !policy.limitTagAccess()) {
+			return;
+		}
+		Set<String> known = new HashSet<>();
+		LinkedHashSet<String> keys = new LinkedHashSet<>();
+		cleaned.forEach(tag -> keys.add(TimeTag.normalize(tag)));
+		keys.remove(null);
+		tags.findByNormalizedIn(keys).forEach(tag -> known.add(tag.getNormalized()));
+		for (String tag : cleaned) {
+			if (!known.contains(TimeTag.normalize(tag))) {
+				throw ApiException.forbidden("error.time.tagNotAllowed", tag);
+			}
+		}
 	}
 
 	/**

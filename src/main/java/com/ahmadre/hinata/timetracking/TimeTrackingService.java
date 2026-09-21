@@ -805,6 +805,87 @@ public class TimeTrackingService {
 	public record Placement(String projectId, String issueId) {
 	}
 
+	// --- entries from a file (HIN-93) --------------------------------------------
+
+	/**
+	 * An entry for [owner] from an imported row, checked the way {@link #create} checks one and
+	 * not written: placement against the owner's reach, duration, day, ownership and freezes for
+	 * [actor], required fields, and whether the tags may be used — without coining a tag, because
+	 * a preview that grew the catalogue would be a write.
+	 *
+	 * <p>[placements] caches the placement per project and issue across the rows of one file: ten
+	 * thousand rows on twenty issues are twenty lookups, not ten thousand.
+	 */
+	public WorkItem checkImported(NewEntry draft, User owner, User actor, Map<String, Placement> placements) {
+		Placement placement = placements.computeIfAbsent(draft.projectId() + "|" + draft.issueId(),
+				key -> resolvePlacement(draft.projectId(), draft.issueId(), owner));
+		ZoneId zone = zoneOf(owner);
+		Instant start = stored(draft.startedAt());
+		Instant end = stored(draft.endedAt());
+		int minutes = resolveDuration(draft.durationMinutes(), start, end);
+		LocalDate date = draft.date() != null ? draft.date()
+				: LocalDate.ofInstant(start != null ? start : clock.instant(), zone);
+		validateDate(date, zone, owner.getId());
+		WorkItem item = WorkItem.builder()
+				.issueId(placement.issueId())
+				.projectId(placement.projectId())
+				.userId(owner.getId())
+				.date(date)
+				.durationMinutes(minutes)
+				.activityType(activityOrDefault(draft.activityType()))
+				.description(draft.description())
+				.startedAt(start)
+				.endedAt(end)
+				.billable(billableOf(draft.billable()))
+				.tags(normalizeTags(draft.tags()))
+				.source(WorkItem.Source.CSV)
+				.build();
+		assertWritable(null, item, actor);
+		assertRequiredFields(contentOf(item), PlacementRule.ENFORCED);
+		tagCatalog.assertAllowed(item.getTags());
+		return item;
+	}
+
+	/**
+	 * Writes checked entries as one part of an import, each marked with [importId] so a failed or
+	 * abandoned import can be taken back whole ({@link #withdrawImported}). Tags are resolved now,
+	 * against the catalogue as it stands, and each issue's derived counter moves once per part.
+	 */
+	public void fileImported(List<WorkItem> items, String importId, User actor) {
+		Map<String, Integer> spent = new HashMap<>();
+		for (WorkItem item : items) {
+			item.setImportId(importId);
+			item.setTags(resolveTags(item.getTags(), actor));
+		}
+		mongo.insert(items, WorkItem.class);
+		items.forEach(item -> {
+			if (item.getIssueId() != null) {
+				spent.merge(item.getIssueId(), item.getDurationMinutes(), Integer::sum);
+			}
+		});
+		spent.forEach(this::shiftSpentTime);
+	}
+
+	/**
+	 * Removes every entry an import wrote and gives the issues their minutes back. Idempotent: a
+	 * second call finds nothing, which is what lets the sweep retry an interrupted import.
+	 */
+	public long withdrawImported(String importId) {
+		Query marked = Query.query(Criteria.where("importId").is(importId));
+		Map<String, Integer> spent = new HashMap<>();
+		Aggregation aggregation = Aggregation.newAggregation(Aggregation.match(Criteria.where("importId").is(importId)
+						.and("issueId").ne(null)),
+				Aggregation.group("issueId").sum("durationMinutes").as("minutes"));
+		for (Document row : mongo.aggregate(aggregation, WorkItem.class, Document.class)) {
+			if (row.get("minutes") instanceof Number minutes) {
+				spent.put(String.valueOf(row.get("_id")), minutes.intValue());
+			}
+		}
+		long removed = mongo.remove(marked, WorkItem.class).getDeletedCount();
+		spent.forEach((issueId, minutes) -> shiftSpentTime(issueId, -minutes));
+		return removed;
+	}
+
 	/**
 	 * Settles project and issue together, because they constrain each other.
 	 * Public because the timer files its entry through {@link #insertTimed} and
