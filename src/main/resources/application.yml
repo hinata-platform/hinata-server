@@ -173,6 +173,9 @@ hinata:
     # work, so each one is off until an operator turns it on deliberately
     # (§ 87 Abs. 1 Nr. 6 BetrVG — co-determined before it runs).
     leads-see-member-entries: ${HINATA_TIME_TRACKING_LEADS_SEE_MEMBER_ENTRIES:false}
+    # off | busy_only | type — the team absence calendar (HIN-118). A holiday
+    # plan is co-determined as well (§ 87 Abs. 1 Nr. 5 BetrVG).
+    absence-calendar-visibility: ${HINATA_TIME_TRACKING_ABSENCE_CALENDAR_VISIBILITY:OFF}
     approvals-enabled: ${HINATA_TIME_TRACKING_APPROVALS_ENABLED:false}
     approval-period:
       # weekly | biweekly | semi_monthly | monthly | quarterly | custom_days |

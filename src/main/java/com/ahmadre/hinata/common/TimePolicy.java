@@ -105,6 +105,26 @@ public final class TimePolicy {
 	/** A suggested weekly target is at most the week (HIN-92). */
 	public static final int MAX_WEEKLY_TARGET_MINUTES = 7 * 24 * 60;
 
+	/**
+	 * How much of other people's absences the team calendar shows (HIN-118).
+	 *
+	 * <p>{@code OFF} is the default and means the calendar does not exist: nobody
+	 * sees anybody else's absences there, exactly as before. {@code BUSY_ONLY}
+	 * shows that somebody is away and nothing about why. {@code TYPE} names the
+	 * absence type — never sickness, which is shown as "away" on every setting,
+	 * because being ill is health data (Art. 9 DSGVO).
+	 *
+	 * <p>The level is a ceiling. Each absence type carries its own visibility, and
+	 * the calendar shows the narrower of the two, so a type an operator keeps
+	 * private stays private whatever this says.
+	 *
+	 * <p>A calendar of who is away when is a holiday plan in the sense of § 87
+	 * Abs. 1 Nr. 5 BetrVG, and the admin screen says so next to the choice.
+	 */
+	public enum AbsenceCalendar {
+		OFF, BUSY_ONLY, TYPE
+	}
+
 	/** How often a timesheet is submitted for approval. */
 	public enum ApprovalPeriod {
 		/** Calendar weeks, starting on the configured {@code weekStartsOn}. */

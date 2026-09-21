@@ -57,6 +57,14 @@ public interface TimeOffRequestRepository extends MongoRepository<TimeOffRequest
 	List<TimeOffRequest> findByUserIdAndStatusAndToGreaterThanEqualAndFromLessThanEqual(String userId,
 			TimeOffRequest.Status status, LocalDate from, LocalDate to);
 
+	/**
+	 * The open requests of a group touching a span — the "requested" layer of the team calendar
+	 * (HIN-118). Answered from {@code user_status_to_from}.
+	 */
+	List<TimeOffRequest> findByUserIdInAndStatusAndToGreaterThanEqualAndFromLessThanEqual(
+			Collection<String> userIds, TimeOffRequest.Status status, LocalDate from, LocalDate to,
+			Pageable pageable);
+
 	boolean existsByTypeId(String typeId);
 
 	/**

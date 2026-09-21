@@ -2,6 +2,7 @@ package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -77,12 +78,28 @@ public class TimePrivacyService {
 	 *                              written to the audit log (and to the entry's history)
 	 * @param entryCreationRecorded filing an entry is written to the audit log
 	 * @param timerEventsRecorded   starting and stopping a timer is written to the audit log
+	 * @param absences              who sees the person's absences (HIN-118), or null while
+	 *                              absence management is off
 	 */
 	public record Visibility(boolean leadsSeeEntries, boolean approvalsEnabled,
 			boolean workloadReports, boolean alerts, boolean targetReminders, boolean arbzgHints,
 			Integer lateEntryHintDays, int maxDaysBack, int entryRetentionMonths,
 			int descriptionRetentionMonths, boolean foreignChangesRecorded,
-			boolean entryCreationRecorded, boolean timerEventsRecorded) {
+			boolean entryCreationRecorded, boolean timerEventsRecorded, AbsenceVisibility absences) {
+	}
+
+	/**
+	 * Who sees a person's absences, as the rules stand (HIN-118, R3).
+	 *
+	 * @param calendar        what colleagues see in the team calendar: nothing, that the person
+	 *                        is away, or the type — sickness never, on any level
+	 * @param leadsSeeSpans   leads of projects the person worked on see type and span
+	 * @param keepersNamed    an operator named the people who keep absences; otherwise it is the
+	 *                        administrators. Either way they are the only ones who see a sick day
+	 *                        as a sick day
+	 */
+	public record AbsenceVisibility(TimePolicy.AbsenceCalendar calendar, boolean leadsSeeSpans,
+			boolean keepersNamed) {
 	}
 
 	/**
@@ -134,7 +151,20 @@ public class TimePrivacyService {
 				audit.isEnabled(AuditAction.TIME_ENTRY_CREATED),
 				audit.isEnabled(AuditAction.TIME_TIMER_STARTED)
 						|| audit.isEnabled(AuditAction.TIME_TIMER_STOPPED)
-						|| audit.isEnabled(AuditAction.TIME_TIMER_DISCARDED));
+						|| audit.isEnabled(AuditAction.TIME_TIMER_DISCARDED),
+				absenceVisibility());
+	}
+
+	/**
+	 * Null while absence management is off: there is then no calendar, no keeper and nothing to
+	 * say beyond what the panel already says about entries.
+	 */
+	private AbsenceVisibility absenceVisibility() {
+		if (!policy.advancedEnabled() || !policy.absenceManagementConfigured()) {
+			return null;
+		}
+		return new AbsenceVisibility(policy.absenceCalendarVisibility(), policy.leadsSeeMemberEntries(),
+				!policy.absenceManagers().isEmpty());
 	}
 
 	/** The built-in notice in {@code language}, or in English when there is none. */

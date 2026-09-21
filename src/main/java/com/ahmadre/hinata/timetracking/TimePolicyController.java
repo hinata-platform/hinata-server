@@ -30,6 +30,11 @@ import java.util.List;
  * the self-hints exist (so a client asks {@code /time/hints} only when it would
  * not be answered with a 404).
  *
+ * <p>{@code absenceCalendarVisibility} joined in HIN-118, additively: whether the
+ * team absence calendar and the "away today" card exist, and at which level. It
+ * reads {@code OFF} whenever absence management is off, so a client asks for the
+ * calendar only where it would be answered.
+ *
  * <p>Resolved through {@link TimeTrackingSettings} rather than read from the
  * stored block, so what a client marks in the editor is what the write gate
  * enforces. Behind {@link AdvancedTimeTrackingGate} like the rest of
@@ -103,7 +108,7 @@ public class TimePolicyController {
 			ApprovalPeriodResponse approvalPeriod, boolean leadsSeeMemberEntries, int maxDaysBack,
 			boolean arbzgHintsEnabled, Integer lateEntryHintDays,
 			List<BackfillGrantResponse> myBackfillGrants, TargetRemindersResponse targetReminders,
-			boolean alertsEnabled) {
+			boolean alertsEnabled, TimePolicy.AbsenceCalendar absenceCalendarVisibility) {
 	}
 
 	/**
@@ -146,6 +151,7 @@ public class TimePolicyController {
 						.toList(),
 				new TargetRemindersResponse(settings.targetRemindersEnabled(),
 						settings.suggestedDailyTargetMinutes(), settings.suggestedWeeklyTargetMinutes()),
-				settings.alertsEnabled());
+				settings.alertsEnabled(),
+				settings.absenceCalendarVisibility());
 	}
 }

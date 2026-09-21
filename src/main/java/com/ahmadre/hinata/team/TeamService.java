@@ -198,11 +198,22 @@ public class TeamService {
 
 	// --- Projects ------------------------------------------------------------
 
+	/**
+	 * Hands projects to a team. Only somebody who leads each project, or a platform
+	 * administrator, may do it.
+	 *
+	 * <p>Attaching is a grant: the team's admins and every member with ALL access
+	 * become members of the project in the same move, and a Team-Admin may then
+	 * hard-delete its issues. Managing the team alone is not enough, because anybody
+	 * can create a team and manage it — without this check, one project id was all it
+	 * took to join any project and to widen who reads whose absences (HIN-118).
+	 */
 	public Team attachProjects(Team team, User actor, List<String> projectIds) {
 		List<Project> attached = new ArrayList<>();
 		for (String projectId : projectIds) {
 			if (projectId == null || team.getProjectIds().contains(projectId)) continue;
 			Project project = projects.get(projectId); // 404 if it doesn't exist
+			projects.assertLeadOrAdmin(project, actor);
 			team.getProjectIds().add(projectId);
 			attached.add(project);
 		}

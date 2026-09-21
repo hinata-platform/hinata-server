@@ -554,6 +554,13 @@ public class HinataProperties {
 		 */
 		private List<String> absenceManagers = new ArrayList<>();
 
+		/**
+		 * How much of other people's absences the team calendar shows. Off by
+		 * default: a calendar of who is away when is a holiday plan, which is
+		 * co-determined (§ 87 Abs. 1 Nr. 5 BetrVG) before anybody sees it.
+		 */
+		private TimePolicy.AbsenceCalendar absenceCalendarVisibility = TimePolicy.AbsenceCalendar.OFF;
+
 		/** Which fields an entry must carry to be accepted. */
 		private RequiredFields requiredFields = new RequiredFields();
 
