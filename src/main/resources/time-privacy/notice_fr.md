@@ -21,7 +21,7 @@ Votre temps n’est jamais utilisé pour prendre des décisions automatisées vo
 
 ### Qui y a accès
 
-Vous voyez toujours vos propres saisies. Les administrateurs de cette instance peuvent voir toutes les saisies. Les autres membres d’un projet voient combien de temps a été imputé à un ticket, mais ils ne voient ni qui l’a saisi ni la description. Ce sont les règles activées par votre organisation qui déterminent si les responsables de projet voient vos saisies individuelles, si les feuilles de temps sont approuvées et quels rapports existent. Le panneau les énumère.
+Vous voyez toujours vos propres saisies. Les administrateurs de cette instance peuvent voir toutes les saisies. Les autres membres d’un projet voient combien de temps a été imputé à un ticket, mais ils ne voient ni qui l’a saisi ni la description. Dans les rapports, ils voient les totaux de leurs projets, par exemple par semaine ou par activité, là encore sans noms. Les administrateurs peuvent importer des saisies pour vous depuis un fichier, et cela est journalisé. Ce sont les règles activées par votre organisation qui déterminent si les responsables de projet voient vos saisies individuelles, si les feuilles de temps sont approuvées et quels rapports existent. Le panneau les énumère.
 
 ### Combien de temps elles sont conservées
 

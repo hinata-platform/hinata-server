@@ -65,6 +65,8 @@ class TimeReportIntegrationTest {
 	private UserRepository users;
 	@Autowired
 	private SettingsService settings;
+	@Autowired
+	private WorkItemIndexMigration indexes;
 
 	private User admin;
 	private User lead;
@@ -227,6 +229,21 @@ class TimeReportIntegrationTest {
 		assertThat(seen.people().getContent().get(1).bookedMinutes()).isEqualTo(120);
 		assertThat(seen.people().getContent().get(1).capacityMinutes()).isPositive();
 		assertThat(seen.bookedInLedProjects()).isTrue();
+	}
+
+	// --- the covering index -------------------------------------------------
+
+	@Test
+	void theRetiredWindowIndexIsDroppedAndItsSuccessorCoversTheMinutes() {
+		mongo.getCollection("work_items").createIndex(new org.bson.Document("date", 1).append("userId", 1)
+				.append("projectId", 1), new com.mongodb.client.model.IndexOptions().name(WorkItemIndexMigration.RETIRED));
+
+		assertThat(indexes.drop()).isTrue();
+		assertThat(indexes.drop()).isFalse();
+		List<String> names = new ArrayList<>();
+		mongo.getCollection("work_items").listIndexes().forEach(index -> names.add(index.getString("name")));
+		assertThat(names).contains(WorkItem.DATE_USER_PROJECT_MINUTES_INDEX)
+				.doesNotContain(WorkItemIndexMigration.RETIRED);
 	}
 
 	// --- fixtures -----------------------------------------------------------

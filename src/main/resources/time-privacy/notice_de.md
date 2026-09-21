@@ -21,7 +21,7 @@ Deine Zeit wird nie für automatisierte Entscheidungen über dich verwendet. Hin
 
 ### Wer die Daten erhält
 
-Deine eigenen Einträge siehst du immer. Administratorinnen und Administratoren dieser Instanz sehen alle Einträge. Andere Mitglieder eines Projekts sehen an einem Vorgang, wie viel Zeit gebucht wurde, aber nicht, wer sie gebucht hat, und nicht die Beschreibung. Ob Projektleitungen deine einzelnen Einträge sehen, ob Stundenzettel freigegeben werden und welche Berichte es gibt, hängt von den Regeln ab, die deine Organisation eingeschaltet hat. Das Panel führt sie auf.
+Deine eigenen Einträge siehst du immer. Administratorinnen und Administratoren dieser Instanz sehen alle Einträge. Andere Mitglieder eines Projekts sehen an einem Vorgang, wie viel Zeit gebucht wurde, aber nicht, wer sie gebucht hat, und nicht die Beschreibung. In Berichten sehen sie die Summen ihrer Projekte, etwa je Woche oder Tätigkeit, ebenfalls ohne Namen. Administratorinnen und Administratoren können Einträge für dich aus einer Datei importieren, und das wird protokolliert. Ob Projektleitungen deine einzelnen Einträge sehen, ob Stundenzettel freigegeben werden und welche Berichte es gibt, hängt von den Regeln ab, die deine Organisation eingeschaltet hat. Das Panel führt sie auf.
 
 ### Wie lange sie aufbewahrt werden
 

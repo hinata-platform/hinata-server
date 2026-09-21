@@ -21,7 +21,7 @@ Tu tiempo nunca se usa para tomar decisiones automatizadas sobre ti. Los avisos 
 
 ### Quién los recibe
 
-Siempre ves tus propios registros. Los administradores de esta instancia pueden ver todos los registros. Los demás miembros de un proyecto ven cuánto tiempo se ha imputado a una incidencia, pero no quién lo imputó ni la descripción. Si los responsables de proyecto ven tus registros individuales, si las hojas de horas se aprueban y qué informes hay depende de las reglas que tu organización haya activado. El panel las enumera.
+Siempre ves tus propios registros. Los administradores de esta instancia pueden ver todos los registros. Los demás miembros de un proyecto ven cuánto tiempo se ha imputado a una incidencia, pero no quién lo imputó ni la descripción. En los informes ven los totales de sus proyectos, por ejemplo por semana o actividad, también sin nombres. Los administradores pueden importar registros por ti desde un archivo, y eso queda registrado. Si los responsables de proyecto ven tus registros individuales, si las hojas de horas se aprueban y qué informes hay depende de las reglas que tu organización haya activado. El panel las enumera.
 
 ### Cuánto tiempo se conservan
 
