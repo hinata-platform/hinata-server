@@ -108,7 +108,8 @@ public class TimePolicyController {
 			ApprovalPeriodResponse approvalPeriod, boolean leadsSeeMemberEntries, int maxDaysBack,
 			boolean arbzgHintsEnabled, Integer lateEntryHintDays,
 			List<BackfillGrantResponse> myBackfillGrants, TargetRemindersResponse targetReminders,
-			boolean alertsEnabled, TimePolicy.AbsenceCalendar absenceCalendarVisibility) {
+			boolean alertsEnabled, TimePolicy.AbsenceCalendar absenceCalendarVisibility,
+			boolean workloadReportsEnabled) {
 	}
 
 	/**
@@ -152,6 +153,9 @@ public class TimePolicyController {
 				new TargetRemindersResponse(settings.targetRemindersEnabled(),
 						settings.suggestedDailyTargetMinutes(), settings.suggestedWeeklyTargetMinutes()),
 				settings.alertsEnabled(),
-				settings.absenceCalendarVisibility());
+				settings.absenceCalendarVisibility(),
+				// HIN-93: whether the workload report exists at all, so a client offers the tab
+				// only where it answers. Who may read it the route decides.
+				settings.workloadReportsEnabled());
 	}
 }
