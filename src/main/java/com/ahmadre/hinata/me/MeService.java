@@ -208,7 +208,7 @@ public class MeService {
 		// Sanitize on read so events added after the prefs were last saved (e.g.
 		// "ingest") surface with their defaults instead of being silently absent.
 		NotificationPreferences sanitized = (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
-		sanitized.setDefaultWeekdays(notificationDays.defaultsFor(user));
+		notificationDays.describeDefaults(user, sanitized);
 		return sanitized;
 	}
 
@@ -216,7 +216,7 @@ public class MeService {
 		NotificationPreferences sanitized = incoming.sanitized();
 		user.setNotificationPreferences(sanitized);
 		users.save(user);
-		sanitized.setDefaultWeekdays(notificationDays.defaultsFor(user));
+		notificationDays.describeDefaults(user, sanitized);
 		return sanitized;
 	}
 

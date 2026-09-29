@@ -60,7 +60,7 @@ public class MeController {
 
 	/** The notification days that apply until the person picks their own. */
 	private MeResponse withDefaultDays(MeResponse response, User user) {
-		response.notificationPreferences().setDefaultWeekdays(notificationDays.defaultsFor(user));
+		notificationDays.describeDefaults(user, response.notificationPreferences());
 		return response;
 	}
 
