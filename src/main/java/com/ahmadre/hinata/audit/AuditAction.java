@@ -45,6 +45,10 @@ public enum AuditAction {
 	USER_DEACTIVATED(ADMINISTRATION, WARNING, true),
 	USER_DELETED(ADMINISTRATION, WARNING, true),
 	USER_PASSWORD_RESET_SENT(ADMINISTRATION, NOTICE, true),
+	// An administrator changing somebody else's sign-in address (HIN-129). With a reset
+	// sent to the new address it is a way into that person's account, so it is recorded
+	// with both addresses and cannot be switched off.
+	USER_EMAIL_CHANGED(ADMINISTRATION, WARNING, true),
 	USER_SESSIONS_REVOKED(ADMINISTRATION, NOTICE, true),
 
 	// --- Configuration -------------------------------------------------------
@@ -253,7 +257,19 @@ public enum AuditAction {
 	// Creating a project from a template in one step. Its own name beside PROJECT_COPIED,
 	// because "where did our twelve event projects come from" is a different question from
 	// "who copied this one project".
-	PROJECT_INSTANTIATED(DATA, NOTICE, true);
+	PROJECT_INSTANTIATED(DATA, NOTICE, true),
+	// A knowledge-base page moved to another place (project, team, private), with its
+	// subpages (HIN-129). Who reads it changes with it.
+	ARTICLE_MOVED(DATA, NOTICE, true);
+
+	/**
+	 * Recorded whatever the settings say. Each is the trace of a privileged act that
+	 * would otherwise leave none: who was made organisation admin or administrator, and
+	 * whose sign-in address an administrator changed. An administrator must not be
+	 * able to switch off the record of what administrators do.
+	 */
+	public static final java.util.Set<AuditAction> ALWAYS_RECORDED =
+			java.util.EnumSet.of(USER_ROLE_CHANGED, USER_EMAIL_CHANGED);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;
@@ -275,5 +291,34 @@ public enum AuditAction {
 
 	public boolean defaultEnabled() {
 		return defaultEnabled;
+	}
+
+	/**
+	 * Records about people's working time, approvals and absences, and the
+	 * organisation's rules for them. They belong to the organisation admins: the
+	 * platform administrator's feed leaves them out, because a sick report or a
+	 * refused timesheet is exactly what running the platform does not need.
+	 */
+	public boolean organisational() {
+		String name = name();
+		return name.startsWith("TIME_") || name.startsWith("TIMESHEET_")
+				|| name.startsWith("AVAILABILITY_") || this == MCP_WORK_LOGGED || this == MCP_WORK_DELETED;
+	}
+
+	/** Records about absences: requests, sick reports, balances, the absence catalogue. */
+	public boolean absence() {
+		return name().startsWith("TIME_OFF_") || this == AVAILABILITY_TIME_OFF_CHANGED;
+	}
+
+	/**
+	 * Records whose metadata names project content: issue keys, page ids, project
+	 * keys. Shown without that metadata to readers who are not in the project; that
+	 * something happened, when and by whom stays readable.
+	 */
+	public boolean content() {
+		String name = name();
+		return name.startsWith("ISSUE_") || name.startsWith("MCP_ISSUE") || name.startsWith("MCP_COMMENT")
+				|| name.startsWith("MCP_KB") || name.startsWith("MCP_SPRINT") || this == MCP_ATTACHMENT_READ
+				|| this == ARTICLE_MOVED || (name.startsWith("PROJECT_") && category == AuditCategory.DATA);
 	}
 }

@@ -80,8 +80,13 @@ public class AvailabilityAccess {
 	}
 
 	public Sight of(User viewer, String userId) {
-		if (viewer.getId().equals(userId) || viewer.isOrgAdmin()) {
+		if (viewer.getId().equals(userId) || keeps(viewer)) {
 			return Sight.FULL;
+		}
+		// An organisation admin outside a named keeper circle plans with absences but
+		// is not told which of them were illness.
+		if (viewer.isOrgAdmin()) {
+			return Sight.TYPE_AND_SPAN;
 		}
 		AvailabilityPolicy current = policy.getIfAvailable();
 		if (current == null || !current.leadsSeeMemberAbsences()) {
@@ -121,8 +126,11 @@ public class AvailabilityAccess {
 
 	/** Whether [viewer] may write somebody else's absences at all. */
 	public boolean keeps(User viewer) {
-		return viewer != null
-				&& (viewer.isOrgAdmin() || keepers.getIfAvailable(AbsenceKeepers::adminsOnly).keeps(viewer));
+		if (viewer == null) return false;
+		AbsenceKeepers named = keepers.getIfAvailable();
+		// Without absence management the organisation admins keep absences, as before;
+		// with it, the module decides, and it narrows to a named circle when there is one.
+		return named != null ? named.keeps(viewer) : viewer.isOrgAdmin();
 	}
 
 	/**

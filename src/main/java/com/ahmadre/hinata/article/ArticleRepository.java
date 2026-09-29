@@ -7,15 +7,9 @@ import java.util.List;
 
 public interface ArticleRepository extends MongoRepository<Article, String> {
 
-	List<Article> findByProjectIdOrderBySortOrderAsc(String projectId);
-
-	List<Article> findByProjectIdIsNullOrderBySortOrderAsc();
-
-	List<Article> findAllByOrderBySortOrderAsc();
-
 	List<Article> findByParentId(String parentId);
 
-	List<Article> findBySpace(String space);
+	boolean existsBySpace(String space);
 
 	/**
 	 * Articles that link to the given readable issue id — the issue⇄article

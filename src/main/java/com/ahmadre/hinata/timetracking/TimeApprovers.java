@@ -68,7 +68,7 @@ class TimeApprovers {
 				.orElse(false);
 	}
 
-	/** The leads of a project, or the administrators when it has none. */
+	/** The leads of a project, or the organisation admins when it has none. */
 	Set<String> approverIds(String projectId) {
 		Set<String> ids = new LinkedHashSet<>();
 		projects.findOptional(projectId).ifPresent(project -> {
@@ -82,20 +82,20 @@ class TimeApprovers {
 		if (ids.isEmpty()) {
 			// A project with no lead still has to have somebody to ask, or the
 			// Art.-16 route would be a button that notifies nobody.
-			ids.addAll(adminIds());
+			ids.addAll(orgAdminIds());
 		}
 		return ids;
 	}
 
 	/**
-	 * Active administrators.
+	 * Active organisation admins.
 	 *
 	 * <p>Through the repository's own query rather than by filtering every user:
 	 * this is reached from the Art.-16 routes, which anybody may call, and draining
 	 * the user collection per request is how a courtesy feature becomes a way to
 	 * make the server work.
 	 */
-	Set<String> adminIds() {
+	Set<String> orgAdminIds() {
 		return users.findByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN).stream()
 				.map(User::getId)
 				.collect(Collectors.toCollection(LinkedHashSet::new));

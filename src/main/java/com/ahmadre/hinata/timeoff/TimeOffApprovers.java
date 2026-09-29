@@ -59,20 +59,20 @@ public class TimeOffApprovers {
 		Set<String> found = switch (type.approverRule()) {
 			case TEAM_LEAD -> teamLeadsOf(person);
 			case NAMED -> new LinkedHashSet<>(settings.absenceManagers());
-			case ADMIN, AUTO -> adminIds();
+			case ADMIN, AUTO -> orgAdminIds();
 		};
 		found.remove(person.getId());
 		if (found.isEmpty()) {
 			// Not "approved by nobody" and not an error thrown at the person asking for leave:
 			// the administrators are always there and can always decide.
-			found = adminIds();
+			found = orgAdminIds();
 			found.remove(person.getId());
 		}
 		return found;
 	}
 
-	/** The administrators who could still act on it, used as the floor everywhere above. */
-	public Set<String> adminIds() {
+	/** The organisation admins who could still act on it, used as the floor everywhere above. */
+	public Set<String> orgAdminIds() {
 		return users.findByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN).stream()
 				.map(User::getId)
 				.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
@@ -103,7 +103,7 @@ public class TimeOffApprovers {
 			// person's statutory leave by pressing "new team" and "add member". Where the rule
 			// finds no such team, `of` falls back to the administrators.
 			if (sanctioned == null) {
-				sanctioned = new LinkedHashSet<>(adminIds());
+				sanctioned = new LinkedHashSet<>(orgAdminIds());
 				sanctioned.addAll(settings.absenceManagers());
 			}
 			if (team.getCreatedBy() == null || !sanctioned.contains(team.getCreatedBy())) {

@@ -25,4 +25,9 @@ public interface ProjectTemplatePolicy {
 
 	/** How a new relative deadline counts where a project does not say. */
 	com.ahmadre.hinata.common.RelativeDate.Basis defaultBasis();
+
+	/** How a new relative deadline on {@code project} counts: its own choice, else {@link #defaultBasis()}. */
+	default com.ahmadre.hinata.common.RelativeDate.Basis effectiveBasis(Project project) {
+		return project != null && project.getDeadlineBasis() != null ? project.getDeadlineBasis() : defaultBasis();
+	}
 }

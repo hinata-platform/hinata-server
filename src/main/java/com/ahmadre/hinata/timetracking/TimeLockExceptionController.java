@@ -102,7 +102,7 @@ public class TimeLockExceptionController {
 
 	@PostMapping
 	public List<LockExceptionResponse> add(@RequestBody @Valid LockExceptionRequest request) {
-		User user = requireAdmin();
+		User user = requireOrgAdmin();
 		LocalDate from = request.getFrom();
 		LocalDate to = request.getTo();
 		if (to.isBefore(from)) {
@@ -143,7 +143,7 @@ public class TimeLockExceptionController {
 
 	@DeleteMapping("/{id}")
 	public List<LockExceptionResponse> remove(@PathVariable String id) {
-		User user = requireAdmin();
+		User user = requireOrgAdmin();
 		ServerSettings stored = settings.get();
 		ServerSettings.TimeTracking block = blockOf(stored);
 		List<ServerSettings.TimeTracking.LockException> exceptions =
@@ -175,7 +175,7 @@ public class TimeLockExceptionController {
 	 * the module gate, and a route that survives the module being switched off is
 	 * worse than one line of authorisation.
 	 */
-	private User requireAdmin() {
+	private User requireOrgAdmin() {
 		User user = currentUser.require();
 		if (!user.isOrgAdmin()) {
 			throw ApiException.forbidden("error.time.lockExceptionsAdminOnly");

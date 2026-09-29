@@ -134,7 +134,7 @@ class TimeReportIntegrationTest {
 	}
 
 	@Test
-	void anAdministratorSeesEverythingAndEntriesWithoutAProjectStayTheirOwners() {
+	void anOrganisationAdminSeesEverythingAndEntriesWithoutAProjectStayTheirOwners() {
 		assertThat(summary(admin, TimeReportService.GroupBy.PROJECT).totals().minutes()).isEqualTo(510);
 		assertThat(minutesByKey(summary(outsider, TimeReportService.GroupBy.PROJECT)))
 				.containsOnly(Map.entry(zeus.getId(), 270L), Map.entry("none", 45L));
@@ -250,6 +250,43 @@ class TimeReportIntegrationTest {
 
 	private TimeReportService.Summary summary(User viewer, TimeReportService.GroupBy groupBy) {
 		return reports.summary(viewer, filter(Map.of()), groupBy, 0, 50);
+	}
+
+	/**
+	 * An organisation admin sums everybody's hours but reads no project's issues through that
+	 * role (HIN-129): outside their own projects a row keeps person, hours and project key, and
+	 * loses the issue, its title, the project's name and the words written with it.
+	 */
+	@Test
+	void anOrganisationAdminReadsHoursButNotTheContentOfProjectsTheyAreNotIn() {
+		List<TimeReportService.EntryRow> rows = detailed(admin);
+		assertThat(rows).isNotEmpty();
+		assertThat(rows).filteredOn(row -> row.projectId() != null).allSatisfy(row -> {
+			assertThat(row.issueTitle()).isNull();
+			assertThat(row.issueKey()).isNull();
+			assertThat(row.description()).isNull();
+			assertThat(row.projectKey()).isNotNull();
+		});
+		// A member of the project reads them.
+		assertThat(detailed(member)).filteredOn(row -> apollo.getId().equals(row.projectId()))
+				.allSatisfy(row -> assertThat(row.issueTitle()).isEqualTo("Work"));
+	}
+
+	@Test
+	void groupedByIssueTheOrganisationAdminSeesHoursButNoTitles() {
+		TimeReportService.Summary byIssue = summary(admin, TimeReportService.GroupBy.ISSUE);
+		assertThat(byIssue.groups().getContent()).isNotEmpty().allSatisfy(group -> {
+			assertThat(group.label()).isNull();
+			assertThat(group.detail()).isNull();
+		});
+		assertThat(summary(member, TimeReportService.GroupBy.ISSUE).groups().getContent())
+				.anySatisfy(group -> assertThat(group.label()).isEqualTo("Work"));
+		assertThat(summary(admin, TimeReportService.GroupBy.PROJECT).groups().getContent())
+				.filteredOn(group -> group.key() != null && !"none".equals(group.key()))
+				.allSatisfy(group -> {
+					assertThat(group.label()).isNull();
+					assertThat(group.detail()).isNotNull();
+				});
 	}
 
 	private List<TimeReportService.EntryRow> detailed(User viewer) {

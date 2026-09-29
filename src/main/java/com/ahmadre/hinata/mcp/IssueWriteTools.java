@@ -201,7 +201,7 @@ public class IssueWriteTools {
 	@McpTool(name = "delete_comment", title = "Delete comment",
 			annotations = @McpTool.McpAnnotations(destructiveHint = true, idempotentHint = true, openWorldHint = false),
 			description = "Delete a comment from an issue. Allowed for the comment's author "
-					+ "(or a platform admin). This cannot be undone.")
+					+ "(or a lead or Team-Admin of the issue's project). This cannot be undone.")
 	public String delete_comment(
 			@McpToolParam(required = true, description = "Issue id or readable id (e.g. HIN-42)") String idOrReadableId,
 			@McpToolParam(required = true, description = "Id of the comment to delete") String commentId) {

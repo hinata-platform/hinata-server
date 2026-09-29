@@ -420,8 +420,19 @@ public class TimesheetApprovalService {
 		if (!isOwner(approval, user) && !user.isOrgAdmin() && !policy.leadsSeeMemberEntries()) {
 			throw ApiException.forbidden("error.time.entriesHidden");
 		}
-		return entries.entriesOfPeriod(approval.getUserId(), approval.getProjectId(),
+		Page<WorkItem> period = entries.entriesOfPeriod(approval.getUserId(), approval.getProjectId(),
 				approval.getPeriodStart(), approval.getPeriodEnd(), page, size);
+		// An organisation admin decides periods of every project, and reads the hours of
+		// each; what an entry says about a project they are not in stays with the project.
+		if (isOwner(approval, user) || reach.canSee(approval.getProjectId(), user)) {
+			return period;
+		}
+		return period.map(TimesheetApprovalService::withoutContent);
+	}
+
+	/** A copy of [item] without the issue it was booked on and the words written with it. */
+	private static WorkItem withoutContent(WorkItem item) {
+		return item.toBuilder().issueId(null).description(null).build();
 	}
 
 	// --- writes -----------------------------------------------------------------

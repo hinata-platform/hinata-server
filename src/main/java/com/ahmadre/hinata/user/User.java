@@ -193,6 +193,18 @@ public class User {
 	 */
 	private Instant timePrivacyAcknowledgedAt;
 
+	/**
+	 * When an administrator last changed this person's sign-in address, or null.
+	 * For a day after that, no administrator may send a password reset: the two
+	 * together would be a way into somebody else's account (HIN-129).
+	 */
+	private Instant emailChangedByAdminAt;
+
+	/** Whether an administrator changed the sign-in address within the day before [now]. */
+	public boolean emailChangedByAdminWithinADay(Instant now) {
+		return emailChangedByAdminAt != null && emailChangedByAdminAt.isAfter(now.minus(java.time.Duration.ofDays(1)));
+	}
+
 	public boolean isAdmin() {
 		return roles != null && roles.contains(Role.ADMIN);
 	}

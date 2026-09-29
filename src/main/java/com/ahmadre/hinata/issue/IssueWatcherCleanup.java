@@ -55,8 +55,8 @@ public class IssueWatcherCleanup {
 	 *
 	 * <p>The access question is asked here rather than by the caller: a service
 	 * that just dropped someone from a member list knows what it revoked, not
-	 * whether the user still reaches the project through a team grant, a second
-	 * team, or being a platform admin. Unsubscribing one of those would be a silent
+	 * whether the user still reaches the project through a team grant or a second
+	 * team. Unsubscribing one of those would be a silent
 	 * loss the user never asked for and would never notice.
 	 */
 	public void removeFromProject(String projectId, Collection<String> userIds) {

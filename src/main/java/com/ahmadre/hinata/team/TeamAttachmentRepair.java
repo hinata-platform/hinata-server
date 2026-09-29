@@ -28,9 +28,13 @@ import java.util.Objects;
  *
  * <p>Deliberately conservative, because detaching a project a team relies on is worse than leaving
  * one extra attachment for an administrator to look at. An attachment is taken back only when the
- * team's own activity shows it was made by somebody who was neither a platform administrator nor a
- * lead of the project, <em>and</em> no current lead of the project is in the team — a lead who is a
- * member could have made or approved it. Everything else stays, and every repair is logged.
+ * team's own activity shows it was made by somebody who was not a lead of the project, <em>and</em>
+ * no current lead of the project is in the team — a lead who is a member could have made or approved
+ * it. Everything else stays, and every repair is logged.
+ *
+ * <p>HIN-129 runs it a second time under a new marker, without the exemption the first run gave
+ * platform administrators: an administrator could attach any project to a team of their own, and
+ * since HIN-129 being an administrator is no longer a reason to reach a project.
  */
 @Slf4j
 @Component
@@ -38,7 +42,7 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class TeamAttachmentRepair implements ApplicationRunner {
 
-	static final String MIGRATION_ID = "hin-118-team-attachment-repair";
+	static final String MIGRATION_ID = "hin-129-team-attachment-repair";
 
 	private final MongoTemplate mongo;
 	private final TeamRepository teams;
@@ -76,9 +80,6 @@ public class TeamAttachmentRepair implements ApplicationRunner {
 			return 0;
 		}
 		User actor = attached.getActorId() == null ? null : mongo.findById(attached.getActorId(), User.class);
-		if (actor != null && actor.isAdmin()) {
-			return 0;
-		}
 		int detached = 0;
 		// The activity names the project by its name at the time; only a project of the team that still
 		// carries that name is considered, so a rename leaves the attachment alone.

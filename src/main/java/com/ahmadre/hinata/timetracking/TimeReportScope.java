@@ -73,6 +73,16 @@ class TimeReportScope {
 					Criteria.where("projectId").in(ledProjects));
 		}
 
+		/**
+		 * Whether the reader may read what an entry says about its project's content —
+		 * the issue it was booked on and the words written with it. Their own entries,
+		 * and entries of projects they are in. An organisation admin sums everybody's
+		 * hours but reads no project's issues through that role (HIN-129).
+		 */
+		boolean readsContent(String projectId, String ownerId) {
+			return viewerId.equals(ownerId) || (projectId != null && visibleProjects.contains(projectId));
+		}
+
 		/** Whether the reader may see anybody's entries but their own. */
 		boolean seesOthers() {
 			return everything || !ledProjects.isEmpty();
@@ -80,11 +90,12 @@ class TimeReportScope {
 	}
 
 	Reach of(User viewer) {
-		if (viewer.isOrgAdmin()) {
-			return new Reach(viewer.getId(), true, Set.of(), Set.of());
-		}
-		Set<String> visible = new LinkedHashSet<>(directProjects(viewer));
+		Set<String> visible = new LinkedHashSet<>(directProjects(viewer, !viewer.isOrgAdmin()));
 		visible.addAll(reach.teamGrantedProjectIds(viewer));
+		if (viewer.isOrgAdmin()) {
+			// Everybody's hours, and the projects the reader is in for what entries say.
+			return new Reach(viewer.getId(), true, Set.copyOf(visible), Set.of());
+		}
 		if (visible.size() > MAX_PROJECTS) {
 			throw com.ahmadre.hinata.common.ApiException.badRequest("error.time.report.tooBroad");
 		}
@@ -96,10 +107,13 @@ class TimeReportScope {
 	 * The projects the reader belongs to or leads, archived ones included — last year's closed
 	 * project is exactly what somebody reports on. Ids only, from the membership index.
 	 */
-	private Collection<String> directProjects(User viewer) {
+	private Collection<String> directProjects(User viewer, boolean capped) {
 		Query query = Query.query(new Criteria().orOperator(Criteria.where("memberIds").is(viewer.getId()),
-				Criteria.where("leadIds").is(viewer.getId()), Criteria.where("leadId").is(viewer.getId())))
-				.limit(MAX_PROJECTS + 1);
+				Criteria.where("leadIds").is(viewer.getId()), Criteria.where("leadId").is(viewer.getId())));
+		// A member's report refuses beyond the cap below; for an organisation admin the
+		// set only decides whose content they read, and a silently cut set would hide
+		// content of projects they are in.
+		if (capped) query.limit(MAX_PROJECTS + 1);
 		query.fields().include("_id");
 		List<Document> found = mongo.query(Project.class).as(Document.class).matching(query).all();
 		return found.stream().map(WorkItemDocuments::id).toList();

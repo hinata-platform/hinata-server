@@ -63,6 +63,8 @@ public class Team {
 
 	/** Projects the team owns / shares. */
 	@Builder.Default
+	// "Which teams own this project" is asked on every settings save and issue open (HIN-129).
+	@Indexed
 	private List<String> projectIds = new ArrayList<>();
 
 	@Builder.Default

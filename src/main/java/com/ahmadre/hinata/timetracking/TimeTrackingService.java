@@ -1354,7 +1354,7 @@ public class TimeTrackingService {
 	/**
 	 * Timesheet matrix: per user+project row, minutes per day in the range.
 	 *
-	 * <p>Scoped by {@code requester}: an admin may filter by any user and any
+	 * <p>Scoped by {@code requester}: an organisation admin may filter by any user and any
 	 * project or by nothing at all; everyone else gets their own rows — a foreign
 	 * {@code userId} is refused, not silently replaced — and may narrow them to
 	 * a project they can see. Both filters are applied together, so a project

@@ -13,7 +13,6 @@ public interface ProjectRepository extends MongoRepository<Project, String> {
 
 	List<Project> findByArchivedFalse();
 
-	List<Project> findByArchivedTrue();
 
 	List<Project> findByMemberIdsContainsAndArchivedFalse(String userId);
 

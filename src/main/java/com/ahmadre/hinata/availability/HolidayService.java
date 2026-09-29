@@ -133,7 +133,7 @@ public class HolidayService implements DisposableBean {
 	}
 
 	public HolidayCalendar createCalendar(User admin, CalendarDraft draft) {
-		assertAdmin(admin);
+		assertOrgAdmin(admin);
 		if (calendars.count() >= HolidayCalendar.COUNT_MAX) {
 			throw ApiException.badRequest("error.availability.calendarsTooMany", HolidayCalendar.COUNT_MAX);
 		}
@@ -163,7 +163,7 @@ public class HolidayService implements DisposableBean {
 	 * state at the same moment, and a replace would put the state from before it back.
 	 */
 	public HolidayCalendar updateCalendar(User admin, String id, CalendarPatch patch) {
-		assertAdmin(admin);
+		assertOrgAdmin(admin);
 		requireCalendar(id);
 		Update update = new Update().set("updatedAt", clock.instant());
 		if (patch.name() != null) {
@@ -194,7 +194,7 @@ public class HolidayService implements DisposableBean {
 
 	/** Removes a calendar with its days; patterns that followed it fall back to the default. */
 	public void deleteCalendar(User admin, String id) {
-		assertAdmin(admin);
+		assertOrgAdmin(admin);
 		HolidayCalendar calendar = requireCalendar(id);
 		holidays.deleteByCalendarId(id);
 		mongo.updateMulti(Query.query(Criteria.where("holidayCalendarId").is(id)),
@@ -215,7 +215,7 @@ public class HolidayService implements DisposableBean {
 	}
 
 	public Holiday addHoliday(User admin, HolidayDraft draft) {
-		assertAdmin(admin);
+		assertOrgAdmin(admin);
 		HolidayCalendar calendar = requireCalendar(draft.calendarId());
 		LocalDate date = requireDate(draft.date());
 		assertRoomIn(calendar.getId(), date.getYear());
@@ -240,7 +240,7 @@ public class HolidayService implements DisposableBean {
 
 	/** Edits a day. A day edited by hand is kept by hand: an import no longer renames it. */
 	public Holiday updateHoliday(User admin, String id, HolidayPatch patch) {
-		assertAdmin(admin);
+		assertOrgAdmin(admin);
 		Holiday holiday = holidays.findById(id).orElseThrow(() -> ApiException.notFound("holiday"));
 		HolidayCalendar calendar = requireCalendar(holiday.getCalendarId());
 		if (patch.date() != null && !patch.date().equals(holiday.getDate())) {
@@ -270,7 +270,7 @@ public class HolidayService implements DisposableBean {
 	}
 
 	public void deleteHoliday(User admin, String id) {
-		assertAdmin(admin);
+		assertOrgAdmin(admin);
 		Holiday holiday = holidays.findById(id).orElseThrow(() -> ApiException.notFound("holiday"));
 		holidays.delete(holiday);
 		calendars.findById(holiday.getCalendarId())
@@ -287,7 +287,7 @@ public class HolidayService implements DisposableBean {
 	 * every import thread and queue slot is taken.
 	 */
 	public CompletableFuture<HolidayCalendar> importYear(User admin, String calendarId, Integer year) {
-		assertAdmin(admin);
+		assertOrgAdmin(admin);
 		HolidayCalendar calendar = requireCalendar(calendarId);
 		if (calendar.getSource() == null) {
 			throw ApiException.badRequest("error.availability.noFeed");
@@ -594,7 +594,7 @@ public class HolidayService implements DisposableBean {
 		return clean;
 	}
 
-	private static void assertAdmin(User user) {
+	private static void assertOrgAdmin(User user) {
 		if (!user.isOrgAdmin()) {
 			throw ApiException.forbidden("error.availability.adminOnly");
 		}

@@ -834,6 +834,47 @@ public class NotificationService {
 				link);
 	}
 
+	/**
+	 * One notice for a change made to many issues at once (HIN-129: a deadline set
+	 * for a selection). Everybody who follows any of them (assignees, the reporter,
+	 * watchers) and still sees its project hears once, with how many of <em>their</em>
+	 * issues moved, instead of once per issue. The editor hears nothing.
+	 */
+	public void notifyIssuesChanged(java.util.Collection<Issue> changed, User editor) {
+		java.util.Map<String, Integer> countByUser = new java.util.HashMap<>();
+		java.util.Map<String, java.util.List<Issue>> byProject = changed.stream()
+				.collect(Collectors.groupingBy(Issue::getProjectId));
+		byProject.forEach((projectId, list) -> {
+			Set<String> followers = new HashSet<>();
+			list.forEach(issue -> followers.addAll(followersOf(issue)));
+			if (editor != null) followers.remove(editor.getId());
+			Set<String> allowed = reach.whoCanSee(projectId, followers);
+			for (Issue issue : list) {
+				for (String userId : followersOf(issue)) {
+					if (allowed.contains(userId)) countByUser.merge(userId, 1, Integer::sum);
+				}
+			}
+		});
+		String editorName = editor == null ? "" : editor.getDisplayName();
+		String link = byProject.size() == 1 ? "/issues?projectId=" + byProject.keySet().iterator().next() : "/issues";
+		countByUser.entrySet().stream()
+				.collect(Collectors.groupingBy(java.util.Map.Entry::getValue,
+						Collectors.mapping(java.util.Map.Entry::getKey, Collectors.toSet())))
+				.forEach((count, ids) -> deliver(ids, Notification.Type.ISSUE_UPDATED,
+						locale -> words.in(locale, "notify.issuesChanged.title", count),
+						locale -> words.in(locale, "notify.issuesChanged.body", editorName, count),
+						link));
+	}
+
+	private static Set<String> followersOf(Issue issue) {
+		Set<String> ids = new HashSet<>();
+		if (issue.getAssigneeIds() != null) ids.addAll(issue.getAssigneeIds());
+		if (issue.getReporterId() != null) ids.add(issue.getReporterId());
+		if (issue.getWatcherIds() != null) ids.addAll(issue.getWatcherIds());
+		ids.remove(null);
+		return ids;
+	}
+
 	/** As {@link #notifySprintStarted}, for sprint completion. */
 	public void notifySprintCompleted(java.util.Collection<String> recipients, String sprintName,
 			String link, User actor) {
@@ -983,6 +1024,55 @@ public class NotificationService {
 				user.isOrgAdmin() ? "notify.orgRole.granted" : "notify.orgRole.revoked");
 		persist(user, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body,
 				user.isOrgAdmin() ? "/organization" : null);
+	}
+
+	/**
+	 * A quiet note in the bell and nowhere else: news about the product that nobody
+	 * needs a mail or a push for.
+	 */
+	public void noteInBell(java.util.Collection<User> people, String titleKey, String bodyKey, String link) {
+		List<Notification> notes = people.stream().filter(user -> user != null && user.isActive())
+				.map(user -> Notification.builder().userId(user.getId()).type(Notification.Type.SYSTEM)
+						.title(words.of(user, titleKey)).body(words.of(user, bodyKey)).link(link).build())
+				.toList();
+		if (!notes.isEmpty()) {
+			notifications.saveAll(notes);
+		}
+	}
+
+	/** Who among [userIds] already has a bell note linking to [link]. */
+	public Set<String> alreadyNoted(java.util.Collection<String> userIds, String link) {
+		return notifications.findByUserIdInAndLink(userIds, link).stream()
+				.map(Notification::getUserId).collect(Collectors.toSet());
+	}
+
+	/**
+	 * Tells the organisation admins that somebody joined or left their role. In-app
+	 * and push; the person concerned is told separately, and never twice.
+	 */
+	public void notifyOrgAdminsOfRoleChange(java.util.Collection<User> orgAdmins, User changed) {
+		for (User admin : orgAdmins) {
+			if (admin == null || admin.getId().equals(changed.getId())) continue;
+			String title = words.of(admin, "notify.rolesUpdated.title");
+			String body = words.of(admin, changed.isOrgAdmin() ? "notify.orgRole.othersGranted"
+					: "notify.orgRole.othersRevoked", changed.getDisplayName());
+			persist(admin, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body, null);
+		}
+	}
+
+	/**
+	 * An administrator changed this person's sign-in address. The mail goes to the
+	 * <em>old</em> address, which is still theirs: if they did not ask for it, that
+	 * is where they would notice.
+	 */
+	public void notifyEmailChangedByAdmin(User user, String previousEmail) {
+		String title = words.of(user, "notify.emailChangedByAdmin.title");
+		String body = words.of(user, "notify.emailChangedByAdmin.body", user.getEmail());
+		persist(user, Notification.Type.SECURITY_ALERT, title, body, "/settings");
+		if (previousEmail != null && !previousEmail.isBlank()) {
+			mail.sendNotification(previousEmail, mail.subjectPrefix() + title, title, body, appLink("/settings"),
+					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(Notification.Type.SECURITY_ALERT));
+		}
 	}
 
 	/**
@@ -1321,7 +1411,6 @@ public class NotificationService {
 		return words.in(locale, "notify.cta.openIssue");
 	}
 
-	/** Recipient's notification preferences, normalised (defaults for legacy users). */
 	/** The person's preferences as they apply today — see {@link NotificationDays}. */
 	private NotificationPreferences prefsOf(User user) {
 		return days.today(user);

@@ -54,9 +54,7 @@ public class KnowledgeReadTools {
 			@McpToolParam(required = false, description = "Only articles in this space (e.g. Engineering)") String space) {
 		scopeGuard.require(Scopes.KB_READ);
 		User user = currentUser.require();
-		List<Article> candidates = articleService.list(user, projectId != null, projectId);
-		return candidates.stream()
-				.filter(a -> space == null || space.equalsIgnoreCase(a.getSpace()))
+		return articleService.list(user, projectId != null, projectId, space, ArticleService.LIST_CAP).stream()
 				.map(ArticleListItem::of)
 				.toList();
 	}

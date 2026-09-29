@@ -183,19 +183,6 @@ public class ProjectService {
 		return new Criteria().orOperator(direct, Criteria.where("id").in(granted));
 	}
 
-	/**
-	 * Ids of all non-archived (active) projects. An archived project is treated
-	 * as deactivated platform-wide, so its issues, boards and other data must
-	 * never surface anywhere; callers listing such data restrict to this set.
-	 */
-	public Set<String> activeProjectIds() {
-		Set<String> ids = new HashSet<>();
-		for (Project project : projects.findByArchivedFalse()) {
-			ids.add(project.getId());
-		}
-		return ids;
-	}
-
 	/** Whether the project exists and is active (non-archived). */
 	public boolean isActive(String projectId) {
 		return projects.findById(projectId).map(p -> !p.isArchived()).orElse(false);
@@ -259,8 +246,13 @@ public class ProjectService {
 		return updated.getIssueCounter();
 	}
 
+	/** The rule behind {@link #assertMember} as a question. */
+	public boolean canSee(Project project, User user) {
+		return projectReach.canSee(project, user);
+	}
+
 	public void assertMember(Project project, User user) {
-		// Direct membership, an admin, or a team grant (Team-Admin, or member with
+		// Direct membership or a team grant (Team-Admin, or member with
 		// ALL/SOME access covering this project) — see ProjectReach, which owns the rule
 		// so callers outside this domain can ask the same question.
 		if (projectReach.canSee(project, user)) return;
@@ -313,9 +305,11 @@ public class ProjectService {
 		return canManage(project, user);
 	}
 
+	/** One indexed existence check: a team owning the project with this user as its admin. */
 	private boolean isTeamAdminOf(Project project, User user) {
-		return teams.findByProjectIdsContains(project.getId()).stream()
-				.anyMatch(team -> team.isAdmin(user.getId()));
+		return mongo.exists(Query.query(Criteria.where("projectIds").is(project.getId())
+				.and("members").elemMatch(Criteria.where("userId").is(user.getId())
+						.and("role").is(com.ahmadre.hinata.team.TeamRole.ADMIN))), com.ahmadre.hinata.team.Team.class);
 	}
 
 	/**
@@ -366,6 +360,7 @@ public class ProjectService {
 		// newly-added ones after save (mirrors TeamService.addMembers' diff).
 		Set<String> previousMembers = new HashSet<>(project.getMemberIds());
 		applyKey(project, req.key());
+		assertLeadsUnchangedUnlessLead(project, req, user);
 		applyMembersAndLeads(project, req);
 		List<RenameOp> stateRenames = applyWorkflow(project, req);
 		List<RenameOp> labelRenames = applyLabels(project, req);
@@ -460,6 +455,25 @@ public class ProjectService {
 			});
 		}
 		project.setKey(key);
+	}
+
+	/**
+	 * Who leads a project is the leads' decision. A Team-Admin runs the settings of
+	 * the team's projects, and a body that names a different set of leads would let
+	 * them appoint themselves: after that every lead-only action (timesheets,
+	 * git, handing the project to another team, deleting it) is theirs. The same
+	 * set in the request, as a settings screen sends it back, is no change.
+	 */
+	private void assertLeadsUnchangedUnlessLead(Project project, ProjectUpdateRequest req, User user) {
+		if (isLead(project, user)) return;
+		Set<String> current = new HashSet<>(project.getLeadIds() != null ? project.getLeadIds() : List.of());
+		if (current.isEmpty() && project.getLeadId() != null) current.add(project.getLeadId());
+		Set<String> requested = req.leadIds() != null ? new HashSet<>(req.leadIds())
+				: req.leadId() != null ? new HashSet<>(Set.of(req.leadId())) : current;
+		requested.remove(null);
+		if (!requested.equals(current)) {
+			throw ApiException.forbidden("error.project.notLead");
+		}
 	}
 
 	private void applyMembersAndLeads(Project project, ProjectUpdateRequest req) {

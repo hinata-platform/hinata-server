@@ -32,9 +32,30 @@ public class KnowledgeAccess {
 	@Builder.Default
 	private ProjectAccess.Scope scope = ProjectAccess.Scope.NONE;
 
-	/** Only meaningful when {@link #scope} is {@code SOME}. */
+	/** Only meaningful when {@code scope} is {@code SOME}. */
 	@Builder.Default
 	private List<String> articleIds = new ArrayList<>();
+
+	/**
+	 * How many pages a SOME grant names, for a reader who is shown the number but not
+	 * the pages (see {@link #redacted()}). Never stored.
+	 */
+	@org.springframework.data.annotation.Transient
+	@com.fasterxml.jackson.annotation.JsonProperty(access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+	private Integer count;
+
+	public int getCount() {
+		return count != null ? count : articleIds == null ? 0 : articleIds.size();
+	}
+
+	/**
+	 * This grant as somebody else's reads it: the scope and how many pages, not which.
+	 * Which pages a colleague may read is the Team-Admins' business, and the ids would
+	 * name pages the reader may not see.
+	 */
+	public KnowledgeAccess redacted() {
+		return KnowledgeAccess.builder().scope(scope).articleIds(new ArrayList<>()).count(getCount()).build();
+	}
 
 	public static KnowledgeAccess all() {
 		return KnowledgeAccess.builder().scope(ProjectAccess.Scope.ALL).build();

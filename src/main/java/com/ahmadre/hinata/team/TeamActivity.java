@@ -18,7 +18,9 @@ public class TeamActivity {
 	public enum Verb {
 		CREATED, UPDATED,
 		ADDED_MEMBER, PROMOTED, DEMOTED, REMOVED_MEMBER,
-		ATTACHED_PROJECT, CREATED_PROJECT, DETACHED_PROJECT
+		ATTACHED_PROJECT, CREATED_PROJECT, DETACHED_PROJECT,
+		/** A member's knowledge-base access changed (HIN-129); objectLabel is the member's id. */
+		KNOWLEDGE_CHANGED
 	}
 
 	@Id

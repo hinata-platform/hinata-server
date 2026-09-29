@@ -26,8 +26,7 @@ final class WorkItemDocuments {
 
 	/** The id as the string the entities carry it as. */
 	static String id(Document document) {
-		Object id = document.get("_id");
-		return id instanceof ObjectId objectId ? objectId.toHexString() : String.valueOf(id);
+		return com.ahmadre.hinata.common.MongoIds.of(document);
 	}
 
 	/** A calendar day, stored as UTC midnight. */

@@ -13,10 +13,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Knowledge base article, organized as a tree per project or globally. */
+/** Knowledge base article, organized as a tree per project, per team or privately. */
 @Data
 @Builder
 @Document("articles")
+// The private-page branch of every visibility query ("my pages without a place")
+// seeks here instead of walking every private page of every person (HIN-129).
+@org.springframework.data.mongodb.core.index.CompoundIndex(name = "author_place",
+		def = "{'authorId': 1, 'projectId': 1, 'teamId': 1}")
 public class Article {
 
 	@Id

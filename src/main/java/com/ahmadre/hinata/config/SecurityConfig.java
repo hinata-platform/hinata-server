@@ -415,6 +415,10 @@ public class SecurityConfig {
 		// for that custom header fails in browsers (Flutter web).
 		config.setAllowedHeaders(
 				List.of("Authorization", "Content-Type", "Accept", "ngrok-skip-browser-warning"));
+		// A browser hides every response header it is not told about. These carry
+		// facts the client acts on: that a list was cut at its cap (a picker must not
+		// treat a cut list as complete), and an export's file name.
+		config.setExposedHeaders(List.of("X-Truncated", "X-Export-Truncated", "Content-Disposition"));
 		config.setMaxAge(3600L);
 		UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
 		source.registerCorsConfiguration("/**", config);

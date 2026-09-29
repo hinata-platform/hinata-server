@@ -82,7 +82,7 @@ public class BoardController {
 		// excludes archived projects (a deactivated project's boards must never
 		// surface) and applies direct-membership + team-grant access — mirroring
 		// SprintService.assertAccess, so the overview matches what a card click
-		// would allow. Admins see every active project's boards.
+		// would allow.
 		Set<String> visible = visibleProjectIds(user);
 		return all.stream()
 				.filter(b -> b.getProjectIds().stream().anyMatch(visible::contains))
@@ -114,7 +114,7 @@ public class BoardController {
 	/**
 	 * Membership check on EVERY spanned project: without this a member of one
 	 * project could craft (or widen) a board spanning a victim project and read
-	 * its full backlog through {@link #view}. Admins are unrestricted.
+	 * its full backlog through {@link #view}.
 	 */
 	private void assertMemberOfAll(List<String> projectIds, User user) {
 		Set<String> visible = visibleProjectIds(user);
@@ -131,7 +131,7 @@ public class BoardController {
 	/**
 	 * Managing a board (rename / delete) is restricted to: the board's owner (the
 	 * member who created it), a lead of any project the board spans, a Team-Admin
-	 * of any team that owns such a project, and platform admins. Regular project
+	 * of any team that owns such a project. Regular project
 	 * members may use a board but not reconfigure it.
 	 */
 	private void assertBoardManage(AgileBoard board, User user) {

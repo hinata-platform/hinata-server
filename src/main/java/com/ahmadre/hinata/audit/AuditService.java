@@ -66,12 +66,17 @@ public class AuditService {
 
 	/** Whether the given action is currently captured (master switch + toggle). */
 	public boolean isEnabled(AuditAction action) {
+		if (AuditAction.ALWAYS_RECORDED.contains(action)) {
+			return true;
+		}
 		ServerSettings.Audit cfg = cached;
 		if (cfg == null) {
 			cfg = orDefault(settings.get().getAudit());
 			cached = cfg;
 		}
-		if (!cfg.isEnabled()) {
+		// The master switch is the platform's; it does not silence the organisation's
+		// records, whose switches are the organisation admins' (HIN-129).
+		if (!cfg.isEnabled() && !action.organisational()) {
 			return false;
 		}
 		Boolean override = cfg.getEvents() == null ? null : cfg.getEvents().get(action.name());

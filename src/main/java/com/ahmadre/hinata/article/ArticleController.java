@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -71,9 +72,7 @@ public class ArticleController {
 	}
 
 	@GetMapping
-	public List<ArticleResponse> list(@RequestParam(required = false) String projectId,
-			/** Only the pages of one team, for the Team-Admin picking pages to open. */
-			@RequestParam(required = false) String teamId,
+	public ResponseEntity<List<ArticleResponse>> list(@RequestParam(required = false) String projectId,
 			@RequestParam(defaultValue = "false") boolean all,
 			@RequestParam(required = false) String referencesIssue) {
 		User user = currentUser.require();
@@ -84,17 +83,22 @@ public class ArticleController {
 			// A backlink question never becomes a listing. A value that is not a key
 			// has no referencing articles; falling through to the ordinary list put
 			// every global article under "documented in" on the issue.
-			if (!RichTextService.isIssueKey(referencesIssue)) return List.of();
+			if (!RichTextService.isIssueKey(referencesIssue)) return ResponseEntity.ok(List.of());
 			String key = referencesIssue.toUpperCase(java.util.Locale.ROOT);
-			return ArticleResponse.from(access.sightOf(user)
+			return ResponseEntity.ok(ArticleResponse.from(access.sightOf(user)
 					.filter(articles.findByReferencedIssueKeysContains(key))
-					.stream().limit(ArticleService.LIST_CAP).toList());
+					.stream().limit(ArticleService.LIST_CAP).toList()));
 		}
-		if (teamId != null) {
-			return ArticleResponse.from(service.listOfTeam(user, teamId));
-		}
-		return ArticleResponse.from(service.list(user, !all, projectId));
+		// One more than the cap, so a cut list says it was cut instead of looking like
+		// pages whose parents the reader cannot open.
+		List<Article> found = service.list(user, !all, projectId, null, ArticleService.LIST_CAP + 1);
+		boolean truncated = found.size() > ArticleService.LIST_CAP;
+		List<ArticleResponse> body = ArticleResponse.from(truncated ? found.subList(0, ArticleService.LIST_CAP) : found);
+		return truncated ? ResponseEntity.ok().header(TRUNCATED, "true").body(body) : ResponseEntity.ok(body);
 	}
+
+	/** Set when a list was cut at its cap. */
+	static final String TRUNCATED = "X-Truncated";
 
 	@GetMapping("/{id}")
 	public ArticleResponse get(@PathVariable String id) {

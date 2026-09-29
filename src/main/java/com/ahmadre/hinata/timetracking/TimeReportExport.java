@@ -115,8 +115,9 @@ public class TimeReportExport {
 	 * A file about to be written: what it reads, whether it will be cut short, its name. Holds one
 	 * of the {@link #MAX_RUNNING} slots until it is closed.
 	 */
-	public record Plan(User viewer, TimeReportFilter filter, TimeReportService.GroupBy groupBy, Query query,
-			int maxRows, boolean truncated, String fileName, Runnable release) implements AutoCloseable {
+	public record Plan(User viewer, TimeReportScope.Reach reach, TimeReportFilter filter,
+			TimeReportService.GroupBy groupBy, Query query, int maxRows, boolean truncated, String fileName,
+			Runnable release) implements AutoCloseable {
 
 		@Override
 		public void close() {
@@ -142,11 +143,12 @@ public class TimeReportExport {
 		try {
 			limiter.require(viewer.getId());
 			int max = format == null ? MAX_CSV_ROWS : MAX_ROWS.get(format);
-			Query query = reports.detailedQuery(viewer, filter);
+			TimeReportScope.Reach reach = reports.reachOf(viewer);
+			Query query = reports.detailedQuery(reach, filter);
 			boolean truncated = mongo.count(Query.of(query).limit(max + 1), WorkItem.class) > max;
 			String name = "time-report-" + filter.from() + "-" + filter.to() + "."
 					+ (format == null ? "csv" : format.extension());
-			return new Plan(viewer, filter, groupBy, query, max, truncated, name, release);
+			return new Plan(viewer, reach, filter, groupBy, query, max, truncated, name, release);
 		}
 		catch (RuntimeException refused) {
 			release.run();
@@ -274,7 +276,7 @@ public class TimeReportExport {
 					while (chunk.size() < CHUNK && emitted + chunk.size() < plan.maxRows() && source.hasNext()) {
 						chunk.add(source.next());
 					}
-					for (TimeReportService.EntryRow row : reports.rows(chunk, plan.filter())) {
+					for (TimeReportService.EntryRow row : reports.rows(plan.reach(), chunk, plan.filter())) {
 						buffer.add(row(row, plan.filter(), words, machine));
 					}
 				}

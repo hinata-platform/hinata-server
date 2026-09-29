@@ -1,6 +1,9 @@
 package com.ahmadre.hinata.article;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -28,6 +31,7 @@ class ArticleBacklinkAclTest {
 
 	private ArticleRepository articles;
 	private ArticleAccess access;
+	private ArticleService service;
 	private CurrentUser currentUser;
 	private ArticleController controller;
 
@@ -46,11 +50,6 @@ class ArticleBacklinkAclTest {
 			.content("HIN-1 auch hier").referencedIssueKeys(List.of("HIN-1"))
 			.build();
 
-	/** A global article that links to nothing — what the ordinary listing returns. */
-	private static final Article GLOBAL = Article.builder()
-			.id("a-global").title("Kontaktdaten").content("Keine Verweise")
-			.build();
-
 	/** A visible article that really links to an issue of a project key with digits. */
 	private static final Article EP26 = Article.builder()
 			.id("a-ep26").title("Erstiparty").projectId("p-mine")
@@ -62,8 +61,8 @@ class ArticleBacklinkAclTest {
 		articles = mock(ArticleRepository.class);
 		access = mock(ArticleAccess.class);
 		currentUser = mock(CurrentUser.class);
-		controller = new ArticleController(articles, new RichTextService(), currentUser, access,
-				mock(ArticleService.class));
+		service = mock(ArticleService.class);
+		controller = new ArticleController(articles, new RichTextService(), currentUser, access, service);
 
 		when(articles.findByReferencedIssueKeysContains("HIN-1"))
 				.thenReturn(List.of(VISIBLE, HIDDEN, TEAM_HIDDEN));
@@ -80,7 +79,7 @@ class ArticleBacklinkAclTest {
 	void anArticleInAnInvisibleProjectIsExcludedFromABacklinkResult() {
 		member();
 
-		List<ArticleController.ArticleResponse> found = controller.list(null, false, "HIN-1");
+		List<ArticleController.ArticleResponse> found = controller.list(null, false, "HIN-1").getBody();
 
 		assertThat(found).extracting(ArticleController.ArticleResponse::id)
 				.containsExactly("a-visible");
@@ -90,30 +89,20 @@ class ArticleBacklinkAclTest {
 	void anArticleInAnInvisibleTeamIsExcludedToo() {
 		member();
 
-		assertThat(controller.list(null, false, "HIN-1"))
+		assertThat(controller.list(null, false, "HIN-1").getBody())
 				.extracting(ArticleController.ArticleResponse::id)
 				.doesNotContain("a-team");
 	}
 
 	@Test
-	void anAdminSeesOnlyWhatTheirOwnMembershipsOpen() {
-		User admin = User.builder().id("u0").email("root@b.c").roles(Set.of(Role.ADMIN, Role.ORG_ADMIN)).build();
-		when(currentUser.require()).thenReturn(admin);
-		when(access.sightOf(admin)).thenReturn(new ArticleAccess.Sight("u0", Set.of(), Set.of(), Set.of()));
-
-		assertThat(controller.list(null, false, "HIN-1")).isEmpty();
-	}
-
-	@Test
 	void aMalformedKeyAnswersWithNoBacklinksRatherThanTheOrdinaryListing() {
 		member();
-		when(articles.findByProjectIdIsNullOrderBySortOrderAsc()).thenReturn(List.of(GLOBAL));
 
 		// A backlink question has exactly one honest answer for a value that
 		// cannot be a key: nothing references it. Falling through to the listing
 		// shows every global article under "documented in" on the issue.
-		assertThat(controller.list(null, false, "not-a-key")).isEmpty();
-		verify(articles, never()).findByProjectIdIsNullOrderBySortOrderAsc();
+		assertThat(controller.list(null, false, "not-a-key").getBody()).isEmpty();
+		verify(service, never()).list(any(), anyBoolean(), any(), any(), anyInt());
 		verify(articles, never()).findByReferencedIssueKeysContains(anyString());
 	}
 
@@ -125,22 +114,20 @@ class ArticleBacklinkAclTest {
 	@Test
 	void anIssueKeyWithDigitsInItsProjectKeyQueriesTheIndex() {
 		member();
-		when(articles.findByProjectIdIsNullOrderBySortOrderAsc()).thenReturn(List.of(GLOBAL));
 		when(articles.findByReferencedIssueKeysContains("EP26-2")).thenReturn(List.of(EP26));
 
-		assertThat(controller.list(null, false, "ep26-2"))
+		assertThat(controller.list(null, false, "ep26-2").getBody())
 				.extracting(ArticleController.ArticleResponse::id)
 				.containsExactly("a-ep26");
-		verify(articles, never()).findByProjectIdIsNullOrderBySortOrderAsc();
+		verify(service, never()).list(any(), anyBoolean(), any(), any(), anyInt());
 	}
 
 	@Test
 	void anEmptyReferencesIssueParameterIsStillABacklinkQuery() {
 		member();
-		when(articles.findByProjectIdIsNullOrderBySortOrderAsc()).thenReturn(List.of(GLOBAL));
 
-		assertThat(controller.list(null, false, "")).isEmpty();
-		verify(articles, never()).findByProjectIdIsNullOrderBySortOrderAsc();
+		assertThat(controller.list(null, false, "").getBody()).isEmpty();
+		verify(service, never()).list(any(), anyBoolean(), any(), any(), anyInt());
 		verify(articles, never()).findByReferencedIssueKeysContains(anyString());
 	}
 }

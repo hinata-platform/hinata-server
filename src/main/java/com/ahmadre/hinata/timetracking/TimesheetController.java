@@ -41,7 +41,7 @@ public class TimesheetController {
 	 * One page of rows, ordered by user and then project.
 	 *
 	 * <p>A row is a person and a project; its columns are the days of the window.
-	 * Non-admins get their own rows and nothing else — naming somebody else is a
+	 * Everybody but an organisation admin gets their own rows and nothing else — naming somebody else is a
 	 * 403, not a quietly narrowed answer.
 	 */
 	@GetMapping("/timesheet")

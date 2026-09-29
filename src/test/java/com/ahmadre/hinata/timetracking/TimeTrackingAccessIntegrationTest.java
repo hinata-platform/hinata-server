@@ -348,7 +348,7 @@ class TimeTrackingAccessIntegrationTest {
 	}
 
 	@Test
-	void withoutAUserFilterANonAdminOnlySeesTheirOwnRows() {
+	void withoutAUserFilterANonOrganisationAdminOnlySeesTheirOwnRows() {
 		logged(member, 30);
 		logged(peer, 60);
 

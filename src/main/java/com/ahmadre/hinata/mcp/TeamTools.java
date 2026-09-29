@@ -18,8 +18,8 @@ import java.util.Map;
 
 /**
  * Read-only MCP tools over teams. Gates on {@code teams:read} and delegates to
- * {@link TeamService}: a caller sees exactly the teams they are a member of
- * (admins see all), mirroring the app. Member entries expose the same public
+ * {@link TeamService}: a caller sees exactly the teams they are a member of,
+ * as in the app. Member entries expose the same public
  * directory fields as {@code search_users}, never per-member project access
  * details beyond the team role.
  */
