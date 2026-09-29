@@ -829,7 +829,7 @@ public class TimeOffRequestService {
 			// would be a request no inbox can ever find, and an automatic approval that fails for
 			// any reason would leave exactly such a request behind. The administrators are the
 			// floor here as everywhere else.
-			audience = approvers.adminIds();
+			audience = approvers.orgAdminIds();
 			audience.remove(person.getId());
 		}
 		return new Routing(audience, decidesItself);

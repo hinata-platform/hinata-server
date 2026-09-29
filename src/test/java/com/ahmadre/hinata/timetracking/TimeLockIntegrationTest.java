@@ -295,7 +295,7 @@ class TimeLockIntegrationTest {
 	}
 
 	@Test
-	void onlyAnAdministratorOpensASpanInsideTheFreeze() {
+	void onlyAnOrganisationAdminOpensASpanInsideTheFreeze() {
 		lockBefore(TODAY);
 		TimeLockExceptionController.LockExceptionRequest request =
 				new TimeLockExceptionController.LockExceptionRequest();

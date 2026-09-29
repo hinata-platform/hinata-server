@@ -56,7 +56,7 @@ import java.util.stream.Collectors;
  * <p><b>Reach.</b> Every query carries the caller's reach as a filter: issues,
  * projects, boards and sprints only of projects they see, pages only those
  * {@link ArticleAccess} opens to them. The counts are counted the same way. People
- * are the directory every picker shows, so they stay as they are. Before this, the
+ * are the directory every picker shows, active accounts only, counted the same way. Before this, the
  * palette answered every account with everybody's issues, projects and pages.
  */
 @Service
@@ -103,12 +103,17 @@ public class SearchService {
 		}
 	}
 
-	private Reach reachOf(User user) {
+	/**
+	 * The caller's reach, worked out once per search: active projects always, the
+	 * archived ones only for an archive search, and the pages from the same project
+	 * set rather than a second lookup of it.
+	 */
+	private Reach reachOf(User user, boolean archivedSearch) {
 		Set<String> active = projectService.visibleTo(user).stream()
 				.map(Project::getId).collect(Collectors.toSet());
-		Set<String> archived = projectService.archivedVisibleTo(user).stream()
-				.map(Project::getId).collect(Collectors.toSet());
-		return new Reach(active, archived, articleAccess.sightOf(user).criteria());
+		Set<String> archived = archivedSearch ? projectService.archivedVisibleTo(user).stream()
+				.map(Project::getId).collect(Collectors.toSet()) : Set.of();
+		return new Reach(active, archived, articleAccess.sightOf(user, active).criteria());
 	}
 
 	public SearchResponse search(User user, String rawQuery, String scope) {
@@ -122,7 +127,7 @@ public class SearchService {
 	 *                 empty. An empty query suggests the latest archived items.
 	 */
 	public SearchResponse search(User user, String rawQuery, String scope, boolean archived) {
-		Reach reach = reachOf(user);
+		Reach reach = reachOf(user, archived);
 		String q = rawQuery == null ? "" : rawQuery.trim();
 		SearchCategory only = SearchCategory.parse(scope);
 		int cap = only == null ? CAP_ALL : CAP_SCOPED;
@@ -139,7 +144,9 @@ public class SearchService {
 		} else {
 			groups = List.of();
 		}
-		return new SearchResponse(groups, counts(reach));
+		// The counts do not depend on what is typed: they are worked out when the
+		// palette opens (an empty query) and not again on every keystroke after it.
+		return new SearchResponse(groups, q.isBlank() ? counts(reach) : java.util.Map.of());
 	}
 
 	private List<SearchGroup> queryGroups(Reach reach, String q, SearchCategory only, int cap,
@@ -319,8 +326,7 @@ public class SearchService {
 		// Raw rows: a projection would hand the entity's constructor nulls for fields it
 		// does not read.
 		return mongo.find(query, org.bson.Document.class, "agile_boards").stream()
-				.map(row -> String.valueOf(row.get("_id") instanceof org.bson.types.ObjectId oid
-						? oid.toHexString() : row.get("_id")))
+				.map(com.ahmadre.hinata.common.MongoIds::of)
 				.collect(Collectors.toSet());
 	}
 
@@ -377,11 +383,10 @@ public class SearchService {
 	// ─────────────────────────── hybrid core ──────────────────────────────
 
 	/**
-	 * Runs the regex + $text pair, merges (regex first, then text), dedupes by
+	 * Runs the regex + $text pair with an AND [filter] (the caller's reach, and the
+	 * archived flag) on both, merges (regex first, then text), dedupes by
 	 * {@code idFn}, floats prefix matches on {@code labelFn} to the top and caps.
 	 */
-	/** The hybrid pair with an AND [filter] — the caller's reach, and the
-	 * archived flag — applied to both the regex and the $text query. */
 	private <T> List<T> hybrid(Class<T> type, String q, int cap, List<Criteria> regexOrs,
 			Criteria filter, String sortField, Function<T, String> idFn,
 			Function<T, String> labelFn) {
@@ -428,7 +433,7 @@ public class SearchService {
 		Map<String, Long> counts = new LinkedHashMap<>();
 		counts.put(SearchCategory.ISSUES.name(), mongo.count(Query.query(reach.issues(false)), Issue.class));
 		counts.put(SearchCategory.PROJECTS.name(), (long) reach.activeProjects().size());
-		counts.put(SearchCategory.PEOPLE.name(), mongo.estimatedCount(User.class));
+		counts.put(SearchCategory.PEOPLE.name(), mongo.count(Query.query(Criteria.where("active").is(true)), User.class));
 		Set<String> boards = boardIds(reach);
 		counts.put(SearchCategory.BOARDS.name(), boards.size()
 				+ mongo.count(Query.query(Criteria.where("boardId").in(boards)), Sprint.class));

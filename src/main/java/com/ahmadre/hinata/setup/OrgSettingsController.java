@@ -3,13 +3,12 @@ package com.ahmadre.hinata.setup;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
-import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.project.ProjectTemplatePolicy;
+import com.ahmadre.hinata.user.OrgAdmins;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -32,7 +31,6 @@ import java.util.List;
  * refuse what would break a module's rules, audits describe what moved, and the
  * reopened lock spans stay the route's own.
  */
-@Slf4j
 @Tag(name = "Organisation")
 @RestController
 @RequestMapping("/api/v1/org/settings")
@@ -44,8 +42,7 @@ public class OrgSettingsController {
 	private final AuditService audit;
 	private final ProjectTemplatePolicy templates;
 	private final List<SettingsPrefill> modulePrefills;
-	private final List<SettingsAudit> moduleAudits;
-	private final List<SettingsGuard> moduleGuards;
+	private final SettingsWrites writes;
 
 	/**
 	 * What the organisation page shows. {@code defaultDeadlineBasis} is the stored
@@ -53,7 +50,9 @@ public class OrgSettingsController {
 	 * that works out to.
 	 */
 	public record OrgSettings(ServerSettings.TimeTracking timeTracking,
-			RelativeDate.Basis defaultDeadlineBasis, RelativeDate.Basis effectiveDeadlineBasis) {
+			RelativeDate.Basis defaultDeadlineBasis, RelativeDate.Basis effectiveDeadlineBasis,
+			/** The stored switches for the organisation's audit records; absent means the action's default. */
+			java.util.Map<String, Boolean> auditEvents) {
 	}
 
 	/**
@@ -61,24 +60,32 @@ public class OrgSettingsController {
 	 * absent basis keeps the stored basis, and {@code clearDefaultDeadlineBasis}
 	 * hands it back to the environment.
 	 */
-	public record OrgSettingsUpdate(ServerSettings.TimeTracking timeTracking,
-			RelativeDate.Basis defaultDeadlineBasis, Boolean clearDefaultDeadlineBasis) {
+	public record OrgSettingsUpdate(@jakarta.validation.Valid ServerSettings.TimeTracking timeTracking,
+			RelativeDate.Basis defaultDeadlineBasis, Boolean clearDefaultDeadlineBasis,
+			/** Switches for the organisation's audit records; other keys are ignored. Absent keeps them. */
+			java.util.Map<String, Boolean> auditEvents) {
+
+		/** The shape before the audit switches, for callers that do not touch them. */
+		public OrgSettingsUpdate(ServerSettings.TimeTracking timeTracking, RelativeDate.Basis defaultDeadlineBasis,
+				Boolean clearDefaultDeadlineBasis) {
+			this(timeTracking, defaultDeadlineBasis, clearDefaultDeadlineBasis, null);
+		}
 	}
 
 	@GetMapping
 	public OrgSettings get() {
-		requireOrgAdmin();
+		OrgAdmins.require(currentUser);
 		return view(settings.get());
 	}
 
 	@PutMapping
-	public OrgSettings update(@RequestBody OrgSettingsUpdate request) {
-		User actor = requireOrgAdmin();
+	public OrgSettings update(@jakarta.validation.Valid @RequestBody OrgSettingsUpdate request) {
+		User actor = OrgAdmins.require(currentUser);
 		ServerSettings current = settings.get();
 		ServerSettings updated = settings.get();
 		if (request.timeTracking() != null) {
 			updated.setTimeTracking(request.timeTracking());
-			AdminSettingsController.keepLockExceptions(updated, current);
+			writes.keepLockExceptions(updated, current);
 		}
 		if (Boolean.TRUE.equals(request.clearDefaultDeadlineBasis()) || request.defaultDeadlineBasis() != null) {
 			ServerSettings.ProjectTemplates block = updated.getProjectTemplates() != null
@@ -87,21 +94,12 @@ public class OrgSettingsController {
 					? null : request.defaultDeadlineBasis());
 			updated.setProjectTemplates(block);
 		}
-		// Before the audit record and before the write, so a refusal leaves no trace
-		// of a change that did not happen.
-		for (SettingsGuard guard : moduleGuards) {
-			guard.check(current, updated);
+		if (request.auditEvents() != null) {
+			writes.carryOrganisationalAuditEvents(updated, request.auditEvents());
 		}
+		writes.check(current, updated);
 		audit.event(AuditAction.SETTINGS_CHANGED).actor(actor).meta("area", "organisation").log();
-		for (SettingsAudit moduleAudit : moduleAudits) {
-			try {
-				moduleAudit.record(current, updated, actor);
-			}
-			catch (RuntimeException ex) {
-				log.warn("Settings audit hook {} failed: {}",
-						moduleAudit.getClass().getSimpleName(), ex.toString());
-			}
-		}
+		writes.recordModules(current, updated, actor);
 		return view(settings.save(updated));
 	}
 
@@ -110,15 +108,8 @@ public class OrgSettingsController {
 		modulePrefills.forEach(prefill -> prefill.prefill(document));
 		ServerSettings.ProjectTemplates block = document.getProjectTemplates();
 		return new OrgSettings(document.getTimeTracking(),
-				block == null ? null : block.getDefaultBasis(), templates.defaultBasis());
+				block == null ? null : block.getDefaultBasis(), templates.defaultBasis(),
+				writes.organisationalAuditEvents(document));
 	}
 
-	/** Read from the stored account, so a role granted a minute ago counts already. */
-	private User requireOrgAdmin() {
-		User user = currentUser.require();
-		if (!user.isOrgAdmin()) {
-			throw ApiException.forbidden("error.org.adminOnly");
-		}
-		return user;
-	}
 }

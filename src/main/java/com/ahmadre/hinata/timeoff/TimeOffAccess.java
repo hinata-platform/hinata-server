@@ -17,8 +17,8 @@ import java.util.List;
  * <li><b>Everybody</b> reads the catalogue of types. A picker needs it, and "this organisation
  * offers parental leave" is not anybody's personal data.</li>
  * <li><b>One's own</b> balance, ledger and entitlement: always.</li>
- * <li><b>A keeper</b> — an administrator, or somebody an operator named in
- * {@code absenceManagers} — reads and writes anybody's, and keeps the catalogue.</li>
+ * <li><b>A keeper</b>: somebody named in {@code absenceManagers}, or, while nobody is named, an
+ * organisation admin. Reads and writes anybody's, and keeps the catalogue.</li>
  * <li><b>Everybody else</b>, leads included: nothing. A lead may see <em>that</em> a member is
  * away, through {@code AvailabilityAccess} and only with the policy on. How many vacation days
  * somebody has left is a different question, and it is not one project planning has to answer
@@ -26,9 +26,9 @@ import java.util.List;
  * </ul>
  *
  * <p>The keeper list is deliberately not a role. This is where sick days are visible as sick days
- * (Art. 9 DSGVO), and "every administrator" is a wider circle than most operators want for that.
- * An administrator keeps the right anyway — they can add themselves in one save — so the list
- * narrows who looks by default without pretending to lock anybody out.
+ * (Art. 9 DSGVO), and "every organisation admin" is a wider circle than most operators want for
+ * that. An organisation admin can add themselves in one save, which the settings audit records;
+ * the list narrows who looks without pretending to lock the people who edit it out.
  */
 @Component
 @RequiredArgsConstructor
@@ -37,13 +37,18 @@ public class TimeOffAccess {
 	private final TimeTrackingSettings settings;
 	private final UserRepository users;
 
-	/** Whether somebody keeps absences for everybody. */
+	/**
+	 * Whether somebody keeps absences for everybody: the people named in
+	 * {@code absenceManagers}, or the organisation admins while nobody is named.
+	 *
+	 * <p>Naming a circle narrows it for real (HIN-129). The list exists so that sick
+	 * days stay with the people an operator chose, usually HR; an organisation admin
+	 * who is not on it runs working time and billing and does not need to know why
+	 * somebody was away.
+	 */
 	public boolean isKeeper(User viewer) {
-		if (viewer.isOrgAdmin()) {
-			return true;
-		}
 		List<String> named = settings.absenceManagers();
-		return !named.isEmpty() && named.contains(viewer.getId());
+		return named.isEmpty() ? viewer.isOrgAdmin() : named.contains(viewer.getId());
 	}
 
 	/** 403 for anybody who does not keep absences for everybody. */

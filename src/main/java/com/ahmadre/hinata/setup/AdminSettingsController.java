@@ -43,10 +43,7 @@ public class AdminSettingsController {
 	private final FeatureFlags featureFlags;
 	/** Modules adding their own derived, read-only values; see {@link SettingsPrefill}. */
 	private final List<SettingsPrefill> modulePrefills;
-	/** Modules describing what an admin changed about them; see {@link SettingsAudit}. */
-	private final List<SettingsAudit> moduleAudits;
-	/** Modules refusing a save that would break their own rules; see {@link SettingsGuard}. */
-	private final List<SettingsGuard> moduleGuards;
+	private final SettingsWrites writes;
 	private final GitIntegrationSettings gitConfig;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
@@ -57,6 +54,7 @@ public class AdminSettingsController {
 	@GetMapping
 	public ServerSettings get() {
 		ServerSettings current = settings.get();
+		boolean orgAdmin = currentUser.require().isOrgAdmin();
 		fillLogoReach(current);
 		// Surface the effective app config (env defaults when not yet overridden)
 		// so the admin form pre-fills the values currently served via /meta.
@@ -107,33 +105,15 @@ public class AdminSettingsController {
 		// freezes them into the database. A module writes into a read-only view
 		// instead, and the operator's environment keeps deciding.
 		modulePrefills.forEach(prefill -> prefill.prefill(current));
+		// The time-tracking block names absence managers and carries the notes of
+		// reopened spans. It is the organisation admins' (see OrgSettingsController),
+		// and a save without it keeps what is stored.
+		if (!orgAdmin) {
+			current.setTimeTracking(null);
+		}
 		return current;
 	}
 
-	/**
-	 * The reopened spans are not editable through this route, whatever the body says.
-	 *
-	 * <p>They are the one thing in the settings document that is an <em>event</em>
-	 * rather than a setting: each carries who opened it, when, and why, and each is
-	 * recorded as {@code TIME_LOCK_EXCEPTION_ADDED}/{@code _REMOVED} by the route
-	 * that mints it. A whole-document PUT could otherwise author one with a
-	 * hand-written author and timestamp, or delete one, and leave nothing behind but
-	 * a generic {@code SETTINGS_CHANGED} — a reopened payroll month attributed to a
-	 * colleague, with no span and no reason in the log. An audit trail a client can
-	 * write is not an audit trail.
-	 *
-	 * <p>So the stored list is carried forward unconditionally. This is the same
-	 * move {@link #keepSecretsIfBlank} makes for write-only secrets, and for the
-	 * same reason: some fields leave the server and must not come back.
-	 */
-	static void keepLockExceptions(ServerSettings updated, ServerSettings current) {
-		ServerSettings.TimeTracking incoming = updated.getTimeTracking();
-		if (incoming == null) {
-			return;
-		}
-		ServerSettings.TimeTracking stored = current.getTimeTracking();
-		incoming.setLockExceptions(stored == null ? null : stored.getLockExceptions());
-	}
 
 	/**
 	 * Pre-fill the security policy from the effective values so the admin form shows
@@ -240,7 +220,7 @@ public class AdminSettingsController {
 		if (!actor.isOrgAdmin()) {
 			updated.setTimeTracking(current.getTimeTracking());
 		}
-		keepLockExceptions(updated, current);
+		writes.keepLockExceptions(updated, current);
 		// The PUT is a whole-document write. The published 10.3.3 client keeps the
 		// settings as the raw map it read, so it hands sections it does not know
 		// back untouched — but a deployment script, a curl body or any client
@@ -279,9 +259,7 @@ public class AdminSettingsController {
 		// Before the audit record and before the write, so a refusal leaves no
 		// trace of a change that did not happen. A module guard throws on purpose
 		// — unlike the audit hooks below, which must never fail a save.
-		for (SettingsGuard guard : moduleGuards) {
-			guard.check(current, updated);
-		}
+		writes.check(current, updated);
 		// Recorded before the save so that disabling audit logging itself is still
 		// captured (the check reads the pre-save, still-enabled settings).
 		audit.event(AuditAction.SETTINGS_CHANGED)
@@ -296,17 +274,13 @@ public class AdminSettingsController {
 		// once the change has succeeded cannot describe the change that switched
 		// the recording off. A module that fails to describe its own settings
 		// never fails the save.
-		for (SettingsAudit moduleAudit : moduleAudits) {
-			try {
-				moduleAudit.record(current, updated, actor);
-			}
-			catch (RuntimeException ex) {
-				log.warn("Settings audit hook {} failed: {}",
-						moduleAudit.getClass().getSimpleName(), ex.toString());
-			}
-		}
+		writes.recordModules(current, updated, actor);
 		if (updated.getAudit() == null) {
 			updated.setAudit(current.getAudit());
+		}
+		else {
+			// The switches for the organisation's records are the organisation admins'.
+			writes.carryOrganisationalAuditEvents(updated, writes.organisationalAuditEvents(current));
 		}
 		ServerSettings saved = settings.save(updated);
 		// After the save: a failed write must not leave the settings pointing at an

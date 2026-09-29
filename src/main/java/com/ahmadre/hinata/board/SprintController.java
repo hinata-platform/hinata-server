@@ -14,8 +14,8 @@ import java.util.List;
 
 /**
  * Sprint planning, lifecycle and insights for Scrum boards. All endpoints are
- * scoped to a board the caller can access (admins, or members of one of the
- * board's projects); see {@link SprintService}.
+ * scoped to a board the caller can access (members of one of the board's
+ * projects); see {@link SprintService}.
  */
 @Tag(name = "Sprints")
 @RestController

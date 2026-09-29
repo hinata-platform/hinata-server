@@ -46,6 +46,7 @@ public class ProjectTemplateTools {
 	private final ProjectService projectService;
 	private final ProjectRepository projects;
 	private final IssueService issues;
+	private final com.ahmadre.hinata.project.ProjectTemplatePolicy templatePolicy;
 
 	@McpTool(name = "copy_project", title = "Copy a project",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = false, idempotentHint = false,
@@ -71,7 +72,9 @@ public class ProjectTemplateTools {
 			@McpToolParam(description = "Copy the project's own board (default false)",
 					required = false) Boolean includeBoard,
 			@McpToolParam(description = "Mark the copy as a template (default false)",
-					required = false) Boolean asTemplate) {
+					required = false) Boolean asTemplate,
+			@McpToolParam(description = "How the copy's new relative deadlines count: CALENDAR or "
+					+ "WORKING; omit to keep the source project's choice", required = false) String basis) {
 		scopeGuard.require(Scopes.PROJECTS_WRITE);
 		User user = currentUser.require();
 		Project source = accessibleProject(idOrKey, user);
@@ -81,7 +84,8 @@ public class ProjectTemplateTools {
 				Boolean.TRUE.equals(includeAttachments),
 				includeTimeSettings == null || includeTimeSettings,
 				Boolean.TRUE.equals(includeBoard),
-				Boolean.TRUE.equals(asTemplate));
+				Boolean.TRUE.equals(asTemplate),
+				basis == null || basis.isBlank() ? null : parseEnum(basis, RelativeDate.Basis.class, null, "basis"));
 		ProjectCopyService.Result result = copies.copy(source.getId(), options, user);
 		Project copy = result.project();
 		return new CopyView(copy.getId(), copy.getKey(), copy.getName(), copy.isTemplate(),
@@ -123,12 +127,12 @@ public class ProjectTemplateTools {
 		}
 		boolean start = "start".equalsIgnoreCase(field);
 		Issue resolved = issues.getForUser(idOrReadableId, user);
-		RelativeDate.Basis fallback = projects.findById(resolved.getProjectId())
-				.map(Project::getDeadlineBasis).orElse(null);
+		RelativeDate.Basis fallback = templatePolicy.effectiveBasis(
+				projects.findById(resolved.getProjectId()).orElse(null));
 		RelativeDate offset = amount == null ? null : new RelativeDate(amount,
 				parseEnum(unit, RelativeDate.Unit.class, RelativeDate.Unit.DAYS, "unit"),
 				parseEnum(basis, RelativeDate.Basis.class,
-						fallback != null ? fallback : settings.defaultBasis(), "basis"));
+						fallback, "basis"));
 		if (offset != null && !offset.withinLimits()) {
 			throw ApiException.badRequest("error.issue.offsetOutOfRange",
 					RelativeDate.MAX_DAYS, RelativeDate.MAX_WEEKS);

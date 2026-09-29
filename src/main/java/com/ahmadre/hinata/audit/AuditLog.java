@@ -30,6 +30,9 @@ import java.util.Map;
 @CompoundIndex(name = "work_item_history",
 		def = "{'metadata.workItem': 1, 'timestamp': -1, '_id': -1}",
 		partialFilter = "{'metadata.workItem': {$exists: true}}")
+// The two feeds (platform, organisation) filter by a set of actions and page by time;
+// with this index Mongo merges the per-action ranges in time order instead of sorting.
+@CompoundIndex(name = "action_time", def = "{'action': 1, 'timestamp': -1}")
 public class AuditLog {
 
 	public enum Outcome {

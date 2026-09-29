@@ -27,7 +27,7 @@ public final class WorkWeeks {
 
 	private static final Set<DayOfWeek> MONDAY_TO_FRIDAY = EnumSet.range(DayOfWeek.MONDAY, DayOfWeek.FRIDAY);
 
-	private static final Set<DayOfWeek> FRIDAY_SATURDAY_WEEKEND =
+	private static final Set<DayOfWeek> SUNDAY_TO_THURSDAY =
 			EnumSet.of(DayOfWeek.SUNDAY, DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY,
 					DayOfWeek.THURSDAY);
 
@@ -38,13 +38,13 @@ public final class WorkWeeks {
 			Map.entry("IR", EnumSet.complementOf(EnumSet.of(DayOfWeek.FRIDAY))),
 			Map.entry("IN", EnumSet.complementOf(EnumSet.of(DayOfWeek.SUNDAY))),
 			Map.entry("UG", EnumSet.complementOf(EnumSet.of(DayOfWeek.SUNDAY))),
-			Map.entry("BH", FRIDAY_SATURDAY_WEEKEND), Map.entry("DZ", FRIDAY_SATURDAY_WEEKEND),
-			Map.entry("EG", FRIDAY_SATURDAY_WEEKEND), Map.entry("IL", FRIDAY_SATURDAY_WEEKEND),
-			Map.entry("IQ", FRIDAY_SATURDAY_WEEKEND), Map.entry("JO", FRIDAY_SATURDAY_WEEKEND),
-			Map.entry("KW", FRIDAY_SATURDAY_WEEKEND), Map.entry("LY", FRIDAY_SATURDAY_WEEKEND),
-			Map.entry("OM", FRIDAY_SATURDAY_WEEKEND), Map.entry("QA", FRIDAY_SATURDAY_WEEKEND),
-			Map.entry("SA", FRIDAY_SATURDAY_WEEKEND), Map.entry("SD", FRIDAY_SATURDAY_WEEKEND),
-			Map.entry("SY", FRIDAY_SATURDAY_WEEKEND), Map.entry("YE", FRIDAY_SATURDAY_WEEKEND));
+			Map.entry("BH", SUNDAY_TO_THURSDAY), Map.entry("DZ", SUNDAY_TO_THURSDAY),
+			Map.entry("EG", SUNDAY_TO_THURSDAY), Map.entry("IL", SUNDAY_TO_THURSDAY),
+			Map.entry("IQ", SUNDAY_TO_THURSDAY), Map.entry("JO", SUNDAY_TO_THURSDAY),
+			Map.entry("KW", SUNDAY_TO_THURSDAY), Map.entry("LY", SUNDAY_TO_THURSDAY),
+			Map.entry("OM", SUNDAY_TO_THURSDAY), Map.entry("QA", SUNDAY_TO_THURSDAY),
+			Map.entry("SA", SUNDAY_TO_THURSDAY), Map.entry("SD", SUNDAY_TO_THURSDAY),
+			Map.entry("SY", SUNDAY_TO_THURSDAY), Map.entry("YE", SUNDAY_TO_THURSDAY));
 
 	/** The zones of those regions, for a person whose language names no region. */
 	private static final Map<String, String> REGION_OF_ZONE = Map.ofEntries(

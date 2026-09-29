@@ -287,7 +287,7 @@ class AvailabilityIntegrationTest {
 	}
 
 	@Test
-	void absencesAreSeenByTheOwnerAndAdmins_byLeadsOnlyWithThePolicyAndWithoutTheNote() {
+	void absencesAreSeenByTheOwnerAndOrganisationAdmins_byLeadsOnlyWithThePolicyAndWithoutTheNote() {
 		as(member);
 		AvailabilityController.TimeOffResponse own = availability.createTimeOff(new AvailabilityController.TimeOffRequest(
 				null, TimeOff.Type.VACATION, null, day(12, 21), day(12, 23), null, "Familie"));
@@ -424,7 +424,7 @@ class AvailabilityIntegrationTest {
 	}
 
 	@Test
-	void anAdministratorKeepingSomebodysAbsenceIsRecorded_withoutItsTypeOrNote() {
+	void anOrganisationAdminKeepingSomebodysAbsenceIsRecorded_withoutItsTypeOrNote() {
 		as(member);
 		availability.createTimeOff(new AvailabilityController.TimeOffRequest(null, TimeOff.Type.VACATION, null, day(12, 14),
 				day(12, 14), null, "Eigene"));
@@ -442,7 +442,7 @@ class AvailabilityIntegrationTest {
 	}
 
 	@Test
-	void patternsAndAbsencesAreDeletedByTheirOwnerOrAnAdministrator_andNobodyElseLearnsTheyExist() {
+	void patternsAndAbsencesAreDeletedByTheirOwnerOrAnOrganisationAdmin_andNobodyElseLearnsTheyExist() {
 		as(member);
 		AvailabilityController.PatternResponse pattern = availability.saveSchedule(null,
 				new AvailabilityController.PatternRequest(day(12, 1), List.of(480, 480, 480, 480, 480, 0, 0), null));

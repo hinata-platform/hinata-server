@@ -3,6 +3,7 @@ package com.ahmadre.hinata.mailingest;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,6 +37,7 @@ public class AdminIngestController {
 	private final IngestConnectionService service;
 	private final EmailIngestService emailIngest;
 	private final ProjectRepository projects;
+	private final com.ahmadre.hinata.project.ProjectService projectService;
 	private final AuditService audit;
 	private final CurrentUser currentUser;
 
@@ -47,6 +49,7 @@ public class AdminIngestController {
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public IngestConnection create(@RequestBody IngestConnection connection) {
+		assertReachable(connection);
 		IngestConnection created = service.create(connection);
 		auditChange("created", created);
 		return created;
@@ -54,9 +57,22 @@ public class AdminIngestController {
 
 	@PutMapping("/{id}")
 	public IngestConnection update(@PathVariable String id, @RequestBody IngestConnection connection) {
+		assertReachable(connection);
 		IngestConnection updated = service.update(id, connection);
 		auditChange("updated", updated);
 		return updated;
+	}
+
+	/**
+	 * Mail becomes issues in the project a connection names, so the administrator
+	 * setting it up must be in that project: routing mail into a project is writing
+	 * into it, and an administrator is not a member of every project (HIN-129).
+	 */
+	private void assertReachable(IngestConnection connection) {
+		if (connection.getProjectId() == null || connection.getProjectId().isBlank()) return;
+		Project project = projects.findById(connection.getProjectId())
+				.orElseThrow(() -> ApiException.notFound("project"));
+		projectService.assertMember(project, currentUser.require());
 	}
 
 	@DeleteMapping("/{id}")
@@ -120,7 +136,8 @@ public class AdminIngestController {
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
 		String needle = q.trim().toLowerCase(Locale.ROOT);
-		List<Project> matches = projects.findByArchivedFalse().stream()
+		// The projects the administrator is in, like every other project picker.
+		List<Project> matches = projectService.visibleTo(currentUser.require()).stream()
 				.filter(p -> needle.isEmpty()
 						|| p.getName().toLowerCase(Locale.ROOT).contains(needle)
 						|| p.getKey().toLowerCase(Locale.ROOT).contains(needle))

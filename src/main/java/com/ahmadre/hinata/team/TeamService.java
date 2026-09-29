@@ -192,10 +192,21 @@ public class TeamService {
 		}
 		if (role != null) membership.setRole(role);
 		if (access != null) membership.setAccess(normalizeAccess(team, access));
-		if (pages != null) membership.setKnowledge(normalizePages(team, pages));
+		boolean pagesChanged = false;
+		if (pages != null) {
+			KnowledgeAccess normalized = normalizePages(team, pages);
+			KnowledgeAccess previous = membership.knowledgeOrNone();
+			pagesChanged = normalized.getScope() != previous.getScope()
+					|| !new HashSet<>(normalized.getArticleIds()).equals(new HashSet<>(previous.getArticleIds()));
+			membership.setKnowledge(normalized);
+		}
 		Team saved = teams.save(team);
 		// Role/access changes can grant or revoke project visibility for this user.
 		syncProjectMembership(new HashSet<>(saved.getProjectIds()), Set.of(userId));
+		if (pagesChanged) {
+			// Who opened which pages to whom is findable afterwards, like a role change.
+			logActivity(saved, actor, TeamActivity.Verb.KNOWLEDGE_CHANGED, userId, null);
+		}
 		if (roleChanged) {
 			logActivity(saved, actor,
 					role == TeamRole.ADMIN ? TeamActivity.Verb.PROMOTED : TeamActivity.Verb.DEMOTED,
@@ -226,8 +237,7 @@ public class TeamService {
 	// --- Projects ------------------------------------------------------------
 
 	/**
-	 * Hands projects to a team. Only somebody who leads each project, or a platform
-	 * administrator, may do it.
+	 * Hands projects to a team. Only somebody who leads each project may do it.
 	 *
 	 * <p>Attaching is a grant: the team's admins and every member with ALL access
 	 * become members of the project in the same move, and a Team-Admin may then

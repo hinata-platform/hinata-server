@@ -48,7 +48,10 @@ public class PasswordResetService {
 		if (email == null || email.isBlank()) return;
 		users.findByEmailIgnoreCase(email.trim())
 				.filter(u -> !u.isSso() && u.isActive() && u.isEmailVerified()
-						&& u.getPasswordHash() != null)
+						&& u.getPasswordHash() != null
+						// Silently, like every other refusal here: an address an administrator
+						// just set is not yet a way into the account, by any route (HIN-129).
+						&& !u.emailChangedByAdminWithinADay(Instant.now()))
 				.ifPresent(this::sendFor);
 	}
 

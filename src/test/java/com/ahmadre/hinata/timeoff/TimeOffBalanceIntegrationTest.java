@@ -311,11 +311,11 @@ class TimeOffBalanceIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("a named keeper is one without being an administrator")
-	void keepingIsTheNamedListPlusAdministrators() {
+	@DisplayName("a named keeper is one without being an administrator, and a named circle is the whole circle")
+	void keepingIsTheNamedListAlone() {
 		assertThat(timeOff.isKeeper(keeper)).isTrue();
 		assertThat(timeOff.isKeeper(member)).isFalse();
-		assertThat(timeOff.isKeeper(user("boss", Role.ORG_ADMIN))).isTrue();
+		assertThat(timeOff.isKeeper(user("boss", Role.ORG_ADMIN))).isFalse();
 	}
 
 	// --- employment dates ---------------------------------------------------------------

@@ -14,9 +14,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Who may read a board: whoever may see at least one of its projects, and an admin, who reads a board
- * of projects nobody may see as empty. The paged reads and the board's own routes ask here, so the
- * rule is one.
+ * Who may read a board: whoever may see at least one of its projects. The paged reads and the
+ * board's own routes ask here, so the rule is one.
  */
 @Component
 @RequiredArgsConstructor
@@ -37,7 +36,7 @@ class BoardAccess {
 	/**
 	 * The board's projects [user] may see.
 	 *
-	 * @throws ApiException 403 when the viewer may see none of them and is no admin
+	 * @throws ApiException 403 when the viewer may see none of them
 	 */
 	List<Project> assertReadable(AgileBoard board, User user) {
 		List<Project> readable = readableProjects(board, user);

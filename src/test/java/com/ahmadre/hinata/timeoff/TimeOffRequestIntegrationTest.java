@@ -244,7 +244,7 @@ class TimeOffRequestIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("a request nobody can be routed to still lands with the administrators")
+	@DisplayName("a request nobody can be routed to still lands with the organisation admins")
 	void anAutomaticTypeStillNamesAnAudience() {
 		vacation.setApproverRule(TimeOffType.ApproverRule.AUTO);
 		typeRepository.save(vacation);
@@ -292,7 +292,7 @@ class TimeOffRequestIntegrationTest {
 	// --- who may decide -------------------------------------------------------------
 
 	@Test
-	@DisplayName("nobody decides their own request — an administrator included, in both directions")
+	@DisplayName("nobody decides their own request — an organisation admin included, in both directions")
 	void nobodyDecidesTheirOwn() {
 		// An administrator asks. The rule routes to the administrators, so they would be among
 		// their own audience; they are struck out of it when it is worked out.
@@ -318,8 +318,8 @@ class TimeOffRequestIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("with nobody to ask, a request lands with the administrators rather than nowhere")
-	void anEmptyAudienceFallsBackToTheAdministrators() {
+	@DisplayName("with nobody to ask, a request lands with the organisation admins rather than nowhere")
+	void anEmptyAudienceFallsBackToTheOrganisationAdmins() {
 		// Nobody is on a team, so the team-lead rule finds nobody at all.
 		vacation.setApproverRule(TimeOffType.ApproverRule.TEAM_LEAD);
 		typeRepository.save(vacation);

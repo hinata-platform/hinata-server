@@ -220,6 +220,7 @@ public class AdminUserService {
 					throw ApiException.badRequest("error.user.cannotDeactivateSelf");
 				}
 				if (u.isAdmin()) requireAnotherActiveAdmin(u, "error.user.cannotDeactivateLastAdmin");
+				if (u.isOrgAdmin()) requireAnotherActiveOrgAdmin(u);
 				sessions.revokeAll(u.getId()); // deactivation forces sign-out everywhere
 			}
 			u.setActive(activate);
@@ -277,21 +278,60 @@ public class AdminUserService {
 	 * administrator, and an organisation admin gains no admin area.
 	 */
 	public void setOrgAdmin(List<String> ids, boolean orgAdmin) {
-		for (String id : ids) {
-			User u = userService.get(id);
-			if (u.isOrgAdmin() == orgAdmin) continue;
-			Set<Role> roles = new java.util.HashSet<>(u.getRoles() == null ? Set.of() : u.getRoles());
-			roles.add(Role.MEMBER);
-			if (orgAdmin) roles.add(Role.ORG_ADMIN); else roles.remove(Role.ORG_ADMIN);
-			u.setRoles(roles);
-			User saved = users.save(u);
-			notifications.notifyOrgRoleChanged(saved);
-			audit.event(AuditAction.USER_ROLE_CHANGED).actor(actingAdmin()).target(saved)
-					.meta("role", "ORG_ADMIN")
-					.meta("from", String.valueOf(!orgAdmin))
-					.meta("to", String.valueOf(orgAdmin)).log();
+		String actingId = currentUser.requireId();
+		List<User> changing = ids.stream().distinct().map(userService::get)
+				.filter(u -> u.isOrgAdmin() != orgAdmin).toList();
+		// Every refusal before the first write, so a selection is changed whole or not at all.
+		for (User u : changing) {
+			// The two roles are separate so that running the platform does not open
+			// people's working time. An administrator handing the second role to
+			// themselves would undo that in one click.
+			if (orgAdmin && u.getId().equals(actingId)) {
+				throw ApiException.badRequest("error.user.cannotGrantOwnOrgRole");
+			}
+		}
+		if (!orgAdmin && !changing.isEmpty()) {
+			long remaining = users.countByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN)
+					- changing.stream().filter(User::isActive).count();
+			if (remaining < 1) {
+				throw ApiException.conflict("error.user.cannotRemoveLastOrgAdmin");
+			}
+		}
+		List<User> holders = users.findByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN);
+		for (User u : changing) {
+			User saved = changeOrgRole(u, orgAdmin, actingAdmin(), null);
+			// The people who already hold the role learn who joins or leaves it; the
+			// record alone would only be found by someone looking.
+			notifications.notifyOrgAdminsOfRoleChange(holders, saved);
 		}
 	}
+
+	/**
+	 * Gives or takes the organisation admin role: the account, the record and the
+	 * person's own notice. Shared with the one-time hand-over, so a grant looks the
+	 * same in the log whichever way it came.
+	 *
+	 * @param actor  who acted, or null for the system
+	 * @param reason why, when it was not a person's decision (e.g. {@code migration})
+	 */
+	public User changeOrgRole(User user, boolean orgAdmin, User actor, String reason) {
+		Set<Role> roles = new java.util.HashSet<>(user.getRoles() == null ? Set.of() : user.getRoles());
+		roles.add(Role.MEMBER);
+		if (orgAdmin) roles.add(Role.ORG_ADMIN); else roles.remove(Role.ORG_ADMIN);
+		user.setRoles(roles);
+		User saved = users.save(user);
+		if (saved.isActive()) {
+			notifications.notifyOrgRoleChanged(saved);
+		}
+		var entry = actor != null ? audit.event(AuditAction.USER_ROLE_CHANGED).actor(actor)
+				: audit.event(AuditAction.USER_ROLE_CHANGED).actor(null, "Hinata");
+		entry = entry.target(saved).meta("role", "ORG_ADMIN")
+				.meta("from", String.valueOf(!orgAdmin)).meta("to", String.valueOf(orgAdmin));
+		if (reason != null) entry = entry.meta("reason", reason);
+		entry.log();
+		return saved;
+	}
+
 
 	// --- Lifecycle: credentials & sessions -----------------------------------
 
@@ -300,6 +340,9 @@ public class AdminUserService {
 			User u = userService.get(id);
 			if (u.isSso()) throw ApiException.badRequest("error.me.passwordManagedByProvider");
 			if (u.isInvitePending()) continue;
+			if (u.emailChangedByAdminWithinADay(Instant.now())) {
+				throw ApiException.conflict("error.user.resetAfterEmailChange");
+			}
 			String secret = randomToken();
 			u.setPasswordResetTokenHash(passwordEncoder.encode(secret));
 			u.setPasswordResetExpiresAt(Instant.now().plus(RESET_TTL_MINUTES, ChronoUnit.MINUTES));
@@ -329,7 +372,14 @@ public class AdminUserService {
 			if (users.existsByEmailIgnoreCase(normalized)) {
 				throw ApiException.conflict("error.user.emailInUse");
 			}
+			String previous = u.getEmail();
 			u.setEmail(normalized);
+			u.setEmailChangedByAdminAt(Instant.now());
+			audit.event(AuditAction.USER_EMAIL_CHANGED).actor(actingAdmin()).target(u)
+					.meta("from", previous).meta("to", normalized).log();
+			// The old address is the one the person still reads: it is told, with a
+			// way back through the administrators, before anything reaches the new one.
+			notifications.notifyEmailChangedByAdmin(u, previous);
 		}
 		return toResponse(users.save(u));
 	}
@@ -341,6 +391,7 @@ public class AdminUserService {
 				throw ApiException.badRequest("error.user.cannotDeleteSelf");
 			}
 			if (u.isAdmin()) requireAnotherActiveAdmin(u, "error.user.cannotDeleteLastAdmin");
+			if (u.isOrgAdmin()) requireAnotherActiveOrgAdmin(u);
 			notifications.notifyAccountDeleted(u);
 			audit.event(AuditAction.USER_DELETED).actor(actingAdmin()).target(u)
 					.meta("email", u.getEmail()).log();
@@ -387,8 +438,21 @@ public class AdminUserService {
 				.filter(java.util.Objects::nonNull).max(Comparator.naturalOrder()).orElse(null);
 	}
 
+	/**
+	 * Somebody has to keep deciding timesheets and absences: the approver
+	 * fallbacks name the organisation admins, and with none left those decisions
+	 * would reach nobody.
+	 */
+	private void requireAnotherActiveOrgAdmin(User user) {
+		requireAnotherActive(Role.ORG_ADMIN, user, "error.user.cannotRemoveLastOrgAdmin");
+	}
+
 	private void requireAnotherActiveAdmin(User user, String messageKey) {
-		if (users.countByRolesContainingAndActiveIsTrueAndIdNot(Role.ADMIN, user.getId()) == 0) {
+		requireAnotherActive(Role.ADMIN, user, messageKey);
+	}
+
+	private void requireAnotherActive(Role role, User user, String messageKey) {
+		if (users.countByRolesContainingAndActiveIsTrueAndIdNot(role, user.getId()) == 0) {
 			throw ApiException.conflict(messageKey);
 		}
 	}

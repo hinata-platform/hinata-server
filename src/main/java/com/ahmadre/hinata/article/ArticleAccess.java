@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.article;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.MongoIds;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.team.KnowledgeAccess;
@@ -17,10 +18,8 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -45,8 +44,17 @@ import java.util.stream.Collectors;
  * every account when it had no project or team; that is exactly the default this
  * rule closes.
  *
+ * <p>The rule comes in two forms, one per question: {@link #canSee(Article, User)}
+ * for one page, answered from that page's place alone, and {@link Sight} as a query
+ * for listings and search. Both treat an archived project as unreadable, and both
+ * open a SOME grant's pages below it; the query stops walking a grant at
+ * {@value #MAX_GRANTED} pages, far beyond what one grant opens, where the per-page
+ * check does not.
+ *
  * <p>Writing follows reading: whoever reads a page may edit it, as in any wiki.
- * Moving a page into another place needs {@link #assertCanTarget}.
+ * Moving a page into another place needs authority over where it is now
+ * ({@code ArticleService.assertMayMove}) and a place the author can reach
+ * ({@link #assertCanTarget}).
  */
 @Component
 @RequiredArgsConstructor
@@ -54,15 +62,16 @@ public class ArticleAccess implements TeamKnowledge {
 
 	private static final String ARTICLES = "articles";
 
+	/** Deeper than any tree a person builds; bounds the walks below. */
+	private static final int MAX_DEPTH = 50;
+
+	/** More pages than one grant opens in practice; keeps the id list in a query bounded. */
+	private static final int MAX_GRANTED = 5_000;
+
 	private final ProjectService projects;
 	private final TeamRepository teams;
 	private final MongoTemplate mongo;
 
-	/** The id of a raw article row, whichever way the driver hands it over. */
-	static String id(Document row) {
-		Object id = row.get("_id");
-		return id instanceof org.bson.types.ObjectId oid ? oid.toHexString() : String.valueOf(id);
-	}
 
 	/** What one person reads, worked out once per request. */
 	public record Sight(String userId, Set<String> projectIds, Set<String> wholeTeams,
@@ -99,8 +108,11 @@ public class ArticleAccess implements TeamKnowledge {
 	}
 
 	public Sight sightOf(User user) {
-		Set<String> projectIds = projects.visibleTo(user).stream()
-				.map(Project::getId).collect(Collectors.toSet());
+		return sightOf(user, projects.visibleTo(user).stream().map(Project::getId).collect(Collectors.toSet()));
+	}
+
+	/** As {@link #sightOf(User)}, for a caller that already knows the projects the user sees. */
+	public Sight sightOf(User user, Set<String> projectIds) {
 		Set<String> wholeTeams = new HashSet<>();
 		Map<String, List<String>> someByTeam = new HashMap<>();
 		for (Team team : teams.findByMembersUserId(user.getId())) {
@@ -117,8 +129,47 @@ public class ArticleAccess implements TeamKnowledge {
 		return new Sight(user.getId(), projectIds, wholeTeams, grantedWithDescendants(someByTeam));
 	}
 
+	/**
+	 * The rule for one page, answered by its place alone: a project page asks the
+	 * project, a team page asks that one team (and, for a SOME grant, the page's own
+	 * ancestors), a private page compares the author. Opening a page costs a lookup or
+	 * two, not the reader's whole reach.
+	 */
 	public boolean canSee(Article article, User user) {
-		return sightOf(user).canSee(article);
+		if (article == null || user == null) return false;
+		if (article.getProjectId() != null) {
+			// Archived like everywhere else: a deactivated project's pages do not open by id
+			// when they never show in a list.
+			return projects.findOptional(article.getProjectId())
+					.map(project -> !project.isArchived() && projects.canSee(project, user)).orElse(false);
+		}
+		if (article.getTeamId() != null) {
+			TeamMembership membership = teams.findById(article.getTeamId())
+					.map(team -> team.membership(user.getId())).orElse(null);
+			if (membership == null) return false;
+			KnowledgeAccess pages = membership.knowledgeOrNone();
+			if (membership.isAdmin() || pages.getScope() == ProjectAccess.Scope.ALL) return true;
+			return pages.getScope() == ProjectAccess.Scope.SOME && pages.getArticleIds() != null
+					&& grantedThroughAncestor(article, article.getTeamId(), Set.copyOf(pages.getArticleIds()));
+		}
+		return user.getId().equals(article.getAuthorId());
+	}
+
+	/** Whether the page or one of its ancestors in the same team is among [granted]. */
+	private boolean grantedThroughAncestor(Article article, String teamId, Set<String> granted) {
+		String id = article.getId();
+		String parentId = article.getParentId();
+		for (int depth = 0; id != null && depth < MAX_DEPTH; depth++) {
+			if (granted.contains(id)) return true;
+			if (parentId == null) return false;
+			Query query = Query.query(Criteria.where("_id").is(parentId).and("teamId").is(teamId));
+			query.fields().include("_id").include("parentId");
+			Document parent = mongo.findOne(query, Document.class, ARTICLES);
+			if (parent == null) return false;
+			id = MongoIds.of(parent);
+			parentId = parent.getString("parentId");
+		}
+		return false;
 	}
 
 	/**
@@ -146,41 +197,35 @@ public class ArticleAccess implements TeamKnowledge {
 		query.fields().include("_id");
 		// Raw documents: a projection leaves out the primitive sortOrder, which the
 		// entity's constructor cannot take as null.
-		return mongo.find(query, Document.class, ARTICLES).stream().map(ArticleAccess::id)
+		return mongo.find(query, Document.class, ARTICLES).stream().map(MongoIds::of)
 				.collect(Collectors.toSet());
 	}
 
 	/**
-	 * A SOME grant opens a page and everything filed under it. Pages of one team
-	 * form their own trees (a page always takes its parent's place), so the walk
-	 * reads each granting team's pages once, ids and parents only.
+	 * A SOME grant opens a page and everything filed under it. Walked down from the
+	 * granted pages level by level (ids only, through the {@code parentId} index), so
+	 * the cost follows the size of what was granted, not the size of the team's pages.
 	 */
+	/** The pages a SOME grant opens in one team: the granted ones and everything below them. */
+	Set<String> grantedInTeam(String teamId, List<String> roots) {
+		return roots == null || roots.isEmpty() ? Set.of() : grantedWithDescendants(Map.of(teamId, roots));
+	}
+
 	private Set<String> grantedWithDescendants(Map<String, List<String>> someByTeam) {
-		if (someByTeam.isEmpty()) return Set.of();
-		Query query = Query.query(Criteria.where("teamId").in(someByTeam.keySet()).and("projectId").is(null));
-		query.fields().include("_id").include("parentId").include("teamId");
-		Map<String, List<String>> children = new HashMap<>();
-		Map<String, String> teamOf = new HashMap<>();
-		for (Document page : mongo.find(query, Document.class, ARTICLES)) {
-			String id = id(page);
-			teamOf.put(id, page.getString("teamId"));
-			String parentId = page.getString("parentId");
-			if (parentId != null) {
-				children.computeIfAbsent(parentId, k -> new ArrayList<>()).add(id);
-			}
-		}
 		Set<String> granted = new HashSet<>();
 		someByTeam.forEach((teamId, roots) -> {
-			Deque<String> open = new ArrayDeque<>();
-			for (String root : roots) {
-				if (teamId.equals(teamOf.get(root))) open.add(root);
-			}
-			while (!open.isEmpty()) {
-				String id = open.pop();
-				if (!granted.add(id)) continue;
-				for (String child : children.getOrDefault(id, List.of())) {
-					if (teamId.equals(teamOf.get(child))) open.add(child);
-				}
+			Query rootsQuery = Query.query(Criteria.where("_id").in(roots).and("teamId").is(teamId)
+					.and("projectId").is(null));
+			rootsQuery.fields().include("_id");
+			List<String> level = mongo.find(rootsQuery, Document.class, ARTICLES).stream()
+					.map(MongoIds::of).toList();
+			for (int depth = 0; !level.isEmpty() && depth < MAX_DEPTH && granted.size() < MAX_GRANTED; depth++) {
+				granted.addAll(level);
+				Query below = Query.query(Criteria.where("parentId").in(level).and("teamId").is(teamId)
+						.and("projectId").is(null));
+				below.fields().include("_id");
+				level = mongo.find(below, Document.class, ARTICLES).stream().map(MongoIds::of)
+						.filter(id -> !granted.contains(id)).toList();
 			}
 		});
 		return granted;

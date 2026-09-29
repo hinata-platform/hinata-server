@@ -535,7 +535,7 @@ class TimesheetApprovalIntegrationTest {
 	}
 
 	@Test
-	void theFreezeBindsTheLeadAndTheAdministratorToo() {
+	void theFreezeBindsTheLeadAndTheOrganisationAdminToo() {
 		WorkItem old = entry(member, project, LAST_MONTH_START, 60);
 		submitLastMonth(member);
 		// A lead manages a member's entries only while leads may read them at all
@@ -658,7 +658,7 @@ class TimesheetApprovalIntegrationTest {
 	}
 
 	@Test
-	void anAdministratorCanDecideASoleLeadsOwnPeriod() {
+	void anOrganisationAdminCanDecideASoleLeadsOwnPeriod() {
 		// Why administrators are not excluded from the self-approval rule: an
 		// instance has to have somebody who can decide the period of the only lead.
 		project.setLeadIds(new ArrayList<>(List.of(lead.getId())));
@@ -988,7 +988,7 @@ class TimesheetApprovalIntegrationTest {
 	}
 
 	@Test
-	void aCorrectionRequestForALockedDayGoesToAdministratorsInstead() {
+	void aCorrectionRequestForALockedDayGoesToOrganisationAdminsInstead() {
 		WorkItem old = entry(member, project, LAST_MONTH_START, 60);
 		lockBefore(TODAY);
 

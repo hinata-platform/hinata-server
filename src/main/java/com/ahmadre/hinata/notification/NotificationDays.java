@@ -6,6 +6,7 @@ import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserZones;
 import com.ahmadre.hinata.user.WorkWeeks;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -30,6 +31,18 @@ public class NotificationDays {
 	private final SettingsService settings;
 	private final Clock clock;
 
+	/**
+	 * The instance's zone, for people without one of their own. Read once, then kept
+	 * until the settings change: a fan-out asks for every recipient, and the answer is
+	 * the same for all of them.
+	 */
+	private volatile ZoneId instanceZone;
+
+	@EventListener
+	void onSettingsChanged(SettingsService.SettingsChangedEvent event) {
+		instanceZone = UserZones.of(null, event.settings());
+	}
+
 	/** The person's stored preferences, sanitized and applied to today. */
 	public NotificationPreferences today(User user) {
 		NotificationPreferences stored = user.getNotificationPreferences();
@@ -44,9 +57,16 @@ public class NotificationDays {
 		return List.copyOf(WorkWeeks.workingDays(user.getLocale(), zoneOf(user)));
 	}
 
-	/** Only a person without a zone of their own costs a settings read. */
 	private ZoneId zoneOf(User user) {
 		boolean own = user.getTimezone() != null && !user.getTimezone().isBlank();
-		return UserZones.of(user, own ? null : settings.get());
+		if (own) {
+			return UserZones.of(user, null);
+		}
+		ZoneId zone = instanceZone;
+		if (zone == null) {
+			zone = UserZones.of(null, settings.get());
+			instanceZone = zone;
+		}
+		return zone;
 	}
 }

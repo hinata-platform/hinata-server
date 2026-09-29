@@ -27,7 +27,7 @@ import java.util.Map;
 /**
  * A project's avatar. Kept out of {@link ProjectController} so the image concern
  * stays legible on its own, but under the same authority: uploading or removing
- * is a settings change (platform admin or project lead), reading only needs the
+ * is a settings change (project lead or Team-Admin of an owning team), reading only needs the
  * visibility every member already has.
  *
  * <p>Unlike a user's avatar, the read endpoint is <b>authenticated</b>. Profile

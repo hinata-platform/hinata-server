@@ -379,7 +379,7 @@ class WorkItemLifecycleIntegrationTest {
 
 	/** An entry that never had an owner (a LEGACY remainder) is not silently anyone's. */
 	@Test
-	void anEntryWithoutAnOwnerBelongsToNobodyAndOnlyALeadOrAdminMayTouchIt() {
+	void anEntryWithoutAnOwnerBelongsToNobodyAndOnlyALeadOrOrganisationAdminMayTouchIt() {
 		WorkItem ownerless = workItems.save(WorkItem.builder().issueId(issue.getId())
 				.projectId(project.getId()).userId(null).date(DAY).durationMinutes(20)
 				.source(WorkItem.Source.LEGACY).build());

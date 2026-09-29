@@ -126,8 +126,9 @@ public class IssueService {
 	 * Applies one change to several issues. Access is settled for all of them before
 	 * the first write — one project per distinct project, not one per issue — so a
 	 * single issue the caller may not touch refuses the whole request and nothing is
-	 * half done. Each write then runs through {@link #update}, with its history,
-	 * notifications and deadline rules, exactly as if it had been made on its own.
+	 * half done, and an issue the caller cannot see answers like one that does not
+	 * exist. Each write keeps its history and deadline rules; the people following
+	 * those issues get one notice for the whole change rather than one per issue.
 	 */
 	public List<Issue> updateAll(List<String> ids, java.util.function.Consumer<Issue> mutator, User editor) {
 		List<String> distinct = ids == null ? List.of()
@@ -139,9 +140,24 @@ public class IssueService {
 		if (found.size() != distinct.size()) {
 			throw ApiException.notFound("issue");
 		}
-		found.stream().map(Issue::getProjectId).distinct()
-				.forEach(projectId -> projects.assertMember(projects.get(projectId), editor));
-		return found.stream().map(issue -> update(issue.getId(), mutator, editor)).toList();
+		java.util.Map<String, Project> byId = new java.util.HashMap<>();
+		for (String projectId : found.stream().map(Issue::getProjectId).distinct().toList()) {
+			Project project = projects.get(projectId);
+			if (!projects.canSee(project, editor)) {
+				throw ApiException.notFound("issue");
+			}
+			byId.put(projectId, project);
+		}
+		List<Issue> updated = found.stream()
+				.map(issue -> apply(issue, byId.get(issue.getProjectId()), mutator, editor, false))
+				.toList();
+		try {
+			notifications.notifyIssuesChanged(updated, editor);
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("bulk change notification failed (updates kept)", ex);
+		}
+		return updated;
 	}
 
 	/** True when {@code user} may see the issue (a member of its project); never throws. */
@@ -282,6 +298,18 @@ public class IssueService {
 		if (editor != null) {
 			assertAccess(issue, editor);
 		}
+		return apply(issue, projects.get(issue.getProjectId()), mutator, editor, true);
+	}
+
+	/**
+	 * The body of {@link #update}, for an issue whose access is already settled and
+	 * whose project is already loaded. {@code announce} false leaves out the change
+	 * summary to watchers and stakeholders, for a caller that sends one summary for
+	 * many issues instead; mentions and new assignments are still told one by one,
+	 * since each is about that issue.
+	 */
+	private Issue apply(Issue issue, Project project, java.util.function.Consumer<Issue> mutator, User editor,
+			boolean announce) {
 		Issue before = snapshot(issue);
 		Set<String> previousAssignees = new HashSet<>(
 				issue.getAssigneeIds() != null ? issue.getAssigneeIds() : List.of());
@@ -290,7 +318,6 @@ public class IssueService {
 		IssueLabels.check(before.getTags(), issue.getTags());
 		validateHierarchy(issue);
 
-		Project project = projects.get(issue.getProjectId());
 		// Keep the issue's state in step with its sprint membership:
 		//  • pulled into a sprint  → advance out of Backlog (it's now on the board);
 		//  • returned to backlog   → drop back to the Backlog state.
@@ -339,12 +366,14 @@ public class IssueService {
 		// and the chain behind this call reaches the mail layer and the digest
 		// queue. A failure there must not come back to the editor as a 500 for a
 		// write that succeeded — nor rob the recipients after it in the fan-out.
-		try {
-			notifications.notifyUpdated(saved, IssueChangeDiff.between(before, saved), editor,
-					notified);
-		}
-		catch (RuntimeException ex) {
-			LOGGER.warn("change notification failed for issue {} (update kept)", saved.getId(), ex);
+		if (announce) {
+			try {
+				notifications.notifyUpdated(saved, IssueChangeDiff.between(before, saved), editor,
+						notified);
+			}
+			catch (RuntimeException ex) {
+				LOGGER.warn("change notification failed for issue {} (update kept)", saved.getId(), ex);
+			}
 		}
 		return saved;
 	}
@@ -429,7 +458,7 @@ public class IssueService {
 	}
 
 	/**
-	 * Hard delete — restricted to platform admins, project leads and Team-Admins
+	 * Hard delete — restricted to project leads and Team-Admins
 	 * of a team owning the project (see {@link ProjectService#canDeleteIssues}).
 	 * Regular members must archive instead.
 	 */
@@ -1024,9 +1053,9 @@ public class IssueService {
 				? Criteria.where("archived").is(true)
 				: Criteria.where("archived").ne(true));
 		// Everyone is limited to active (non-archived) projects — an archived
-		// project is deactivated, so its issues never surface anywhere. Non-admins
-		// are further limited to projects they belong to (A01). visibleTo already
-		// excludes archived projects, so it is the active scope for a member.
+		// project is deactivated, so its issues never surface anywhere — and to the
+		// projects the reader belongs to (A01). visibleTo already excludes archived
+		// projects, so it is exactly that scope.
 		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
 		Pageable pageable = PageRequest.of(p.page(), Math.min(p.size(), 100), sortFor(p.sort()));
 		if (p.projectId() != null) {
@@ -1404,12 +1433,14 @@ public class IssueService {
 	}
 
 	/**
-	 * Delete a comment. The author may delete their own; admins may moderate any.
+	 * Delete a comment. The author may delete their own; the people who run the
+	 * project (its leads and the Team-Admins of a team owning it) may moderate any.
 	 * Deleting a ROOT cascades its whole reply thread (and frees each reply's blob).
 	 */
 	public void deleteComment(String issueId, String commentId, User user) {
 		IssueComment comment = requireComment(issueId, commentId, user);
-		if (!user.isAdmin() && !comment.getAuthorId().equals(user.getId())) {
+		if (!comment.getAuthorId().equals(user.getId())
+				&& !projects.canManage(projects.get(get(issueId).getProjectId()), user)) {
 			throw ApiException.forbidden("error.comment.deleteOwnOnly");
 		}
 		// A top-level comment owns a flat reply thread — remove it too so replies

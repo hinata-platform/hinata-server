@@ -121,7 +121,7 @@ public class AdminUserController {
 		service.setRole(request.ids(), request.role());
 	}
 
-	public record OrgRoleRequest(@NotEmpty List<String> ids, boolean orgAdmin) {
+	public record OrgRoleRequest(@NotEmpty @Size(max = 100) List<String> ids, boolean orgAdmin) {
 	}
 
 	@PostMapping("/org-role")

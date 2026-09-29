@@ -12,9 +12,8 @@ import com.ahmadre.hinata.user.User;
  *
  * <p><b>The same inversion as {@link TimeOffCatalogue} and {@link TimeOffGate}, for the same
  * reason.</b> The dependency runs {@code timeoff → availability}; this module cannot read the
- * other's settings, so it states the question and lets the module above answer it. With absence
- * management absent or switched off, {@link #adminsOnly()} answers no to everybody and the rule is
- * exactly what it was before there was a second answer.
+ * other's settings, so it states the question and lets the module above answer it. Without an
+ * answer the organisation admins keep absences, exactly as before there was a second answer.
  *
  * <p>It widens who may <em>write</em> and nothing else. What a person may <em>see</em> of somebody
  * else's absences stays where it was decided in HIN-91: {@link AvailabilityAccess#of}, the
@@ -24,9 +23,4 @@ public interface AbsenceKeepers {
 
 	/** Whether [actor] keeps absences for the organisation. */
 	boolean keeps(User actor);
-
-	/** The answer when there is no absence management: administrators and nobody else. */
-	static AbsenceKeepers adminsOnly() {
-		return actor -> false;
-	}
 }

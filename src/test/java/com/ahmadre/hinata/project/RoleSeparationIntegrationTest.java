@@ -3,6 +3,8 @@ package com.ahmadre.hinata.project;
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleAccess;
 import com.ahmadre.hinata.article.ArticleService;
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditFeed;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.RelativeDate;
@@ -109,6 +111,25 @@ class RoleSeparationIntegrationTest {
 	@Autowired
 	private com.ahmadre.hinata.migration.OrgAdminRoleBackfill backfill;
 
+	@Autowired
+	private com.ahmadre.hinata.audit.AuditService audit;
+	@Autowired
+	private AuditFeed auditFeed;
+	@Autowired
+	private com.ahmadre.hinata.admin.AdminUserService adminUsers;
+	@Autowired
+	private com.ahmadre.hinata.timeoff.TimeOffAccess timeOffAccess;
+	@Autowired
+	private com.ahmadre.hinata.availability.AvailabilityAccess availabilityAccess;
+	@Autowired
+	private com.ahmadre.hinata.team.TeamController teamController;
+	@Autowired
+	private com.ahmadre.hinata.article.TeamPagesController teamPages;
+	@Autowired
+	private com.ahmadre.hinata.audit.OrgAuditController orgAudit;
+	@Autowired
+	private com.ahmadre.hinata.auth.PasswordResetService passwordResets;
+
 	@MockitoBean
 	private CurrentUser currentUser;
 
@@ -124,7 +145,7 @@ class RoleSeparationIntegrationTest {
 	@BeforeEach
 	void seed() {
 		for (String collection : List.of("users", "projects", "teams", "issues", "articles",
-				"issue_activities", "server_settings", MigrationMarkers.COLLECTION)) {
+				"issue_activities", "server_settings", "audit_log", "team_activity", MigrationMarkers.COLLECTION)) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		settings.save(new ServerSettings());
@@ -193,7 +214,28 @@ class RoleSeparationIntegrationTest {
 	}
 
 	@Test
-	void aProjectCountsDeadlinesItsOwnWayOrTheOrganisations() {
+	void aTeamAdminCannotAppointThemselvesLead() {
+		assertThatThrownBy(() -> projectService.applyUpdate(project.getId(), new ProjectUpdateRequest(null, null,
+				null, null, List.of(teamAdmin.getId()), null, null, null, null, null, null, null, null, null),
+				teamAdmin)).isInstanceOf(ApiException.class).hasMessageContaining("notLead");
+
+		// The same leads sent back, as a settings screen does, are no change.
+		Project saved = projectService.applyUpdate(project.getId(), new ProjectUpdateRequest(null, "Same leads",
+				null, null, List.of(lead.getId()), null, null, null, null, null, null, null, null, null), teamAdmin);
+		assertThat(saved.getLeadIds()).containsExactly(lead.getId());
+	}
+
+	@Test
+	void aProjectFollowsTheOrganisationUntilItSaysOtherwise() {
+		assertThat(templates.effectiveBasis(project)).isEqualTo(RelativeDate.Basis.CALENDAR);
+		when(currentUser.require()).thenReturn(orgAdmin);
+		orgSettings.update(new OrgSettingsController.OrgSettingsUpdate(null, RelativeDate.Basis.WORKING, null));
+		assertThat(templates.effectiveBasis(projects.findById(project.getId()).orElseThrow()))
+				.isEqualTo(RelativeDate.Basis.WORKING);
+	}
+
+	@Test
+	void aProjectSetsAndClearsItsOwnDeadlineBasis() {
 		Project updated = projectService.applyUpdate(project.getId(), new ProjectUpdateRequest(null, null, null,
 				null, null, null, null, null, null, null, null, null, null, RelativeDate.Basis.WORKING, null, null),
 				lead);
@@ -212,8 +254,10 @@ class RoleSeparationIntegrationTest {
 		Issue b = issue("Second");
 		LocalDate due = LocalDate.of(2026, 12, 1);
 
+		// Answered like an issue that does not exist: an outsider learns nothing.
 		assertThatThrownBy(() -> issues.updateAll(List.of(a.getId(), b.getId()),
-				issue -> issue.setDueDate(due), outsider)).isInstanceOf(ApiException.class);
+				issue -> issue.setDueDate(due), outsider)).isInstanceOf(ApiException.class)
+				.hasMessageContaining("notFound");
 		assertThat(issueRepository.findById(a.getId()).orElseThrow().getDueDate()).isNull();
 
 		List<Issue> updated = issues.updateAll(List.of(a.getId(), b.getId(), a.getId()),
@@ -321,7 +365,11 @@ class RoleSeparationIntegrationTest {
 
 		when(currentUser.require()).thenReturn(admin);
 		ServerSettings body = adminSettings.get();
-		body.getTimeTracking().setCurrency("USD");
+		// The block is the organisation's: an administrator is not even shown it.
+		assertThat(body.getTimeTracking()).isNull();
+		ServerSettings.TimeTracking attempt = new ServerSettings.TimeTracking();
+		attempt.setCurrency("USD");
+		body.setTimeTracking(attempt);
 		body.getProjectTemplates().setDefaultBasis(RelativeDate.Basis.CALENDAR);
 		adminSettings.update(body);
 
@@ -343,6 +391,203 @@ class RoleSeparationIntegrationTest {
 		users.save(separated);
 		backfill.run(new DefaultApplicationArguments());
 		assertThat(users.findById(admin.getId()).orElseThrow().isOrgAdmin()).isFalse();
+	}
+
+	// --- HIN-129 review round -------------------------------------------------
+
+	@Test
+	void thePlatformAuditFeedLeavesOutTheOrganisationsRecordsAndContentDetails() {
+		audit.event(AuditAction.TIME_OFF_SICK_REPORTED).actor(member).target(member).meta("from", "2026-10-01").log();
+		audit.event(AuditAction.ISSUE_DELETED).actor(lead).meta("issue", "SEC-1").log();
+		audit.event(AuditAction.LOGIN_SUCCESS).actor(member).log();
+		AuditFeed.Filter all = new AuditFeed.Filter(null, null, null, null, null, null, null, null, 1, 50);
+
+		List<AuditFeed.AuditEntryResponse> platform = auditFeed.page(all, AuditFeed.Scope.PLATFORM).items();
+		assertThat(platform).extracting(AuditFeed.AuditEntryResponse::action)
+				.contains("ISSUE_DELETED", "LOGIN_SUCCESS").doesNotContain("TIME_OFF_SICK_REPORTED");
+		assertThat(platform).filteredOn(row -> row.action().equals("ISSUE_DELETED"))
+				.allSatisfy(row -> assertThat(row.metadata()).isEmpty());
+
+		assertThat(auditFeed.page(all, AuditFeed.Scope.ORGANISATION).items())
+				.extracting(AuditFeed.AuditEntryResponse::action).containsExactly("TIME_OFF_SICK_REPORTED");
+	}
+
+	@Test
+	void anAdministratorCannotGrantThemselvesTheOrganisationRoleNorRemoveTheLastOne() {
+		when(currentUser.requireId()).thenReturn(admin.getId());
+		assertThatThrownBy(() -> adminUsers.setOrgAdmin(List.of(admin.getId()), true))
+				.isInstanceOf(ApiException.class).hasMessageContaining("cannotGrantOwnOrgRole");
+		assertThatThrownBy(() -> adminUsers.setOrgAdmin(List.of(orgAdmin.getId()), false))
+				.isInstanceOf(ApiException.class).hasMessageContaining("cannotRemoveLastOrgAdmin");
+
+		adminUsers.setOrgAdmin(List.of(member.getId()), true);
+		assertThat(users.findById(member.getId()).orElseThrow().isOrgAdmin()).isTrue();
+	}
+
+	@Test
+	void anAddressChangedByAnAdministratorBlocksAResetForADay() {
+		when(currentUser.requireId()).thenReturn(admin.getId());
+		adminUsers.updateDetails(member.getId(), null, null, "elsewhere@example.org");
+
+		assertThatThrownBy(() -> adminUsers.sendPasswordReset(List.of(member.getId())))
+				.isInstanceOf(ApiException.class).hasMessageContaining("resetAfterEmailChange");
+		assertThat(mongo.count(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("action").is("USER_EMAIL_CHANGED")),
+				"audit_log")).isEqualTo(1);
+	}
+
+	@Test
+	void readingAPageIsNotEnoughToTakeItAway() {
+		Article plan = page(lead, project.getId(), null, null, "Plan");
+		Article mine = page(member, null, null, null, "Mine");
+
+		assertThatThrownBy(() -> articles.place(plan.getId(), null, team.getId(), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("moveNotAllowed");
+		Article reloaded = mongo.findById(plan.getId(), Article.class);
+		assertThatThrownBy(() -> articles.save(reloaded, mine.getId(), member))
+				.isInstanceOf(ApiException.class);
+		assertThat(mongo.findById(plan.getId(), Article.class).getProjectId()).isEqualTo(project.getId());
+	}
+
+	@Test
+	void aPageFiledUnderAnotherPlaceStaysWhereItIsWhenItsOldParentMoves() {
+		Article root = page(lead, null, null, null, "Draft");
+		// Filed before places were kept together: a team page under a private one.
+		Article teamPage = mongo.save(Article.builder().title("Team notes").teamId(team.getId())
+				.parentId(root.getId()).authorId(teamAdmin.getId()).build());
+
+		articles.place(root.getId(), project.getId(), null, lead);
+
+		Article after = mongo.findById(teamPage.getId(), Article.class);
+		assertThat(after.getTeamId()).isEqualTo(team.getId());
+		assertThat(after.getProjectId()).isNull();
+		assertThat(after.getParentId()).isNull();
+	}
+
+	@Test
+	void namedAbsenceManagersNarrowWhoSeesIllness() {
+		assertThat(timeOffAccess.isKeeper(orgAdmin)).isTrue();
+
+		when(currentUser.require()).thenReturn(orgAdmin);
+		ServerSettings.TimeTracking block = new ServerSettings.TimeTracking();
+		block.setAbsenceManagers(List.of(member.getId()));
+		orgSettings.update(new OrgSettingsController.OrgSettingsUpdate(block, null, null));
+
+		assertThat(timeOffAccess.isKeeper(orgAdmin)).isFalse();
+		assertThat(timeOffAccess.isKeeper(member)).isTrue();
+		assertThat(availabilityAccess.of(orgAdmin, lead.getId()))
+				.isEqualTo(com.ahmadre.hinata.availability.AvailabilityAccess.Sight.TYPE_AND_SPAN);
+	}
+
+	@Test
+	void aMemberSeesHowManyPagesColleaguesWereOpenedButNotWhich() {
+		Article handbook = page(teamAdmin, null, team.getId(), null, "Handbook");
+		teamService.updateMembership(teams.findById(team.getId()).orElseThrow(), teamAdmin, member.getId(),
+				null, null, KnowledgeAccess.some(List.of(handbook.getId())));
+		User other = user("other");
+		teamService.addMembers(teams.findById(team.getId()).orElseThrow(), teamAdmin, List.of(other.getId()),
+				TeamRole.MEMBER, ProjectAccess.none());
+
+		when(currentUser.require()).thenReturn(other);
+		TeamMembership seen = teamController.get(team.getId()).membership(member.getId());
+		assertThat(seen.knowledgeOrNone().getArticleIds()).isEmpty();
+		assertThat(seen.knowledgeOrNone().getCount()).isEqualTo(1);
+
+		when(currentUser.require()).thenReturn(member);
+		assertThat(teamPages.outline(team.getId(), "hand").getBody())
+				.extracting(ArticleService.PageRef::title).containsExactly("Handbook");
+	}
+
+	@Test
+	void theHandOverIsOnRecordForEveryPerson() {
+		backfill.run(new DefaultApplicationArguments());
+		assertThat(mongo.count(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("action").is("USER_ROLE_CHANGED")
+						.and("targetId").is(admin.getId())), "audit_log")).isEqualTo(1);
+	}
+
+	// --- HIN-129 review round 2 -------------------------------------------------
+
+	@Test
+	void anotherPersonsPrivatePageNeverTravelsWithMine() {
+		Article mine = page(lead, null, null, null, "Old wiki");
+		// Filed under it back when pages without a place were everybody's.
+		Article theirs = mongo.save(Article.builder().title("Their notes").parentId(mine.getId())
+				.authorId(member.getId()).build());
+
+		articles.place(mine.getId(), project.getId(), null, lead);
+
+		Article after = mongo.findById(theirs.getId(), Article.class);
+		assertThat(after.getProjectId()).isNull();
+		assertThat(after.getParentId()).isNull();
+		assertThat(articleAccess.canSee(after, lead)).isFalse();
+		assertThat(articleAccess.canSee(after, member)).isTrue();
+	}
+
+	@Test
+	void aPageOfAnArchivedProjectDoesNotOpenByIdEither() {
+		Article plan = page(lead, project.getId(), null, null, "Plan");
+		project.setArchived(true);
+		projects.save(project);
+		assertThat(articleAccess.canSee(mongo.findById(plan.getId(), Article.class), member)).isFalse();
+	}
+
+	@Test
+	void theForgotPasswordRouteWaitsOutAnAddressAnAdministratorJustSet() {
+		when(currentUser.requireId()).thenReturn(admin.getId());
+		adminUsers.updateDetails(member.getId(), null, null, "taken@example.org");
+		User changed = users.findById(member.getId()).orElseThrow();
+		changed.setEmailVerified(true);
+		changed.setPasswordHash("hash");
+		users.save(changed);
+
+		passwordResets.requestByEmail("taken@example.org");
+
+		assertThat(users.findById(member.getId()).orElseThrow().getPasswordResetTokenHash()).isNull();
+	}
+
+	@Test
+	void anOrganisationAdminOutsideANamedCircleDoesNotReadAbsencesInTheLog() {
+		audit.event(AuditAction.TIME_OFF_SICK_REPORTED).actor(member).target(member).log();
+		audit.event(AuditAction.TIMESHEET_APPROVED).actor(lead).target(member).log();
+		when(currentUser.require()).thenReturn(orgAdmin);
+		ServerSettings.TimeTracking block = new ServerSettings.TimeTracking();
+		block.setAbsenceManagers(List.of(member.getId()));
+		orgSettings.update(new OrgSettingsController.OrgSettingsUpdate(block, null, null));
+
+		assertThat(orgAudit.list(null, null, null, null, null, null, null, null, 1, 50).items())
+				.extracting(AuditFeed.AuditEntryResponse::action)
+				.contains("TIMESHEET_APPROVED").doesNotContain("TIME_OFF_SICK_REPORTED");
+	}
+
+	@Test
+	void theOrganisationsAuditSwitchesAreTheOrganisationAdmins() {
+		when(currentUser.require()).thenReturn(orgAdmin);
+		orgSettings.update(new OrgSettingsController.OrgSettingsUpdate(null, null, null,
+				java.util.Map.of("TIME_ENTRY_CREATED", true, "LOGIN_SUCCESS", false)));
+		assertThat(settings.get().getAudit().getEvents()).containsEntry("TIME_ENTRY_CREATED", true)
+				.doesNotContainKey("LOGIN_SUCCESS");
+
+		when(currentUser.require()).thenReturn(admin);
+		ServerSettings body = adminSettings.get();
+		body.getAudit().setEnabled(false);
+		body.getAudit().getEvents().put("TIME_ENTRY_CREATED", false);
+		adminSettings.update(body);
+
+		assertThat(settings.get().getAudit().getEvents()).containsEntry("TIME_ENTRY_CREATED", true);
+		// The platform's master switch does not silence the organisation's records.
+		audit.event(AuditAction.TIME_ENTRY_CREATED).actor(member).log();
+		assertThat(mongo.count(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("action").is("TIME_ENTRY_CREATED")),
+				"audit_log")).isEqualTo(1);
+	}
+
+	@Test
+	void aSelectionThatIncludesTheAdministratorChangesNobody() {
+		when(currentUser.requireId()).thenReturn(admin.getId());
+		assertThatThrownBy(() -> adminUsers.setOrgAdmin(List.of(member.getId(), admin.getId()), true))
+				.isInstanceOf(ApiException.class);
+		assertThat(users.findById(member.getId()).orElseThrow().isOrgAdmin()).isFalse();
 	}
 
 	// --- helpers ----------------------------------------------------------------

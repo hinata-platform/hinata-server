@@ -137,14 +137,17 @@ class TimeOffTypeIntegrationTest {
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.forbidden");
 
-		// A named keeper is not an administrator and still keeps the catalogue.
+		// A named keeper is not an administrator and still keeps the catalogue; with a circle
+		// named, an organisation admin outside it does not (HIN-129).
 		assertThat(keeper.isAdmin()).isFalse();
 		assertThat(types.create(keeper, draft("training")).getKey()).isEqualTo("training");
-		assertThat(types.create(admin, draft("sabbatical")).getKey()).isEqualTo("sabbatical");
+		assertThatThrownBy(() -> types.create(admin, draft("sabbatical")))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.timeOff.forbidden");
 	}
 
 	@Test
-	void removingTheLastNamedKeeperLeavesAdministratorsOnly() {
+	void removingTheLastNamedKeeperLeavesOrganisationAdminsOnly() {
 		enableModule(List.of());
 
 		assertThatThrownBy(() -> types.create(keeper, draft("training")))
@@ -156,7 +159,7 @@ class TimeOffTypeIntegrationTest {
 
 	@Test
 	void aSickTypeCannotBeMadeSubjectToApproval() {
-		assertThatThrownBy(() -> types.create(admin, draft("illness").toBuilder()
+		assertThatThrownBy(() -> types.create(keeper, draft("illness").toBuilder()
 				.kind(TimeOffType.Kind.SICK).approvalRequired(true).build()))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.sickNeedsNoApproval");
@@ -164,7 +167,7 @@ class TimeOffTypeIntegrationTest {
 
 	@Test
 	void anUnlimitedTypeCannotAlsoCarryABalance() {
-		assertThatThrownBy(() -> types.create(admin, draft("unpaid").toBuilder()
+		assertThatThrownBy(() -> types.create(keeper, draft("unpaid").toBuilder()
 				.unlimited(true).allowanceMilliDays(5 * TimeOffType.DAY).build()))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.unlimitedHasNoBalance");
@@ -172,19 +175,19 @@ class TimeOffTypeIntegrationTest {
 
 	@Test
 	void aKeyIsASlugAndIsTakenOnlyOnce() {
-		assertThatThrownBy(() -> types.create(admin, draft("Not a key!")))
+		assertThatThrownBy(() -> types.create(keeper, draft("Not a key!")))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.typeKeyInvalid");
 
-		types.create(admin, draft("training"));
-		assertThatThrownBy(() -> types.create(admin, draft("TRAINING")))
+		types.create(keeper, draft("training"));
+		assertThatThrownBy(() -> types.create(keeper, draft("TRAINING")))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.typeKeyTaken");
 	}
 
 	@Test
 	void anImpossibleDayOfTheYearIsRefused() {
-		assertThatThrownBy(() -> types.create(admin, draft("training").toBuilder()
+		assertThatThrownBy(() -> types.create(keeper, draft("training").toBuilder()
 				.carryoverExpiresMonth(2).carryoverExpiresDay(31).build()))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.monthDayInvalid");
@@ -196,14 +199,14 @@ class TimeOffTypeIntegrationTest {
 	void aSystemTypeIsSwitchedOffRatherThanDeleted() {
 		TimeOffType sick = types.byKey(TimeOffType.SYSTEM_SICK).orElseThrow();
 
-		assertThatThrownBy(() -> types.delete(admin, sick.getId()))
+		assertThatThrownBy(() -> types.delete(keeper, sick.getId()))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.typeSystemUndeletable");
 
-		types.update(admin, sick.getId(), TimeOffTypeService.Draft.builder().active(false).build());
+		types.update(keeper, sick.getId(), TimeOffTypeService.Draft.builder().active(false).build());
 		assertThat(types.list(member, false)).extracting(TimeOffType::getKey)
 				.doesNotContain(TimeOffType.SYSTEM_SICK);
-		assertThat(types.list(admin, true)).extracting(TimeOffType::getKey)
+		assertThat(types.list(keeper, true)).extracting(TimeOffType::getKey)
 				.contains(TimeOffType.SYSTEM_SICK);
 		// A member asking for everything still only gets what is on offer.
 		assertThat(types.list(member, true)).extracting(TimeOffType::getKey)
@@ -212,26 +215,26 @@ class TimeOffTypeIntegrationTest {
 
 	@Test
 	void aTypeWithHistoryIsSwitchedOffRatherThanDeleted() {
-		TimeOffType training = types.create(admin, draft("training"));
+		TimeOffType training = types.create(keeper, draft("training"));
 		assertThat(types.list(admin, true)).hasSize(4);
 
 		// An unused type goes.
-		TimeOffType spare = types.create(admin, draft("spare"));
-		types.delete(admin, spare.getId());
+		TimeOffType spare = types.create(keeper, draft("spare"));
+		types.delete(keeper, spare.getId());
 		assertThat(typeRepository.findById(spare.getId())).isEmpty();
 
 		ledger.save(TimeOffLedgerEntry.builder().userId(member.getId()).typeId(training.getId())
 				.year(2026).kind(TimeOffLedgerEntry.Kind.ACCRUAL).milliDays(5 * TimeOffType.DAY)
 				.effectiveOn(LocalDate.of(2026, 1, 1)).build());
 
-		assertThatThrownBy(() -> types.delete(admin, training.getId()))
+		assertThatThrownBy(() -> types.delete(keeper, training.getId()))
 				.isInstanceOf(ApiException.class)
 				.hasMessageContaining("error.timeOff.typeInUse");
 	}
 
 	@Test
 	void keepingTheCatalogueIsAudited() {
-		types.create(admin, draft("training"));
+		types.create(keeper, draft("training"));
 
 		List<AuditLog> events = mongo.find(
 				Query.query(Criteria.where("action").is(AuditAction.TIME_OFF_TYPE_CHANGED.name())),

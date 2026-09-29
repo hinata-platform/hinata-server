@@ -158,7 +158,7 @@ public class TimeReportService {
 				Math.clamp(size, 1, PAGE_MAX));
 		Page<Group> groups = groupBy == GroupBy.USER
 				? byName(criteria, filter, pageable)
-				: grouped(criteria, filter, groupBy, pageable);
+				: grouped(reach, criteria, filter, groupBy, pageable);
 		return new Summary(totals(criteria, filter), groupBy, groups, reach.seesOthers());
 	}
 
@@ -179,7 +179,8 @@ public class TimeReportService {
 	}
 
 	/** One page of groups, sorted in the pipeline: buckets by date, everything else by size. */
-	private Page<Group> grouped(Criteria criteria, TimeReportFilter filter, GroupBy groupBy, Pageable pageable) {
+	private Page<Group> grouped(TimeReportScope.Reach reach, Criteria criteria, TimeReportFilter filter,
+			GroupBy groupBy, Pageable pageable) {
 		List<AggregationOperation> stages = groupStages(criteria, filter, groupBy);
 		Document order = groupBy.isTime() ? new Document("_id", 1)
 				: new Document("minutes", -1).append("_id", 1);
@@ -192,7 +193,7 @@ public class TimeReportService {
 		List<Document> rows = facet.getList("rows", Document.class, List.of());
 		List<Document> counted = facet.getList("count", Document.class, List.of());
 		long total = counted.isEmpty() ? 0 : number(counted.get(0), "n");
-		return new PageImpl<>(label(groupBy, rows), pageable, total);
+		return new PageImpl<>(label(reach, groupBy, rows), pageable, total);
 	}
 
 	/**
@@ -207,7 +208,7 @@ public class TimeReportService {
 		if (rows.size() > PEOPLE_GROUPS_MAX) {
 			throw ApiException.badRequest("error.time.report.tooBroad");
 		}
-		List<Group> named = new ArrayList<>(label(GroupBy.USER, rows));
+		List<Group> named = new ArrayList<>(label(null, GroupBy.USER, rows));
 		Collator collator = Collator.getInstance(Locale.ENGLISH);
 		collator.setStrength(Collator.SECONDARY);
 		named.sort(Comparator.comparing((Group group) -> group.label() == null ? "￿" : group.label(), collator)
@@ -255,14 +256,19 @@ public class TimeReportService {
 		return stages;
 	}
 
-	/** The groups of one page with their names. Each kind is looked up once per page. */
-	private List<Group> label(GroupBy groupBy, List<Document> rows) {
+	/**
+	 * The groups of one page with their names. Each kind is looked up once per page. An issue's
+	 * title and key, and a project's name, are project content: only for projects [reach] reads
+	 * (the same rule as the rows, see {@code TimeReportScope.Reach#readsContent}); the key of a
+	 * project is what working time and billing need and stays.
+	 */
+	private List<Group> label(TimeReportScope.Reach reach, GroupBy groupBy, List<Document> rows) {
 		List<String> keys = rows.stream().map(row -> keyOf(row.get("_id"))).toList();
 		Set<String> ids = keys.stream().filter(Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
 		Map<String, Document> named = switch (groupBy) {
 			case PROJECT -> documents(Project.class, ids, "key", "name");
 			case USER -> documents(User.class, ids, "displayName", "username");
-			case ISSUE -> documents(Issue.class, ids, "readableId", "title");
+			case ISSUE -> documents(Issue.class, ids, "readableId", "title", "projectId");
 			case TEAM -> documents(Team.class, ids, "name", "key");
 			default -> Map.of();
 		};
@@ -276,7 +282,7 @@ public class TimeReportService {
 			if (found != null) {
 				switch (groupBy) {
 					case PROJECT -> {
-						label = found.getString("name");
+						label = readsProject(reach, key) ? found.getString("name") : null;
 						detail = found.getString("key");
 					}
 					case USER -> {
@@ -284,8 +290,10 @@ public class TimeReportService {
 						detail = found.getString("username");
 					}
 					case ISSUE -> {
-						label = found.getString("title");
-						detail = found.getString("readableId");
+						if (readsProject(reach, found.getString("projectId"))) {
+							label = found.getString("title");
+							detail = found.getString("readableId");
+						}
 					}
 					case TEAM -> {
 						label = found.getString("name");
@@ -299,6 +307,11 @@ public class TimeReportService {
 					number(row, "entries")));
 		}
 		return groups;
+	}
+
+	/** Whether [reach] reads the content of [projectId]; no reach (people groups) asks nothing. */
+	private static boolean readsProject(TimeReportScope.Reach reach, String projectId) {
+		return reach == null || reach.readsContent(projectId, null);
 	}
 
 	/**
@@ -333,10 +346,16 @@ public class TimeReportService {
 		if (pageable.getOffset() >= COUNT_MAX) {
 			return new PageImpl<>(List.of(), pageable, COUNT_MAX);
 		}
-		Query query = detailedQuery(viewer, filter);
+		TimeReportScope.Reach reach = scopes.of(viewer);
+		Query query = detailedQuery(reach, filter);
 		List<WorkItem> items = mongo.find(Query.of(query).with(pageable), WorkItem.class);
-		return PageableExecutionUtils.getPage(rows(items, filter), pageable,
+		return PageableExecutionUtils.getPage(rows(reach, items, filter), pageable,
 				() -> mongo.count(Query.of(query).limit(COUNT_MAX), WorkItem.class));
+	}
+
+	/** What [viewer] may read of the report, worked out once per report or export. */
+	TimeReportScope.Reach reachOf(User viewer) {
+		return scopes.of(viewer);
 	}
 
 	/**
@@ -344,13 +363,18 @@ public class TimeReportService {
 	 * newest first. Day, then id — an order the {@code date_id} index walks without sorting, and
 	 * within a day the order entries were written in.
 	 */
-	Query detailedQuery(User viewer, TimeReportFilter filter) {
-		Criteria criteria = criteria(scopes.of(viewer), filter, true);
+	Query detailedQuery(TimeReportScope.Reach reach, TimeReportFilter filter) {
+		Criteria criteria = criteria(reach, filter, true);
 		return Query.query(criteria).with(Sort.by(Sort.Order.desc("date"), Sort.Order.desc("_id")));
 	}
 
-	/** [items] as rows, with every user, project and issue they name looked up once. */
-	List<EntryRow> rows(List<WorkItem> items, TimeReportFilter filter) {
+	/**
+	 * [items] as rows, with every user, project and issue they name looked up once. What an entry
+	 * says about its project's content (issue key and title, the description, the project's name)
+	 * is left out where [reach] does not read that project; the hours, the person and the project
+	 * key stay, which is what working time and billing need.
+	 */
+	List<EntryRow> rows(TimeReportScope.Reach reach, List<WorkItem> items, TimeReportFilter filter) {
 		Map<String, Document> users = documents(User.class, idsOf(items, WorkItem::getUserId), "displayName", "username");
 		Map<String, Document> projects = documents(Project.class, idsOf(items, WorkItem::getProjectId), "key", "name");
 		Map<String, Document> issues = documents(Issue.class, idsOf(items, WorkItem::getIssueId), "readableId", "title");
@@ -358,17 +382,18 @@ public class TimeReportService {
 		for (WorkItem item : items) {
 			Document user = item.getUserId() == null ? null : users.get(item.getUserId());
 			Document project = item.getProjectId() == null ? null : projects.get(item.getProjectId());
-			Document issue = item.getIssueId() == null ? null : issues.get(item.getIssueId());
+			boolean content = reach.readsContent(item.getProjectId(), item.getUserId());
+			Document issue = !content || item.getIssueId() == null ? null : issues.get(item.getIssueId());
 			rows.add(new EntryRow(item.getId(), item.getDate(), item.getStartedAt(), item.getEndedAt(),
 					item.getDurationMinutes(), TimeRounding.round(item.getDurationMinutes(), filter.rounding()),
 					item.getUserId(),
 					user == null ? null : firstNonBlank(user.getString("displayName"), user.getString("username")),
 					item.getProjectId(), project == null ? null : project.getString("key"),
-					project == null ? null : project.getString("name"),
-					item.getIssueId(), issue == null ? null : issue.getString("readableId"),
+					project == null || !content ? null : project.getString("name"),
+					content ? item.getIssueId() : null, issue == null ? null : issue.getString("readableId"),
 					issue == null ? null : issue.getString("title"),
 					item.getActivityType() == null ? DEFAULT_ACTIVITY : item.getActivityType(),
-					item.getDescription(), item.getTags(), item.isBillable(), item.getSource()));
+					content ? item.getDescription() : null, item.getTags(), item.isBillable(), item.getSource()));
 		}
 		return rows;
 	}
@@ -405,6 +430,11 @@ public class TimeReportService {
 		if (filter.description() != null) {
 			all.add(Criteria.where("description")
 					.regex(Pattern.compile(Pattern.quote(filter.description()), Pattern.CASE_INSENSITIVE)));
+			if (reach.everything()) {
+				// Searching the words is reading them: only where the reader may read them.
+				all.add(new Criteria().orOperator(Criteria.where("userId").is(reach.viewerId()),
+						Criteria.where("projectId").in(reach.visibleProjects())));
+			}
 		}
 		if (!filter.approval().isEmpty()) {
 			all.add(approval(filter));

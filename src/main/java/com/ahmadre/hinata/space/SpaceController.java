@@ -11,6 +11,10 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
@@ -31,6 +35,7 @@ public class SpaceController {
 	private final SpaceRepository spaces;
 	private final ArticleRepository articles;
 	private final CurrentUser currentUser;
+	private final MongoTemplate mongo;
 
 	public record SpaceRequest(
 			@NotBlank @Size(max = 60) String name,
@@ -83,12 +88,12 @@ public class SpaceController {
 			if (spaces.existsByName(newName)) {
 				throw ApiException.conflict("error.space.exists");
 			}
-			// Articles reference the space by name — cascade the rename onto them.
-			List<Article> inSpace = articles.findBySpace(space.getName());
-			for (Article a : inSpace) {
-				a.setSpace(newName);
-				articles.save(a);
-			}
+			// Articles reference the space by name, so the rename cascades onto them —
+			// as one update of that field alone. Saving each whole page would write
+			// pages the caller cannot read (private ones included) and could undo an
+			// edit somebody made to one of them a moment earlier.
+			mongo.updateMulti(Query.query(Criteria.where("space").is(space.getName())),
+					new Update().set("space", newName), Article.class);
 			space.setName(newName);
 		}
 		if (request.icon() != null) space.setIcon(request.icon());
@@ -103,7 +108,7 @@ public class SpaceController {
 	public void delete(@PathVariable String id) {
 		currentUser.require();
 		Space space = spaces.findById(id).orElseThrow(() -> ApiException.notFound("space"));
-		if (!articles.findBySpace(space.getName()).isEmpty()) {
+		if (articles.existsBySpace(space.getName())) {
 			throw ApiException.conflict("error.space.notEmpty");
 		}
 		spaces.deleteById(id);

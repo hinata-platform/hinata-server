@@ -129,7 +129,7 @@ public class TimeCorrectionService {
 		boolean approval = state.reason() == TimePolicy.LockReason.APPROVAL;
 		Set<String> recipients = approval
 				? approvers.approverIds(item.getProjectId())
-				: approvers.adminIds();
+				: approvers.orgAdminIds();
 		recipients.remove(user.getId());
 		if (!recipients.isEmpty()) {
 			notifications.notifyTimeCorrectionRequested(recipients, user.getDisplayName(),
@@ -192,7 +192,7 @@ public class TimeCorrectionService {
 				.day(today())
 				.createdAt(clock.instant())
 				.build(), "error.time.backfillAlreadyRequested");
-		Set<String> recipients = approvers.adminIds();
+		Set<String> recipients = approvers.orgAdminIds();
 		recipients.remove(user.getId());
 		if (!recipients.isEmpty()) {
 			notifications.notifyTimeBackfillRequested(recipients, user.getDisplayName(),
@@ -335,7 +335,7 @@ public class TimeCorrectionService {
 
 	/** Every grant still running, newest first. Administrators only. */
 	public Page<Grant> activeGrants(int page, int size, User user) {
-		requireAdmin(user);
+		requireOrgAdmin(user);
 		Pageable pageable = PageRequest.of(Math.clamp(page, 0, TimeTrackingService.PAGE_INDEX_MAX),
 				Math.clamp(size, 1, PAGE_MAX), Sort.by(Sort.Order.desc("grantedAt")));
 		Page<TimeBackfillGrant> found = grants.findByExpiresAtAfter(clock.instant(), pageable);
@@ -353,7 +353,7 @@ public class TimeCorrectionService {
 
 	/** Takes a grant back before it ends. Administrators only; audited. */
 	public void revokeGrant(String grantId, User user) {
-		requireAdmin(user);
+		requireOrgAdmin(user);
 		TimeBackfillGrant grant = grants.findById(grantId)
 				.orElseThrow(() -> ApiException.notFound("timeBackfillGrant"));
 		grants.delete(grant);
@@ -461,7 +461,7 @@ public class TimeCorrectionService {
 		return LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC);
 	}
 
-	private static void requireAdmin(User user) {
+	private static void requireOrgAdmin(User user) {
 		if (!user.isOrgAdmin()) {
 			throw ApiException.forbidden("error.time.lockExceptionsAdminOnly");
 		}

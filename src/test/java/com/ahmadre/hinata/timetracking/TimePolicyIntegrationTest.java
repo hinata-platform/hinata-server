@@ -329,7 +329,7 @@ class TimePolicyIntegrationTest {
 	}
 
 	@Test
-	void onlyAnAdministratorRenamesOrDeletesATag() {
+	void onlyAnOrganisationAdminRenamesOrDeletesATag() {
 		// Coining a word is cheap and undoable, and the operator decides who may.
 		// Renaming one rewrites a label on every entry that carries it, in
 		// projects the actor may not even be able to see — that is an
@@ -702,7 +702,7 @@ class TimePolicyIntegrationTest {
 	}
 
 	@Test
-	void aCuratedCatalogueRefusesAnUnknownTagAndOnlyAdminsAddOne() {
+	void aCuratedCatalogueRefusesAnUnknownTagAndOnlyOrganisationAdminsAddOne() {
 		tagCatalog.create("Meeting", null, admin);
 		limitTagAccess(true);
 

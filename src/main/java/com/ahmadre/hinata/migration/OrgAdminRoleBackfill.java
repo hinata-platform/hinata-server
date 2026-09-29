@@ -1,15 +1,17 @@
 package com.ahmadre.hinata.migration;
 
-import com.mongodb.client.model.Filters;
-import com.mongodb.client.model.Updates;
+import com.ahmadre.hinata.admin.AdminUserService;
+import com.ahmadre.hinata.user.Role;
+import com.ahmadre.hinata.user.User;
+import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Component;
+
 
 /**
  * One-time hand-over when the organisation admin role arrives: every account that
@@ -24,7 +26,9 @@ import org.springframework.stereotype.Component;
  *
  * <p>Runs once (a marker in {@code migrations}), never fails the start, and only
  * ever adds the role — a later run could not take it from anybody who was given it
- * or kept it deliberately.
+ * or kept it deliberately. Each grant is audited and the person is told, so the
+ * hand-over is visible to them and to whoever reads the log, not only to the
+ * operator who reads the server's output.
  */
 @Slf4j
 @Component
@@ -34,16 +38,23 @@ public class OrgAdminRoleBackfill implements ApplicationRunner {
 
 	static final String MARKER_ID = "org-admin-role-from-admins";
 
-	private final MongoTemplate mongo;
+	private final UserRepository users;
 	private final MigrationMarkers markers;
+	private final AdminUserService adminUsers;
 
 	@Override
 	public void run(ApplicationArguments args) {
 		if (markers.done(MARKER_ID)) return;
 		try {
-			long granted = mongo.getCollection("users").updateMany(
-					Filters.and(Filters.eq("roles", "ADMIN"), Filters.ne("roles", "ORG_ADMIN")),
-					Updates.addToSet("roles", "ORG_ADMIN")).getModifiedCount();
+			int granted = 0;
+			for (User user : users.findByRolesContaining(Role.ADMIN)) {
+				if (user.isOrgAdmin()) continue;
+				// The same grant as in Admin → Users: one record per person (reason
+				// "migration") and their own notice, findable by name rather than as a
+				// count in a log line.
+				adminUsers.changeOrgRole(user, true, null, "migration");
+				granted++;
+			}
 			if (granted > 0) {
 				log.info("OrgAdminRoleBackfill: {} administrator(s) are now also organisation admins", granted);
 			}

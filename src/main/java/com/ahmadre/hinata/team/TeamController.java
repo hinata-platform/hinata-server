@@ -84,12 +84,14 @@ public class TeamController {
 
 	@GetMapping
 	public List<Team> list(@RequestParam(required = false) String q) {
-		List<Team> visible = teamService.visibleTo(currentUser.require());
+		User viewer = currentUser.require();
+		List<Team> visible = teamService.visibleTo(viewer);
 		String needle = q == null ? null : q.trim().toLowerCase();
 		return visible.stream()
 				.filter(t -> needle == null || needle.isEmpty()
 						|| (t.getName() != null && t.getName().toLowerCase().contains(needle)))
 				.limit(LIST_CAP)
+				.map(t -> forViewer(t, viewer))
 				.toList();
 	}
 
@@ -98,6 +100,23 @@ public class TeamController {
 		User user = currentUser.require();
 		Team team = teamService.get(id);
 		teamService.assertVisible(team, user);
+		return forViewer(team, user);
+	}
+
+	/**
+	 * The team as [viewer] may read it: a Team-Admin sees every member's knowledge
+	 * grant, everybody else sees their own and, for the others, only how many pages.
+	 * The response object is the one read for this request; it is never saved.
+	 */
+	private static Team forViewer(Team team, User viewer) {
+		if (team.isAdmin(viewer.getId()) || team.getMembers() == null) {
+			return team;
+		}
+		team.getMembers().forEach(member -> {
+			if (!viewer.getId().equals(member.getUserId())) {
+				member.setKnowledge(member.knowledgeOrNone().redacted());
+			}
+		});
 		return team;
 	}
 
@@ -195,7 +214,7 @@ public class TeamController {
 		} else {
 			teamService.assertVisible(team, user);
 		}
-		return teamService.removeMember(team, user, userId);
+		return forViewer(teamService.removeMember(team, user, userId), user);
 	}
 
 	// --- Projects ------------------------------------------------------------

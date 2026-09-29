@@ -169,7 +169,7 @@ class TimeImportIntegrationTest {
 	}
 
 	@Test
-	void onlyAnAdministratorImportsForSomebodyElseAndThatIsAudited() {
+	void onlyAnOrganisationAdminImportsForSomebodyElseAndThatIsAudited() {
 		String file = """
 				date,minutes,issue
 				%s,30,APO-1

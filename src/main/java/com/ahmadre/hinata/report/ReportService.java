@@ -112,8 +112,9 @@ public class ReportService {
 	}
 
 	/**
-	 * Minutes per project in the range — over the projects {@code user} can see. Entries without a project (detached from a deleted issue in
-	 * a project that has since gone) are skipped: a null key would have no name
+	 * Minutes per project in the range — over the projects {@code user} can see.
+	 * Entries without a project (detached from a deleted issue in a project that
+	 * has since gone) are skipped: a null key would have no name
 	 * to show and no JSON to serialize to.
 	 *
 	 * <p>Mongo does the summing. Reading the entries to add them up here meant an

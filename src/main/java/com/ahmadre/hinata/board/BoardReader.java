@@ -309,7 +309,7 @@ public class BoardReader {
 	 * board's order, and the columns built from them.
 	 *
 	 * @throws ApiException 404 for a board that does not exist, 403 when the viewer may see none of its
-	 *                      projects. An admin reads such a board as empty.
+	 *                      projects.
 	 */
 	BoardScope scope(String boardId, User user) {
 		AgileBoard board = boards.findById(boardId).orElseThrow(() -> ApiException.notFound("board"));
