@@ -207,6 +207,24 @@ public class GlobalExceptionHandler {
 				.body(ApiError.of(HttpStatus.NOT_FOUND, t("error.routeNotFound"), null));
 	}
 
+	/**
+	 * A mapped URL asked with a method it does not take — a PUT where the API
+	 * takes a PATCH. Like the unknown path above, the catch-all turned it into a
+	 * 500 with a stack trace, telling a client its request broke the server when
+	 * it was only the wrong verb. It is a 405, with the allowed methods named.
+	 */
+	@ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+	public ResponseEntity<ApiError> handleWrongMethod(
+			org.springframework.web.HttpRequestMethodNotSupportedException ex,
+			HttpServletRequest request, HttpServletResponse response) {
+		if (!allowJsonError(request, response)) return null;
+		ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+		if (ex.getSupportedHttpMethods() != null && !ex.getSupportedHttpMethods().isEmpty()) {
+			builder.allow(ex.getSupportedHttpMethods().toArray(org.springframework.http.HttpMethod[]::new));
+		}
+		return builder.body(ApiError.of(HttpStatus.METHOD_NOT_ALLOWED, t("error.methodNotAllowed"), null));
+	}
+
 	@ExceptionHandler(Exception.class)
 	public ResponseEntity<ApiError> handleUnexpected(Exception ex, HttpServletRequest request,
 			HttpServletResponse response) {
