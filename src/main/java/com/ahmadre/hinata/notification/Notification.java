@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.notification;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Builder;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
@@ -63,12 +64,15 @@ public class Notification {
 	 * waited as one mail and one push. {@code held} is set whenever either channel waits.
 	 */
 	@Builder.Default
+	@JsonIgnore
 	private boolean held = false;
 
 	@Builder.Default
+	@JsonIgnore
 	private boolean heldEmail = false;
 
 	@Builder.Default
+	@JsonIgnore
 	private boolean heldPush = false;
 
 	@CreatedDate

@@ -1,7 +1,7 @@
 package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.common.RelativeDate;
-import com.ahmadre.hinata.template.ProjectTemplateSettings;
+import com.ahmadre.hinata.common.OrganisationDayCount;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 
@@ -37,8 +37,7 @@ public final class NotificationDaysFixture {
 	public static NotificationDays at(Instant now, RelativeDate.Basis basis) {
 		SettingsService settings = mock(SettingsService.class);
 		when(settings.get()).thenReturn(new ServerSettings());
-		ProjectTemplateSettings deadlines = mock(ProjectTemplateSettings.class);
-		when(deadlines.defaultBasis()).thenReturn(basis);
-		return new NotificationDays(settings, deadlines, Clock.fixed(now, ZoneOffset.UTC));
+		OrganisationDayCount dayCount = () -> basis;
+		return new NotificationDays(settings, dayCount, Clock.fixed(now, ZoneOffset.UTC));
 	}
 }
