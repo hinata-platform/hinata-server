@@ -305,6 +305,10 @@ hinata:
     # Copies one person may make per hour; 0 switches the budget off. One copy is
     # already bounded (500 issues, 50 files, 100 MB) — this bounds how many.
     copies-per-hour: ${HINATA_PROJECT_TEMPLATES_COPIES_PER_HOUR:20}
+    # How a new relative deadline counts by default: CALENDAR or WORKING days.
+    # An organisation admin can change it for the organisation, and every project
+    # for itself; this is only where both start.
+    default-basis: ${HINATA_PROJECT_TEMPLATES_DEFAULT_BASIS:CALENDAR}
 
 springdoc:
   api-docs:

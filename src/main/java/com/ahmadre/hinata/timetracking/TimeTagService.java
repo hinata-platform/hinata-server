@@ -345,7 +345,7 @@ public class TimeTagService {
 	 * week. Coining a word is cheap and undoable.
 	 */
 	private void assertMayCoin(User actor) {
-		if (policy.limitTagAccess() && (actor == null || !actor.isAdmin())) {
+		if (policy.limitTagAccess() && (actor == null || !actor.isOrgAdmin())) {
 			throw ApiException.forbidden("error.time.tagsRestricted");
 		}
 	}
@@ -362,7 +362,7 @@ public class TimeTagService {
 	 * a label across the whole organisation.
 	 */
 	private void assertMayCurate(User actor) {
-		if (actor == null || !actor.isAdmin()) {
+		if (actor == null || !actor.isOrgAdmin()) {
 			throw ApiException.forbidden("error.time.tagsRestricted");
 		}
 	}

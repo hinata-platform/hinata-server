@@ -55,7 +55,7 @@ class ProjectSearchTest {
 		ProjectRepository projects = mock(ProjectRepository.class);
 		service = new ProjectService(projects, mock(ProjectTemplatePolicy.class), mongo, teams,
 				mock(NotificationService.class), mock(IssueWatcherCleanup.class),
-				new ProjectReach(projects, teams, mock(UserRepository.class)));
+				new ProjectReach(projects, teams));
 	}
 
 	private User member() {
@@ -117,10 +117,10 @@ class ProjectSearchTest {
 	}
 
 	@Test
-	void givesPlatformAdminsNoAccessBranchAtAll() {
+	void narrowsPlatformAdminsLikeEverybodyElse() {
 		service.searchVisible(admin(), null, false, PageRequest.of(0, 25));
 
-		assertThat(capturedFind()).doesNotContain("memberIds");
+		assertThat(capturedFind()).contains("memberIds");
 	}
 
 	@Test

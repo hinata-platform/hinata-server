@@ -133,7 +133,7 @@ class TimePolicyIntegrationTest {
 		project = projects.save(Project.builder().key("HIN").name("Hinata")
 				.leadIds(new ArrayList<>()).memberIds(new ArrayList<>()).build());
 		member = user("member", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		issue = issueRepository.save(Issue.builder().projectId(project.getId()).readableId("HIN-1")
 				.numberInProject(1).title("Login bug").state("Open").spentMinutes(0)
 				.watcherIds(new ArrayList<>()).assigneeIds(new ArrayList<>())

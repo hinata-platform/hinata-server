@@ -172,7 +172,7 @@ class TimeOffYearRunIntegrationTest {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		CLOCK.on(LocalDate.of(2025, 6, 15));
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		member = user("member", Role.MEMBER);
 		other = user("other", Role.MEMBER);
 		policy(block -> {
@@ -478,7 +478,7 @@ class TimeOffYearRunIntegrationTest {
 
 		int before = properties.getRateLimit().getExportsPerMinute();
 		properties.getRateLimit().setExportsPerMinute(1);
-		User exporter = user("budget-" + System.nanoTime(), Role.ADMIN);
+		User exporter = user("budget-" + System.nanoTime(), Role.ORG_ADMIN);
 		try {
 			exports.plan(exporter, query, null).close();
 			assertThatThrownBy(() -> exports.plan(exporter, query, null))

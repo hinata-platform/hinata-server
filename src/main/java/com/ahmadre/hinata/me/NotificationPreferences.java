@@ -1,19 +1,32 @@
 package com.ahmadre.hinata.me;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.data.annotation.Transient;
 
+import java.time.DayOfWeek;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Per-user notification preferences: a per-event × per-channel grid plus two
  * independent master channel switches (so a whole channel can be silenced
  * without losing the per-event choices). Embedded in the {@code users} document.
  *
- * <p>Effective delivery is {@code master && event-channel}. The {@code security}
- * event is transactional and locked on for both channels (see {@link #LOCKED}).
+ * <p>Effective delivery is {@code master && event-channel && today is one of the
+ * person's days}. The {@code security} event is transactional and locked on for
+ * both channels and every day (see {@link #LOCKED}).
+ *
+ * <p>The days are {@link #weekdays}: the days of the week e-mail and push may
+ * reach this person at all. Null until they pick their own, and null means the
+ * working days where they live (see {@code user.WorkWeeks}); the bell keeps
+ * everything either way, so nothing is lost on a quiet day, it just does not ring.
  */
 @Data
 @NoArgsConstructor
@@ -50,6 +63,24 @@ public class NotificationPreferences {
 	private boolean emailEnabled = true;
 	private boolean pushEnabled = true;
 	private Map<String, Channel> events = new LinkedHashMap<>();
+
+	/** Days e-mail and push may arrive, or null for the working days where the person lives. */
+	private List<DayOfWeek> weekdays;
+
+	/**
+	 * What a null {@link #weekdays} works out to for this person, so the settings card can
+	 * show the days that apply. Never stored — filled on the way out.
+	 */
+	@Transient
+	@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	private List<DayOfWeek> defaultWeekdays;
+
+	public NotificationPreferences(boolean emailEnabled, boolean pushEnabled, Map<String, Channel> events) {
+		this.emailEnabled = emailEnabled;
+		this.pushEnabled = pushEnabled;
+		this.events = events;
+	}
 
 	/** Sensible defaults for a fresh account (mirrors the reference data). */
 	public static NotificationPreferences defaults() {
@@ -92,7 +123,28 @@ public class NotificationPreferences {
 			}
 		}
 		base.events.put(LOCKED, new Channel(true, true));
+		// Mon→Sun, each day once. None at all reads as "no choice made": silencing
+		// every day is what the two channel switches are for.
+		if (weekdays != null && !weekdays.isEmpty()) {
+			Set<DayOfWeek> days = EnumSet.noneOf(DayOfWeek.class);
+			weekdays.stream().filter(java.util.Objects::nonNull).forEach(days::add);
+			base.weekdays = days.isEmpty() ? null : List.copyOf(days);
+		}
 		return base;
+	}
+
+	/**
+	 * These preferences as they apply on {@code today}: unchanged on one of the
+	 * person's days, both channels silenced on any other. The locked event still
+	 * delivers, because {@link #deliversEmail} and {@link #deliversPush} answer it
+	 * before they look at a channel.
+	 */
+	public NotificationPreferences on(DayOfWeek today, Set<DayOfWeek> fallback) {
+		boolean open = weekdays != null ? weekdays.contains(today) : fallback.contains(today);
+		if (open) return this;
+		NotificationPreferences quiet = new NotificationPreferences(false, false, events);
+		quiet.weekdays = weekdays;
+		return quiet;
 	}
 
 	public boolean deliversEmail(String eventId) {

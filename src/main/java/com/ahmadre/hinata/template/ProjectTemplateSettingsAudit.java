@@ -34,12 +34,22 @@ public class ProjectTemplateSettingsAudit implements SettingsAudit {
 		// The controller hands the same object back for a block the request omitted, which
 		// means "no opinion" rather than "cleared". Identity is the cheapest way to say
 		// nothing was said.
-		if (was == now || Objects.equals(was.getEnabled(), now.getEnabled())) {
+		if (was == now) {
 			return;
 		}
-		audit.event(AuditAction.PROJECT_TEMPLATES_POLICY_CHANGED).actor(actor)
-				.meta("enabled", text(was.getEnabled()) + " → " + text(now.getEnabled()))
-				.log();
+		boolean enabledMoved = !Objects.equals(was.getEnabled(), now.getEnabled());
+		boolean basisMoved = !Objects.equals(was.getDefaultBasis(), now.getDefaultBasis());
+		if (!enabledMoved && !basisMoved) {
+			return;
+		}
+		var event = audit.event(AuditAction.PROJECT_TEMPLATES_POLICY_CHANGED).actor(actor);
+		if (enabledMoved) {
+			event.meta("enabled", text(was.getEnabled()) + " → " + text(now.getEnabled()));
+		}
+		if (basisMoved) {
+			event.meta("defaultBasis", text(was.getDefaultBasis()) + " → " + text(now.getDefaultBasis()));
+		}
+		event.log();
 	}
 
 	/** An empty block rather than null, so the comparison above reads one way. */
@@ -50,7 +60,7 @@ public class ProjectTemplateSettingsAudit implements SettingsAudit {
 	}
 
 	/** {@code "default"} for a null, because that is what a null means in this block. */
-	private static String text(Boolean value) {
+	private static String text(Object value) {
 		return value == null ? "default" : String.valueOf(value);
 	}
 }

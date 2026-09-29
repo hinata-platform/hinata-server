@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueLink;
 import com.ahmadre.hinata.issue.IssueLinkType;
@@ -96,7 +97,7 @@ public class ProjectCopyService {
 			// --- Project: the plan and how it is presented ---
 			"key", "name", "description", "color", "avatarUrl", "workflowStates",
 			"resolvedStates", "labels", "leadId", "leadIds", "memberIds", "eventDate",
-			"workdayCalendarId", "template",
+			"workdayCalendarId", "template", "deadlineBasis",
 			// --- Issue: the work itself ---
 			"projectId", "title", "description", "descriptionDoc", "type", "priority", "tags",
 			"parentId", "estimateMinutes", "storyPoints", "startDate", "dueDate",
@@ -155,7 +156,15 @@ public class ProjectCopyService {
 	/** What the copy sheet lets a caller decide. */
 	public record Options(String name, String key, LocalDate eventDate, boolean includeMembers,
 			boolean includeAttachments, boolean includeTimeSettings, boolean includeBoard,
-			boolean asTemplate) {
+			boolean asTemplate, RelativeDate.Basis deadlineBasis) {
+
+		/** The copy counts deadlines the way its source does. */
+		public Options(String name, String key, LocalDate eventDate, boolean includeMembers,
+				boolean includeAttachments, boolean includeTimeSettings, boolean includeBoard,
+				boolean asTemplate) {
+			this(name, key, eventDate, includeMembers, includeAttachments, includeTimeSettings,
+					includeBoard, asTemplate, null);
+		}
 	}
 
 	/** What a copy turned out to be, for the sheet's toast and for the audit record. */
@@ -427,6 +436,8 @@ public class ProjectCopyService {
 				.memberIds(members)
 				.eventDate(eventDate)
 				.workdayCalendarId(source.getWorkdayCalendarId())
+				.deadlineBasis(options.deadlineBasis() != null ? options.deadlineBasis()
+						: source.getDeadlineBasis())
 				.template(options.asTemplate())
 				.build();
 	}

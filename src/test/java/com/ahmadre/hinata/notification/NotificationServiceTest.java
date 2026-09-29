@@ -71,7 +71,7 @@ class NotificationServiceTest {
 mock(IssueRepository.class), mock(ProjectRepository.class),
 com.ahmadre.hinata.common.UserWordsFixture.real()),
 				com.ahmadre.hinata.common.UserWordsFixture.real(),
-				mock(IssueDigestService.class));
+				NotificationDaysFixture.weekday(), mock(IssueDigestService.class));
 	}
 
 	/** A stored text comment, as the write path would have produced it. */

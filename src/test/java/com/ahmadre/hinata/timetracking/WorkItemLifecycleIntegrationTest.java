@@ -102,7 +102,7 @@ class WorkItemLifecycleIntegrationTest {
 		}
 		lead = user("lead", Role.MEMBER);
 		member = user("member", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		project = projects.save(Project.builder().key("HIN").name("Hinata")
 				.leadId(lead.getId()).leadIds(new ArrayList<>(List.of(lead.getId())))
 				.memberIds(new ArrayList<>(List.of(lead.getId(), member.getId())))
@@ -232,7 +232,7 @@ class WorkItemLifecycleIntegrationTest {
 			assertThat(row.projectId()).isNull();
 			assertThat(row.totalMinutes()).isEqualTo(15);
 		});
-		assertThat(reports.timePerProject(DAY.minusDays(2), DAY.plusDays(2), admin))
+		assertThat(reports.timePerProject(DAY.minusDays(2), DAY.plusDays(2), member))
 				.as("no null key — it has no name to show and no JSON to serialize to")
 				.containsExactly(entry(project.getId(), 30));
 	}

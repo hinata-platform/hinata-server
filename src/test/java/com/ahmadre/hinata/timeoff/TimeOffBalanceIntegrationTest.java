@@ -315,7 +315,7 @@ class TimeOffBalanceIntegrationTest {
 	void keepingIsTheNamedListPlusAdministrators() {
 		assertThat(timeOff.isKeeper(keeper)).isTrue();
 		assertThat(timeOff.isKeeper(member)).isFalse();
-		assertThat(timeOff.isKeeper(user("boss", Role.ADMIN))).isTrue();
+		assertThat(timeOff.isKeeper(user("boss", Role.ORG_ADMIN))).isTrue();
 	}
 
 	// --- employment dates ---------------------------------------------------------------

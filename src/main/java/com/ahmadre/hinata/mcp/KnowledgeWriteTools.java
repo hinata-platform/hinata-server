@@ -1,14 +1,13 @@
 package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.article.Article;
-import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.article.ArticleService;
 import com.ahmadre.hinata.richtext.LexicalToMarkdown;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
-import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
@@ -20,16 +19,18 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * MCP write tools for the knowledge base. Mirrors {@code ArticleController.create}:
- * the article's author is the authenticated user and its scope is set by the
- * optional project / team ids (global when both are absent). Gates on the
+ * MCP write tools for the knowledge base, through the same
+ * {@link ArticleService} the REST routes use: the article's author is the
+ * authenticated user, its place is the optional project / team (private to the
+ * author when both are absent, the parent's place when a parent is given), and the
+ * caller must reach that place. Gates on the
  * {@code kb:write} scope, audits the write and returns a lean article view.
  */
 @Service
 @RequiredArgsConstructor
 public class KnowledgeWriteTools {
 
-	private final ArticleRepository articles;
+	private final ArticleService articles;
 	private final RichTextService richText;
 	private final CurrentUser currentUser;
 	private final ScopeGuard scopeGuard;
@@ -59,8 +60,8 @@ public class KnowledgeWriteTools {
 	@McpTool(name = "create_kb_article", title = "Create knowledge base article",
 			annotations = @McpTool.McpAnnotations(destructiveHint = false, openWorldHint = false),
 			description = "Create a knowledge base article authored by the current user. Scope it to a "
-					+ "project or a team by passing that id (leave both empty for a global, organisation-wide "
-					+ "article). Returns the created article.")
+					+ "project or a team by passing that id; leave both empty for a private article only "
+					+ "you can read. A child article lives where its parent lives. Returns the created article.")
 	public ArticleView create_kb_article(
 			@McpToolParam(required = true, description = "Article title") String title,
 			@McpToolParam(required = true, description = "Markdown body of the article") String content,
@@ -73,18 +74,8 @@ public class KnowledgeWriteTools {
 		User me = currentUser.require();
 		// An agent writes markdown; storage is Lexical.
 		RichText body = richText.fromMarkdown(content);
-		Article saved = articles.save(Article.builder()
-				.title(title)
-				.content(body.text())
-				.contentDoc(body.doc())
-				.referencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()))
-				.projectId(projectId)
-				.teamId(teamId)
-				.parentId(parentId)
-				.space(space)
-				.tags(tags != null ? tags : List.of())
-				.authorId(me.getId())
-				.build());
+		Article saved = articles.create(me, new ArticleService.Draft(title, body, blankToNull(projectId),
+				blankToNull(teamId), blankToNull(parentId), space, null, tags, null));
 		audit.event(AuditAction.MCP_KB_CREATED).actor(me)
 				.meta("article", saved.getId()).log();
 		return ArticleView.of(saved);
@@ -114,10 +105,10 @@ public class KnowledgeWriteTools {
 			article.setContentDoc(body.doc());
 			article.setReferencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()));
 		}
-		if (parentId != null) article.setParentId(parentId.isBlank() ? null : parentId);
 		if (space != null) article.setSpace(space);
 		if (tags != null) article.setTags(tags);
-		Article saved = articles.save(article);
+		Article saved = articles.save(article,
+				parentId == null ? article.getParentId() : blankToNull(parentId), me);
 		audit.event(AuditAction.MCP_KB_UPDATED).actor(me)
 				.meta("article", saved.getId()).log();
 		return ArticleView.of(saved);
@@ -132,12 +123,13 @@ public class KnowledgeWriteTools {
 		scopeGuard.require(Scopes.KB_WRITE);
 		User me = currentUser.require();
 		Article article = knowledgeReadTools.requireVisible(id, me);
-		if (!articles.findByParentId(article.getId()).isEmpty()) {
-			throw ApiException.conflict("error.article.hasChildren");
-		}
-		articles.deleteById(article.getId());
+		articles.delete(article);
 		audit.event(AuditAction.MCP_KB_DELETED).actor(me)
 				.meta("article", article.getId()).log();
 		return "deleted";
+	}
+
+	private static String blankToNull(String value) {
+		return value == null || value.isBlank() ? null : value;
 	}
 }

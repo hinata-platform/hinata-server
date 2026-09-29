@@ -168,7 +168,7 @@ class TimePrivacyIntegrationTest {
 				.leadIds(new ArrayList<>()).memberIds(new ArrayList<>()).build());
 		member = user("member", Role.MEMBER, "de");
 		lead = user("lead", Role.MEMBER, "en");
-		admin = user("admin", Role.ADMIN, "en");
+		admin = user("admin", Role.ORG_ADMIN, "en");
 		project.getLeadIds().add(lead.getId());
 		project = projects.save(project);
 	}
@@ -774,7 +774,7 @@ class TimePrivacyIntegrationTest {
 	@Test
 	void theHistoryForgetsTheNameAndTheWordsOfAnAccountThatIsGone() {
 		policy(block -> block.setLockBefore(TODAY));
-		User secondAdmin = user("second-admin", Role.ADMIN, "en");
+		User secondAdmin = user("second-admin", Role.ORG_ADMIN, "en");
 		WorkItem frozen = entry(member, TODAY.minusDays(5), 60, "Workshop");
 		WorkItem open = entry(member, TODAY, 60, "Planning");
 		timeTracking.update(open.getId(), minutes(45), secondAdmin);

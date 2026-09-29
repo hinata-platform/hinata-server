@@ -79,8 +79,8 @@ public class ProjectService {
 	}
 
 	/**
-	 * Projects the user may see: platform admins see all; everyone else sees the
-	 * projects they are a direct member of <em>plus</em> any project granted to
+	 * Projects the user may see: the projects they are a direct member of
+	 * <em>plus</em> any project granted to
 	 * them through a team (see {@link TeamAccess}). The two sources are deduped
 	 * by id and archived projects are excluded.
 	 */
@@ -94,9 +94,6 @@ public class ProjectService {
 	}
 
 	private List<Project> visible(User user, boolean archived) {
-		if (user.isAdmin()) {
-			return archived ? projects.findByArchivedTrue() : projects.findByArchivedFalse();
-		}
 		List<Project> direct = archived
 				? projects.findByMemberIdsContainsAndArchivedTrue(user.getId())
 				: projects.findByMemberIdsContainsAndArchivedFalse(user.getId());
@@ -141,9 +138,7 @@ public class ProjectService {
 		List<String> capped = ids.stream().filter(Objects::nonNull).distinct().limit(RESOLVE_CAP).toList();
 		if (capped.isEmpty()) return List.of();
 		Criteria byId = Criteria.where("id").in(capped);
-		Criteria reach = reachOf(user);
-		Criteria criteria = reach == null ? byId : new Criteria().andOperator(byId, reach);
-		return mongo.find(Query.query(criteria), Project.class);
+		return mongo.find(Query.query(new Criteria().andOperator(byId, reachOf(user))), Project.class);
 	}
 
 	/**
@@ -162,8 +157,7 @@ public class ProjectService {
 	private Criteria searchCriteria(User user, String query, boolean archived) {
 		List<Criteria> parts = new ArrayList<>();
 		parts.add(Criteria.where("archived").is(archived));
-		Criteria reach = reachOf(user);
-		if (reach != null) parts.add(reach);
+		parts.add(reachOf(user));
 		String needle = query == null ? null : query.trim();
 		// A pattern cannot carry a NUL, and a line break would write a line of its own into a log.
 		if (needle != null && needle.chars().anyMatch(Character::isISOControl)) {
@@ -180,11 +174,9 @@ public class ProjectService {
 
 	/**
 	 * Query form of {@link #visible}: the projects this user may reach, either as
-	 * a direct member or through a team grant. Null for platform admins, who
-	 * reach everything — a caller must then add no access branch at all.
+	 * a direct member or through a team grant.
 	 */
 	private Criteria reachOf(User user) {
-		if (user.isAdmin()) return null;
 		Criteria direct = Criteria.where("memberIds").is(user.getId());
 		Set<String> granted = teamGrantedProjectIds(user);
 		if (granted.isEmpty()) return direct;
@@ -218,6 +210,9 @@ public class ProjectService {
 			throw ApiException.conflict("error.project.keyExists");
 		}
 		project.setKey(key);
+		if (project.getDeadlineBasis() != null && !templates.offered()) {
+			throw ApiException.badRequest("error.feature.disabled");
+		}
 		if (project.getLeadId() == null) {
 			project.setLeadId(creator.getId());
 		}
@@ -272,41 +267,55 @@ public class ProjectService {
 		throw ApiException.forbidden("error.project.notMember");
 	}
 
-	/** Editing project settings is restricted to platform admins and project
-	 * leads — regular members can read but not reconfigure the project. */
-	public void assertLeadOrAdmin(Project project, User user) {
-		if (!isLeadOrAdmin(project, user)) {
+	/**
+	 * Editing project settings — name, workflow, members, the event date — is for
+	 * the people who run the project: its leads, and the Team-Admins of a team that
+	 * owns it. Platform admins are deliberately not on that list: running the
+	 * platform is not a licence to reconfigure, or read, anyone's project.
+	 */
+	public void assertCanManage(Project project, User user) {
+		if (!canManage(project, user)) {
 			throw ApiException.forbidden("error.project.notLead");
 		}
 	}
 
 	/**
-	 * The rule behind {@link #assertLeadOrAdmin} as a question, for callers that
-	 * fall back to a narrower permission rather than refusing outright — a work
-	 * item's owner may edit it whether or not they lead the project.
+	 * The rule behind {@link #assertCanManage} as a question, for callers that fall
+	 * back to a narrower permission rather than refusing outright.
 	 */
-	public boolean isLeadOrAdmin(Project project, User user) {
-		if (user.isAdmin()) return true;
+	public boolean canManage(Project project, User user) {
+		return isLead(project, user) || isTeamAdminOf(project, user);
+	}
+
+	/**
+	 * The narrower rule for what a Team-Admin must not do on a project they did not
+	 * start: delete it, hand it to another team, connect a repository, decide a
+	 * timesheet. Each of those either cannot be undone or reaches beyond the team.
+	 */
+	public void assertLead(Project project, User user) {
+		if (!isLead(project, user)) {
+			throw ApiException.forbidden("error.project.notLead");
+		}
+	}
+
+	/** Whether {@code user} is one of the project's leads. */
+	public boolean isLead(Project project, User user) {
 		List<String> leads = project.getLeadIds();
 		if (leads != null && leads.contains(user.getId())) return true;
 		return user.getId().equals(project.getLeadId()); // legacy single lead
 	}
 
 	/**
-	 * Whether {@code user} may hard-delete issues of this project: platform
-	 * admins, project leads, and Team-Admins of a team that owns the project.
-	 * Everyone else may only archive issues.
+	 * Whether {@code user} may hard-delete issues of this project: the same people
+	 * who manage it. Everyone else may only archive issues.
 	 */
 	public boolean canDeleteIssues(Project project, User user) {
-		if (user.isAdmin()) return true;
-		List<String> leads = project.getLeadIds();
-		if (leads != null && leads.contains(user.getId())) return true;
-		if (user.getId().equals(project.getLeadId())) return true; // legacy single lead
-		return teams.findByMembersUserId(user.getId()).stream().anyMatch(team -> {
-			var membership = team.membership(user.getId());
-			return membership != null && membership.isAdmin()
-					&& team.getProjectIds().contains(project.getId());
-		});
+		return canManage(project, user);
+	}
+
+	private boolean isTeamAdminOf(Project project, User user) {
+		return teams.findByProjectIdsContains(project.getId()).stream()
+				.anyMatch(team -> team.isAdmin(user.getId()));
 	}
 
 	/**
@@ -318,7 +327,7 @@ public class ProjectService {
 	 */
 	public Project applyUpdate(String id, ProjectUpdateRequest req, User user) {
 		Project project = get(id);
-		assertLeadOrAdmin(project, user);
+		assertCanManage(project, user);
 
 		if (req.name() != null) {
 			if (req.name().isBlank()) throw ApiException.badRequest("error.project.nameRequired");
@@ -340,6 +349,16 @@ public class ProjectService {
 			}
 			project.setTemplate(req.template());
 			templates.recordMarked(project, user);
+		}
+		boolean clearBasis = Boolean.TRUE.equals(req.clearDeadlineBasis());
+		if ((req.deadlineBasis() != null || clearBasis) && !templates.offered()) {
+			// Relative deadlines are the module's; a basis for them is too.
+			throw ApiException.badRequest("error.feature.disabled");
+		}
+		if (clearBasis) {
+			project.setDeadlineBasis(null);
+		} else if (req.deadlineBasis() != null) {
+			project.setDeadlineBasis(req.deadlineBasis());
 		}
 
 		String previousKey = project.getKey();

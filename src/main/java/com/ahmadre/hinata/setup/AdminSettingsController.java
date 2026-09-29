@@ -126,7 +126,7 @@ public class AdminSettingsController {
 	 * move {@link #keepSecretsIfBlank} makes for write-only secrets, and for the
 	 * same reason: some fields leave the server and must not come back.
 	 */
-	private static void keepLockExceptions(ServerSettings updated, ServerSettings current) {
+	static void keepLockExceptions(ServerSettings updated, ServerSettings current) {
 		ServerSettings.TimeTracking incoming = updated.getTimeTracking();
 		if (incoming == null) {
 			return;
@@ -232,6 +232,14 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
+		User actor = currentUser.require();
+		// Working time, absences and billing are the organisation's, edited on
+		// /api/v1/org/settings. An administrator who is not also an organisation
+		// admin saves the rest of the document and carries that block forward as it
+		// is stored, whatever the body says — the published app still sends it.
+		if (!actor.isOrgAdmin()) {
+			updated.setTimeTracking(current.getTimeTracking());
+		}
 		keepLockExceptions(updated, current);
 		// The PUT is a whole-document write. The published 10.3.3 client keeps the
 		// settings as the raw map it read, so it hands sections it does not know
@@ -254,6 +262,10 @@ public class AdminSettingsController {
 		}
 		if (updated.getProjectTemplates() == null) {
 			updated.setProjectTemplates(current.getProjectTemplates());
+		} else if (updated.getProjectTemplates() != current.getProjectTemplates()) {
+			// The deadline default is the organisation's too; see OrgSettingsController.
+			updated.getProjectTemplates().setDefaultBasis(current.getProjectTemplates() == null ? null
+					: current.getProjectTemplates().getDefaultBasis());
 		}
 		// An upload the admin has just switched away from: the stored object would
 		// otherwise shadow the new URL in the /meta/logo proxy and linger as an
@@ -272,7 +284,6 @@ public class AdminSettingsController {
 		}
 		// Recorded before the save so that disabling audit logging itself is still
 		// captured (the check reads the pre-save, still-enabled settings).
-		User actor = currentUser.require();
 		audit.event(AuditAction.SETTINGS_CHANGED)
 				.actor(actor)
 				// An explicit "audit": null in the body is a 500 otherwise, and the

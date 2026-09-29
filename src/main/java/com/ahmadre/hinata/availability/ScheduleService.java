@@ -94,7 +94,7 @@ public class ScheduleService {
 	/** Removes a pattern; the days it covered fall back to the one before it, or the default. */
 	public void delete(User viewer, String id) {
 		WorkingSchedule pattern = schedules.findById(id).orElseThrow(() -> ApiException.notFound("workingSchedule"));
-		if (!viewer.isAdmin() && !viewer.getId().equals(pattern.getUserId())) {
+		if (!viewer.isOrgAdmin() && !viewer.getId().equals(pattern.getUserId())) {
 			// Not found rather than forbidden: whether somebody else has a pattern is not the
 			// caller's to learn.
 			throw ApiException.notFound("workingSchedule");

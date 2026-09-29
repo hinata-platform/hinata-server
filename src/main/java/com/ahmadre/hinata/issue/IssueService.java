@@ -119,7 +119,32 @@ public class IssueService {
 		return issue;
 	}
 
-	/** True when {@code user} may see the issue (admin or project member); never throws. */
+	/** Most issues one bulk change touches; the list's selection bar sends a page at most. */
+	public static final int MAX_BULK = 100;
+
+	/**
+	 * Applies one change to several issues. Access is settled for all of them before
+	 * the first write — one project per distinct project, not one per issue — so a
+	 * single issue the caller may not touch refuses the whole request and nothing is
+	 * half done. Each write then runs through {@link #update}, with its history,
+	 * notifications and deadline rules, exactly as if it had been made on its own.
+	 */
+	public List<Issue> updateAll(List<String> ids, java.util.function.Consumer<Issue> mutator, User editor) {
+		List<String> distinct = ids == null ? List.of()
+				: ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+		if (distinct.size() > MAX_BULK) {
+			throw ApiException.badRequest("error.issue.bulkTooMany", MAX_BULK);
+		}
+		List<Issue> found = issues.findAllById(distinct);
+		if (found.size() != distinct.size()) {
+			throw ApiException.notFound("issue");
+		}
+		found.stream().map(Issue::getProjectId).distinct()
+				.forEach(projectId -> projects.assertMember(projects.get(projectId), editor));
+		return found.stream().map(issue -> update(issue.getId(), mutator, editor)).toList();
+	}
+
+	/** True when {@code user} may see the issue (a member of its project); never throws. */
 	public boolean canAccess(Issue issue, User user) {
 		try {
 			assertAccess(issue, user);
@@ -130,7 +155,7 @@ public class IssueService {
 		}
 	}
 
-	/** Throws 403 unless {@code user} is an admin or a member of the project. */
+	/** Throws 403 unless {@code user} may see the project, as a member or through a team. */
 	private void assertAccess(Issue issue, User user) {
 		projects.assertMember(projects.get(issue.getProjectId()), user);
 	}
@@ -1002,9 +1027,7 @@ public class IssueService {
 		// project is deactivated, so its issues never surface anywhere. Non-admins
 		// are further limited to projects they belong to (A01). visibleTo already
 		// excludes archived projects, so it is the active scope for a member.
-		List<String> scope = user.isAdmin()
-				? List.copyOf(projects.activeProjectIds())
-				: projects.visibleTo(user).stream().map(Project::getId).toList();
+		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
 		Pageable pageable = PageRequest.of(p.page(), Math.min(p.size(), 100), sortFor(p.sort()));
 		if (p.projectId() != null) {
 			if (!scope.contains(p.projectId())) {
@@ -1112,9 +1135,7 @@ public class IssueService {
 			return List.of();
 		}
 		List<String> capped = keys.stream().distinct().limit(MENTION_LIMIT).toList();
-		List<String> scope = user.isAdmin()
-				? List.copyOf(projects.activeProjectIds())
-				: projects.visibleTo(user).stream().map(Project::getId).toList();
+		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
 		if (scope.isEmpty()) {
 			return List.of();
 		}

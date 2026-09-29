@@ -80,7 +80,7 @@ public class ProjectScheduleService {
 	public Preview preview(String projectId, LocalDate eventDate, Integer limit, User user) {
 		requireModule();
 		Project project = projects.get(projectId);
-		projects.assertLeadOrAdmin(project, user);
+		projects.assertCanManage(project, user);
 		return previewOf(project, eventDate, limit);
 	}
 
@@ -173,7 +173,7 @@ public class ProjectScheduleService {
 	public Result apply(String projectId, LocalDate eventDate, User user) {
 		requireModule();
 		Project project = projects.get(projectId);
-		projects.assertLeadOrAdmin(project, user);
+		projects.assertCanManage(project, user);
 
 		LocalDate previous = project.getEventDate();
 		// Read once and hand both down. Asking again for the write would walk the project a

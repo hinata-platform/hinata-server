@@ -89,7 +89,7 @@ public class TimeTagController {
 		// "delete this tag from 1 204 entries", and the only person who can act
 		// on it is the administrator who may rename or delete one. Refused rather
 		// than quietly ignored for anybody else, so the contract is visible.
-		if (!user.isAdmin()) {
+		if (!user.isOrgAdmin()) {
 			throw ApiException.forbidden("error.time.tagsRestricted");
 		}
 		return found.map(tag -> TimeTagResponse.from(tag, tags.usage(tag)));

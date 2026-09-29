@@ -73,7 +73,7 @@ public class TimeOffApprovers {
 
 	/** The administrators who could still act on it, used as the floor everywhere above. */
 	public Set<String> adminIds() {
-		return users.findByRolesContainingAndActiveIsTrue(Role.ADMIN).stream()
+		return users.findByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN).stream()
 				.map(User::getId)
 				.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 	}

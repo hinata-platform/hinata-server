@@ -112,8 +112,7 @@ public class ReportService {
 	}
 
 	/**
-	 * Minutes per project in the range — over the projects {@code user} can see
-	 * (admins: all). Entries without a project (detached from a deleted issue in
+	 * Minutes per project in the range — over the projects {@code user} can see. Entries without a project (detached from a deleted issue in
 	 * a project that has since gone) are skipped: a null key would have no name
 	 * to show and no JSON to serialize to.
 	 *
@@ -125,13 +124,11 @@ public class ReportService {
 	public Map<String, Integer> timePerProject(LocalDate from, LocalDate to, User user) {
 		requireRange(from, to);
 		Criteria criteria = Criteria.where("date").gte(from).lte(to);
-		if (!user.isAdmin()) {
-			List<String> visible = projects.visibleTo(user).stream().map(Project::getId).toList();
-			if (visible.isEmpty()) {
-				return new LinkedHashMap<>();
-			}
-			criteria = criteria.and("projectId").in(visible);
+		List<String> visible = projects.visibleTo(user).stream().map(Project::getId).toList();
+		if (visible.isEmpty()) {
+			return new LinkedHashMap<>();
 		}
+		criteria = criteria.and("projectId").in(visible);
 		Map<String, Integer> result = new LinkedHashMap<>();
 		Aggregation aggregation = Aggregation.newAggregation(
 				Aggregation.match(criteria),

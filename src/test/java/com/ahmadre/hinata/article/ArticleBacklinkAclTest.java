@@ -8,11 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ahmadre.hinata.auth.CurrentUser;
-import com.ahmadre.hinata.project.Project;
-import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.richtext.RichTextService;
-import com.ahmadre.hinata.team.Team;
-import com.ahmadre.hinata.team.TeamService;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,8 +27,7 @@ import java.util.Set;
 class ArticleBacklinkAclTest {
 
 	private ArticleRepository articles;
-	private ProjectService projects;
-	private TeamService teams;
+	private ArticleAccess access;
 	private CurrentUser currentUser;
 	private ArticleController controller;
 
@@ -65,11 +60,10 @@ class ArticleBacklinkAclTest {
 	@BeforeEach
 	void setUp() {
 		articles = mock(ArticleRepository.class);
-		projects = mock(ProjectService.class);
-		teams = mock(TeamService.class);
+		access = mock(ArticleAccess.class);
 		currentUser = mock(CurrentUser.class);
-		controller = new ArticleController(articles, new RichTextService(), currentUser,
-				projects, teams);
+		controller = new ArticleController(articles, new RichTextService(), currentUser, access,
+				mock(ArticleService.class));
 
 		when(articles.findByReferencedIssueKeysContains("HIN-1"))
 				.thenReturn(List.of(VISIBLE, HIDDEN, TEAM_HIDDEN));
@@ -78,8 +72,7 @@ class ArticleBacklinkAclTest {
 	private User member() {
 		User user = User.builder().id("u1").email("a@b.c").roles(Set.of(Role.MEMBER)).build();
 		when(currentUser.require()).thenReturn(user);
-		when(projects.visibleTo(user)).thenReturn(List.of(Project.builder().id("p-mine").build()));
-		when(teams.visibleTo(user)).thenReturn(List.of());
+		when(access.sightOf(user)).thenReturn(new ArticleAccess.Sight("u1", Set.of("p-mine"), Set.of(), Set.of()));
 		return user;
 	}
 
@@ -103,13 +96,12 @@ class ArticleBacklinkAclTest {
 	}
 
 	@Test
-	void anAdminSeesEveryBacklink() {
-		User admin = User.builder().id("u0").email("root@b.c").roles(Set.of(Role.ADMIN)).build();
+	void anAdminSeesOnlyWhatTheirOwnMembershipsOpen() {
+		User admin = User.builder().id("u0").email("root@b.c").roles(Set.of(Role.ADMIN, Role.ORG_ADMIN)).build();
 		when(currentUser.require()).thenReturn(admin);
+		when(access.sightOf(admin)).thenReturn(new ArticleAccess.Sight("u0", Set.of(), Set.of(), Set.of()));
 
-		assertThat(controller.list(null, false, "HIN-1"))
-				.extracting(ArticleController.ArticleResponse::id)
-				.containsExactly("a-visible", "a-hidden", "a-team");
+		assertThat(controller.list(null, false, "HIN-1")).isEmpty();
 	}
 
 	@Test

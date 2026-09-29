@@ -1,15 +1,10 @@
 package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.article.Article;
-import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.article.ArticleService;
 import com.ahmadre.hinata.auth.CurrentUser;
-import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.pat.Scopes;
-import com.ahmadre.hinata.project.Project;
-import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.richtext.LexicalToMarkdown;
-import com.ahmadre.hinata.team.Team;
-import com.ahmadre.hinata.team.TeamService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.mcp.annotation.McpTool;
@@ -18,15 +13,13 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Read-only MCP tool over the knowledge base. Gates on {@code kb:read} and
- * applies the exact same visibility rule the {@code ArticleController} enforces:
- * a project-scoped article is visible only to members of that project, a
- * team-scoped article only to that team's members, a global article to every
- * authenticated user; admins see all. Access denial is reported as "not found"
+ * applies the exact same visibility rule the {@code ArticleController} enforces,
+ * through {@link com.ahmadre.hinata.article.ArticleAccess}: a project page for the
+ * project's people, a team page for whom the team opened it to, a private page for
+ * its author. Access denial is reported as "not found"
  * so the tool never leaks the existence of an article the caller cannot see.
  */
 @Service
@@ -35,9 +28,7 @@ public class KnowledgeReadTools {
 
 	private final ScopeGuard scopeGuard;
 	private final CurrentUser currentUser;
-	private final ArticleRepository articles;
-	private final ProjectService projectService;
-	private final TeamService teamService;
+	private final ArticleService articleService;
 
 	@McpTool(name = "read_kb_article", title = "Read a knowledge base article",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
@@ -63,29 +54,11 @@ public class KnowledgeReadTools {
 			@McpToolParam(required = false, description = "Only articles in this space (e.g. Engineering)") String space) {
 		scopeGuard.require(Scopes.KB_READ);
 		User user = currentUser.require();
-		// Precompute the caller's visibility once instead of per article.
-		Set<String> projectIds = projectService.visibleTo(user).stream()
-				.map(Project::getId).collect(Collectors.toSet());
-		Set<String> teamIds = teamService.visibleTo(user).stream()
-				.map(Team::getId).collect(Collectors.toSet());
-		List<Article> candidates = projectId != null
-				? articles.findByProjectIdOrderBySortOrderAsc(projectId)
-				: articles.findAllByOrderBySortOrderAsc();
+		List<Article> candidates = articleService.list(user, projectId != null, projectId);
 		return candidates.stream()
 				.filter(a -> space == null || space.equalsIgnoreCase(a.getSpace()))
-				.filter(a -> user.isAdmin() || canSee(a, projectIds, teamIds))
 				.map(ArticleListItem::of)
 				.toList();
-	}
-
-	private static boolean canSee(Article article, Set<String> projectIds, Set<String> teamIds) {
-		if (article.getProjectId() != null) {
-			return projectIds.contains(article.getProjectId());
-		}
-		if (article.getTeamId() != null) {
-			return teamIds.contains(article.getTeamId());
-		}
-		return true; // global / organisation-wide
 	}
 
 	/** Article metadata without the (potentially large) markdown body. */
@@ -106,29 +79,7 @@ public class KnowledgeReadTools {
 	 * 404 both when the article is missing and when it is hidden from the caller.
 	 */
 	Article requireVisible(String id, User user) {
-		Article article = articles.findById(id)
-				.orElseThrow(() -> ApiException.notFound("article"));
-		if (!canSee(article, user)) {
-			throw ApiException.notFound("article");
-		}
-		return article;
-	}
-
-	private boolean canSee(Article article, User user) {
-		if (user.isAdmin()) {
-			return true;
-		}
-		if (article.getProjectId() != null) {
-			Set<String> projectIds = projectService.visibleTo(user).stream()
-					.map(Project::getId).collect(Collectors.toSet());
-			return projectIds.contains(article.getProjectId());
-		}
-		if (article.getTeamId() != null) {
-			Set<String> teamIds = teamService.visibleTo(user).stream()
-					.map(Team::getId).collect(Collectors.toSet());
-			return teamIds.contains(article.getTeamId());
-		}
-		return true; // global / organisation-wide
+		return articleService.readable(id, user);
 	}
 
 	/**

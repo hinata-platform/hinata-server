@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.search;
 
 import com.ahmadre.hinata.article.Article;
+import com.ahmadre.hinata.article.ArticleAccess;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.BoardLinks;
 import com.ahmadre.hinata.board.Sprint;
@@ -8,6 +9,7 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
+import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.search.SearchResponse.SearchGroup;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -50,6 +52,12 @@ import java.util.stream.Collectors;
  * </ul>
  * Results are deduped by id, prefix matches floated to the top, then capped.
  * No external search engine — fits the self-hosted MongoDB deployment.
+ *
+ * <p><b>Reach.</b> Every query carries the caller's reach as a filter: issues,
+ * projects, boards and sprints only of projects they see, pages only those
+ * {@link ArticleAccess} opens to them. The counts are counted the same way. People
+ * are the directory every picker shows, so they stay as they are. Before this, the
+ * palette answered every account with everybody's issues, projects and pages.
  */
 @Service
 @RequiredArgsConstructor
@@ -72,10 +80,39 @@ public class SearchService {
 	private final MongoTemplate mongo;
 	private final UserRepository users;
 	private final ProjectRepository projects;
+	private final ProjectService projectService;
 	private final IssueRepository issues;
+	private final ArticleAccess articleAccess;
 
-	public SearchResponse search(String rawQuery, String scope) {
-		return search(rawQuery, scope, false);
+	/** What one caller may find, worked out once per search. */
+	private record Reach(Set<String> activeProjects, Set<String> archivedProjects,
+			Criteria pages) {
+
+		Criteria issues(boolean archived) {
+			return new Criteria().andOperator(archivedIs(archived),
+					Criteria.where("projectId").in(activeProjects));
+		}
+
+		Criteria projects(boolean archived) {
+			return new Criteria().andOperator(Criteria.where("archived").is(archived),
+					Criteria.where("_id").in(archived ? archivedProjects : activeProjects));
+		}
+
+		Criteria boards() {
+			return Criteria.where("projectIds").in(activeProjects);
+		}
+	}
+
+	private Reach reachOf(User user) {
+		Set<String> active = projectService.visibleTo(user).stream()
+				.map(Project::getId).collect(Collectors.toSet());
+		Set<String> archived = projectService.archivedVisibleTo(user).stream()
+				.map(Project::getId).collect(Collectors.toSet());
+		return new Reach(active, archived, articleAccess.sightOf(user).criteria());
+	}
+
+	public SearchResponse search(User user, String rawQuery, String scope) {
+		return search(user, rawQuery, scope, false);
 	}
 
 	/**
@@ -84,7 +121,8 @@ public class SearchService {
 	 *                 those two categories exist in the archive; the rest stay
 	 *                 empty. An empty query suggests the latest archived items.
 	 */
-	public SearchResponse search(String rawQuery, String scope, boolean archived) {
+	public SearchResponse search(User user, String rawQuery, String scope, boolean archived) {
+		Reach reach = reachOf(user);
 		String q = rawQuery == null ? "" : rawQuery.trim();
 		SearchCategory only = SearchCategory.parse(scope);
 		int cap = only == null ? CAP_ALL : CAP_SCOPED;
@@ -95,27 +133,27 @@ public class SearchService {
 		// the latest archived items.
 		final List<SearchGroup> groups;
 		if (!q.isBlank()) {
-			groups = queryGroups(q, only, cap, archived);
+			groups = queryGroups(reach, q, only, cap, archived);
 		} else if (only != null || archived) {
-			groups = suggestGroups(only, archived);
+			groups = suggestGroups(reach, only, archived);
 		} else {
 			groups = List.of();
 		}
-		return new SearchResponse(groups, counts());
+		return new SearchResponse(groups, counts(reach));
 	}
 
-	private List<SearchGroup> queryGroups(String q, SearchCategory only, int cap,
+	private List<SearchGroup> queryGroups(Reach reach, String q, SearchCategory only, int cap,
 			boolean archived) {
 		List<SearchGroup> groups = new ArrayList<>();
 		for (SearchCategory cat : SearchCategory.values()) {
 			if (only != null && cat != only) continue;
 			List<SearchHit> hits = switch (cat) {
-				case ISSUES -> mapIssues(searchIssues(q, cap, archived), archived);
-				case PROJECTS -> mapProjects(searchProjects(q, cap, archived), archived);
+				case ISSUES -> mapIssues(searchIssues(reach, q, cap, archived), archived);
+				case PROJECTS -> mapProjects(searchProjects(reach, q, cap, archived), archived);
 				// People, boards and docs have no archive — hidden in archive mode.
 				case PEOPLE -> archived ? List.<SearchHit>of() : mapPeople(searchPeople(q, cap));
-				case BOARDS -> archived ? List.<SearchHit>of() : searchBoards(q, cap);
-				case DOCS -> archived ? List.<SearchHit>of() : mapDocs(searchDocs(q, cap));
+				case BOARDS -> archived ? List.<SearchHit>of() : searchBoards(reach, q, cap);
+				case DOCS -> archived ? List.<SearchHit>of() : mapDocs(searchDocs(reach, q, cap));
 			};
 			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
 		}
@@ -124,16 +162,16 @@ public class SearchService {
 
 	/** Empty-query suggestions: latest entities of one scope, or — in archive
 	 * mode — the latest archived issues and projects across both categories. */
-	private List<SearchGroup> suggestGroups(SearchCategory only, boolean archived) {
-		if (!archived) return groupOf(only, suggest(only));
+	private List<SearchGroup> suggestGroups(Reach reach, SearchCategory only, boolean archived) {
+		if (!archived) return groupOf(only, suggest(reach, only));
 		List<SearchGroup> groups = new ArrayList<>();
 		for (SearchCategory cat : List.of(SearchCategory.ISSUES, SearchCategory.PROJECTS)) {
 			if (only != null && cat != only) continue;
 			List<SearchHit> hits = switch (cat) {
 				case ISSUES -> mapIssues(
-						latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, archivedIs(true)), true);
+						latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, reach.issues(true)), true);
 				case PROJECTS -> mapProjects(
-						latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedTrue()), true);
+						latest(Project.class, SUGGEST_LIMIT, F_UPDATED, reach.projects(true)), true);
 				default -> List.<SearchHit>of();
 			};
 			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
@@ -146,39 +184,31 @@ public class SearchService {
 	}
 
 	/** Latest entities of [cat] (most-recent first) for the empty-query state. */
-	private List<SearchHit> suggest(SearchCategory cat) {
+	private List<SearchHit> suggest(Reach reach, SearchCategory cat) {
 		return switch (cat) {
 			case ISSUES -> mapIssues(
-					latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, archivedIs(false)), false);
+					latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, reach.issues(false)), false);
 			case PROJECTS -> mapProjects(
-					latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedFalse()), false);
+					latest(Project.class, SUGGEST_LIMIT, F_UPDATED, reach.projects(false)), false);
 			case PEOPLE -> mapPeople(
 					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)));
-			case BOARDS -> suggestBoards();
+			case BOARDS -> suggestBoards(reach);
 			case DOCS -> mapDocs(
-					latest(Article.class, SUGGEST_LIMIT, F_UPDATED, null));
+					latest(Article.class, SUGGEST_LIMIT, F_UPDATED, reach.pages()));
 		};
 	}
 
 	// ─────────────────────────── per-category ─────────────────────────────
 
-	private List<Issue> searchIssues(String q, int cap, boolean archived) {
+	private List<Issue> searchIssues(Reach reach, String q, int cap, boolean archived) {
 		return hybrid(Issue.class, q, cap,
 				List.of(contains(F_TITLE, q), prefix("readableId", q), contains(F_TAGS, q)),
-				archivedIs(archived), F_UPDATED, Issue::getId, Issue::getTitle);
+				reach.issues(archived), F_UPDATED, Issue::getId, Issue::getTitle);
 	}
 
-	/** Ids of active (non-archived) projects — archived projects are hidden
-	 * platform-wide, so their issues/projects/boards never appear in search. */
-	private Set<String> activeProjectIds() {
-		return projects.findByArchivedFalse().stream()
-				.map(Project::getId).collect(Collectors.toSet());
-	}
-
-	private List<SearchHit> mapIssues(List<Issue> rawHits, boolean archived) {
-		Set<String> active = activeProjectIds();
-		List<Issue> hits = rawHits.stream()
-				.filter(it -> active.contains(it.getProjectId())).toList();
+	// Archived projects are hidden platform-wide; the reach holds active projects
+	// only, so their issues and boards never reach the mapping below.
+	private List<SearchHit> mapIssues(List<Issue> hits, boolean archived) {
 		Map<String, User> byId = userMap(hits.stream()
 				.map(Issue::getAssigneeId).filter(Objects::nonNull).collect(Collectors.toSet()));
 
@@ -199,10 +229,10 @@ public class SearchService {
 		}).toList();
 	}
 
-	private List<Project> searchProjects(String q, int cap, boolean archived) {
+	private List<Project> searchProjects(Reach reach, String q, int cap, boolean archived) {
 		return hybrid(Project.class, q, cap,
 				List.of(contains(F_NAME, q), prefix("key", q)),
-				Criteria.where("archived").is(archived),
+				reach.projects(archived),
 				F_UPDATED, Project::getId, Project::getName);
 	}
 
@@ -243,7 +273,7 @@ public class SearchService {
 	private List<User> searchPeople(String q, int cap) {
 		return hybrid(User.class, q, cap,
 				List.of(contains("displayName", q), contains("username", q), contains(F_TITLE, q)),
-				null, User::getId, User::getDisplayName);
+				Criteria.where("active").is(true), null, User::getId, User::getDisplayName);
 	}
 
 	private List<SearchHit> mapPeople(List<User> hits) {
@@ -260,29 +290,43 @@ public class SearchService {
 				.toList();
 	}
 
-	private List<SearchHit> searchBoards(String q, int cap) {
+	private List<SearchHit> searchBoards(Reach reach, String q, int cap) {
 		List<AgileBoard> boards = hybrid(AgileBoard.class, q, cap,
-				List.of(contains(F_NAME, q)), null, AgileBoard::getId, AgileBoard::getName);
+				List.of(contains(F_NAME, q)), reach.boards(), null, AgileBoard::getId, AgileBoard::getName);
 		List<Sprint> sprints = hybrid(Sprint.class, q, cap,
-				List.of(contains(F_NAME, q), contains("goal", q)), null, Sprint::getId, Sprint::getName);
+				List.of(contains(F_NAME, q), contains("goal", q)), sprintsOf(reach), null,
+				Sprint::getId, Sprint::getName);
 		return combineBoards(boards, sprints, cap);
 	}
 
-	private List<SearchHit> suggestBoards() {
-		List<AgileBoard> boards = latest(AgileBoard.class, SUGGEST_LIMIT, "createdAt", null);
+	private List<SearchHit> suggestBoards(Reach reach) {
+		List<AgileBoard> boards = latest(AgileBoard.class, SUGGEST_LIMIT, "createdAt", reach.boards());
 		int remaining = SUGGEST_LIMIT - boards.size();
 		List<Sprint> sprints = remaining > 0
-				? latest(Sprint.class, remaining, "createdAt", null)
+				? latest(Sprint.class, remaining, "createdAt", sprintsOf(reach))
 				: List.of();
 		return combineBoards(boards, sprints, SUGGEST_LIMIT);
 	}
 
+	/** Sprints of the boards the caller reaches — a sprint has no project of its own. */
+	private Criteria sprintsOf(Reach reach) {
+		return Criteria.where("boardId").in(boardIds(reach));
+	}
+
+	private Set<String> boardIds(Reach reach) {
+		Query query = Query.query(reach.boards());
+		query.fields().include("_id");
+		// Raw rows: a projection would hand the entity's constructor nulls for fields it
+		// does not read.
+		return mongo.find(query, org.bson.Document.class, "agile_boards").stream()
+				.map(row -> String.valueOf(row.get("_id") instanceof org.bson.types.ObjectId oid
+						? oid.toHexString() : row.get("_id")))
+				.collect(Collectors.toSet());
+	}
+
 	private List<SearchHit> combineBoards(List<AgileBoard> boards, List<Sprint> sprints, int cap) {
-		Set<String> active = activeProjectIds();
 		List<SearchHit> out = new ArrayList<>();
-		boards.stream()
-				.filter(b -> b.getProjectIds().stream().anyMatch(active::contains))
-				.forEach(b -> out.add(mapBoard(b)));
+		boards.forEach(b -> out.add(mapBoard(b)));
 		sprints.forEach(s -> out.add(mapSprint(s)));
 		return out.size() > cap ? out.subList(0, cap) : out;
 	}
@@ -308,10 +352,10 @@ public class SearchService {
 				.build();
 	}
 
-	private List<Article> searchDocs(String q, int cap) {
+	private List<Article> searchDocs(Reach reach, String q, int cap) {
 		return hybrid(Article.class, q, cap,
 				List.of(contains(F_TITLE, q), contains(F_TAGS, q)),
-				F_UPDATED, Article::getId, Article::getTitle);
+				reach.pages(), F_UPDATED, Article::getId, Article::getTitle);
 	}
 
 	private List<SearchHit> mapDocs(List<Article> hits) {
@@ -336,21 +380,18 @@ public class SearchService {
 	 * Runs the regex + $text pair, merges (regex first, then text), dedupes by
 	 * {@code idFn}, floats prefix matches on {@code labelFn} to the top and caps.
 	 */
-	private <T> List<T> hybrid(Class<T> type, String q, int cap, List<Criteria> regexOrs,
-			String sortField, Function<T, String> idFn, Function<T, String> labelFn) {
-		return hybrid(type, q, cap, regexOrs, null, sortField, idFn, labelFn);
-	}
-
-	/** Variant with an extra AND [filter] (e.g. the archived flag) applied to
-	 * both the regex and the $text query. */
+	/** The hybrid pair with an AND [filter] — the caller's reach, and the
+	 * archived flag — applied to both the regex and the $text query. */
 	private <T> List<T> hybrid(Class<T> type, String q, int cap, List<Criteria> regexOrs,
 			Criteria filter, String sortField, Function<T, String> idFn,
 			Function<T, String> labelFn) {
 		int candidates = cap * CANDIDATE_FACTOR;
 
-		Query regexQuery = new Query(new Criteria()
-				.orOperator(regexOrs.toArray(Criteria[]::new))).limit(candidates);
-		if (filter != null) regexQuery.addCriteria(filter);
+		Criteria anyLabel = new Criteria().orOperator(regexOrs.toArray(Criteria[]::new));
+		// One criteria object: the reach filter is itself an $and/$or, and a query holds
+		// only one key-less criteria next to the label $or.
+		Query regexQuery = new Query(filter == null ? anyLabel : new Criteria().andOperator(anyLabel, filter))
+				.limit(candidates);
 		if (sortField != null) regexQuery.with(Sort.by(Sort.Direction.DESC, sortField));
 		List<T> regexHits = mongo.find(regexQuery, type);
 
@@ -381,14 +422,17 @@ public class SearchService {
 				.toList();
 	}
 
-	private Map<String, Long> counts() {
+	/** Counts within the caller's reach; a total over everybody's data would say
+	 * how much there is that they cannot see. */
+	private Map<String, Long> counts(Reach reach) {
 		Map<String, Long> counts = new LinkedHashMap<>();
-		counts.put(SearchCategory.ISSUES.name(), mongo.estimatedCount(Issue.class));
-		counts.put(SearchCategory.PROJECTS.name(), mongo.estimatedCount(Project.class));
+		counts.put(SearchCategory.ISSUES.name(), mongo.count(Query.query(reach.issues(false)), Issue.class));
+		counts.put(SearchCategory.PROJECTS.name(), (long) reach.activeProjects().size());
 		counts.put(SearchCategory.PEOPLE.name(), mongo.estimatedCount(User.class));
-		counts.put(SearchCategory.BOARDS.name(),
-				mongo.estimatedCount(AgileBoard.class) + mongo.estimatedCount(Sprint.class));
-		counts.put(SearchCategory.DOCS.name(), mongo.estimatedCount(Article.class));
+		Set<String> boards = boardIds(reach);
+		counts.put(SearchCategory.BOARDS.name(), boards.size()
+				+ mongo.count(Query.query(Criteria.where("boardId").in(boards)), Sprint.class));
+		counts.put(SearchCategory.DOCS.name(), mongo.count(Query.query(reach.pages()), Article.class));
 		return counts;
 	}
 
@@ -402,14 +446,6 @@ public class SearchService {
 	/** Case-insensitive anchored prefix — index-friendly for ids/keys. */
 	private static Criteria prefix(String field, String q) {
 		return Criteria.where(field).regex("^" + Pattern.quote(q), "i");
-	}
-
-	private static Criteria archivedFalse() {
-		return Criteria.where("archived").is(false);
-	}
-
-	private static Criteria archivedTrue() {
-		return Criteria.where("archived").is(true);
 	}
 
 	/** Issue archived filter — {@code ne(true)} keeps matching pre-migration

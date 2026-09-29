@@ -177,7 +177,7 @@ public class TimeLockExceptionController {
 	 */
 	private User requireAdmin() {
 		User user = currentUser.require();
-		if (!user.isAdmin()) {
+		if (!user.isOrgAdmin()) {
 			throw ApiException.forbidden("error.time.lockExceptionsAdminOnly");
 		}
 		return user;

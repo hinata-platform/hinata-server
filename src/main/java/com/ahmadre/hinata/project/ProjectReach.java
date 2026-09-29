@@ -4,7 +4,6 @@ import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.team.TeamAccess;
 import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.user.User;
-import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -15,9 +14,11 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * The one answer to "may this user see that project": platform admins see every
- * project, everyone else sees the projects they are a direct member of plus any project
- * granted to them through a team (see {@link TeamAccess}).
+ * The one answer to "may this user see that project": the projects somebody is a
+ * direct member of plus any project granted to them through a team (see
+ * {@link TeamAccess}). Nobody sees more: not a platform admin, not an organisation
+ * admin. Running the platform or the organisation is not a reason to read a
+ * project's issues, comments or people.
  *
  * <p>It lives apart from {@link ProjectService} because callers outside the project
  * domain need the rule without pulling in the whole service: {@code ProjectService}
@@ -41,18 +42,11 @@ public class ProjectReach {
 	private final ProjectRepository projects;
 	// A repository, not TeamService: TeamService depends on the project domain.
 	private final TeamRepository teams;
-	// Likewise a repository, not UserService — whoCanSee is handed bare ids (a
-	// watcher list, a queued digest entry) and has to resolve the accounts itself
-	// to settle the platform-admin case.
-	private final UserRepository users;
 
-	/** Whether {@code user} may see the project — direct membership, team grant, or admin. */
+	/** Whether {@code user} may see the project — direct membership or team grant. */
 	public boolean canSee(Project project, User user) {
 		if (project == null || user == null) {
 			return false;
-		}
-		if (user.isAdmin()) {
-			return true;
 		}
 		if (project.getMemberIds() != null && project.getMemberIds().contains(user.getId())) {
 			return true;
@@ -79,9 +73,9 @@ public class ProjectReach {
 	 * watcher list, where the project is the same for everyone: asking
 	 * {@link #canSee(String, User)} per candidate would re-read that project and
 	 * re-query the team collection once per watcher. Here it is one project read,
-	 * then at most one team query, then at most one user read — and the cheap
+	 * then at most one team query — and the cheap
 	 * answers are settled first, so a list of ordinary project members never
-	 * touches the team or user collections at all.
+	 * touches the team collection at all.
 	 */
 	public Set<String> whoCanSee(String projectId, Collection<String> userIds) {
 		if (projectId == null || userIds == null || userIds.isEmpty()) {
@@ -112,12 +106,6 @@ public class ProjectReach {
 				}
 				if (undecided.isEmpty()) break;
 			}
-		}
-		if (!undecided.isEmpty()) {
-			// Whatever is left can still be a platform admin, who sees everything.
-			users.findAllById(undecided).forEach(user -> {
-				if (user.isAdmin()) allowed.add(user.getId());
-			});
 		}
 		return allowed;
 	}

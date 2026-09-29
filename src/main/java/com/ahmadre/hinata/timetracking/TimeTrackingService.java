@@ -532,7 +532,7 @@ public class TimeTrackingService {
 	 * manage their project's entries.
 	 */
 	public boolean canManageForeign(WorkItem item, User user) {
-		return user.isAdmin() || ((item.getUserId() == null || leadsReadMemberEntries())
+		return user.isOrgAdmin() || ((item.getUserId() == null || leadsReadMemberEntries())
 				&& approvers.leads(item.getProjectId(), user));
 	}
 
@@ -555,7 +555,7 @@ public class TimeTrackingService {
 	 * times about the same project: whether the reader leads it is looked up once.
 	 */
 	public Predicate<WorkItem> detailsVisibleTo(User reader) {
-		if (!policy.advancedEnabled() || reader.isAdmin()) {
+		if (!policy.advancedEnabled() || reader.isOrgAdmin()) {
 			return item -> true;
 		}
 		boolean leadsSee = policy.leadsSeeMemberEntries();
@@ -646,7 +646,7 @@ public class TimeTrackingService {
 	public EntryHistory history(String workItemId, int page, int size, User user) {
 		WorkItem item = workItems.findById(workItemId)
 				.orElseThrow(() -> ApiException.notFound("workItem"));
-		if (!isOwner(item, user) && !user.isAdmin()
+		if (!isOwner(item, user) && !user.isOrgAdmin()
 				&& !(policy.leadsSeeMemberEntries() && canManageForeign(item, user))) {
 			// Not found, not forbidden. A route that answers 404 for an id that
 			// does not exist and 403 for one that does is an oracle: somebody who
@@ -664,7 +664,7 @@ public class TimeTrackingService {
 		Set<String> departed = departedAmong(rows, item.getUserId());
 		return new EntryHistory(PageableExecutionUtils.getPage(rows, pageable,
 						() -> mongo.count(Query.of(query).limit(-1).skip(-1), AuditLog.class)),
-				isOwner(item, user) || user.isAdmin(),
+				isOwner(item, user) || user.isOrgAdmin(),
 				approvers.leads(item.getProjectId(), user),
 				item.getUserId() != null && departed.contains(item.getUserId()),
 				departed);
@@ -1403,7 +1403,7 @@ public class TimeTrackingService {
 	 * Who and what a timesheet request may see, expressed as a query.
 	 *
 	 * <p>Shared by both routes so there is one answer rather than two that drift.
-	 * An admin may name any user and any project, or neither; everybody else gets
+	 * An organisation admin may name any user and any project, or neither; everybody else gets
 	 * their own rows — a foreign {@code userId} is refused, never quietly
 	 * replaced — and may narrow to a project they can see. Both filters are
 	 * applied together, so a project can never widen a user.
@@ -1417,10 +1417,10 @@ public class TimeTrackingService {
 	private Criteria timesheetCriteria(LocalDate from, LocalDate to, String userId,
 			String projectId, User requester, TimesheetReach reach) {
 		String effectiveUser = userId;
-		boolean seesMembers = !requester.isAdmin() && reach == TimesheetReach.MEMBERS_OF_LED_PROJECT
+		boolean seesMembers = !requester.isOrgAdmin() && reach == TimesheetReach.MEMBERS_OF_LED_PROJECT
 				&& projectId != null && policy.leadsSeeMemberEntries()
 				&& approvers.leads(projectId, requester);
-		if (!requester.isAdmin() && !seesMembers) {
+		if (!requester.isOrgAdmin() && !seesMembers) {
 			if (userId == null) {
 				effectiveUser = requester.getId();
 			}
@@ -1428,7 +1428,7 @@ public class TimeTrackingService {
 				throw ApiException.forbidden("error.accessDenied");
 			}
 		}
-		if (!requester.isAdmin() && !seesMembers && effectiveUser == null) {
+		if (!requester.isOrgAdmin() && !seesMembers && effectiveUser == null) {
 			// Unreachable today — CurrentUser.require() cannot hand back a user
 			// without an id. It is here because the criteria below narrows only
 			// when it has a value, so the one query that decides who sees whose
@@ -1437,7 +1437,10 @@ public class TimeTrackingService {
 			// caller to two; the wrong default is not worth carrying.
 			throw ApiException.forbidden("error.accessDenied");
 		}
-		if (projectId != null && !projectReach.canSee(projectId, requester)) {
+		// An organisation admin keeps the organisation's timesheets and narrows by
+		// project for that; hours per person and day are what that duty reads, and
+		// they open no issue, comment or page of the project.
+		if (projectId != null && !requester.isOrgAdmin() && !projectReach.canSee(projectId, requester)) {
 			throw ApiException.forbidden("error.project.notMember");
 		}
 		Criteria criteria = Criteria.where("date").gte(from).lte(to);

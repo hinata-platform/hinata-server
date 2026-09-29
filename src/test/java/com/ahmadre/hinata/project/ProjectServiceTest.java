@@ -51,7 +51,7 @@ class ProjectServiceTest {
 		when(templates.offered()).thenReturn(true);
 		service = new ProjectService(projects, templates, mongo, teams, notifications,
 				mock(IssueWatcherCleanup.class),
-				new ProjectReach(projects, teams, mock(UserRepository.class)));
+				new ProjectReach(projects, teams));
 	}
 
 	private User user(String id, Role... roles) {
@@ -141,6 +141,16 @@ class ProjectServiceTest {
 	}
 
 	@Test
+	void aPlatformAdminWhoIsNotALeadCannotEditSettings() {
+		sampleProject();
+		ProjectUpdateRequest update = new ProjectUpdateRequest(
+				null, "Renamed", null, null, null, null, null, null, null, null, null, null, null, null);
+		assertThatThrownBy(() -> service.applyUpdate("p1", update, user("root", Role.ADMIN)))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.project.notLead");
+	}
+
+	@Test
 	void nonLeadMemberCannotEditSettings() {
 		sampleProject();
 		ProjectUpdateRequest update = new ProjectUpdateRequest(
@@ -152,7 +162,7 @@ class ProjectServiceTest {
 	}
 
 	@Test
-	void adminCanEditAndDeletingALabelCascades() {
+	void aLeadCanEditAndDeletingALabelCascades() {
 		Project project = sampleProject();
 		project.getLabels().add(Project.Label.builder().id("lb1").name("bug").hue(20).build());
 		project.getLabels().add(Project.Label.builder().id("lb2").name("ux").hue(330).build());
@@ -161,7 +171,7 @@ class ProjectServiceTest {
 				null, null, null, null, null, null, null, null,
 				List.of(Project.Label.builder().id("lb1").name("bug").hue(20).build()),
 				null, null, null, null, null);
-		Project saved = service.applyUpdate("p1", update, user("admin", Role.ADMIN));
+		Project saved = service.applyUpdate("p1", update, user("u1"));
 
 		assertThat(saved.labelNames()).containsExactly("bug");
 		// "ux" was removed -> pulled from every issue's tags.

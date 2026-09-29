@@ -82,7 +82,7 @@ class TimeReportIntegrationTest {
 			mongo.remove(new Query(), type);
 		}
 		settings.save(new ServerSettings());
-		admin = person("Ada Admin", Role.ADMIN);
+		admin = person("Ada Admin", Role.ORG_ADMIN);
 		lead = person("Lena Lead", Role.MEMBER);
 		member = person("Mia Member", Role.MEMBER);
 		outsider = person("Otto Outsider", Role.MEMBER);

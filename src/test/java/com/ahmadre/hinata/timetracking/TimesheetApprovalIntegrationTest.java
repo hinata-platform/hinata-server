@@ -148,7 +148,7 @@ class TimesheetApprovalIntegrationTest {
 		member = user("member", Role.MEMBER);
 		lead = user("lead", Role.MEMBER);
 		secondLead = user("second", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		// Deliberately in no project: "a stranger" has to mean somebody the
 		// submission is genuinely none of, or the 404 assertions prove nothing.
 		stranger = users.save(User.builder().email("stranger@example.org").username("stranger")

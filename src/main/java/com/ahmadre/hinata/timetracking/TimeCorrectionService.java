@@ -223,7 +223,7 @@ public class TimeCorrectionService {
 				Math.clamp(size, 1, PAGE_MAX),
 				Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("_id")));
 		Criteria criteria = Criteria.where("userId").ne(user.getId());
-		if (!user.isAdmin()) {
+		if (!user.isOrgAdmin()) {
 			Collection<String> led = approvers.ledProjectIds(user);
 			if (led.isEmpty()) {
 				return Page.empty(pageable);
@@ -295,7 +295,7 @@ public class TimeCorrectionService {
 	 * a sentence asked for on top of that only held the administrator up.
 	 */
 	public CorrectionRequest grant(String requestId, String note, User user) {
-		if (!user.isAdmin()) {
+		if (!user.isOrgAdmin()) {
 			throw ApiException.notFound("timeCorrectionRequest");
 		}
 		TimeCorrectionRequest request = answerable(requestId, user);
@@ -392,7 +392,7 @@ public class TimeCorrectionService {
 	}
 
 	private boolean mayAnswer(TimeCorrectionRequest request, User user) {
-		if (user.isAdmin()) {
+		if (user.isOrgAdmin()) {
 			return true;
 		}
 		return request.getKind() == TimeCorrectionRequest.Kind.ENTRY
@@ -430,7 +430,7 @@ public class TimeCorrectionService {
 				row.getUserId(), labels.get(row.getUserId()), row.getCreatedAt(),
 				answer == null ? null : new Answer(answer.getNote(), answer.getById(),
 						labels.get(answer.getById()), answer.getAt(), answer.isGranted()),
-				answer == null && reader.isAdmin() && grantable(row)
+				answer == null && reader.isOrgAdmin() && grantable(row)
 						&& !reader.getId().equals(row.getUserId()));
 	}
 
@@ -462,7 +462,7 @@ public class TimeCorrectionService {
 	}
 
 	private static void requireAdmin(User user) {
-		if (!user.isAdmin()) {
+		if (!user.isOrgAdmin()) {
 			throw ApiException.forbidden("error.time.lockExceptionsAdminOnly");
 		}
 	}

@@ -222,6 +222,14 @@ public class HinataProperties {
 		 * generously — somebody planning a term's events makes a handful in a sitting.
 		 */
 		private int copiesPerHour = 20;
+
+		/**
+		 * How a new relative deadline counts when neither its project nor the
+		 * organisation says otherwise. Calendar days: "28 days before" needs no
+		 * holiday calendar to mean what it says.
+		 */
+		private com.ahmadre.hinata.common.RelativeDate.Basis defaultBasis =
+				com.ahmadre.hinata.common.RelativeDate.Basis.CALENDAR;
 	}
 
 	/**

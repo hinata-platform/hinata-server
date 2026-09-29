@@ -117,7 +117,6 @@ public class BoardController {
 	 * its full backlog through {@link #view}. Admins are unrestricted.
 	 */
 	private void assertMemberOfAll(List<String> projectIds, User user) {
-		if (user.isAdmin()) return;
 		Set<String> visible = visibleProjectIds(user);
 		for (String projectId : projectIds) {
 			if (!visible.contains(projectId)) throw ApiException.forbidden("error.accessDenied");
@@ -141,7 +140,6 @@ public class BoardController {
 	}
 
 	private boolean canManageBoard(AgileBoard board, User user) {
-		if (user.isAdmin()) return true;
 		if (user.getId().equals(board.getOwnerId())) return true;
 		for (String projectId : board.getProjectIds()) {
 			if (projects.findOptional(projectId).map(p -> isProjectLead(p, user)).orElse(false)) {

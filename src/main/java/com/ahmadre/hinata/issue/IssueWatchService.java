@@ -109,9 +109,7 @@ public class IssueWatchService {
 				// _id breaks ties so a row can never be shown on two pages (or on
 				// none) when several issues share an updatedAt.
 				Sort.by(Sort.Order.desc("updatedAt"), Sort.Order.desc("_id")));
-		List<String> scope = user.isAdmin()
-				? List.copyOf(projects.activeProjectIds())
-				: projects.visibleTo(user).stream().map(Project::getId).toList();
+		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
 		if (scope.isEmpty()) {
 			return Page.empty(pageable);
 		}

@@ -77,7 +77,7 @@ class TimeOffTypeIntegrationTest {
 		}
 		member = user("member", Role.MEMBER);
 		keeper = user("keeper", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		enableModule(List.of(keeper.getId()));
 	}
 

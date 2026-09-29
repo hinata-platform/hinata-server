@@ -109,8 +109,9 @@ public class ProjectTemplateTools {
 					+ "positive after. Omit to remove the offset and keep the date as it is.",
 					required = false) Integer amount,
 			@McpToolParam(description = "DAYS (default) or WEEKS", required = false) String unit,
-			@McpToolParam(description = "CALENDAR (default) counts every day; WORKING skips "
-					+ "weekends and the holidays of the project's calendar",
+			@McpToolParam(description = "CALENDAR counts every day; WORKING skips weekends and "
+					+ "the holidays of the project's calendar. Omit for the project's default, "
+					+ "which follows the organisation's unless the project sets its own",
 					required = false) String basis) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User user = currentUser.require();
@@ -121,14 +122,17 @@ public class ProjectTemplateTools {
 					"error.feature.disabled");
 		}
 		boolean start = "start".equalsIgnoreCase(field);
+		Issue resolved = issues.getForUser(idOrReadableId, user);
+		RelativeDate.Basis fallback = projects.findById(resolved.getProjectId())
+				.map(Project::getDeadlineBasis).orElse(null);
 		RelativeDate offset = amount == null ? null : new RelativeDate(amount,
 				parseEnum(unit, RelativeDate.Unit.class, RelativeDate.Unit.DAYS, "unit"),
-				parseEnum(basis, RelativeDate.Basis.class, RelativeDate.Basis.CALENDAR, "basis"));
+				parseEnum(basis, RelativeDate.Basis.class,
+						fallback != null ? fallback : settings.defaultBasis(), "basis"));
 		if (offset != null && !offset.withinLimits()) {
 			throw ApiException.badRequest("error.issue.offsetOutOfRange",
 					RelativeDate.MAX_DAYS, RelativeDate.MAX_WEEKS);
 		}
-		Issue resolved = issues.getForUser(idOrReadableId, user);
 		Issue saved = issues.update(resolved.getId(), issue -> {
 			if (start) {
 				issue.setStartOffset(offset);

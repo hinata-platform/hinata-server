@@ -52,7 +52,7 @@ public class BoardTools {
 		Set<String> visible = projectService.visibleTo(user).stream()
 				.map(Project::getId).collect(Collectors.toSet());
 		return all.stream()
-				.filter(b -> user.isAdmin() || b.getProjectIds().stream().anyMatch(visible::contains))
+				.filter(b -> b.getProjectIds().stream().anyMatch(visible::contains))
 				.map(BoardView::of)
 				.toList();
 	}

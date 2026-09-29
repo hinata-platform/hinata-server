@@ -257,10 +257,10 @@ public class DemoSeeder {
 		if (s.isSetupCompleted()) {
 			admin = users.findAll().stream().filter(User::isAdmin).findFirst()
 					.orElseGet(() -> userService.createLocal("admin@hinata.dev", "admin",
-							"admin", DEMO_PASSWORD, Set.of(Role.ADMIN, Role.MEMBER)));
+							"admin", DEMO_PASSWORD, Set.of(Role.ADMIN, Role.ORG_ADMIN, Role.MEMBER)));
 		} else {
 			admin = userService.createLocal("admin@hinata.dev", "admin", "admin",
-					DEMO_PASSWORD, Set.of(Role.ADMIN, Role.MEMBER));
+					DEMO_PASSWORD, Set.of(Role.ADMIN, Role.ORG_ADMIN, Role.MEMBER));
 			s.setOrganizationName("Hinata");
 			s.setSetupCompleted(true);
 			settings.save(s);
@@ -324,6 +324,9 @@ public class DemoSeeder {
 					.userId(u.getId())
 					.role(u.getId().equals(creator.getId()) ? TeamRole.ADMIN : TeamRole.MEMBER)
 					.access(ProjectAccess.all())
+					// The demo shows a knowledge base people can read, so its members get
+					// the team's pages; a real team opens them on purpose.
+					.knowledge(com.ahmadre.hinata.team.KnowledgeAccess.all())
 					.build());
 		}
 		return teams.save(Team.builder()

@@ -22,4 +22,7 @@ public interface ProjectTemplatePolicy {
 
 	/** Records that {@code project} was marked as a template, or unmarked. */
 	void recordMarked(Project project, User actor);
+
+	/** How a new relative deadline counts where a project does not say. */
+	com.ahmadre.hinata.common.RelativeDate.Basis defaultBasis();
 }

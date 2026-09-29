@@ -325,35 +325,9 @@ public class IssueController {
 			}
 			if (request.tags() != null) issue.setTags(request.tags());
 			if (request.dependsOnIds() != null) issue.setDependsOnIds(request.dependsOnIds());
-			// Offsets first, so a request that sends both a date and an offset ends with the
-			// date winning — which is the rule everywhere else in this feature.
-			if (Boolean.TRUE.equals(request.clearStartOffset())) {
-				issue.setStartOffset(null);
-			} else if (request.startOffset() != null) {
-				issue.setStartOffset(checkedOffset(request.startOffset()));
-			}
-			if (Boolean.TRUE.equals(request.clearDueOffset())) {
-				issue.setDueOffset(null);
-			} else if (request.dueOffset() != null) {
-				issue.setDueOffset(checkedOffset(request.dueOffset()));
-			}
-			if (Boolean.TRUE.equals(request.clearStartDate())) {
-				issue.setStartDate(null);
-				issue.setStartOffset(null);
-			} else if (request.startDate() != null) {
-				issue.setStartDate(request.startDate());
-				// A hand-set date wins and takes the rule with it. Without this the next
-				// event-date move would quietly overwrite a deliberate decision, which is the
-				// one thing a schedule feature must never do.
-				issue.setStartOffset(null);
-			}
-			if (Boolean.TRUE.equals(request.clearDueDate())) {
-				issue.setDueDate(null);
-				issue.setDueOffset(null);
-			} else if (request.dueDate() != null) {
-				issue.setDueDate(request.dueDate());
-				issue.setDueOffset(null);
-			}
+			applyDeadlines(issue, new Deadlines(request.startDate(), request.startOffset(),
+					request.clearStartDate(), request.clearStartOffset(), request.dueDate(),
+					request.dueOffset(), request.clearDueDate(), request.clearDueOffset()));
 			if (request.estimateMinutes() != null) issue.setEstimateMinutes(request.estimateMinutes());
 			if (Boolean.TRUE.equals(request.clearStoryPoints())) {
 				issue.setStoryPoints(null);
@@ -362,6 +336,80 @@ public class IssueController {
 			}
 			if (request.rank() != null) issue.setRank(request.rank());
 		}, currentUser.require());
+	}
+
+	/** The deadline part of an update, shared by the single and the bulk route. */
+	record Deadlines(LocalDate startDate, RelativeDate startOffset, Boolean clearStartDate,
+			Boolean clearStartOffset, LocalDate dueDate, RelativeDate dueOffset, Boolean clearDueDate,
+			Boolean clearDueOffset) {
+
+		boolean any() {
+			return startDate != null || startOffset != null || Boolean.TRUE.equals(clearStartDate)
+					|| Boolean.TRUE.equals(clearStartOffset) || dueDate != null || dueOffset != null
+					|| Boolean.TRUE.equals(clearDueDate) || Boolean.TRUE.equals(clearDueOffset);
+		}
+	}
+
+	private void applyDeadlines(Issue issue, Deadlines d) {
+		// Offsets first, so a request that sends both a date and an offset ends with the
+		// date winning — which is the rule everywhere else in this feature.
+		if (Boolean.TRUE.equals(d.clearStartOffset())) {
+			issue.setStartOffset(null);
+		} else if (d.startOffset() != null) {
+			issue.setStartOffset(checkedOffset(d.startOffset()));
+		}
+		if (Boolean.TRUE.equals(d.clearDueOffset())) {
+			issue.setDueOffset(null);
+		} else if (d.dueOffset() != null) {
+			issue.setDueOffset(checkedOffset(d.dueOffset()));
+		}
+		if (Boolean.TRUE.equals(d.clearStartDate())) {
+			issue.setStartDate(null);
+			issue.setStartOffset(null);
+		} else if (d.startDate() != null) {
+			issue.setStartDate(d.startDate());
+			// A hand-set date wins and takes the rule with it. Without this the next
+			// event-date move would quietly overwrite a deliberate decision, which is the
+			// one thing a schedule feature must never do.
+			issue.setStartOffset(null);
+		}
+		if (Boolean.TRUE.equals(d.clearDueDate())) {
+			issue.setDueDate(null);
+			issue.setDueOffset(null);
+		} else if (d.dueDate() != null) {
+			issue.setDueDate(d.dueDate());
+			issue.setDueOffset(null);
+		}
+	}
+
+	/**
+	 * The same deadline for several issues at once — what the issue list's selection
+	 * offers instead of opening each one. Deadline fields only, with exactly the
+	 * single update's meaning.
+	 */
+	public record BulkDeadlineRequest(
+			@NotEmpty @Size(max = IssueService.MAX_BULK) List<String> issueIds,
+			LocalDate startDate, RelativeDate startOffset, Boolean clearStartDate, Boolean clearStartOffset,
+			LocalDate dueDate, RelativeDate dueOffset, Boolean clearDueDate, Boolean clearDueOffset) {
+	}
+
+	/**
+	 * Sets the deadline on every named issue. All or nothing on access: an issue the
+	 * caller may not touch refuses the whole request before anything is written.
+	 */
+	@PostMapping("/bulk/deadline")
+	public List<Issue> bulkDeadline(@RequestBody @Valid BulkDeadlineRequest request) {
+		Deadlines deadlines = new Deadlines(request.startDate(), request.startOffset(),
+				request.clearStartDate(), request.clearStartOffset(), request.dueDate(),
+				request.dueOffset(), request.clearDueDate(), request.clearDueOffset());
+		if (!deadlines.any()) {
+			throw ApiException.badRequest("error.issue.bulkNothingToChange");
+		}
+		// Checked once up front, so a refused offset refuses the request, not issue 37.
+		if (request.startOffset() != null) checkedOffset(request.startOffset());
+		if (request.dueOffset() != null) checkedOffset(request.dueOffset());
+		return issueService.updateAll(request.issueIds(), issue -> applyDeadlines(issue, deadlines),
+				currentUser.require());
 	}
 
 	@DeleteMapping("/{id}")

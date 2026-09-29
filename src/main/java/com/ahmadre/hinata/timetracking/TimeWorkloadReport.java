@@ -75,7 +75,7 @@ public class TimeWorkloadReport {
 			throw new ApiException(HttpStatus.NOT_FOUND, AdvancedTimeTrackingGate.DISABLED_KEY);
 		}
 		TimeReportScope.Reach reach = scopes.of(viewer);
-		if (!viewer.isAdmin() && reach.ledProjects().isEmpty()) {
+		if (!viewer.isOrgAdmin() && reach.ledProjects().isEmpty()) {
 			throw ApiException.forbidden("error.time.report.workloadForbidden");
 		}
 		Pageable pageable = PageRequest.of(Math.clamp(page, 0, TimeTrackingService.PAGE_INDEX_MAX),
@@ -83,7 +83,7 @@ public class TimeWorkloadReport {
 		boolean scoped = teamId != null && !teamId.isBlank() || projectId != null && !projectId.isBlank();
 		Page<Document> people;
 		boolean truncated = false;
-		if (viewer.isAdmin() && !scoped) {
+		if (viewer.isOrgAdmin() && !scoped) {
 			people = everybody(filter, pageable);
 		}
 		else {
@@ -106,7 +106,7 @@ public class TimeWorkloadReport {
 					minutes - total.capacityMinutes()));
 		}
 		return new Workload(new PageImpl<>(rows, pageable, people.getTotalElements()), truncated,
-				!viewer.isAdmin());
+				!viewer.isOrgAdmin());
 	}
 
 	/** Every active account, by name, paged in the database: an administrator without a group. */

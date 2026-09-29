@@ -52,7 +52,9 @@ public class ProjectCopyController {
 			Boolean includeTimeSettings,
 			Boolean includeBoard,
 			/** Whether the copy is itself a template. Used by "save this project as a template". */
-			Boolean asTemplate) {
+			Boolean asTemplate,
+			/** How the copy's new deadlines count; absent keeps the source's choice. */
+			com.ahmadre.hinata.common.RelativeDate.Basis deadlineBasis) {
 	}
 
 	/** What a copy of this project would involve. Changes nothing. */
@@ -77,7 +79,8 @@ public class ProjectCopyController {
 				Boolean.TRUE.equals(request.includeAttachments()),
 				request.includeTimeSettings() == null || request.includeTimeSettings(),
 				Boolean.TRUE.equals(request.includeBoard()),
-				Boolean.TRUE.equals(request.asTemplate()));
+				Boolean.TRUE.equals(request.asTemplate()),
+				request.deadlineBasis());
 		ProjectCopyService.Result result = copies.copy(id, options, currentUser.require());
 		return new CopyResponse(result.project(), result.issuesCopied(), result.subtasksCopied(),
 				result.attachmentsCopied(), result.deadlinesSet());

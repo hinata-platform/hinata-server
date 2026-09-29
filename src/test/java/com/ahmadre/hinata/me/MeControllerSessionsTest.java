@@ -56,7 +56,8 @@ class MeControllerSessionsTest {
 				mock(DataExportPdfService.class), mock(ExportRateLimiter.class),
 				mock(UserService.class),
 				mock(IssueWatchService.class), mock(SecurityPolicy.class), mock(JwtDecoder.class),
-				mock(SettingsService.class), mock(BrandLogoService.class), messages);
+				mock(SettingsService.class), mock(BrandLogoService.class), messages,
+				mock(com.ahmadre.hinata.notification.NotificationDays.class));
 	}
 
 	private RefreshSession session(String id) {

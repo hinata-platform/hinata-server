@@ -29,6 +29,11 @@ public class ProjectTemplateMarking implements ProjectTemplatePolicy {
 	}
 
 	@Override
+	public com.ahmadre.hinata.common.RelativeDate.Basis defaultBasis() {
+		return settings.defaultBasis();
+	}
+
+	@Override
 	public void recordMarked(Project project, User actor) {
 		audit.event(AuditAction.PROJECT_TEMPLATE_MARKED).actor(actor)
 				.meta("project", project.getKey())

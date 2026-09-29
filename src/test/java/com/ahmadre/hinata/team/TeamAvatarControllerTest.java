@@ -54,7 +54,7 @@ class TeamAvatarControllerTest {
 		// manage rule, so stubbing it out would stub out the behaviour under test.
 		teamService = new TeamService(teams, mock(TeamActivityRepository.class),
 				mock(ProjectService.class), mock(NotificationService.class), avatars,
-				mock(IssueWatcherCleanup.class));
+				mock(IssueWatcherCleanup.class), mock(TeamKnowledge.class));
 		controller = new TeamAvatarController(teamService, avatars,
 				new CurrentUser(mock(UserRepository.class), mock(SessionService.class)));
 	}

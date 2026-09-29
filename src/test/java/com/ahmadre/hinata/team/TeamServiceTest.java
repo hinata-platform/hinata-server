@@ -36,7 +36,7 @@ class TeamServiceTest {
 		avatars = mock(TeamAvatarService.class);
 		when(teams.save(any(Team.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		service = new TeamService(teams, mock(TeamActivityRepository.class), projects, notifications,
-				avatars, mock(IssueWatcherCleanup.class));
+				avatars, mock(IssueWatcherCleanup.class), mock(TeamKnowledge.class));
 	}
 
 	private User user(String id, Role... roles) {

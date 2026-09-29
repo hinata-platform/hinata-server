@@ -140,6 +140,14 @@ public class Project {
 		this.template = template;
 	}
 
+	/**
+	 * How a new relative deadline on this project counts — calendar or working days — or
+	 * null to follow the organisation's default. A default for what the deadline editor
+	 * preselects, never a rule: each deadline keeps the basis it was saved with, so
+	 * changing this moves no date.
+	 */
+	private com.ahmadre.hinata.common.RelativeDate.Basis deadlineBasis;
+
 	/** Monotonic counter backing per-project issue numbers. */
 	@Builder.Default
 	private long issueCounter = 0;

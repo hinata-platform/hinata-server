@@ -79,6 +79,7 @@ public class IssueDigestService {
 	private final ProjectReach reach;
 	private final IssueChangeRenderer renderer;
 	private final HinataProperties properties;
+	private final NotificationDays days;
 	private final Clock clock;
 
 	/**
@@ -381,8 +382,7 @@ public class IssueDigestService {
 	}
 
 	private NotificationPreferences preferencesOf(User user) {
-		NotificationPreferences prefs = user.getNotificationPreferences();
-		return (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
+		return days.today(user);
 	}
 
 	/**

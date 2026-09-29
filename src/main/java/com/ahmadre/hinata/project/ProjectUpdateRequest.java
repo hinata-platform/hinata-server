@@ -36,8 +36,24 @@ public record ProjectUpdateRequest(
 		 * cannot acquire templates it has no way of showing.
 		 */
 		Boolean template,
+		/**
+		 * How a new relative deadline counts on this project. Refused, like {@link #template},
+		 * while {@code project_templates} is off.
+		 */
+		com.ahmadre.hinata.common.RelativeDate.Basis deadlineBasis,
+		/** Hands {@link #deadlineBasis} back to the organisation's default. */
+		Boolean clearDeadlineBasis,
 		/** Maps a to-be-deleted workflow-state id to the surviving state id its
 		 * issues should be migrated into. Required when deleting a state that
 		 * still has issues assigned. */
 		Map<String, String> stateMigrations) {
+
+	/** The shape before {@link #deadlineBasis}, for callers that do not touch it. */
+	public ProjectUpdateRequest(String key, String name, String description, String leadId,
+			List<String> leadIds, List<String> memberIds, List<Project.WorkflowState> workflowStates,
+			List<String> resolvedStates, List<Project.Label> labels, String color, Boolean archived,
+			String workdayCalendarId, Boolean template, Map<String, String> stateMigrations) {
+		this(key, name, description, leadId, leadIds, memberIds, workflowStates, resolvedStates, labels,
+				color, archived, workdayCalendarId, template, null, null, stateMigrations);
+	}
 }
