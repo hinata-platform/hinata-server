@@ -134,7 +134,7 @@ class AvailabilityIntegrationTest {
 		member = user("member", Role.MEMBER, true);
 		lead = user("lead", Role.MEMBER, true);
 		stranger = user("stranger", Role.MEMBER, false);
-		admin = user("admin", Role.ADMIN, false);
+		admin = user("admin", Role.ORG_ADMIN, false);
 		project.getLeadIds().add(lead.getId());
 		project = projects.save(project);
 	}

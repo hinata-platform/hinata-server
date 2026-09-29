@@ -41,7 +41,7 @@ public class SetupService {
 			throw ApiException.conflict("error.setup.alreadyCompleted");
 		}
 		User admin = userService.createLocal(request.adminEmail(), request.adminUsername(),
-				request.adminDisplayName(), request.adminPassword(), Set.of(Role.ADMIN, Role.MEMBER));
+				request.adminDisplayName(), request.adminPassword(), Set.of(Role.ADMIN, Role.ORG_ADMIN, Role.MEMBER));
 		current.setOrganizationName(request.organizationName());
 		current.setSetupCompleted(true);
 		settings.save(current);

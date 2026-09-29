@@ -55,7 +55,7 @@ class ProjectReachTest {
 		projects = mock(ProjectRepository.class);
 		teams = mock(TeamRepository.class);
 		users = mock(UserRepository.class);
-		reach = new ProjectReach(projects, teams, users);
+		reach = new ProjectReach(projects, teams);
 
 		Project project = Project.builder().id(PROJECT).key("HIN").name("hinata")
 				.memberIds(new ArrayList<>(List.of("direct")))
@@ -123,12 +123,13 @@ class ProjectReachTest {
 	void theCastCoversBothOutcomes() {
 		Set<String> allowed = reach.whoCanSee(PROJECT, cast.keySet());
 
-		assertThat(allowed).contains("direct", "granted", "admin");
-		assertThat(allowed).doesNotContain("stranger", "grantedElsewhere");
+		assertThat(allowed).contains("direct", "granted");
+		// A platform admin is not a member, and being one opens nothing (HIN-129).
+		assertThat(allowed).doesNotContain("stranger", "grantedElsewhere", "admin", "deactivatedAdmin");
 	}
 
 	/**
-	 * A project that no longer exists is visible to nobody — not even an admin.
+	 * A project that no longer exists is visible to nobody.
 	 * Both paths have to agree on that too, since a queued digest can outlive the
 	 * project it points into.
 	 */

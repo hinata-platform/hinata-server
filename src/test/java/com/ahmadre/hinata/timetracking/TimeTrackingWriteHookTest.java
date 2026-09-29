@@ -110,7 +110,7 @@ class TimeTrackingWriteHookTest {
 	private void projectLedBy(User leadUser) {
 		Project project = Project.builder().id("p-1").key("HIN").name("Hinata").build();
 		when(projects.findOptional("p-1")).thenReturn(Optional.of(project));
-		when(projects.isLeadOrAdmin(eq(project), any()))
+		when(projects.isLead(eq(project), any()))
 				.thenAnswer(invocation -> leadUser.getId()
 						.equals(((User) invocation.getArgument(1)).getId()));
 	}

@@ -62,7 +62,7 @@ class ProjectAvatarControllerTest {
 		projectService = new ProjectService(projects, mock(ProjectTemplatePolicy.class),
 				mock(MongoTemplate.class), teams,
 				mock(NotificationService.class), mock(IssueWatcherCleanup.class),
-				new ProjectReach(projects, teams, mock(UserRepository.class)));
+				new ProjectReach(projects, teams));
 		controller = new ProjectAvatarController(projectService, avatars,
 				new CurrentUser(mock(UserRepository.class), mock(SessionService.class)));
 	}

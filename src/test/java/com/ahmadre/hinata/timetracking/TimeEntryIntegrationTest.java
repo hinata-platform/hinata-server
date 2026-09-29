@@ -110,7 +110,7 @@ class TimeEntryIntegrationTest {
 		owner = user("owner", Role.MEMBER);
 		peer = user("peer", Role.MEMBER);
 		outsider = user("outsider", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		project = project("HIN", "Hinata", owner, peer);
 		other = project("SEC", "Secret", peer);
 		issue = issue(project, "HIN-1", 1);

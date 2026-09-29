@@ -595,7 +595,7 @@ public class HolidayService implements DisposableBean {
 	}
 
 	private static void assertAdmin(User user) {
-		if (!user.isAdmin()) {
+		if (!user.isOrgAdmin()) {
 			throw ApiException.forbidden("error.availability.adminOnly");
 		}
 	}

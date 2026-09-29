@@ -603,7 +603,7 @@ public class GitService {
 
 	private Project requireLead(String projectId, User user) {
 		Project project = projects.get(projectId);
-		projects.assertLeadOrAdmin(project, user);
+		projects.assertLead(project, user);
 		return project;
 	}
 

@@ -58,6 +58,7 @@ public class MeService {
 	private final com.ahmadre.hinata.auth.TokenService tokens;
 	private final com.ahmadre.hinata.auth.PasswordResetService passwordResetService;
 	private final com.ahmadre.hinata.common.UserWords words;
+	private final com.ahmadre.hinata.notification.NotificationDays notificationDays;
 	/** The modules holding personal data of their own; see {@link PersonalDataExport}. */
 	private final List<PersonalDataExport> personalData;
 
@@ -206,13 +207,16 @@ public class MeService {
 		NotificationPreferences prefs = user.getNotificationPreferences();
 		// Sanitize on read so events added after the prefs were last saved (e.g.
 		// "ingest") surface with their defaults instead of being silently absent.
-		return (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
+		NotificationPreferences sanitized = (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
+		sanitized.setDefaultWeekdays(notificationDays.defaultsFor(user));
+		return sanitized;
 	}
 
 	public NotificationPreferences saveNotificationPreferences(User user, NotificationPreferences incoming) {
 		NotificationPreferences sanitized = incoming.sanitized();
 		user.setNotificationPreferences(sanitized);
 		users.save(user);
+		sanitized.setDefaultWeekdays(notificationDays.defaultsFor(user));
 		return sanitized;
 	}
 

@@ -131,7 +131,7 @@ class TeamAbsenceIntegrationTest {
 		bob = user("bob", Role.MEMBER);
 		eve = user("eve", Role.MEMBER);
 		mallory = user("mallory", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		project = projects.save(Project.builder().key("HIN").name("Hinata")
 				.leadId(lead.getId()).leadIds(new ArrayList<>(List.of(lead.getId())))
 				.memberIds(new ArrayList<>(List.of(lead.getId(), ann.getId(), bob.getId(), eve.getId()))).build());

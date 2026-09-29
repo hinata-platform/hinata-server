@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.template;
 
+import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.setup.ServerSettings;
@@ -74,6 +75,15 @@ public class ProjectTemplateSettings implements FeatureFlags.Module {
 	public boolean enabledIn(ServerSettings.ProjectTemplates block) {
 		Boolean override = orEmpty(block).getEnabled();
 		return override != null ? override : env().isEnabled();
+	}
+
+	/**
+	 * How a new relative deadline counts on a project that does not say: the
+	 * organisation's choice, else the environment's.
+	 */
+	public RelativeDate.Basis defaultBasis() {
+		RelativeDate.Basis override = db().getDefaultBasis();
+		return override != null ? override : env().getDefaultBasis();
 	}
 
 	/** As above, for a whole settings document rather than the one block. */

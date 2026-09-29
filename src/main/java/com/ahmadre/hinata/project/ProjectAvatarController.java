@@ -52,7 +52,7 @@ public class ProjectAvatarController {
 			@RequestParam("file") MultipartFile file) {
 		User user = currentUser.require();
 		Project project = projectService.get(id);
-		projectService.assertLeadOrAdmin(project, user);
+		projectService.assertCanManage(project, user);
 		return Map.of("avatarUrl", avatars.store(project, file));
 	}
 
@@ -62,7 +62,7 @@ public class ProjectAvatarController {
 	public void remove(@PathVariable String id) {
 		User user = currentUser.require();
 		Project project = projectService.get(id);
-		projectService.assertLeadOrAdmin(project, user);
+		projectService.assertCanManage(project, user);
 		avatars.remove(project);
 	}
 

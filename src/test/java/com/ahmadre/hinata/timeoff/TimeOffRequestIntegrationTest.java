@@ -130,8 +130,8 @@ class TimeOffRequestIntegrationTest {
 		}
 		member = user("member", Role.MEMBER);
 		keeper = user("keeper", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
-		secondAdmin = user("admin2", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
+		secondAdmin = user("admin2", Role.ORG_ADMIN);
 		enableModule(List.of(keeper.getId()));
 		vacation = approvable(types.byKey(TimeOffType.SYSTEM_VACATION).orElseThrow());
 		sick = types.byKey(TimeOffType.SYSTEM_SICK).orElseThrow();

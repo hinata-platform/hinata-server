@@ -32,6 +32,7 @@ public class MetaController {
 	private final com.ahmadre.hinata.auth.AuthPolicy authPolicy;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final FeatureFlags featureFlags;
+	private final com.ahmadre.hinata.project.ProjectTemplatePolicy templatePolicy;
 	private final BrandLogoService brandLogo;
 
 	@Value("${hinata.version:1.0.0}")
@@ -43,7 +44,12 @@ public class MetaController {
 			String windowsStoreUrl, String linuxStoreUrl,
 			Map<String, Boolean> featureFlags, boolean localAuthEnabled,
 			boolean registrationEnabled, boolean adminApprovalRequired, UploadLimits uploadLimits,
-			int passwordMinLength) {
+			int passwordMinLength,
+			/**
+			 * How a new relative deadline counts where a project does not say:
+			 * {@code CALENDAR} or {@code WORKING}, the organisation's default.
+			 */
+			String defaultDeadlineBasis) {
 	}
 
 	/** Attachment upload constraints so the client can validate before sending. */
@@ -81,7 +87,8 @@ public class MetaController {
 				authPolicy.requireAdminApproval(),
 				new UploadLimits(storage.getMaxUploadMb(), storage.getMaxFilesPerRequest(),
 						storage.getMaxRequestMb(), storage.getAllowedContentTypes()),
-				securityPolicy.passwordMinLength());
+				securityPolicy.passwordMinLength(),
+				templatePolicy.defaultBasis().name());
 	}
 
 	@Operation(summary = "Organization logo", description = "Serves the organization logo same-origin so clients (incl. the web app and the PDF export) load it without CORS restrictions. An uploaded logo is streamed from object storage; a configured external URL is fetched server-side through the SSRF-hardened image fetcher and cached.")

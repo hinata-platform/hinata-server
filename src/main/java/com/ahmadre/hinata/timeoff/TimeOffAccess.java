@@ -39,7 +39,7 @@ public class TimeOffAccess {
 
 	/** Whether somebody keeps absences for everybody. */
 	public boolean isKeeper(User viewer) {
-		if (viewer.isAdmin()) {
+		if (viewer.isOrgAdmin()) {
 			return true;
 		}
 		List<String> named = settings.absenceManagers();

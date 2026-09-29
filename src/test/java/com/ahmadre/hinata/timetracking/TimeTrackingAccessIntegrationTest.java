@@ -108,7 +108,7 @@ class TimeTrackingAccessIntegrationTest {
 		peer = user("peer", Role.MEMBER);
 		outsider = user("outsider", Role.MEMBER);
 		lead = user("lead", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 		project = projects.save(Project.builder().key("HIN").name("Hinata")
 				.leadId(lead.getId()).leadIds(new ArrayList<>(List.of(lead.getId())))
 				.memberIds(new ArrayList<>(List.of(member.getId(), peer.getId(), lead.getId())))
@@ -177,7 +177,8 @@ class TimeTrackingAccessIntegrationTest {
 		assertThat(timeTracking.list(issue.getId(), member)).hasSize(1);
 		assertThat(timeTracking.list(issue.getId(), peer)).hasSize(1);
 		assertThat(timeTracking.list(issue.getId(), lead)).hasSize(1);
-		assertThat(timeTracking.list(issue.getId(), admin)).hasSize(1);
+		// An issue is project content: the organisation role does not open it.
+		assertForbidden(() -> timeTracking.list(issue.getId(), admin));
 	}
 
 	@Test
@@ -188,7 +189,7 @@ class TimeTrackingAccessIntegrationTest {
 
 		assertThat(timeTracking.page(issue.getId(), 0, 20, member).getTotalElements()).isEqualTo(1);
 		assertThat(timeTracking.page(issue.getId(), 0, 20, lead).getTotalElements()).isEqualTo(1);
-		assertThat(timeTracking.page(issue.getId(), 0, 20, admin).getTotalElements()).isEqualTo(1);
+		assertForbidden(() -> timeTracking.page(issue.getId(), 0, 20, admin));
 	}
 
 	/** The readable id is the same door; it must not be a way around the lock. */
@@ -370,7 +371,7 @@ class TimeTrackingAccessIntegrationTest {
 	}
 
 	@Test
-	void anAdminStillSeesEveryoneAndMayNarrowByUserOrProject() {
+	void anOrganisationAdminSeesEveryoneAndMayNarrowByUserOrProject() {
 		logged(member, 30);
 		logged(peer, 60);
 		timeTracking.add(foreignIssue.getId(), draft(15), WorkItem.Source.APP, outsider);
@@ -386,11 +387,11 @@ class TimeTrackingAccessIntegrationTest {
 	@Test
 	void bothFiltersApplyTogether() {
 		logged(member, 30);
-		timeTracking.add(foreignIssue.getId(), draft(15), WorkItem.Source.APP, admin);
+		timeTracking.add(foreignIssue.getId(), draft(15), WorkItem.Source.APP, outsider);
 
-		assertThat(sheet(admin.getId(), project.getId(), admin))
-				.as("the admin logged nothing on this project").isEmpty();
-		assertThat(sheet(admin.getId(), foreign.getId(), admin)).singleElement()
+		assertThat(sheet(outsider.getId(), project.getId(), admin))
+				.as("the outsider logged nothing on this project").isEmpty();
+		assertThat(sheet(outsider.getId(), foreign.getId(), admin)).singleElement()
 				.satisfies(row -> assertThat(row.totalMinutes()).isEqualTo(15));
 	}
 
@@ -559,8 +560,8 @@ class TimeTrackingAccessIntegrationTest {
 				.containsExactly(entry(foreign.getId(), 15));
 
 		assertThat(reports.timePerProject(DAY.minusDays(3), DAY.plusDays(3), admin))
-				.as("an admin sees the whole instance, as before")
-				.containsOnlyKeys(project.getId(), foreign.getId());
+				.as("the project report is project content; no role reaches past membership")
+				.isEmpty();
 	}
 
 	@Test

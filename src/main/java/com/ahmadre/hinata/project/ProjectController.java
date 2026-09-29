@@ -38,7 +38,12 @@ public class ProjectController {
 			@NotBlank @Size(max = 120) String name,
 			@Size(max = 4000) String description,
 			String color,
-			String leadId) {
+			String leadId,
+			/**
+			 * How a new relative deadline counts on this project; absent follows the
+			 * organisation. Refused while {@code project_templates} is off.
+			 */
+			com.ahmadre.hinata.common.RelativeDate.Basis deadlineBasis) {
 	}
 
 	/**
@@ -119,6 +124,7 @@ public class ProjectController {
 				.description(request.description())
 				.color(request.color() != null ? request.color() : "#AEC6F4")
 				.leadId(request.leadId())
+				.deadlineBasis(request.deadlineBasis())
 				.build();
 		return projectService.create(project, user);
 	}
@@ -154,7 +160,7 @@ public class ProjectController {
 	public DeletionService.ProjectImpact deletionImpact(@PathVariable String id) {
 		User user = currentUser.require();
 		Project project = projectService.get(id);
-		projectService.assertLeadOrAdmin(project, user);
+		projectService.assertLead(project, user);
 		return deletion.projectImpact(project, user);
 	}
 
@@ -171,7 +177,7 @@ public class ProjectController {
 			@RequestParam(required = false) String migrateToProjectId) {
 		User user = currentUser.require();
 		Project project = projectService.get(id);
-		projectService.assertLeadOrAdmin(project, user);
+		projectService.assertLead(project, user);
 		DeletionService.ProjectDeleteOptions options =
 				deletion.validateProjectDelete(project, user, issueStrategy, migrateToProjectId);
 		SseEmitter emitter = deletion.newEmitter();

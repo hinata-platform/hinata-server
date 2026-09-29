@@ -4,11 +4,6 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
-import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.project.Project;
-import com.ahmadre.hinata.project.ProjectService;
-import com.ahmadre.hinata.team.Team;
-import com.ahmadre.hinata.team.TeamService;
 import com.ahmadre.hinata.user.User;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -19,8 +14,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 @Tag(name = "Knowledge Base")
 @RestController
@@ -31,8 +24,8 @@ public class ArticleController {
 	private final ArticleRepository articles;
 	private final RichTextService richText;
 	private final CurrentUser currentUser;
-	private final ProjectService projectService;
-	private final TeamService teamService;
+	private final ArticleAccess access;
+	private final ArticleService service;
 
 	public record ArticleRequest(
 			@NotBlank @Size(max = 300) String title,
@@ -77,12 +70,10 @@ public class ArticleController {
 		}
 	}
 
-	/** Hard ceiling on the array-shaped corpus load so the KB can never stream an
-	 * unbounded set of (potentially 100k-char) bodies to the client. */
-	private static final int LIST_CAP = 1000;
-
 	@GetMapping
 	public List<ArticleResponse> list(@RequestParam(required = false) String projectId,
+			/** Only the pages of one team, for the Team-Admin picking pages to open. */
+			@RequestParam(required = false) String teamId,
 			@RequestParam(defaultValue = "false") boolean all,
 			@RequestParam(required = false) String referencesIssue) {
 		User user = currentUser.require();
@@ -95,67 +86,42 @@ public class ArticleController {
 			// every global article under "documented in" on the issue.
 			if (!RichTextService.isIssueKey(referencesIssue)) return List.of();
 			String key = referencesIssue.toUpperCase(java.util.Locale.ROOT);
-			return ArticleResponse.from(
-					filterVisible(articles.findByReferencedIssueKeysContains(key), user)
-							.stream().limit(LIST_CAP).toList());
+			return ArticleResponse.from(access.sightOf(user)
+					.filter(articles.findByReferencedIssueKeysContains(key))
+					.stream().limit(ArticleService.LIST_CAP).toList());
 		}
-		final List<Article> base;
-		if (all) {
-			base = articles.findAllByOrderBySortOrderAsc();
-		} else if (projectId != null) {
-			base = articles.findByProjectIdOrderBySortOrderAsc(projectId);
-		} else {
-			base = articles.findByProjectIdIsNullOrderBySortOrderAsc();
+		if (teamId != null) {
+			return ArticleResponse.from(service.listOfTeam(user, teamId));
 		}
-		return ArticleResponse.from(filterVisible(base, user).stream().limit(LIST_CAP).toList());
+		return ArticleResponse.from(service.list(user, !all, projectId));
 	}
 
 	@GetMapping("/{id}")
 	public ArticleResponse get(@PathVariable String id) {
-		User user = currentUser.require();
-		Article article = articles.findById(id).orElseThrow(() -> ApiException.notFound("article"));
-		if (!canSee(article, user)) {
-			// Don't leak existence of articles the user has no access to.
-			throw ApiException.notFound("article");
-		}
-		return ArticleResponse.from(article);
+		return ArticleResponse.from(service.readable(id, currentUser.require()));
 	}
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public ArticleResponse create(@RequestBody @Valid ArticleRequest request) {
 		User user = currentUser.require();
-		// Write-side ACL: the caller must be able to see the target project/team,
-		// otherwise they could plant KB content into a space they can't access.
-		assertCanTarget(request.projectId(), request.teamId(), user);
 		RichText body = richText.fromRequest(request.contentDoc(), request.content());
-		if (body == null) body = RichText.EMPTY;
-		return ArticleResponse.from(articles.save(Article.builder()
-				.title(request.title())
-				.content(body.text())
-				.contentDoc(body.doc())
-				.referencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()))
-				.projectId(request.projectId())
-				.teamId(request.teamId())
-				.parentId(request.parentId())
-				.space(request.space())
-				.icon(request.icon())
-				.tags(request.tags() != null ? request.tags() : List.of())
-				.sortOrder(request.sortOrder() != null ? request.sortOrder() : 0)
-				.authorId(user.getId())
-				.build()));
+		return ArticleResponse.from(service.create(user, new ArticleService.Draft(request.title(), body,
+				request.projectId(), request.teamId(), request.parentId(), request.space(), request.icon(),
+				request.tags(), request.sortOrder())));
 	}
 
+	/**
+	 * Edits a page. Its place (project, team, private) is not changed here: a
+	 * client that never knew about places sends them back empty, and reading that
+	 * as "make it private" would hide a page from everybody on every save. Places
+	 * change through {@link #place}. A new parent does move the page, into the
+	 * parent's place.
+	 */
 	@PatchMapping("/{id}")
 	public ArticleResponse update(@PathVariable String id, @RequestBody @Valid ArticleRequest request) {
 		User user = currentUser.require();
-		Article article = articles.findById(id).orElseThrow(() -> ApiException.notFound("article"));
-		if (!canSee(article, user)) {
-			throw ApiException.notFound("article");
-		}
-		// The caller must also be able to see the TARGET project/team — otherwise
-		// an article could be relocated into a space the caller can't access.
-		assertCanTarget(request.projectId(), request.teamId(), user);
+		Article article = service.readable(id, user);
 		article.setTitle(request.title());
 		// Resolved against what is stored: a client old enough to send only the
 		// legacy field is sending back the derived plain text it was given, and
@@ -167,92 +133,31 @@ public class ArticleController {
 			article.setContentDoc(body.doc());
 			article.setReferencedIssueKeys(new java.util.ArrayList<>(body.issueKeys()));
 		}
-		article.setProjectId(request.projectId());
-		article.setTeamId(request.teamId());
-		article.setParentId(request.parentId());
 		if (request.space() != null) article.setSpace(request.space());
 		if (request.icon() != null) article.setIcon(request.icon());
 		if (request.tags() != null) article.setTags(request.tags());
 		if (request.sortOrder() != null) article.setSortOrder(request.sortOrder());
-		return ArticleResponse.from(articles.save(article));
+		return ArticleResponse.from(service.save(article, request.parentId(), user));
+	}
+
+	/** Where a page lives. Both null makes it private to its author. */
+	public record PlaceRequest(String projectId, String teamId) {
+	}
+
+	/**
+	 * Moves a top-level page, with everything filed under it, into a project, a
+	 * team or the author's private pages. Who reads it changes with it, so the
+	 * caller must reach the new place.
+	 */
+	@PutMapping("/{id}/place")
+	public ArticleResponse place(@PathVariable String id, @RequestBody PlaceRequest request) {
+		User user = currentUser.require();
+		return ArticleResponse.from(service.place(id, request.projectId(), request.teamId(), user));
 	}
 
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String id) {
-		User user = currentUser.require();
-		Article article = articles.findById(id).orElseThrow(() -> ApiException.notFound("article"));
-		if (!canSee(article, user)) {
-			throw ApiException.notFound("article");
-		}
-		if (!articles.findByParentId(id).isEmpty()) {
-			throw ApiException.conflict("error.article.hasChildren");
-		}
-		articles.deleteById(id);
-	}
-
-	// ── visibility ──────────────────────────────────────────────────────────
-
-	/**
-	 * Articles (and therefore their spaces) are visible when:
-	 * <ul>
-	 *   <li>project-scoped → the user has access to that project (direct member
-	 *       or via a team grant), or</li>
-	 *   <li>team-scoped → the user belongs to that team, or</li>
-	 *   <li>global (no project, no team) → visible to every authenticated user.</li>
-	 * </ul>
-	 * Platform admins see everything.
-	 */
-	private List<Article> filterVisible(List<Article> base, User user) {
-		if (user.isAdmin()) {
-			return base;
-		}
-		Set<String> projectIds = projectService.visibleTo(user).stream()
-				.map(Project::getId).collect(Collectors.toSet());
-		Set<String> teamIds = teamService.visibleTo(user).stream()
-				.map(Team::getId).collect(Collectors.toSet());
-		return base.stream()
-				.filter(a -> canSee(a, projectIds, teamIds))
-				.toList();
-	}
-
-	/**
-	 * Guards the write-side target scope: a non-admin caller may only create/move
-	 * an article into a project or team they can actually see. Global articles
-	 * (null project + null team) stay creatable by any authenticated user.
-	 */
-	private void assertCanTarget(String projectId, String teamId, User user) {
-		if (user.isAdmin()) {
-			return;
-		}
-		if (projectId != null && projectService.visibleTo(user).stream()
-				.noneMatch(p -> p.getId().equals(projectId))) {
-			throw ApiException.forbidden("error.accessDenied");
-		}
-		if (teamId != null && teamService.visibleTo(user).stream()
-				.noneMatch(t -> t.getId().equals(teamId))) {
-			throw ApiException.forbidden("error.accessDenied");
-		}
-	}
-
-	private boolean canSee(Article article, User user) {
-		if (user.isAdmin()) {
-			return true;
-		}
-		Set<String> projectIds = projectService.visibleTo(user).stream()
-				.map(Project::getId).collect(Collectors.toSet());
-		Set<String> teamIds = teamService.visibleTo(user).stream()
-				.map(Team::getId).collect(Collectors.toSet());
-		return canSee(article, projectIds, teamIds);
-	}
-
-	private boolean canSee(Article article, Set<String> projectIds, Set<String> teamIds) {
-		if (article.getProjectId() != null) {
-			return projectIds.contains(article.getProjectId());
-		}
-		if (article.getTeamId() != null) {
-			return teamIds.contains(article.getTeamId());
-		}
-		return true; // global / organisation-wide
+		service.delete(service.readable(id, currentUser.require()));
 	}
 }

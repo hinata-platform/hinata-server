@@ -171,7 +171,7 @@ public class ProjectTimeSettingsController {
 			@RequestBody @Valid ProjectTimeSettingsRequest request) {
 		User user = currentUser.require();
 		Project project = projects.get(projectId);
-		projects.assertLeadOrAdmin(project, user);
+		projects.assertCanManage(project, user);
 		// Against the injected clock rather than a @PastOrPresent, for two reasons:
 		// the annotation reads the JVM's default zone and default clock, and it
 		// would reach the client as a field error under the generic "validation

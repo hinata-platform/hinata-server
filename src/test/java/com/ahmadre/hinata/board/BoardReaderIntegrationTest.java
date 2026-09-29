@@ -337,9 +337,10 @@ class BoardReaderIntegrationTest {
 		assertThat(memberWall.refs()).isEmpty();
 		assertThat(column(memberWall, "Open").issues().getFirst().epicId()).isNull();
 
+		// The administrator leads Secret and is not in Hinata: the platform role adds nothing.
 		BoardReader.BoardWall adminWall = reader.wall(board.getId(), null, BoardQuery.ALL, 30, admin);
 		assertThat(column(adminWall, "Open").issues()).extracting(BoardCard::title)
-				.containsExactlyInAnyOrder("Own work", "Secret work");
+				.containsExactly("Secret work");
 
 		assertRefused(() -> reader.wall(board.getId(), null, BoardQuery.ALL, 30, outsider), "error.accessDenied");
 		assertRefused(() -> reader.facets(board.getId(), BoardQuery.Shape.WALL, outsider), "error.accessDenied");
@@ -349,9 +350,8 @@ class BoardReaderIntegrationTest {
 		hinata.setArchived(true);
 		projects.save(hinata);
 		assertRefused(() -> reader.wall(board.getId(), null, BoardQuery.ALL, 30, member), "error.accessDenied");
-		// An admin reads a board of projects nobody may see as empty.
-		assertThat(reader.wall(board.getId(), null, BoardQuery.ALL, 30, admin).columns())
-				.allSatisfy(column -> assertThat(column.issues()).isEmpty());
+		// Nor for an administrator: the role opens no board it would not open anyway.
+		assertRefused(() -> reader.wall(board.getId(), null, BoardQuery.ALL, 30, admin), "error.accessDenied");
 	}
 
 	@Test

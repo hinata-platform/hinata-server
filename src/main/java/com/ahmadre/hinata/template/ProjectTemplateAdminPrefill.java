@@ -36,6 +36,7 @@ public class ProjectTemplateAdminPrefill implements SettingsPrefill {
 		}
 		ServerSettings.ProjectTemplates view = new ServerSettings.ProjectTemplates();
 		view.setEnabled(settings.enabled());
+		view.setDefaultBasis(settings.defaultBasis());
 		stored.setEffective(view);
 	}
 }

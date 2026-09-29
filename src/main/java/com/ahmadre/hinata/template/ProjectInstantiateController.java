@@ -49,7 +49,9 @@ public class ProjectInstantiateController {
 	public record InstantiateRequest(
 			@NotBlank @Size(max = 120) String name,
 			@Size(min = 2, max = 10) String key,
-			LocalDate eventDate) {
+			LocalDate eventDate,
+			/** How the new project's deadlines count; absent keeps the template's choice. */
+			com.ahmadre.hinata.common.RelativeDate.Basis deadlineBasis) {
 	}
 
 	@PostMapping
@@ -61,7 +63,7 @@ public class ProjectInstantiateController {
 				request.key(),
 				// Bounded in the service, which is what every protocol goes through.
 				request.eventDate(),
-				true, false, true, false, false);
+				true, false, true, false, false, request.deadlineBasis());
 		ProjectCopyService.Result result = copies.copy(id, options, currentUser.require());
 		// Its own record beside PROJECT_COPIED, which the copy already wrote: "where did our
 		// twelve event projects come from" is a different question from "who copied this one".

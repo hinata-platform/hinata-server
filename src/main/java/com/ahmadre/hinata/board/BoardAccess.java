@@ -41,7 +41,7 @@ class BoardAccess {
 	 */
 	List<Project> assertReadable(AgileBoard board, User user) {
 		List<Project> readable = readableProjects(board, user);
-		if (readable.isEmpty() && !user.isAdmin()) {
+		if (readable.isEmpty()) {
 			throw ApiException.forbidden("error.accessDenied");
 		}
 		return readable;

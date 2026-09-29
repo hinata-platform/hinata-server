@@ -56,6 +56,13 @@ public class MeController {
 	private final com.ahmadre.hinata.setup.SettingsService settings;
 	private final com.ahmadre.hinata.setup.BrandLogoService brandLogo;
 	private final org.springframework.context.MessageSource messages;
+	private final com.ahmadre.hinata.notification.NotificationDays notificationDays;
+
+	/** The notification days that apply until the person picks their own. */
+	private MeResponse withDefaultDays(MeResponse response, User user) {
+		response.notificationPreferences().setDefaultWeekdays(notificationDays.defaultsFor(user));
+		return response;
+	}
 
 	// --- DTOs -----------------------------------------------------------------
 
@@ -189,7 +196,7 @@ public class MeController {
 		// every start-up, so this self-heals accounts left on the sign-up default.
 		User user = me.syncLocale(currentUser.require(),
 				org.springframework.context.i18n.LocaleContextHolder.getLocale().getLanguage());
-		return MeResponse.from(user);
+		return withDefaultDays(MeResponse.from(user), user);
 	}
 
 	@Operation(summary = "Update my profile (display name, title, pronouns, locale, time zone)")
@@ -200,7 +207,7 @@ public class MeController {
 		User saved = me.updateProfile(user, request.displayName(), request.title(),
 				request.pronouns(), request.locale(), request.timezone(),
 				time == null ? null : time.merge(user.getTimePreferences()));
-		return MeResponse.from(saved);
+		return withDefaultDays(MeResponse.from(saved), saved);
 	}
 
 	// --- Email & password -----------------------------------------------------

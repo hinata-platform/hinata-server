@@ -197,6 +197,11 @@ public class User {
 		return roles != null && roles.contains(Role.ADMIN);
 	}
 
+	/** Whether this person runs the organisation's time, absence and billing side. See {@link Role}. */
+	public boolean isOrgAdmin() {
+		return roles != null && roles.contains(Role.ORG_ADMIN);
+	}
+
 	public boolean isSso() {
 		return origin != null && origin != Origin.LOCAL;
 	}

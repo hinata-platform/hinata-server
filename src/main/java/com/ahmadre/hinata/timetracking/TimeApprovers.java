@@ -60,11 +60,11 @@ class TimeApprovers {
 
 	/**
 	 * Whether {@code user} leads the project — the authority an approval needs, and
-	 * the one {@code ProjectService.isLeadOrAdmin} states. False for no project.
+	 * the one {@code ProjectService.isLead} states. False for no project.
 	 */
 	boolean leads(String projectId, User user) {
 		return projectId != null && projects.findOptional(projectId)
-				.map(project -> projects.isLeadOrAdmin(project, user))
+				.map(project -> projects.isLead(project, user))
 				.orElse(false);
 	}
 
@@ -96,7 +96,7 @@ class TimeApprovers {
 	 * make the server work.
 	 */
 	Set<String> adminIds() {
-		return users.findByRolesContainingAndActiveIsTrue(Role.ADMIN).stream()
+		return users.findByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN).stream()
 				.map(User::getId)
 				.collect(Collectors.toCollection(LinkedHashSet::new));
 	}

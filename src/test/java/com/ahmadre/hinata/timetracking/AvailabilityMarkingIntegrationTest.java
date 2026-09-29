@@ -124,7 +124,7 @@ class AvailabilityMarkingIntegrationTest {
 		project = projects.save(Project.builder().key("HIN").name("Hinata")
 				.leadIds(new ArrayList<>()).memberIds(new ArrayList<>()).build());
 		member = user("member", Role.MEMBER);
-		User admin = user("admin", Role.ADMIN);
+		User admin = user("admin", Role.ORG_ADMIN);
 
 		as(admin);
 		HolidayController.CalendarResponse calendar = holidayApi.createCalendar(

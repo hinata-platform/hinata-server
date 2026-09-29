@@ -80,7 +80,7 @@ public class AvailabilityAccess {
 	}
 
 	public Sight of(User viewer, String userId) {
-		if (viewer.getId().equals(userId) || viewer.isAdmin()) {
+		if (viewer.getId().equals(userId) || viewer.isOrgAdmin()) {
 			return Sight.FULL;
 		}
 		AvailabilityPolicy current = policy.getIfAvailable();
@@ -122,7 +122,7 @@ public class AvailabilityAccess {
 	/** Whether [viewer] may write somebody else's absences at all. */
 	public boolean keeps(User viewer) {
 		return viewer != null
-				&& (viewer.isAdmin() || keepers.getIfAvailable(AbsenceKeepers::adminsOnly).keeps(viewer));
+				&& (viewer.isOrgAdmin() || keepers.getIfAvailable(AbsenceKeepers::adminsOnly).keeps(viewer));
 	}
 
 	/**

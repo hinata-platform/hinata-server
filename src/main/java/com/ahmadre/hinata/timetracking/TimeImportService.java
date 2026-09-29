@@ -316,7 +316,7 @@ public class TimeImportService {
 		if (targetUserId == null || targetUserId.isBlank() || targetUserId.equals(actor.getId())) {
 			return actor;
 		}
-		if (!actor.isAdmin()) {
+		if (!actor.isOrgAdmin()) {
 			throw ApiException.forbidden("error.time.import.othersAdminOnly");
 		}
 		return users.findById(targetUserId).orElseThrow(() -> ApiException.notFound("user"));
@@ -425,7 +425,7 @@ public class TimeImportService {
 				return target;
 			}
 			String key = named.strip().toLowerCase(Locale.ROOT);
-			if (!actor.isAdmin()) {
+			if (!actor.isOrgAdmin()) {
 				if (key.equals(lower(actor.getUsername())) || key.equals(lower(actor.getEmail()))) {
 					return actor;
 				}
@@ -450,7 +450,7 @@ public class TimeImportService {
 		}
 
 		private Map<String, String> projectsOf(User owner) {
-			Criteria criteria = owner.isAdmin() ? new Criteria()
+			Criteria criteria = owner.isOrgAdmin() ? new Criteria()
 					: new Criteria().orOperator(Criteria.where("memberIds").is(owner.getId()),
 							Criteria.where("_id").in(reach.teamGrantedProjectIds(owner)));
 			Query query = Query.query(criteria).limit(TimeReportScope.MAX_PROJECTS);

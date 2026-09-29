@@ -121,6 +121,15 @@ public class AdminUserController {
 		service.setRole(request.ids(), request.role());
 	}
 
+	public record OrgRoleRequest(@NotEmpty List<String> ids, boolean orgAdmin) {
+	}
+
+	@PostMapping("/org-role")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void orgRole(@RequestBody @Valid OrgRoleRequest request) {
+		service.setOrgAdmin(request.ids(), request.orgAdmin());
+	}
+
 	// --- Approvals ------------------------------------------------------------
 
 	@PostMapping("/approve")
@@ -147,7 +156,7 @@ public class AdminUserController {
 
 	public record AdminUpdateUserRequest(Boolean active, Boolean admin,
 			@Size(max = 120) String displayName, @Size(max = 120) String title,
-			@Email String email) {
+			@Email String email, Boolean orgAdmin) {
 	}
 
 	@PatchMapping("/{id}")
@@ -158,6 +167,9 @@ public class AdminUserController {
 		}
 		if (request.admin() != null) {
 			service.setRole(List.of(id), request.admin() ? "ADMIN" : "USER");
+		}
+		if (request.orgAdmin() != null) {
+			service.setOrgAdmin(List.of(id), request.orgAdmin());
 		}
 		return service.updateDetails(id, request.displayName(), request.title(), request.email());
 	}

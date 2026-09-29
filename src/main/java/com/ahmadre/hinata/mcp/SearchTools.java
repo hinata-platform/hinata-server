@@ -33,7 +33,6 @@ public class SearchTools {
 			@McpToolParam(description = "Free-text query") String q,
 			@McpToolParam(required = false, description = "Category scope: all | ISSUES | PROJECTS | PEOPLE | BOARDS | DOCS") String scope) {
 		scopeGuard.require(Scopes.SEARCH_READ);
-		currentUser.require();
-		return searchService.search(q, scope);
+		return searchService.search(currentUser.require(), q, scope);
 	}
 }

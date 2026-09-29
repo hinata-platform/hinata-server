@@ -26,5 +26,7 @@ public record AdminUserResponse(
 		Instant lastActive,
 		Instant invitedAt,
 		String invitedBy,
-		Instant joinedAt) {
+		Instant joinedAt,
+		/** Whether the person runs the organisation's time, absence and billing side. */
+		boolean orgAdmin) {
 }

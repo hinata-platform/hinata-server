@@ -58,7 +58,7 @@ class MeControllerPagesTest {
 				mock(UserEvents.class), mock(DataExportPdfService.class), mock(ExportRateLimiter.class),
 				mock(UserService.class),
 				mock(IssueWatchService.class), securityPolicy, mock(JwtDecoder.class), settings,
-				brandLogo, messages);
+				brandLogo, messages, mock(com.ahmadre.hinata.notification.NotificationDays.class));
 	}
 
 	private String resetForm(String acceptLanguage) {

@@ -80,7 +80,7 @@ class TimeReportScope {
 	}
 
 	Reach of(User viewer) {
-		if (viewer.isAdmin()) {
+		if (viewer.isOrgAdmin()) {
 			return new Reach(viewer.getId(), true, Set.of(), Set.of());
 		}
 		Set<String> visible = new LinkedHashSet<>(directProjects(viewer));

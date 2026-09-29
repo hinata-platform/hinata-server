@@ -811,6 +811,14 @@ public class ServerSettings {
 		private Boolean enabled;
 
 		/**
+		 * The organisation's default for how a new relative deadline counts; null ⇒
+		 * {@code hinata.project-templates.default-basis}. Owned by the organisation
+		 * admins ({@code /api/v1/org/settings}); the admin area's save carries it
+		 * forward untouched.
+		 */
+		private com.ahmadre.hinata.common.RelativeDate.Basis defaultBasis;
+
+		/**
 		 * What the switch currently resolves to, for the admin area to show
 		 * beside the field it edits. Never stored — filled by the module itself
 		 * on the way out, like {@link TimeTracking#getEffective()}.

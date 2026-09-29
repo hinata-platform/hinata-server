@@ -84,7 +84,7 @@ class TimeImportIntegrationTest {
 			mongo.remove(new Query(), type);
 		}
 		settings.save(new ServerSettings());
-		admin = person("admin", Role.ADMIN);
+		admin = person("admin", Role.ORG_ADMIN);
 		member = person("member", Role.MEMBER);
 		Project project = mongo.insert(Project.builder().key("APO").name("Apollo").leadId(admin.getId())
 				.leadIds(new ArrayList<>(List.of(admin.getId())))

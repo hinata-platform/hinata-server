@@ -366,7 +366,7 @@ public class TimesheetApprovalService {
 			User user) {
 		assertEnabled();
 		Pageable pageable = pageOf(page, size);
-		if (user.isAdmin()) {
+		if (user.isOrgAdmin()) {
 			return status == null
 					? approvals.findAll(pageable)
 					: approvals.findByStatus(status, pageable);
@@ -417,7 +417,7 @@ public class TimesheetApprovalService {
 	 */
 	public Page<WorkItem> entriesOf(String id, int page, int size, User user) {
 		TimesheetApproval approval = get(id, user);
-		if (!isOwner(approval, user) && !user.isAdmin() && !policy.leadsSeeMemberEntries()) {
+		if (!isOwner(approval, user) && !user.isOrgAdmin() && !policy.leadsSeeMemberEntries()) {
 			throw ApiException.forbidden("error.time.entriesHidden");
 		}
 		return entries.entriesOfPeriod(approval.getUserId(), approval.getProjectId(),
@@ -748,11 +748,11 @@ public class TimesheetApprovalService {
 		if (isOwner(approval, user)) {
 			return false;
 		}
-		if (user.isAdmin()) {
+		if (user.isOrgAdmin()) {
 			return true;
 		}
 		return projects.findOptional(approval.getProjectId())
-				.map(project -> projects.isLeadOrAdmin(project, user))
+				.map(project -> projects.isLead(project, user))
 				.orElse(false);
 	}
 

@@ -42,6 +42,7 @@ public class NotificationService {
 	private final ProjectReach reach;
 	private final IssueChangeRenderer changeRenderer;
 	private final com.ahmadre.hinata.common.UserWords words;
+	private final NotificationDays days;
 	// Where the watchers' change mails go instead of the mail server; the bell and
 	// the push still fire from here, immediately.
 	private final IssueDigestService digests;
@@ -973,6 +974,18 @@ public class NotificationService {
 	}
 
 	/**
+	 * Tells somebody they became, or stopped being, an organisation admin. In-app and
+	 * push only: the role changes what they may manage, not how they sign in.
+	 */
+	public void notifyOrgRoleChanged(User user) {
+		String title = words.of(user, "notify.rolesUpdated.title");
+		String body = words.of(user,
+				user.isOrgAdmin() ? "notify.orgRole.granted" : "notify.orgRole.revoked");
+		persist(user, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body,
+				user.isOrgAdmin() ? "/organization" : null);
+	}
+
+	/**
 	 * Must be invoked <em>before</em> the user document is removed. No in-app
 	 * notification is persisted because the account (and its notifications) are
 	 * about to be deleted; the mail is dispatched asynchronously from captured
@@ -1032,7 +1045,11 @@ public class NotificationService {
 		String member = words.of(user, "notify.role.member");
 		return user.getRoles().stream()
 				.sorted()
-				.map(role -> role == Role.ADMIN ? "Administrator" : member)
+				.map(role -> switch (role) {
+					case ADMIN -> "Administrator";
+					case ORG_ADMIN -> words.of(user, "notify.role.orgAdmin");
+					case MEMBER -> member;
+				})
 				.collect(Collectors.joining(", "));
 	}
 
@@ -1305,9 +1322,9 @@ public class NotificationService {
 	}
 
 	/** Recipient's notification preferences, normalised (defaults for legacy users). */
+	/** The person's preferences as they apply today — see {@link NotificationDays}. */
 	private NotificationPreferences prefsOf(User user) {
-		NotificationPreferences prefs = user.getNotificationPreferences();
-		return (prefs == null ? NotificationPreferences.defaults() : prefs).sanitized();
+		return days.today(user);
 	}
 
 	/**

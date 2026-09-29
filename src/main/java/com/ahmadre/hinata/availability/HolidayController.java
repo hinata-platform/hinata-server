@@ -110,7 +110,7 @@ public class HolidayController {
 	@GetMapping("/calendars")
 	public Page<CalendarResponse> calendars(@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "50") int size) {
-		boolean admin = currentUser.require().isAdmin();
+		boolean admin = currentUser.require().isOrgAdmin();
 		return holidays.calendars(page, size).map(calendar -> CalendarResponse.from(calendar, admin, words));
 	}
 

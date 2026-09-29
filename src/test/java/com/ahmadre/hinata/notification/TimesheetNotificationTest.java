@@ -78,7 +78,7 @@ class TimesheetNotificationTest {
 						mock(IssueRepository.class), mock(ProjectRepository.class),
 						com.ahmadre.hinata.common.UserWordsFixture.real()),
 				com.ahmadre.hinata.common.UserWordsFixture.real(),
-				mock(IssueDigestService.class));
+				NotificationDaysFixture.weekday(), mock(IssueDigestService.class));
 	}
 
 	/** Silences the {@code time} event for both people, leaving everything else on. */

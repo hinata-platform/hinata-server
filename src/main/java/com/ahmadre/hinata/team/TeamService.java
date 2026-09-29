@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
  * Team lifecycle, membership, project attachment and the team activity feed.
  * Mirrors {@link ProjectService} conventions (i18n {@link ApiException} keys,
  * thin Mongo access). Authority is scoped: a Team-Admin manages only their own
- * team; a platform admin can manage any team. The last-Team-Admin invariant is
+ * team, and nobody else manages it. The last-Team-Admin invariant is
  * enforced here, not just in the UI.
  */
 @Service
@@ -37,6 +37,7 @@ public class TeamService {
 	// Team grants are revoked in reconcileProjectMembers below; subscriptions that
 	// only that grant allowed have to go with them.
 	private final com.ahmadre.hinata.issue.IssueWatcherCleanup watcherCleanup;
+	private final TeamKnowledge knowledge;
 
 	// --- Reads ---------------------------------------------------------------
 
@@ -45,16 +46,19 @@ public class TeamService {
 	}
 
 	public List<Team> visibleTo(User user) {
-		return user.isAdmin() ? teams.findAll() : teams.findByMembersUserId(user.getId());
+		return teams.findByMembersUserId(user.getId());
 	}
 
-	/** Platform admin OR a Team-Admin of this specific team. */
+	/**
+	 * A Team-Admin of this specific team. A platform admin is not one by virtue of
+	 * the platform role: a team's people and projects are its own.
+	 */
 	public boolean canManage(Team team, User user) {
-		return user.isAdmin() || team.isAdmin(user.getId());
+		return team.isAdmin(user.getId());
 	}
 
 	public void assertVisible(Team team, User user) {
-		if (!user.isAdmin() && !team.isMember(user.getId())) {
+		if (!team.isMember(user.getId())) {
 			throw ApiException.forbidden("error.team.notMember");
 		}
 	}
@@ -99,6 +103,7 @@ public class TeamService {
 						.userId(creator.getId())
 						.role(TeamRole.ADMIN)
 						.access(ProjectAccess.all())
+						.knowledge(KnowledgeAccess.all())
 						.build())))
 				.build();
 		Team saved = teams.save(team);
@@ -136,7 +141,18 @@ public class TeamService {
 
 	public Team addMembers(Team team, User actor, List<String> userIds, TeamRole role,
 			ProjectAccess access) {
+		return addMembers(team, actor, userIds, role, access, null);
+	}
+
+	/**
+	 * Adds people with a role, project access and knowledge access. A null
+	 * {@code pages} opens no page: joining a team never shows its knowledge base
+	 * by itself.
+	 */
+	public Team addMembers(Team team, User actor, List<String> userIds, TeamRole role,
+			ProjectAccess access, KnowledgeAccess pages) {
 		ProjectAccess normalized = normalizeAccess(team, access);
+		KnowledgeAccess normalizedPages = normalizePages(team, pages);
 		Set<String> existing = new HashSet<>();
 		team.getMembers().forEach(m -> existing.add(m.getUserId()));
 		List<String> added = new ArrayList<>();
@@ -145,7 +161,8 @@ public class TeamService {
 			existing.add(userId);
 			added.add(userId);
 			team.getMembers().add(TeamMembership.builder()
-					.userId(userId).role(role).access(copyAccess(normalized)).build());
+					.userId(userId).role(role).access(copyAccess(normalized))
+					.knowledge(copyPages(normalizedPages)).build());
 		}
 		if (added.isEmpty()) return team;
 		Team saved = teams.save(team);
@@ -162,6 +179,12 @@ public class TeamService {
 
 	public Team updateMembership(Team team, User actor, String userId, TeamRole role,
 			ProjectAccess access) {
+		return updateMembership(team, actor, userId, role, access, null);
+	}
+
+	/** Changes what is given; a null argument leaves that part as it is. */
+	public Team updateMembership(Team team, User actor, String userId, TeamRole role,
+			ProjectAccess access, KnowledgeAccess pages) {
 		TeamMembership membership = requireMember(team, userId);
 		boolean roleChanged = role != null && role != membership.getRole();
 		if (roleChanged && membership.isAdmin() && role == TeamRole.MEMBER && team.adminCount() <= 1) {
@@ -169,6 +192,7 @@ public class TeamService {
 		}
 		if (role != null) membership.setRole(role);
 		if (access != null) membership.setAccess(normalizeAccess(team, access));
+		if (pages != null) membership.setKnowledge(normalizePages(team, pages));
 		Team saved = teams.save(team);
 		// Role/access changes can grant or revoke project visibility for this user.
 		syncProjectMembership(new HashSet<>(saved.getProjectIds()), Set.of(userId));
@@ -216,7 +240,7 @@ public class TeamService {
 		for (String projectId : projectIds) {
 			if (projectId == null || team.getProjectIds().contains(projectId)) continue;
 			Project project = projects.get(projectId); // 404 if it doesn't exist
-			projects.assertLeadOrAdmin(project, actor);
+			projects.assertLead(project, actor);
 			team.getProjectIds().add(projectId);
 			attached.add(project);
 		}
@@ -269,13 +293,15 @@ public class TeamService {
 	}
 
 	public Project createTeamProject(Team team, User actor, String key, String name,
-			String description, String color, String leadId) {
+			String description, String color, String leadId,
+			com.ahmadre.hinata.common.RelativeDate.Basis deadlineBasis) {
 		Project project = Project.builder()
 				.key(key)
 				.name(name)
 				.description(description)
 				.color(color != null && !color.isBlank() ? color : "#AEC6F4")
 				.leadId(leadId)
+				.deadlineBasis(deadlineBasis)
 				.build();
 		Project created = projects.create(project, actor); // validates key, seeds workflow
 		team.getProjectIds().add(created.getId());
@@ -366,6 +392,37 @@ public class TeamService {
 				yield ProjectAccess.some(cleaned);
 			}
 		};
+	}
+
+	/**
+	 * A SOME grant names pages of this team and nothing else, so a Team-Admin can
+	 * never open a page of another team, a project or somebody's private page by
+	 * naming its id.
+	 */
+	private KnowledgeAccess normalizePages(Team team, KnowledgeAccess pages) {
+		if (pages == null || pages.getScope() == null) return KnowledgeAccess.none();
+		return switch (pages.getScope()) {
+			case ALL -> KnowledgeAccess.all();
+			case NONE -> KnowledgeAccess.none();
+			case SOME -> {
+				List<String> ids = pages.getArticleIds() == null ? List.of()
+						: pages.getArticleIds().stream().filter(java.util.Objects::nonNull).distinct().toList();
+				if (ids.size() > KnowledgeAccess.MAX_ARTICLES) {
+					throw ApiException.badRequest("error.team.tooManyPages");
+				}
+				Set<String> ours = ids.isEmpty() ? Set.of() : knowledge.pagesOf(team.getId(), ids);
+				if (ours.size() != ids.size()) {
+					throw ApiException.badRequest("error.team.pagesNotOfTeam");
+				}
+				yield KnowledgeAccess.some(ids);
+			}
+		};
+	}
+
+	private KnowledgeAccess copyPages(KnowledgeAccess pages) {
+		return pages.getScope() == ProjectAccess.Scope.SOME
+				? KnowledgeAccess.some(pages.getArticleIds())
+				: KnowledgeAccess.builder().scope(pages.getScope()).build();
 	}
 
 	private ProjectAccess copyAccess(ProjectAccess access) {

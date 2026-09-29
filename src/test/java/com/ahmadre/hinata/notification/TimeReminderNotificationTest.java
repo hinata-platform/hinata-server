@@ -75,7 +75,7 @@ class TimeReminderNotificationTest {
 						mock(IssueRepository.class), mock(ProjectRepository.class),
 						com.ahmadre.hinata.common.UserWordsFixture.real()),
 				com.ahmadre.hinata.common.UserWordsFixture.real(),
-				mock(IssueDigestService.class));
+				NotificationDaysFixture.weekday(), mock(IssueDigestService.class));
 	}
 
 	private void timeEvent(boolean email, boolean pushOn) {

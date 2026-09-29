@@ -56,10 +56,11 @@ public class TeamController {
 	public record AddMembersRequest(
 			@NotEmpty List<String> userIds,
 			TeamRole role,
-			ProjectAccess access) {
+			ProjectAccess access,
+			KnowledgeAccess knowledge) {
 	}
 
-	public record UpdateMemberRequest(TeamRole role, ProjectAccess access) {
+	public record UpdateMemberRequest(TeamRole role, ProjectAccess access, KnowledgeAccess knowledge) {
 	}
 
 	public record AttachProjectsRequest(@NotEmpty List<String> projectIds) {
@@ -70,7 +71,9 @@ public class TeamController {
 			@NotBlank @Size(max = 120) String name,
 			@Size(max = 4000) String description,
 			String color,
-			String leadId) {
+			String leadId,
+			/** How new relative deadlines count; see {@code ProjectController.CreateProjectRequest}. */
+			com.ahmadre.hinata.common.RelativeDate.Basis deadlineBasis) {
 	}
 
 	// --- Reads ---------------------------------------------------------------
@@ -169,7 +172,7 @@ public class TeamController {
 		teamService.assertManage(team, user);
 		TeamRole role = request.role() != null ? request.role() : TeamRole.MEMBER;
 		ProjectAccess access = request.access() != null ? request.access() : ProjectAccess.none();
-		return teamService.addMembers(team, user, request.userIds(), role, access);
+		return teamService.addMembers(team, user, request.userIds(), role, access, request.knowledge());
 	}
 
 	@PatchMapping("/{id}/members/{userId}")
@@ -178,7 +181,8 @@ public class TeamController {
 		User user = currentUser.require();
 		Team team = teamService.get(id);
 		teamService.assertManage(team, user);
-		return teamService.updateMembership(team, user, userId, request.role(), request.access());
+		return teamService.updateMembership(team, user, userId, request.role(), request.access(),
+				request.knowledge());
 	}
 
 	@DeleteMapping("/{id}/members/{userId}")
@@ -213,7 +217,7 @@ public class TeamController {
 		Team team = teamService.get(id);
 		teamService.assertManage(team, user);
 		return teamService.createTeamProject(team, user, request.key(), request.name(),
-				request.description(), request.color(), request.leadId());
+				request.description(), request.color(), request.leadId(), request.deadlineBasis());
 	}
 
 	@DeleteMapping("/{id}/projects/{projectId}")

@@ -142,7 +142,7 @@ class TimeLockIntegrationTest {
 		otherProject = projects.save(Project.builder().key("MOB").name("Mobile")
 				.leadIds(new ArrayList<>()).memberIds(new ArrayList<>()).build());
 		member = user("member", Role.MEMBER);
-		admin = user("admin", Role.ADMIN);
+		admin = user("admin", Role.ORG_ADMIN);
 	}
 
 	private User user(String name, Role role) {
