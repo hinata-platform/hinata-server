@@ -2,7 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.setup.SettingsService;
-import com.ahmadre.hinata.template.ProjectTemplateSettings;
+import com.ahmadre.hinata.common.OrganisationDayCount;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserZones;
 import com.ahmadre.hinata.user.WorkWeeks;
@@ -36,7 +36,7 @@ import java.util.Set;
 public class NotificationDays {
 
 	private final SettingsService settings;
-	private final ProjectTemplateSettings deadlines;
+	private final OrganisationDayCount dayCount;
 	private final Clock clock;
 
 	/**
@@ -85,7 +85,7 @@ public class NotificationDays {
 		ZoneId zone = zoneOf(user);
 		Set<DayOfWeek> workdays = WorkWeeks.workingDays(user.getLocale(), zone);
 		out.setDefaultWeekdays(List.copyOf(workdays));
-		NotificationWindow fallback = NotificationWindow.defaultFor(workdays, deadlines.defaultBasis());
+		NotificationWindow fallback = NotificationWindow.defaultFor(workdays, dayCount.dayCount());
 		out.setDefaultSchedule(fallback.always()
 				? NotificationPreferences.Schedule.ALWAYS : NotificationPreferences.Schedule.CUSTOM);
 		out.setDefaultFrom(fallback.from() == null ? null : fallback.from().toString());
@@ -93,7 +93,7 @@ public class NotificationDays {
 	}
 
 	private NotificationWindow window(NotificationPreferences prefs, User user, ZoneId zone) {
-		return NotificationWindow.of(prefs, WorkWeeks.workingDays(user.getLocale(), zone), deadlines.defaultBasis());
+		return NotificationWindow.of(prefs, WorkWeeks.workingDays(user.getLocale(), zone), dayCount.dayCount());
 	}
 
 	private static NotificationPreferences stored(User user) {

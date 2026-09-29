@@ -28,7 +28,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
-public class ProjectTemplateSettings implements FeatureFlags.Module {
+public class ProjectTemplateSettings implements FeatureFlags.Module, com.ahmadre.hinata.common.OrganisationDayCount {
 
 	/** The client-visible flag name, snake_case like {@code absence_management}. */
 	public static final String FLAG = "project_templates";
@@ -84,6 +84,11 @@ public class ProjectTemplateSettings implements FeatureFlags.Module {
 	public RelativeDate.Basis defaultBasis() {
 		RelativeDate.Basis override = db().getDefaultBasis();
 		return override != null ? override : env().getDefaultBasis();
+	}
+
+	@Override
+	public RelativeDate.Basis dayCount() {
+		return defaultBasis();
 	}
 
 	/** As above, for a whole settings document rather than the one block. */
