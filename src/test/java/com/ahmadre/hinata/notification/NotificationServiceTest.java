@@ -26,6 +26,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.issue.IssueRepository;
@@ -65,13 +66,60 @@ class NotificationServiceTest {
 					}
 					return found;
 				});
-		service = new NotificationService(notifications, users, mail, push,
+		service = serviceWith(NotificationDaysFixture.weekday());
+	}
+
+	private NotificationService serviceWith(NotificationDays days) {
+		return new NotificationService(notifications, users, mail, push,
 				mock(GatewayService.class), richText, reach,
 				new IssueChangeRenderer(users, mock(SprintRepository.class),
 mock(IssueRepository.class), mock(ProjectRepository.class),
 com.ahmadre.hinata.common.UserWordsFixture.real()),
 				com.ahmadre.hinata.common.UserWordsFixture.real(),
-				NotificationDaysFixture.weekday(), mock(IssueDigestService.class));
+				days, mock(IssueDigestService.class));
+	}
+
+	// --- notification window (HIN-131) -----------------------------------------
+
+	@Test
+	void outsideTheWindowTheBellRingsAndMailAndPushWait() {
+		// Saturday 3 October 2026, noon in Berlin, in an organisation that counts working days.
+		service = serviceWith(NotificationDaysFixture.at(java.time.Instant.parse("2026-10-03T10:00:00Z"),
+				com.ahmadre.hinata.common.RelativeDate.Basis.WORKING));
+		User replier = User.builder().id("u2").displayName("Sam").active(true).build();
+		User parentAuthor = User.builder().id("u1").displayName("Rebar").active(true)
+				.email("rebar@example.org").timezone("Europe/Berlin").build();
+		when(users.findById("u1")).thenReturn(Optional.of(parentAuthor));
+
+		service.notifyComment(issue(), replier, comment("c99", "u2", "{{user:u1}} look", "u1"));
+
+		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
+		verify(notifications).save(saved.capture());
+		assertThat(saved.getValue()).satisfies(n -> {
+			assertThat(n.isHeld()).isTrue();
+			assertThat(n.isHeldEmail()).isTrue();
+			assertThat(n.isHeldPush()).isTrue();
+		});
+		verifyNoInteractions(push);
+		verifyNoInteractions(mail);
+	}
+
+	@Test
+	void insideTheWindowNothingWaits() {
+		// Wednesday noon UTC: 14:00 in Berlin, inside office hours.
+		service = serviceWith(NotificationDaysFixture.at(NotificationDaysFixture.WEDNESDAY,
+				com.ahmadre.hinata.common.RelativeDate.Basis.WORKING));
+		User replier = User.builder().id("u2").displayName("Sam").active(true).build();
+		User parentAuthor = User.builder().id("u1").displayName("Rebar").active(true)
+				.email("rebar@example.org").timezone("Europe/Berlin").build();
+		when(users.findById("u1")).thenReturn(Optional.of(parentAuthor));
+
+		service.notifyComment(issue(), replier, comment("c99", "u2", "{{user:u1}} look", "u1"));
+
+		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
+		verify(notifications).save(saved.capture());
+		assertThat(saved.getValue().isHeld()).isFalse();
+		verify(push).sendToUser(eq("u1"), any(), any(), any(), any());
 	}
 
 	/** A stored text comment, as the write path would have produced it. */

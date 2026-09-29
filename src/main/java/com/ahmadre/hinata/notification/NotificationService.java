@@ -806,14 +806,14 @@ public class NotificationService {
 			String pushTitle, String pushBody, String link) {
 		if (user == null || !user.isActive()) return;
 		String eventId = eventId(type);
-		notifications.save(Notification.builder()
-				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
-		NotificationPreferences prefs = prefsOf(user);
-		if (prefs.deliversEmail(eventId)) {
+		Delivery delivery = delivery(user, eventId);
+		notifications.save(delivery.mark(Notification.builder()
+				.userId(user.getId()).type(type).title(title).body(body).link(link)).build());
+		if (delivery.email()) {
 			mail.sendNotification(user.getEmail(), mail.subjectPrefix() + title, title, body, appLink(link),
 					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		}
-		if (prefs.deliversPush(eventId)) {
+		if (delivery.push()) {
 			push.sendToUser(user.getId(), pushTitle, pushBody, link, Map.of("type", type.name()));
 		}
 	}
@@ -922,15 +922,15 @@ public class NotificationService {
 			java.util.Map<String, Object> model) {
 		if (user == null || !user.isActive()) return;
 		String link = "/weekly-summary";
-		notifications.save(Notification.builder()
+		Delivery delivery = delivery(user, eventId(Notification.Type.DIGEST));
+		notifications.save(delivery.mark(Notification.builder()
 				.userId(user.getId()).type(Notification.Type.DIGEST)
-				.title(title).body(body).link(link).build());
-		NotificationPreferences prefs = prefsOf(user);
-		if (prefs.deliversEmail(eventId(Notification.Type.DIGEST))) {
+				.title(title).body(body).link(link)).build());
+		if (delivery.email()) {
 			model.put("ctaLink", appLink(link));
 			mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/weekly-summary", model);
 		}
-		if (prefs.deliversPush(eventId(Notification.Type.DIGEST))) {
+		if (delivery.push()) {
 			push.sendToUser(user.getId(), title, body, link);
 		}
 	}
@@ -945,16 +945,15 @@ public class NotificationService {
 	public void notifyTimeReport(User user, String title, String body, java.util.Map<String, Object> model,
 			String link) {
 		if (user == null || !user.isActive()) return;
-		notifications.save(Notification.builder()
+		Delivery delivery = delivery(user, eventId(Notification.Type.TIME_REPORT_SCHEDULED));
+		notifications.save(delivery.mark(Notification.builder()
 				.userId(user.getId()).type(Notification.Type.TIME_REPORT_SCHEDULED)
-				.title(title).body(body).link(link).build());
-		NotificationPreferences prefs = prefsOf(user);
-		String eventId = eventId(Notification.Type.TIME_REPORT_SCHEDULED);
-		if (prefs.deliversEmail(eventId)) {
+				.title(title).body(body).link(link)).build());
+		if (delivery.email()) {
 			model.put("ctaLink", appLink(link));
 			mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + title, "email/time-report", model);
 		}
-		if (prefs.deliversPush(eventId)) {
+		if (delivery.push()) {
 			push.sendToUser(user.getId(), words.of(user, "notify.timeReport.pushTitle"),
 					words.of(user, "notify.timeReport.pushBody"), link,
 					Map.of("type", Notification.Type.TIME_REPORT_SCHEDULED.name()));
@@ -1300,18 +1299,19 @@ public class NotificationService {
 			String eventId = routing.eventFor().apply(user.getId());
 			// The in-app (bell) notification is always recorded; e-mail and push
 			// are gated by the recipient's per-event channel preferences.
-			notifications.save(Notification.builder()
-					.userId(user.getId()).type(type).title(t).body(b).link(userLink).build());
-			NotificationPreferences prefs = prefsOf(user);
+			Delivery delivery = delivery(user, eventId);
+			notifications.save(delivery.mark(Notification.builder()
+					.userId(user.getId()).type(type).title(t).body(b).link(userLink)).build());
 			// In-app notifications keep the relative route; the e-mail button gets
 			// an absolute deep link that the native app intercepts as a
-			// Universal/App Link, straight to the issue.
-			if (prefs.deliversEmail(eventId) && !routing.emailSink().takeOver(user)) {
+			// Universal/App Link, straight to the issue. A held mail is not handed to
+			// the change digest either: the summary at the window's start lists it.
+			if (delivery.email() && !routing.emailSink().takeOver(user)) {
 				mail.sendNotification(user.getEmail(), mail.subjectPrefix() + t, t, b, appLink(userLink),
 						buttonLabel(locale), localeOf(user), eyebrowKey(type),
 						routing.changeLines().apply(locale));
 			}
-			if (prefs.deliversPush(eventId)) {
+			if (delivery.push()) {
 				push.sendToUser(user.getId(), t,
 						pushBodies.computeIfAbsent(locale, pushBody::of), userLink,
 						Map.of("type", type.name()));
@@ -1411,9 +1411,26 @@ public class NotificationService {
 		return words.in(locale, "notify.cta.openIssue");
 	}
 
-	/** The person's preferences as they apply today — see {@link NotificationDays}. */
-	private NotificationPreferences prefsOf(User user) {
-		return days.today(user);
+	/**
+	 * What a delivery sends now, and what it leaves waiting for the person's notification
+	 * window (HIN-131). The locked event never waits.
+	 */
+	private record Delivery(boolean email, boolean push, boolean holdEmail, boolean holdPush) {
+
+		Notification.NotificationBuilder mark(Notification.NotificationBuilder builder) {
+			return builder.held(holdEmail || holdPush).heldEmail(holdEmail).heldPush(holdPush);
+		}
+	}
+
+	private Delivery delivery(User user, String eventId) {
+		NotificationDays.Gate gate = days.gate(user);
+		NotificationPreferences prefs = gate.prefs();
+		boolean email = prefs.deliversEmail(eventId);
+		boolean push = prefs.deliversPush(eventId);
+		if (gate.open() || NotificationPreferences.LOCKED.equals(eventId)) {
+			return new Delivery(email, push, false, false);
+		}
+		return new Delivery(false, false, email, push);
 	}
 
 	/**

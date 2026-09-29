@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.notification;
 
+import com.ahmadre.hinata.common.RelativeDate;
+import com.ahmadre.hinata.template.ProjectTemplateSettings;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 
@@ -26,9 +28,17 @@ public final class NotificationDaysFixture {
 		return at(WEDNESDAY);
 	}
 
+	/** At {@code now}, on the platform's default: calendar days, so notifications at any time. */
 	public static NotificationDays at(Instant now) {
+		return at(now, RelativeDate.Basis.CALENDAR);
+	}
+
+	/** At {@code now}, for an organisation that counts in {@code basis}. */
+	public static NotificationDays at(Instant now, RelativeDate.Basis basis) {
 		SettingsService settings = mock(SettingsService.class);
 		when(settings.get()).thenReturn(new ServerSettings());
-		return new NotificationDays(settings, Clock.fixed(now, ZoneOffset.UTC));
+		ProjectTemplateSettings deadlines = mock(ProjectTemplateSettings.class);
+		when(deadlines.defaultBasis()).thenReturn(basis);
+		return new NotificationDays(settings, deadlines, Clock.fixed(now, ZoneOffset.UTC));
 	}
 }

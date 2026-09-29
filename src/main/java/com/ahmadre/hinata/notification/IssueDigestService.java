@@ -80,6 +80,7 @@ public class IssueDigestService {
 	private final IssueChangeRenderer renderer;
 	private final HinataProperties properties;
 	private final NotificationDays days;
+	private final HeldNotifications held;
 	private final Clock clock;
 
 	/**
@@ -337,7 +338,14 @@ public class IssueDigestService {
 			return false;
 		}
 		// The user may have switched watching off while this was queued.
-		if (!preferencesOf(recipient).deliversEmail(NotificationPreferences.WATCHING)) {
+		NotificationDays.Gate gate = days.gate(recipient);
+		if (!gate.prefs().deliversEmail(NotificationPreferences.WATCHING)) {
+			return false;
+		}
+		// Came due outside the recipient's window (HIN-131): the bell entries for these
+		// changes wait for the window instead, and its summary mail lists them.
+		if (!gate.open()) {
+			held.holdEmailFor(recipient.getId(), issue.getReadableId(), claimed.getFirstQueuedAt());
 			return false;
 		}
 		List<FieldChange> changes = FieldChange.collapse(claimed.getChanges());
@@ -379,10 +387,6 @@ public class IssueDigestService {
 		// is left to the layout's `email.cta.open`, like every other templated mail.
 		model.put("ctaLink", gateway.relayLink("/issues/" + issue.getReadableId(), null));
 		return model;
-	}
-
-	private NotificationPreferences preferencesOf(User user) {
-		return days.today(user);
 	}
 
 	/**

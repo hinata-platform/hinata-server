@@ -2,6 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.template.ProjectTemplateSettings;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserZones;
 import com.ahmadre.hinata.user.WorkWeeks;
@@ -11,24 +12,31 @@ import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.time.DayOfWeek;
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Applies a person's notification days: on a day they did not choose, e-mail and
- * push stay silent and only the bell records the notification. "Today" is today
- * in the person's own time zone, so a Friday-evening mention in Berlin is not a
- * Saturday for somebody in Riyadh by accident — nor the other way round.
+ * Applies a person's notification schedule (HIN-129 days, HIN-131 hours): outside their
+ * window e-mail and push stay silent — held back, see {@link HeldNotifications} — and only
+ * the bell records the notification at once. "Now" is now in the person's own time zone, so
+ * a Friday-evening mention in Berlin is not a Saturday for somebody in Riyadh by accident —
+ * nor the other way round.
  *
- * <p>The one place every delivery path asks, so the rule cannot hold for the bell
- * fan-out and be forgotten by the weekly summary or the change digest.
+ * <p>Who has not chosen follows the organisation: working days as the deadline default make
+ * office hours on working days everybody's default, the platform's calendar days leave
+ * notifications on at all times.
+ *
+ * <p>The one place every delivery path asks, so the rule cannot hold for the bell fan-out
+ * and be forgotten by the weekly summary or the change digest.
  */
 @Component
 @RequiredArgsConstructor
 public class NotificationDays {
 
 	private final SettingsService settings;
+	private final ProjectTemplateSettings deadlines;
 	private final Clock clock;
 
 	/**
@@ -43,18 +51,54 @@ public class NotificationDays {
 		instanceZone = UserZones.of(null, event.settings());
 	}
 
-	/** The person's stored preferences, sanitized and applied to today. */
-	public NotificationPreferences today(User user) {
-		NotificationPreferences stored = user.getNotificationPreferences();
-		NotificationPreferences prefs = (stored == null ? NotificationPreferences.defaults() : stored).sanitized();
-		ZoneId zone = zoneOf(user);
-		return prefs.on(LocalDate.now(clock.withZone(zone)).getDayOfWeek(),
-				WorkWeeks.workingDays(user.getLocale(), zone));
+	/** A person's preferences, and whether their window is open right now. */
+	public record Gate(NotificationPreferences prefs, boolean open) {
+
+		/** The preferences as they apply now: unchanged when open, both channels quiet when not. */
+		public NotificationPreferences now() {
+			return open ? prefs : prefs.quiet();
+		}
 	}
 
-	/** The days that apply when the person has not picked any, Monday first. */
-	public List<DayOfWeek> defaultsFor(User user) {
-		return List.copyOf(WorkWeeks.workingDays(user.getLocale(), zoneOf(user)));
+	/** The person's stored preferences, sanitized, and whether they may be reached now. */
+	public Gate gate(User user) {
+		NotificationPreferences prefs = stored(user);
+		ZoneId zone = zoneOf(user);
+		return new Gate(prefs, window(prefs, user, zone).isOpen(LocalDateTime.now(clock.withZone(zone))));
+	}
+
+	/** The preferences as they apply now — see {@link Gate#now()}. */
+	public NotificationPreferences today(User user) {
+		return gate(user).now();
+	}
+
+	/** The person's window as their preferences and the organisation work it out. */
+	public NotificationWindow windowOf(User user) {
+		return window(stored(user), user, zoneOf(user));
+	}
+
+	/**
+	 * Fills in what applies while the person has not chosen — days, schedule and hours —
+	 * so the settings card can show it and preset its fields.
+	 */
+	public void describeDefaults(User user, NotificationPreferences out) {
+		ZoneId zone = zoneOf(user);
+		Set<DayOfWeek> workdays = WorkWeeks.workingDays(user.getLocale(), zone);
+		out.setDefaultWeekdays(List.copyOf(workdays));
+		NotificationWindow fallback = NotificationWindow.defaultFor(workdays, deadlines.defaultBasis());
+		out.setDefaultSchedule(fallback.always()
+				? NotificationPreferences.Schedule.ALWAYS : NotificationPreferences.Schedule.CUSTOM);
+		out.setDefaultFrom(fallback.from() == null ? null : fallback.from().toString());
+		out.setDefaultUntil(fallback.until() == null ? null : fallback.until().toString());
+	}
+
+	private NotificationWindow window(NotificationPreferences prefs, User user, ZoneId zone) {
+		return NotificationWindow.of(prefs, WorkWeeks.workingDays(user.getLocale(), zone), deadlines.defaultBasis());
+	}
+
+	private static NotificationPreferences stored(User user) {
+		NotificationPreferences stored = user.getNotificationPreferences();
+		return (stored == null ? NotificationPreferences.defaults() : stored).sanitized();
 	}
 
 	private ZoneId zoneOf(User user) {

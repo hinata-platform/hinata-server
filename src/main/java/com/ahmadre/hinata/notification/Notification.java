@@ -17,6 +17,9 @@ import java.time.Instant;
 // Partial, so it holds one entry per person with a target and not their whole history.
 @CompoundIndex(name = "user_target_reminder", def = "{'userId': 1, 'type': 1}",
 		partialFilter = "{'type': 'TIME_TARGET_REMINDER'}")
+// What waits for a person's notification window (HIN-131). Partial, so it holds only the
+// few notifications that are waiting, not everybody's history.
+@CompoundIndex(name = "held_user", def = "{'held': 1, 'userId': 1}", partialFilter = "{'held': true}")
 public class Notification {
 
 	public enum Type {
@@ -53,6 +56,20 @@ public class Notification {
 
 	@Builder.Default
 	private boolean read = false;
+
+	/**
+	 * Written outside the person's notification window (HIN-131): the mail and push it would
+	 * have sent wait for the window, where {@link HeldNotifications} sends everything that
+	 * waited as one mail and one push. {@code held} is set whenever either channel waits.
+	 */
+	@Builder.Default
+	private boolean held = false;
+
+	@Builder.Default
+	private boolean heldEmail = false;
+
+	@Builder.Default
+	private boolean heldPush = false;
 
 	@CreatedDate
 	private Instant createdAt;
