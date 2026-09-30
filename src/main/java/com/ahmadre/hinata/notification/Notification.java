@@ -63,17 +63,33 @@ public class Notification {
 	 * have sent wait for the window, where {@link HeldNotifications} sends everything that
 	 * waited as one mail and one push. {@code held} is set whenever either channel waits.
 	 */
-	@Builder.Default
+	// Object types, not primitives: every notification written before these fields existed
+	// comes back without them, and a primitive constructor parameter refuses the null, which
+	// made the whole document unreadable. The getters below give the default.
 	@JsonIgnore
-	private boolean held = false;
+	private Boolean held;
 
-	@Builder.Default
 	@JsonIgnore
-	private boolean heldEmail = false;
+	private Boolean heldEmail;
 
-	@Builder.Default
 	@JsonIgnore
-	private boolean heldPush = false;
+	private Boolean heldPush;
+
+	/** Never null: a notification written before HIN-131 never waited. */
+	@JsonIgnore
+	public boolean isHeld() {
+		return Boolean.TRUE.equals(held);
+	}
+
+	@JsonIgnore
+	public boolean isHeldEmail() {
+		return Boolean.TRUE.equals(heldEmail);
+	}
+
+	@JsonIgnore
+	public boolean isHeldPush() {
+		return Boolean.TRUE.equals(heldPush);
+	}
 
 	@CreatedDate
 	private Instant createdAt;
