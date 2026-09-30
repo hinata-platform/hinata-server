@@ -166,4 +166,28 @@ class HeldNotificationsIntegrationTest {
 		// Released: a second sweep sends nothing again.
 		assertThat(held.sweep(10)).isZero();
 	}
+
+	/**
+	 * A notification written before HIN-131 has no {@code held} fields at all. It must still
+	 * read: with primitives there, every old document failed to map and the bell answered 500.
+	 */
+	@Test
+	void aNotificationFromBeforeTheWindowStillReads() {
+		mongo.getCollection("notifications").insertOne(new Document()
+				.append("userId", "legacy-user")
+				.append("type", "SYSTEM")
+				.append("title", "Before HIN-131")
+				.append("read", false)
+				.append("createdAt", java.util.Date.from(SATURDAY)));
+
+		List<Notification> read = mongo.find(new org.springframework.data.mongodb.core.query.Query(
+				org.springframework.data.mongodb.core.query.Criteria.where("userId").is("legacy-user")),
+				Notification.class);
+
+		assertThat(read).singleElement().satisfies(n -> {
+			assertThat(n.isHeld()).isFalse();
+			assertThat(n.isHeldEmail()).isFalse();
+			assertThat(n.isHeldPush()).isFalse();
+		});
+	}
 }
