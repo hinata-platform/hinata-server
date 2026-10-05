@@ -71,6 +71,9 @@ public enum AuditAction {
 	TIME_REPORT_EXPORTED(DATA, INFO, true),
 	// Entries written from a CSV file. Always for an import on somebody else's behalf, which only
 	// an administrator may do; an import of one's own entries is the ordinary use of the feature.
+	/** A person subscribed to one of their own calendars (HIN-94); the host only, never the address. */
+	TIME_CALENDAR_SUBSCRIPTION_CREATED(DATA, INFO, true),
+	TIME_CALENDAR_SUBSCRIPTION_DELETED(DATA, INFO, true),
 	TIME_ENTRIES_IMPORTED(DATA, NOTICE, true),
 	ISSUE_WATCHED(DATA, INFO, true),
 	ISSUE_UNWATCHED(DATA, INFO, true),

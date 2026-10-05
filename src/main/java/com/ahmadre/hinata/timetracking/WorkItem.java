@@ -97,6 +97,11 @@ import java.util.List;
 // The entries one CSV import wrote, so taking a failed import back is a lookup. Partial: almost no
 // entry comes from a file, and the index holds only those that did.
 @CompoundIndex(name = "import_id", def = "{'importId': 1}", partialFilter = "{'importId': {'$exists': true}}")
+// One entry per calendar occurrence (HIN-94): what makes taking an event over idempotent, by hand
+// and by rule alike. Partial, so it holds only the entries that came from a calendar.
+@CompoundIndex(name = "calendar_ref", unique = true,
+		def = "{'calendarRef.subscriptionId': 1, 'calendarRef.uid': 1, 'calendarRef.recurrenceId': 1}",
+		partialFilter = "{'calendarRef': {'$exists': true}}")
 public class WorkItem {
 
 	/** The index a project's recorded minutes are summed from; named once for the annotation and the hint. */
@@ -192,6 +197,17 @@ public class WorkItem {
 	 * import is taken back by; see {@code TimeReportImport}.
 	 */
 	private String importId;
+
+	/** The calendar occurrence this entry was taken over from (HIN-94), or null. */
+	private CalendarRef calendarRef;
+
+	/**
+	 * Names one occurrence of a subscribed calendar: the subscription, the event's UID and, for an
+	 * occurrence of a series, its recurrence id (null otherwise). Stays on the entry after the event
+	 * has left the feed, so the same occurrence is never taken over twice.
+	 */
+	public record CalendarRef(String subscriptionId, String uid, String recurrenceId) {
+	}
 
 	/**
 	 * Documents written before 2.0 carry no {@code source}; they were logged in
