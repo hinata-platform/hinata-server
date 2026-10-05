@@ -85,6 +85,12 @@ public class TimeTrackingErasure {
 				new Update().pull("schedule.recipients", userId), TimeSavedReport.class).getModifiedCount());
 		step("pending import(s)", userId, () -> mongo.remove(Query.query(Criteria.where("ownerId").is(userId)),
 				TimeImport.class).getDeletedCount());
+		// Calendar subscriptions (HIN-94) are the person's own and nobody else's: the address, the
+		// events and the status all go. Entries taken over from them stay, like every other entry.
+		step("calendar event(s)", userId, () -> mongo.remove(Query.query(Criteria.where("userId").is(userId)),
+				CalendarEvent.class).getDeletedCount());
+		step("calendar subscription(s)", userId, () -> mongo.remove(Query.query(Criteria.where("userId").is(userId)),
+				CalendarSubscription.class).getDeletedCount());
 		step("pseudonym record", userId, () -> recordDeparture(userId));
 	}
 

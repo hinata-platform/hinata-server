@@ -756,6 +756,20 @@ public class TimeTrackingService {
 	 * page.
 	 */
 	public WorkItem create(NewEntry draft, WorkItem.Source source, User user) {
+		return create(draft, source, null, user);
+	}
+
+	/**
+	 * Files an entry taken over from a calendar occurrence (HIN-94), checked exactly as
+	 * {@link #create} checks one. The reference is unique among entries, so a second takeover of the
+	 * same occurrence fails with a {@link org.springframework.dao.DuplicateKeyException} before
+	 * anything else is written; the caller answers with the entry that is there.
+	 */
+	WorkItem createFromCalendar(NewEntry draft, WorkItem.CalendarRef ref, User user) {
+		return create(draft, WorkItem.Source.CALENDAR, ref, user);
+	}
+
+	private WorkItem create(NewEntry draft, WorkItem.Source source, WorkItem.CalendarRef ref, User user) {
 		// Placement first, then the body. The order is load-bearing on the 1.x
 		// route this now also serves: `POST /issues/{id}/work-items` has always
 		// answered 403 for an issue the caller cannot see, whatever else was
@@ -784,6 +798,7 @@ public class TimeTrackingService {
 				.billable(billableOf(draft.billable()))
 				.tags(normalizeTags(draft.tags()))
 				.source(source == null ? WorkItem.Source.APP : source)
+				.calendarRef(ref)
 				.build();
 		assertWritable(null, item, user);
 		assertRequiredFields(contentOf(item), PlacementRule.ENFORCED);

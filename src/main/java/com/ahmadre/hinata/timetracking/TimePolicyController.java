@@ -109,7 +109,7 @@ public class TimePolicyController {
 			boolean arbzgHintsEnabled, Integer lateEntryHintDays,
 			List<BackfillGrantResponse> myBackfillGrants, TargetRemindersResponse targetReminders,
 			boolean alertsEnabled, TimePolicy.AbsenceCalendar absenceCalendarVisibility,
-			boolean workloadReportsEnabled, boolean absenceReportsEnabled) {
+			boolean workloadReportsEnabled, boolean absenceReportsEnabled, boolean icsImportEnabled) {
 	}
 
 	/**
@@ -159,6 +159,9 @@ public class TimePolicyController {
 				settings.workloadReportsEnabled(),
 				// HIN-119: the same for the report on absences and balances, which only exists while
 				// absence management does.
-				settings.absenceReportsEnabled());
+				settings.absenceReportsEnabled(),
+				// HIN-94: whether people may subscribe to their own calendars, so a client offers the
+				// settings section and the calendar layer only where they answer.
+				settings.icsImportEnabled());
 	}
 }

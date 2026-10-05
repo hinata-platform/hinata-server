@@ -55,6 +55,7 @@ public class TimeEntryController {
 	private final TimerService timers;
 	private final TimeCorrectionService corrections;
 	private final TimeCalendarLayers layers;
+	private final CalendarSubscriptionService calendarSubscriptions;
 	private final CurrentUser currentUser;
 
 	// --- DTOs -----------------------------------------------------------------
@@ -105,23 +106,41 @@ public class TimeEntryController {
 	 * quietly drawing a partial week.
 	 *
 	 * <p>Absences, holidays and the planned minutes of each day arrived with stage
-	 * 10 as fields of their own ({@link TimeCalendarLayers}); external events
-	 * (stage 13) will do the same. A client reads a missing layer as an empty
-	 * one, so the published app, which knows none of them, is unaffected. They
-	 * mark days and never decide anything about the entries (R9).
+	 * 10 as fields of their own ({@link TimeCalendarLayers}); the events of the
+	 * caller's own calendar subscriptions (stage 13) do the same. A client reads a
+	 * missing layer as an empty one, so the published app, which knows none of
+	 * them, is unaffected. They mark days and never decide anything about the
+	 * entries (R9).
 	 */
 	public record CalendarResponse(LocalDate from, LocalDate to,
 			List<TimeTrackingController.WorkItemResponse> entries, boolean truncated,
 			List<TimeCalendarLayers.Absence> absences, List<TimeCalendarLayers.HolidayDay> holidays,
-			Map<LocalDate, Integer> scheduledMinutes) {
+			Map<LocalDate, Integer> scheduledMinutes, List<CalendarEventResponse> events) {
 
 		static CalendarResponse from(TimeTrackingService.CalendarWindow window,
-				TimeCalendarLayers.Layers layers) {
+				TimeCalendarLayers.Layers layers, List<CalendarSubscriptionService.LayerEvent> events) {
 			return new CalendarResponse(window.from(), window.to(),
 					window.entries().stream()
 							.map(TimeTrackingController.WorkItemResponse::from).toList(),
 					window.truncated(), layers.absences(), layers.holidays(),
-					layers.scheduledMinutes());
+					layers.scheduledMinutes(), events.stream().map(CalendarEventResponse::from).toList());
+		}
+	}
+
+	/**
+	 * One event of the caller's own subscriptions, a suggestion and not an entry (HIN-94). An
+	 * all-day event runs from midnight to midnight in the caller's zone. {@code convertedEntryId}
+	 * names the entry taken over from it, if there is one.
+	 */
+	public record CalendarEventResponse(String id, String subscriptionId, String color, Instant startsAt,
+			Instant endsAt, String timezone, boolean allDay, boolean free, String status, String summary,
+			String location, String convertedEntryId) {
+
+		static CalendarEventResponse from(CalendarSubscriptionService.LayerEvent shown) {
+			CalendarEvent event = shown.event();
+			return new CalendarEventResponse(event.getId(), event.getSubscriptionId(), shown.color(), event.getStartsAt(),
+					event.getEndsAt(), event.getTimezone(), event.isAllDay(), event.isFree(), event.getStatus(),
+					event.getSummary(), event.getLocation(), shown.convertedEntryId());
 		}
 	}
 
@@ -223,7 +242,9 @@ public class TimeEntryController {
 			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
 			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
 		User user = currentUser.require();
-		return CalendarResponse.from(timeTracking.calendar(from, to, user), layers.of(user, from, to));
+		TimeTrackingService.CalendarWindow window = timeTracking.calendar(from, to, user);
+		return CalendarResponse.from(window, layers.of(user, from, to),
+				calendarSubscriptions.layer(user, window.from(), window.to()));
 	}
 
 	// --- one entry -------------------------------------------------------------

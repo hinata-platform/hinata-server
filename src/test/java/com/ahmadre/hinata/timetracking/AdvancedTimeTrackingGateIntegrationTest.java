@@ -59,7 +59,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 		"management.health.mail.enabled=false",
 		// The shipped default, stated rather than assumed: this whole file is
 		// about what an instance that has not opted in looks like.
-		"hinata.time-tracking.advanced-enabled=false"
+		"hinata.time-tracking.advanced-enabled=false",
+		// The organisation's own switch for calendar subscriptions (HIN-94), on so that the
+		// gate is the only thing between a caller and that route.
+		"hinata.time-tracking.ics-import-enabled=true"
 })
 @Import(AdvancedTimeTrackingGateIntegrationTest.GatedProbe.class)
 @Testcontainers(disabledWithoutDocker = true)
@@ -77,8 +80,8 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	 * A handler for each gated prefix that has no real one yet, so "the gate
 	 * opened" can be read as a 200 rather than as a different flavour of 404.
 	 *
-	 * <p>{@code /api/v1/me/timer} is deliberately absent: stage 3 put a real
-	 * controller there, and a probe mapping the same path would make the context
+	 * <p>{@code /api/v1/me/timer} and {@code /api/v1/me/calendar-subscriptions}
+	 * are deliberately absent: stages 3 and 13 put real controllers there, and a probe mapping the same path would make the context
 	 * fail to start with an ambiguous mapping. That the gate still answers 404
 	 * for it while the module is off is now a stronger statement than it was —
 	 * the interceptor beats a handler that exists.
@@ -90,7 +93,7 @@ class AdvancedTimeTrackingGateIntegrationTest {
 		static class Probe {
 
 			@GetMapping({ "/api/v1/time/probe", "/api/v1/availability/probe",
-					"/api/v1/billing/probe", "/api/v1/me/calendar-subscriptions" })
+					"/api/v1/billing/probe" })
 			Map<String, String> probe() {
 				return Map.of("reached", "yes");
 			}
@@ -117,6 +120,7 @@ class AdvancedTimeTrackingGateIntegrationTest {
 			new Gated("/api/v1/availability/schedule", 200),
 			new Gated("/api/v1/availability/holidays/calendars", 200),
 			new Gated("/api/v1/billing/probe", 200),
+			// The real route since stage 13; the test switches the organisation's import on.
 			new Gated("/api/v1/me/calendar-subscriptions", 200));
 
 	private final HttpClient http = HttpClient.newBuilder()
