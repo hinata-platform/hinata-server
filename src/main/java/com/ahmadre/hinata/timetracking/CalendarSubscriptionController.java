@@ -1,10 +1,12 @@
 package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.UserWords;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
+import java.util.function.BiFunction;
 
 /**
  * The caller's own calendar subscriptions (HIN-94).
@@ -34,6 +38,7 @@ public class CalendarSubscriptionController {
 
 	private final CalendarSubscriptionService subscriptions;
 	private final CurrentUser currentUser;
+	private final UserWords words;
 
 	public record RuleRequest(boolean enabled, @Size(max = 64) String projectId,
 			@Size(max = 20) List<@Size(max = TimeTag.MAX_NAME) String> tags, Boolean billable) {
@@ -51,18 +56,28 @@ public class CalendarSubscriptionController {
 			Instant since) {
 	}
 
-	public record SkipResponse(String eventId, Instant startsAt, String messageKey, Instant at) {
+	/** {@code message} is {@code messageKey} in the reader's language. */
+	public record SkipResponse(String eventId, Instant startsAt, String messageKey, String message, Instant at) {
 	}
 
 	/**
 	 * A subscription as its owner sees it. {@code hostMasked} is the host followed by an ellipsis;
-	 * {@code lastError} is a message key, with {@code lastErrorArg} its argument.
+	 * {@code lastError} is a message key, with {@code lastErrorArg} its argument, and
+	 * {@code lastErrorMessage} the sentence in the reader's language.
 	 */
 	public record SubscriptionResponse(String id, String name, String color, String hostMasked, boolean enabled,
 			RuleResponse autoConvert, CalendarSubscription.Status status, String lastError, Integer lastErrorArg,
-			Instant lastFetchedAt, int failures, int eventCount, List<SkipResponse> skips, Instant createdAt) {
+			String lastErrorMessage, Instant lastFetchedAt, int failures, int eventCount, List<SkipResponse> skips,
+			Instant createdAt) {
 
 		static SubscriptionResponse from(CalendarSubscription subscription) {
+			return from(subscription, null);
+		}
+
+		static SubscriptionResponse from(CalendarSubscription subscription, UserWords words) {
+			Locale locale = LocaleContextHolder.getLocale();
+			BiFunction<String, Integer, String> say = (key, arg) -> key == null || words == null
+					? null : arg == null ? words.in(locale, key) : words.in(locale, key, arg);
 			CalendarSubscription.AutoConvert rule = subscription.getAutoConvert() == null
 					? CalendarSubscription.AutoConvert.OFF : subscription.getAutoConvert();
 			return new SubscriptionResponse(subscription.getId(), subscription.getName(), subscription.getColor(),
@@ -70,36 +85,42 @@ public class CalendarSubscriptionController {
 					subscription.isEnabled(),
 					new RuleResponse(rule.enabled(), rule.projectId(), rule.tags(), rule.billable(), rule.since()),
 					subscription.getLastStatus(), subscription.getLastError(), subscription.getLastErrorArg(),
+					say.apply(subscription.getLastError(), subscription.getLastErrorArg()),
 					subscription.getLastFetchedAt(), subscription.getFailures(), subscription.getEventCount(),
 					subscription.getSkips().stream()
-							.map(skip -> new SkipResponse(skip.eventId(), skip.startsAt(), skip.messageKey(), skip.at()))
+							.map(skip -> new SkipResponse(skip.eventId(), skip.startsAt(), skip.messageKey(),
+									say.apply(skip.messageKey(), null), skip.at()))
 							.toList(),
 					subscription.getCreatedAt());
 		}
 	}
 
+	private SubscriptionResponse respond(CalendarSubscription subscription) {
+		return SubscriptionResponse.from(subscription, words);
+	}
+
 	/** At most {@value CalendarSubscription#PER_USER_MAX}, so there is no page. */
 	@GetMapping
 	public List<SubscriptionResponse> list() {
-		return subscriptions.list(currentUser.require()).stream().map(SubscriptionResponse::from).toList();
+		return subscriptions.list(currentUser.require()).stream().map(this::respond).toList();
 	}
 
 	@GetMapping("/{id}")
 	public SubscriptionResponse get(@PathVariable String id) {
-		return SubscriptionResponse.from(subscriptions.require(currentUser.require(), id));
+		return respond(subscriptions.require(currentUser.require(), id));
 	}
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public SubscriptionResponse create(@Valid @RequestBody SubscriptionRequest body) {
-		return SubscriptionResponse.from(subscriptions.create(currentUser.require(),
+		return respond(subscriptions.create(currentUser.require(),
 				new CalendarSubscriptionService.Draft(body.name(), body.url(), body.color(), body.enabled(),
 						body.autoConvert() == null ? null : body.autoConvert().toDraft())));
 	}
 
 	@PatchMapping("/{id}")
 	public SubscriptionResponse update(@PathVariable String id, @Valid @RequestBody SubscriptionRequest body) {
-		return SubscriptionResponse.from(subscriptions.update(currentUser.require(), id,
+		return respond(subscriptions.update(currentUser.require(), id,
 				new CalendarSubscriptionService.Patch(body.name(), body.url(), body.color(), body.enabled(),
 						body.autoConvert() == null ? null : body.autoConvert().toDraft())));
 	}
@@ -114,6 +135,6 @@ public class CalendarSubscriptionController {
 	@PostMapping("/{id}/refresh")
 	@ResponseStatus(HttpStatus.ACCEPTED)
 	public SubscriptionResponse refresh(@PathVariable String id) {
-		return SubscriptionResponse.from(subscriptions.refresh(currentUser.require(), id));
+		return respond(subscriptions.refresh(currentUser.require(), id));
 	}
 }
