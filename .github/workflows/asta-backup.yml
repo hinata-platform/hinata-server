@@ -1,0 +1,198 @@
+# Backups of the asta stack on ASTASRV01 into the restic repository on the NAS (IT-117).
+#
+#   inspect       what is there: backup directory, scheduler, last run
+#   install       writes the backup directory, adds the read-only X.509 user for the database and the
+#                 read-only SeaweedFS identity for the files (SeaweedFS restarts for ~10 s), and
+#                 starts the scheduler (nightly, 00:40 UTC)
+#   run           one backup now, on the scheduler
+#   restore-test  restores the latest snapshots into throwaway places and compares the counts
+#
+# The NAS end (append-only REST server, retention 7/4/6) is deployed from hinata-gateway's
+# backup-repo workflow. bear has no backups by decision.
+#
+# This repository is public and so are its logs: nothing here prints a value. Secrets come from
+# repository secrets: BACKUP_ENV_ASTA (RESTIC_PASSWORD, RESTIC_REST_USER, RESTIC_REST_PASSWORD,
+# S3_BACKUP_ACCESS_KEY, S3_BACKUP_SECRET_KEY), BACKUP_MONGO_PEM_ASTA (the backup client
+# certificate) and BACKUP_REST_CERT (the pinned certificate of the REST server). Keep
+# RESTIC_PASSWORD apart from the servers too: without it the backups cannot be read.
+#
+# Never write a dollar followed by two braces outside the env: block below, comments included.
+name: asta backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "inspect, install, run or restore-test"
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect, install, run, restore-test]
+
+concurrency:
+  group: asta-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: asta backup
+    runs-on: [self-hosted, astasrv01]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run
+        env:
+          MODE: ${{ inputs.mode }}
+          BACKUP_ENV: ${{ secrets.BACKUP_ENV_ASTA }}
+          MONGO_PEM: ${{ secrets.BACKUP_MONGO_PEM_ASTA }}
+          REST_CERT: ${{ secrets.BACKUP_REST_CERT }}
+        run: |
+          set -euo pipefail
+          STACK=hinata
+          NAS=192.168.1.6:18443
+          SCRIPTS_B64=$(tar -C deploy/backup -cz backup.sh restore-test.sh | base64 -w0)
+          ENTRYPOINT_B64=$(base64 -w0 deploy/seaweedfs/entrypoint.sh)
+          export STACK BACKUP_ENV MONGO_PEM REST_CERT SCRIPTS_B64 ENTRYPOINT_B64 NAS
+
+          # A short script inside the stack directory.
+          in_stack() {
+            docker run --rm -e STACK -e BACKUP_ENV -e MONGO_PEM -e REST_CERT -e SCRIPTS_B64 -e ENTRYPOINT_B64 -e NAS \
+              -v "/opt/stacks/$STACK:/work" -w /work alpine:3.22 sh -euc "$1"
+          }
+          on_scheduler() {
+            docker exec hinata-backup-scheduler sh -euc "$1"
+          }
+
+          echo "::group::inspect"
+          in_stack '
+            test -f deploy/x509/prod/ca.crt && echo "stack CA:          present" || echo "stack CA:          absent"
+            test -d backup && echo "backup dir:        present" || echo "backup dir:        absent"
+            for f in backup.env ca.crt hinata-backup.pem rest-server.crt backup.sh restore-test.sh compose.yml; do
+              test -f "backup/$f" && echo "  $f: present" || echo "  $f: absent"
+            done
+            test -f backup/last-run.json && echo "last run: $(cat backup/last-run.json)" || echo "last run: none"
+            grep -q "^SEAWEEDFS_BACKUP_ACCESS_KEY=" seaweedfs.env 2>/dev/null && echo "seaweedfs backup identity: configured" || echo "seaweedfs backup identity: absent"
+          '
+          echo "scheduler: $(docker inspect -f '{{.State.Status}}' hinata-backup-scheduler 2>/dev/null || echo missing)"
+          echo "::endgroup::"
+
+          case "$MODE" in
+            inspect) exit 0 ;;
+            run)
+              on_scheduler '/bin/sh /backup/backup.sh' 2>&1 | grep -vE "^\s*$" | tail -n 20
+              exit 0 ;;
+            restore-test)
+              on_scheduler '/bin/sh /backup/restore-test.sh' 2>&1 | tail -n 40
+              exit 0 ;;
+          esac
+
+          for v in BACKUP_ENV MONGO_PEM REST_CERT; do
+            [ -n "${!v}" ] || { echo "::error::repository secret for $v is not set"; exit 1; }
+          done
+
+          echo "::group::backup directory"
+          in_stack '
+            apk add --no-cache openssl >/dev/null
+            umask 077
+            mkdir -p backup/staging
+            chmod 700 backup backup/staging
+            eval "$(printf "%s\n" "$BACKUP_ENV" | grep -E "^(RESTIC_PASSWORD|RESTIC_REST_USER|RESTIC_REST_PASSWORD|S3_BACKUP_ACCESS_KEY|S3_BACKUP_SECRET_KEY)=" | sed "s/^/export /")"
+            {
+              echo "STACK=$STACK"
+              echo "NETWORK=${STACK}_hinata"
+              echo "RESTIC_REPOSITORY=rest:https://$RESTIC_REST_USER:$RESTIC_REST_PASSWORD@$NAS/$RESTIC_REST_USER/hinata/"
+              echo "RESTIC_PASSWORD=$RESTIC_PASSWORD"
+              echo "S3_BUCKET=hinata"
+              echo "S3_BACKUP_ACCESS_KEY=$S3_BACKUP_ACCESS_KEY"
+              echo "S3_BACKUP_SECRET_KEY=$S3_BACKUP_SECRET_KEY"
+              echo "MONGO_HOSTS=mongo1:27017,mongo2:27017"
+              echo "MONGO_DB=hinata"
+            } > backup/backup.env
+            printf "%s\n" "$MONGO_PEM" > backup/hinata-backup.pem
+            printf "%s\n" "$REST_CERT" > backup/rest-server.crt
+            cp deploy/x509/prod/ca.crt backup/ca.crt
+            openssl verify -CAfile backup/ca.crt backup/hinata-backup.pem >/dev/null \
+              && echo "backup certificate verifies against the stack CA" \
+              || { echo "::error::backup certificate does not belong to this stack CA"; exit 1; }
+            echo "$SCRIPTS_B64" | base64 -d | tar -xz -C backup
+            chmod 600 backup/backup.env backup/hinata-backup.pem
+            echo "backup directory written"
+          '
+          echo "::endgroup::"
+
+          echo "::group::database user"
+          # The backup certificate becomes an X.509 user with read on the database and nothing
+          # else. Created through the replica set, so it lands on the primary.
+          ROOT_USER=$(docker inspect hinata-mongo1-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^MONGO_INITDB_ROOT_USERNAME=//p')
+          ROOT_PASS=$(docker inspect hinata-mongo1-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^MONGO_INITDB_ROOT_PASSWORD=//p')
+          [ -n "$ROOT_USER" ] && [ -n "$ROOT_PASS" ] || { echo "::error::no root credentials on mongo1"; exit 1; }
+          DN=$(docker run --rm -v "/opt/stacks/$STACK/backup:/b:ro" alpine:3.22 sh -c \
+            'apk add --no-cache openssl >/dev/null && openssl x509 -in /b/hinata-backup.pem -noout -subject -nameopt RFC2253 | sed "s/^subject=//"')
+          docker exec -i -e ROOT_USER="$ROOT_USER" -e ROOT_PASS="$ROOT_PASS" -e DN="$DN" hinata-mongo1-1 sh -c '
+            mongosh --quiet "mongodb://mongo1:27017,mongo2:27017/admin?replicaSet=rs0&tls=true" \
+              --tlsCAFile /etc/mongo/certs/ca.crt --tlsCertificateKeyFile /etc/mongo/certs/server.pem \
+              -u "$ROOT_USER" -p "$ROOT_PASS" --authenticationDatabase admin --eval "
+                const ext = db.getSiblingDB(\"\$external\");
+                const dn = process.env.DN;
+                if (ext.getUsers().users.some(u => u.user === dn)) { print(\"backup user already present\"); }
+                else { ext.runCommand({ createUser: dn, roles: [{ role: \"read\", db: \"hinata\" }] }); print(\"backup user created (read on hinata)\"); }
+              "'
+          echo "::endgroup::"
+
+          echo "::group::read-only SeaweedFS identity"
+          CHANGED=$(in_stack '
+            echo "$ENTRYPOINT_B64" | base64 -d > deploy/seaweedfs/entrypoint.sh.new
+            eval "$(printf "%s\n" "$BACKUP_ENV" | grep -E "^S3_BACKUP_(ACCESS|SECRET)_KEY=" | sed "s/^/export /")"
+            changed=no
+            cmp -s deploy/seaweedfs/entrypoint.sh deploy/seaweedfs/entrypoint.sh.new || { mv deploy/seaweedfs/entrypoint.sh.new deploy/seaweedfs/entrypoint.sh; changed=yes; }
+            rm -f deploy/seaweedfs/entrypoint.sh.new
+            if ! grep -q "^SEAWEEDFS_BACKUP_ACCESS_KEY=" seaweedfs.env; then
+              cp -a seaweedfs.env "seaweedfs.env.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+              printf "SEAWEEDFS_BACKUP_ACCESS_KEY=%s\nSEAWEEDFS_BACKUP_SECRET_KEY=%s\n" "$S3_BACKUP_ACCESS_KEY" "$S3_BACKUP_SECRET_KEY" >> seaweedfs.env
+              chmod 600 seaweedfs.env
+              changed=yes
+            fi
+            echo $changed
+          ')
+          if [ "$CHANGED" = "yes" ]; then
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
+              -e STACK_DIR="$STACK" docker:cli docker compose -p "$STACK-storage" --env-file seaweedfs.env \
+              -f seaweedfs.compose.yml up -d --force-recreate 2>&1 | grep -E "Recreated|Started|Error" || true
+            for i in $(seq 1 60); do
+              CODE=$(docker run --rm --network "${STACK}_hinata" curlimages/curl:8.16.0 -s -o /dev/null -w '%{http_code}' http://seaweedfs:8333/ || true)
+              [ "$CODE" = "403" ] && break
+              sleep 2
+            done
+            echo "SeaweedFS back (anonymous request: $CODE)"
+          else
+            echo "identity already configured"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::scheduler"
+          # Cron in UTC: 00:40 UTC is 02:40 in summer and 01:40 in winter, after the time-off year
+          # run and before the retention jobs.
+          in_stack '
+            cat > backup/compose.yml <<YAML
+          services:
+            scheduler:
+              image: docker:28-cli
+              container_name: hinata-backup-scheduler
+              restart: unless-stopped
+              entrypoint: ["/bin/sh", "-euc"]
+              command:
+                - |
+                  echo "40 0 * * * /bin/sh /backup/backup.sh >/dev/null 2>&1" > /etc/crontabs/root
+                  exec crond -f -l 8
+              environment:
+                BACKUP_DIR: /opt/stacks/$STACK/backup
+              volumes:
+                - /var/run/docker.sock:/var/run/docker.sock
+                - /opt/stacks/$STACK/backup:/backup
+          YAML
+            echo "compose.yml written"
+          '
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK/backup:/work" -w /work \
+            docker:cli docker compose -p "$STACK-backup" -f compose.yml up -d 2>&1 | grep -E "Created|Started|Running|Error" || true
+          echo "scheduler: $(docker inspect -f '{{.State.Status}}' hinata-backup-scheduler)"
+          echo "::endgroup::"

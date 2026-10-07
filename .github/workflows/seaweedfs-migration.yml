@@ -6,6 +6,9 @@
 #             then compares count and bytes. hinata-server keeps reading MinIO. Safe to repeat.
 #   switch    copies what changed since, points hinata-server at SeaweedFS and recreates only it
 #   rollback  restores the override file from before the switch and points the server back at MinIO
+#   retire-minio  after the switch has been accepted: MinIO is put behind a profile nobody enables,
+#             hinata-server no longer depends on it, and its container is stopped and removed.
+#             Its data directory stays where it is until somebody deletes it on purpose.
 #
 # MinIO, its container and its data are never stopped, changed or removed by any of these: that is
 # a separate decision once the switch has been checked.
@@ -33,11 +36,11 @@ on:
         type: choice
         options: [hinata-bear, hinata]
       mode:
-        description: "inspect, copy, switch or rollback"
+        description: "inspect, copy, switch, rollback or retire-minio"
         required: true
         default: inspect
         type: choice
-        options: [inspect, copy, switch, rollback]
+        options: [inspect, copy, switch, rollback, retire-minio]
 
 concurrency:
   group: seaweedfs-migration
@@ -136,6 +139,47 @@ jobs:
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
               docker:cli docker compose -p "$STACK" up -d --no-deps --force-recreate hinata-server
             echo "server S3 endpoint now: $(env_of "$SERVER" HINATA_S3_ENDPOINT)"
+            exit 0
+          fi
+
+          if [ "$MODE" = "retire-minio" ]; then
+            [ "$(env_of "$SERVER" HINATA_S3_ENDPOINT)" = "http://seaweedfs:8333" ] \
+              || { echo "::error::hinata-server does not read SeaweedFS yet; switch first"; exit 1; }
+            in_stack '
+              grep -q "HINATA_S3_ENDPOINT: http://seaweedfs:8333" docker-compose.override.yml \
+                || { echo "::error::override is not the one the switch wrote"; exit 1; }
+              if grep -q "^  minio:" docker-compose.override.yml; then
+                echo "override already retires MinIO"
+              else
+                STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+                cp -a docker-compose.override.yml "docker-compose.override.yml.bak-$STAMP"
+                awk "
+                  { print }
+                  /^  hinata-server:[[:space:]]*\$/ {
+                    print \"    depends_on:\"
+                    print \"      minio:\"
+                    print \"        condition: service_started\"
+                    print \"        required: false\"
+                  }
+                " docker-compose.override.yml > o.tmp
+                printf "%s\n" "  minio:" "    profiles: [retired]" >> o.tmp
+                mv o.tmp docker-compose.override.yml
+                echo "override: MinIO behind profile retired, server no longer depends on it"
+              fi
+            '
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
+              docker:cli docker compose -p "$STACK" config --services | sed 's/^/  enabled service: /'
+            docker stop "$MINIO" >/dev/null 2>&1 && echo "minio container stopped" || echo "minio container was not running"
+            docker rm "$MINIO" >/dev/null 2>&1 && echo "minio container removed" || true
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
+              docker:cli docker compose -p "$STACK" up -d --no-deps --force-recreate hinata-server 2>&1 | grep -E "Recreated|Started|Error" || true
+            for i in $(seq 1 60); do
+              STATE=$(docker inspect -f '{{.State.Health.Status}}' "$SERVER" 2>/dev/null || true)
+              [ "$STATE" = "healthy" ] && break
+              sleep 3
+            done
+            echo "server state:          $STATE"
+            in_stack 'test -d minio && echo "minio data dir kept:   $(du -sh minio | cut -f1)" || echo "minio data dir:        not here (named volume)"'
             exit 0
           fi
 

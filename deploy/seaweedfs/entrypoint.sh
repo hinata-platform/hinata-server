@@ -25,6 +25,17 @@ for name in HINATA_S3_ACCESS_KEY HINATA_S3_SECRET_KEY SEAWEEDFS_ADMIN_ACCESS_KEY
 done
 
 BUCKET=${HINATA_S3_BUCKET:-hinata}
+# An optional third identity for backups (deploy/backup): it may read and list the bucket and
+# nothing else, so a backup job can never change what it copies.
+BACKUP_IDENTITY=""
+if [ -n "${SEAWEEDFS_BACKUP_ACCESS_KEY:-}" ] && [ -n "${SEAWEEDFS_BACKUP_SECRET_KEY:-}" ]; then
+  BACKUP_IDENTITY=",
+    {
+      \"name\": \"backup\",
+      \"credentials\": [{\"accessKey\": \"$SEAWEEDFS_BACKUP_ACCESS_KEY\", \"secretKey\": \"$SEAWEEDFS_BACKUP_SECRET_KEY\"}],
+      \"actions\": [\"Read:$BUCKET\", \"List:$BUCKET\"]
+    }"
+fi
 mkdir -p /etc/seaweedfs
 umask 077
 cat > /etc/seaweedfs/s3.json <<JSON
@@ -39,7 +50,7 @@ cat > /etc/seaweedfs/s3.json <<JSON
       "name": "admin",
       "credentials": [{"accessKey": "$SEAWEEDFS_ADMIN_ACCESS_KEY", "secretKey": "$SEAWEEDFS_ADMIN_SECRET_KEY"}],
       "actions": ["Admin", "Read", "Write", "List", "Tagging"]
-    }
+    }$BACKUP_IDENTITY
   ]
 }
 JSON
