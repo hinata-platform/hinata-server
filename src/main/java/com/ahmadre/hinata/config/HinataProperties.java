@@ -807,7 +807,7 @@ public class HinataProperties {
 	@Setter
 	public static class Storage {
 		/**
-		 * Object-storage backend: {@code s3} (MinIO, AWS S3, Google Cloud Storage
+		 * Object-storage backend: {@code s3} (SeaweedFS, MinIO, AWS S3, Google Cloud Storage
 		 * via its S3-interoperable XML API, Cloudflare R2, DigitalOcean Spaces, …)
 		 * or {@code azure} (Azure Blob Storage via its native API).
 		 */
@@ -823,6 +823,13 @@ public class HinataProperties {
 		 * or {@code path}.
 		 */
 		private String addressingStyle = "auto";
+		/**
+		 * Server-side encryption asked of the S3 store for every object written or copied:
+		 * empty for none (the store's own default applies), or {@code AES256} for SSE-S3, under
+		 * keys the store manages. For a store that encrypts only on request, such as SeaweedFS,
+		 * whose bucket default encryption is accepted and not applied.
+		 */
+		private String sse = "";
 		/**
 		 * Azure Blob Storage connection string (from the storage account's
 		 * "Access keys" blade). Only read when {@code provider=azure}; the

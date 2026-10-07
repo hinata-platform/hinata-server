@@ -13,6 +13,8 @@ import io.minio.ListObjectsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.ServerSideEncryption;
+import io.minio.ServerSideEncryptionS3;
 import io.minio.RemoveObjectArgs;
 import io.minio.Result;
 import io.minio.errors.ErrorResponseException;
@@ -28,8 +30,8 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
- * S3-protocol backend. Covers every S3-compatible store: MinIO (the bundled
- * default), AWS S3, Google Cloud Storage via its S3-interoperable XML API
+ * S3-protocol backend. Covers every S3-compatible store: SeaweedFS (the bundled
+ * default), MinIO, AWS S3, Google Cloud Storage via its S3-interoperable XML API
  * (HMAC keys), Cloudflare R2, DigitalOcean Spaces, Hetzner Object Storage, …
  * Which store is used is purely a matter of endpoint + credentials.
  */
@@ -38,8 +40,12 @@ class S3StorageBackend implements StorageBackend {
 	private final MinioClient client;
 	private final String bucket;
 
+	/** SSE-S3 for every write and copy, or null to leave encryption to the store. */
+	private final ServerSideEncryption sse;
+
 	S3StorageBackend(HinataProperties.Storage storage) {
 		this.bucket = storage.getBucket();
+		this.sse = sseOf(storage.getSse());
 		MinioClient built = MinioClient.builder()
 				.endpoint(storage.getEndpoint())
 				.credentials(storage.getAccessKey(), storage.getSecretKey())
@@ -67,6 +73,7 @@ class S3StorageBackend implements StorageBackend {
 				.object(objectKey)
 				.contentType(contentType)
 				.stream(stream, length, -1)
+				.sse(sse)
 				.build());
 	}
 
@@ -84,6 +91,9 @@ class S3StorageBackend implements StorageBackend {
 				.bucket(bucket)
 				.object(toKey)
 				.source(CopySource.builder().bucket(bucket).object(fromKey).build())
+				// Asked again for the copy: a copy is a new object, and a store that encrypts only
+				// on request would otherwise write it in the clear.
+				.sse(sse)
 				.build());
 	}
 
@@ -142,5 +152,19 @@ class S3StorageBackend implements StorageBackend {
 		if (!client.bucketExists(BucketExistsArgs.builder().bucket(bucket).build())) {
 			client.makeBucket(MakeBucketArgs.builder().bucket(bucket).build());
 		}
+	}
+
+	/**
+	 * The encryption [value] names: {@code AES256} for SSE-S3, nothing for an empty value. Anything
+	 * else fails the start, because a typo here would otherwise store every object unencrypted.
+	 */
+	static ServerSideEncryption sseOf(String value) {
+		if (value == null || value.isBlank()) {
+			return null;
+		}
+		if ("AES256".equalsIgnoreCase(value.strip())) {
+			return new ServerSideEncryptionS3();
+		}
+		throw new IllegalStateException("hinata.storage.sse must be empty or AES256, not " + value.strip());
 	}
 }

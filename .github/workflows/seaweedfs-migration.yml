@@ -1,0 +1,290 @@
+# Moves the object store of the two production stacks on ASTASRV01 from MinIO to SeaweedFS
+# (HIN-134), one step at a time, each run by hand.
+#
+#   inspect   what is there: compose files, containers, MinIO's object count and bytes
+#   copy      starts SeaweedFS beside MinIO and copies every object into it, encrypted (SSE-S3),
+#             then compares count and bytes. hinata-server keeps reading MinIO. Safe to repeat.
+#   switch    copies what changed since, points hinata-server at SeaweedFS and recreates only it
+#   rollback  restores the override file from before the switch and points the server back at MinIO
+#
+# MinIO, its container and its data are never stopped, changed or removed by any of these: that is
+# a separate decision once the switch has been checked.
+#
+# Reaches the host the way ics-secret.yml does: the self-hosted runner on the box, whose docker CLI
+# talks to the host daemon. The runner cannot see /opt/stacks itself, so everything that touches a
+# stack directory runs in a fresh container that mounts it.
+#
+# This repository is public and so are its logs. Nothing here prints a value: secrets come from
+# repository secrets (SEAWEEDFS_ENV_ASTA, SEAWEEDFS_ENV_BEAR, each the env file printed by
+# deploy/generate-secrets.sh, whose SEAWEEDFS_SSE_KEK must also be kept apart from the server),
+# and MinIO's credentials are read from its running container and passed on, never echoed.
+#
+# Never write a dollar followed by two braces in this file outside the env: block below, comments
+# included: Actions parses it as an expression everywhere.
+name: SeaweedFS migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: "Which stack"
+        required: true
+        default: hinata-bear
+        type: choice
+        options: [hinata-bear, hinata]
+      mode:
+        description: "inspect, copy, switch or rollback"
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect, copy, switch, rollback]
+
+concurrency:
+  group: seaweedfs-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: SeaweedFS migration
+    runs-on: [self-hosted, astasrv01]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run
+        env:
+          STACK: ${{ inputs.stack }}
+          MODE: ${{ inputs.mode }}
+          ENV_ASTA: ${{ secrets.SEAWEEDFS_ENV_ASTA }}
+          ENV_BEAR: ${{ secrets.SEAWEEDFS_ENV_BEAR }}
+        run: |
+          set -euo pipefail
+          case "$STACK" in
+            hinata) SECRETS="$ENV_ASTA" ;;
+            hinata-bear) SECRETS="$ENV_BEAR" ;;
+            *) echo "::error::unknown stack"; exit 1 ;;
+          esac
+          NET="${STACK}_hinata"
+          SEAWEED="${STACK}-seaweedfs"
+          SERVER="${STACK}-hinata-server-1"
+          MINIO="${STACK}-minio-1"
+          ENTRYPOINT_B64=$(base64 -w0 deploy/seaweedfs/entrypoint.sh)
+          SETUP_B64=$(base64 -w0 deploy/seaweedfs/setup.sh)
+          export SECRETS ENTRYPOINT_B64 SETUP_B64 SEAWEED NET
+
+          # A short script inside the stack's own directory.
+          in_stack() {
+            docker run --rm -e SECRETS -e ENTRYPOINT_B64 -e SETUP_B64 -e SEAWEED -e NET \
+              -v "/opt/stacks/$STACK:/work" -w /work docker:cli sh -euc "$1"
+          }
+
+          # Reads one variable of a running container without printing it.
+          env_of() {
+            docker inspect "$1" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+              | sed -n "s/^$2=//p" | head -n1
+          }
+
+          # rclone on the stack network, configured entirely through the environment: no file, no
+          # argument and no log line carries a key.
+          rclone_run() {
+            docker run --rm --network "$NET" \
+              -e RCLONE_CONFIG_SRC_TYPE=s3 -e RCLONE_CONFIG_SRC_PROVIDER=Minio \
+              -e RCLONE_CONFIG_SRC_ENDPOINT=http://minio:9000 \
+              -e RCLONE_CONFIG_SRC_ACCESS_KEY_ID="$MINIO_USER" \
+              -e RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY="$MINIO_PASS" \
+              -e RCLONE_CONFIG_DST_TYPE=s3 -e RCLONE_CONFIG_DST_PROVIDER=SeaweedFS \
+              -e RCLONE_CONFIG_DST_ENDPOINT=http://seaweedfs:8333 \
+              -e RCLONE_CONFIG_DST_ACCESS_KEY_ID="$S3_KEY" \
+              -e RCLONE_CONFIG_DST_SECRET_ACCESS_KEY="$S3_SECRET" \
+              -e RCLONE_CONFIG_DST_SERVER_SIDE_ENCRYPTION=AES256 \
+              rclone/rclone:1.71 "$@"
+          }
+
+          echo "::group::inspect $STACK"
+          in_stack '
+            test -f docker-compose.yml || { echo "::error::no compose file"; exit 1; }
+            echo "compose file:          present"
+            test -f .env && echo ".env:                  present" || echo ".env:                  absent"
+            test -f docker-compose.override.yml && echo "override file:         present ($(grep -cE "^[[:space:]]+HINATA_" docker-compose.override.yml) variables)" || echo "override file:         absent"
+            test -f seaweedfs.env && echo "seaweedfs.env:         present" || echo "seaweedfs.env:         absent"
+            test -d seaweedfs && echo "seaweedfs data dir:    present" || echo "seaweedfs data dir:    absent"
+            test -d minio && echo "minio data dir:        present" || echo "minio data dir:        absent (named volume?)"
+          '
+          echo "minio container:       $(docker inspect -f '{{.State.Status}}' "$MINIO" 2>/dev/null || echo missing)"
+          echo "seaweedfs container:   $(docker inspect -f '{{.State.Status}}' "$SEAWEED" 2>/dev/null || echo missing)"
+          echo "server S3 endpoint:    $(env_of "$SERVER" HINATA_S3_ENDPOINT)"
+          echo "server SSE:            $(env_of "$SERVER" HINATA_S3_SSE | sed 's/^$/(none)/')"
+          MINIO_USER=$(env_of "$MINIO" MINIO_ROOT_USER)
+          MINIO_PASS=$(env_of "$MINIO" MINIO_ROOT_PASSWORD)
+          export MINIO_USER MINIO_PASS
+          S3_KEY=x S3_SECRET=x
+          echo "minio objects:         $(rclone_run size src:hinata --json | sed -n 's/.*"count":\([0-9]*\).*"bytes":\([0-9]*\).*/\1 objects, \2 bytes/p')"
+          echo "::endgroup::"
+
+          if [ "$MODE" = "inspect" ]; then
+            echo "inspect only, nothing written"
+            exit 0
+          fi
+
+          if [ "$MODE" = "rollback" ]; then
+            in_stack '
+              LAST=$(ls -1 docker-compose.override.yml.bak-* 2>/dev/null | sort | tail -n1 || true)
+              test -n "$LAST" || { echo "::error::no override backup to roll back to"; exit 1; }
+              cp -a "$LAST" docker-compose.override.yml
+              [ -s docker-compose.override.yml ] || rm -f docker-compose.override.yml
+              echo "override restored from $LAST"
+            '
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
+              docker:cli docker compose -p "$STACK" up -d --no-deps --force-recreate hinata-server
+            echo "server S3 endpoint now: $(env_of "$SERVER" HINATA_S3_ENDPOINT)"
+            exit 0
+          fi
+
+          test -n "$SECRETS" || { echo "::error::repository secret for $STACK is not set"; exit 1; }
+
+          echo "::group::prepare $STACK"
+          # Secrets file, deploy scripts and the compose file for SeaweedFS. Written only when the
+          # secrets file is new or unchanged in name: an existing seaweedfs.env is never replaced,
+          # because a different SSE key would make everything already stored unreadable.
+          in_stack '
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            if [ -f seaweedfs.env ]; then
+              echo "seaweedfs.env kept as it is"
+            else
+              umask 077
+              printf "%s\n" "$SECRETS" > seaweedfs.env
+              echo "seaweedfs.env written"
+            fi
+            chmod 600 seaweedfs.env
+            for name in HINATA_S3_ACCESS_KEY HINATA_S3_SECRET_KEY SEAWEEDFS_ADMIN_ACCESS_KEY SEAWEEDFS_ADMIN_SECRET_KEY \
+                SEAWEEDFS_SSE_KEK SEAWEEDFS_JWT_VOLUME_WRITE SEAWEEDFS_JWT_VOLUME_READ SEAWEEDFS_JWT_FILER_WRITE \
+                SEAWEEDFS_JWT_FILER_READ; do
+              grep -qE "^$name=.+" seaweedfs.env || { echo "::error::seaweedfs.env lacks $name"; exit 1; }
+            done
+            mkdir -p deploy/seaweedfs seaweedfs
+            echo "$ENTRYPOINT_B64" | base64 -d > deploy/seaweedfs/entrypoint.sh
+            echo "$SETUP_B64" | base64 -d > deploy/seaweedfs/setup.sh
+            # One brace each: compose reads the values from seaweedfs.env at run time.
+            printf "%s\n" \
+              "# Written by the SeaweedFS migration workflow (HIN-134). Values live in seaweedfs.env." \
+              "services:" \
+              "  seaweedfs:" \
+              "    image: chrislusf/seaweedfs:4.48" \
+              "    container_name: $SEAWEED" \
+              "    restart: unless-stopped" \
+              "    entrypoint: [\"/bin/sh\", \"/opt/hinata/entrypoint.sh\"]" \
+              "    env_file: [seaweedfs.env]" \
+              "    environment:" \
+              "      WEED_S3_SSE_KEK: \${SEAWEEDFS_SSE_KEK}" \
+              "      WEED_JWT_SIGNING_KEY: \${SEAWEEDFS_JWT_VOLUME_WRITE}" \
+              "      WEED_JWT_SIGNING_READ_KEY: \${SEAWEEDFS_JWT_VOLUME_READ}" \
+              "      WEED_JWT_FILER_SIGNING_KEY: \${SEAWEEDFS_JWT_FILER_WRITE}" \
+              "      WEED_JWT_FILER_SIGNING_READ_KEY: \${SEAWEEDFS_JWT_FILER_READ}" \
+              "    volumes:" \
+              "      - /opt/stacks/\${STACK_DIR}/seaweedfs:/data" \
+              "      - /opt/stacks/\${STACK_DIR}/deploy/seaweedfs:/opt/hinata:ro" \
+              "    networks: [hinata]" \
+              "networks:" \
+              "  hinata:" \
+              "    name: $NET" \
+              "    external: true" \
+              > seaweedfs.compose.yml
+            echo "seaweedfs.compose.yml written"
+          '
+          echo "::endgroup::"
+
+          compose_seaweed() {
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
+              -e STACK_DIR="$STACK" docker:cli docker compose -p "$STACK-storage" --env-file seaweedfs.env \
+              -f seaweedfs.compose.yml "$@"
+          }
+
+          echo "::group::start SeaweedFS"
+          compose_seaweed up -d
+          for i in $(seq 1 60); do
+            CODE=$(docker run --rm --network "$NET" curlimages/curl:8.16.0 -s -o /dev/null -w '%{http_code}' http://seaweedfs:8333/ || true)
+            [ "$CODE" = "403" ] && break
+            sleep 2
+          done
+          [ "$CODE" = "403" ] || { echo "::error::SeaweedFS did not come up (anonymous request answered $CODE)"; exit 1; }
+          echo "anonymous request refused (403): credentials are enforced"
+          docker run --rm --network "$NET" -v "/opt/stacks/$STACK:/work" -w /work \
+            --entrypoint /bin/sh amazon/aws-cli:2.31.13 -c \
+            'set -a; . ./seaweedfs.env; set +a; SEAWEEDFS_ENDPOINT=http://seaweedfs:8333 sh deploy/seaweedfs/setup.sh' \
+            | grep -E "seaweedfs-setup|SSEAlgorithm" || true
+          echo "::endgroup::"
+
+          S3_KEY=$(in_stack 'sed -n "s/^HINATA_S3_ACCESS_KEY=//p" seaweedfs.env')
+          S3_SECRET=$(in_stack 'sed -n "s/^HINATA_S3_SECRET_KEY=//p" seaweedfs.env')
+          export S3_KEY S3_SECRET
+
+          echo "::group::copy MinIO into SeaweedFS"
+          rclone_run sync src:hinata dst:hinata --checksum --transfers 8 --stats-one-line --stats 30s -v 2>&1 \
+            | grep -vE "Copied \(new\)|Updated modification time" || true
+          SRC=$(rclone_run size src:hinata --json)
+          DST=$(rclone_run size dst:hinata --json)
+          echo "minio:     $(echo "$SRC" | sed -n 's/.*"count":\([0-9]*\).*"bytes":\([0-9]*\).*/\1 objects, \2 bytes/p')"
+          echo "seaweedfs: $(echo "$DST" | sed -n 's/.*"count":\([0-9]*\).*"bytes":\([0-9]*\).*/\1 objects, \2 bytes/p')"
+          rclone_run check src:hinata dst:hinata --one-way --size-only 2>&1 | tail -n 3
+          if [ "$(echo "$SRC" | sed -n 's/.*"count":\([0-9]*\).*/\1/p')" != "$(echo "$DST" | sed -n 's/.*"count":\([0-9]*\).*/\1/p')" ]; then
+            echo "::error::object counts differ"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          if [ "$MODE" = "copy" ]; then
+            echo "copied; hinata-server still reads MinIO"
+            exit 0
+          fi
+
+          echo "::group::switch hinata-server to SeaweedFS"
+          # Like the ICS secret: the two values hinata-server needs go into .env, which compose reads
+          # on every run, the ordinary deploy included; the override names them. The SSE key and
+          # the JWT keys stay in seaweedfs.env and never reach the server. Backups for rollback.
+          in_stack '
+            STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+            if [ -f docker-compose.override.yml ]; then
+              if grep -vE "^[[:space:]]*#|^services:[[:space:]]*$|^  hinata-server:[[:space:]]*$|^    environment:[[:space:]]*$|^      HINATA_(ICS_SECRET|S3_[A-Z_]+):" \
+                  docker-compose.override.yml | grep -q .; then
+                echo "::error::the override file holds more than this workflow knows; not touching it"
+                exit 1
+              fi
+              cp -a docker-compose.override.yml "docker-compose.override.yml.bak-$STAMP"
+              echo "override backed up as docker-compose.override.yml.bak-$STAMP"
+            else
+              : > "docker-compose.override.yml.bak-$STAMP"
+              echo "no override before; an empty backup marks that"
+            fi
+            touch .env
+            cp -a .env ".env.bak-$STAMP"
+            grep -vE "^HINATA_S3_(ACCESS_KEY|SECRET_KEY)=" .env > .env.tmp || true
+            grep -E "^HINATA_S3_(ACCESS_KEY|SECRET_KEY)=" seaweedfs.env >> .env.tmp
+            mv .env.tmp .env
+            chmod 600 .env
+            echo "S3 credentials written to .env"
+            ICS=""
+            grep -q HINATA_ICS_SECRET docker-compose.override.yml 2>/dev/null && ICS=yes
+            {
+              echo "# Written by the ICS secret and SeaweedFS migration workflows. Values live in .env."
+              echo "services:"
+              echo "  hinata-server:"
+              echo "    environment:"
+              [ -n "$ICS" ] && echo "      HINATA_ICS_SECRET: \${HINATA_ICS_SECRET:-}"
+              echo "      HINATA_S3_ENDPOINT: http://seaweedfs:8333"
+              echo "      HINATA_S3_ACCESS_KEY: \${HINATA_S3_ACCESS_KEY}"
+              echo "      HINATA_S3_SECRET_KEY: \${HINATA_S3_SECRET_KEY}"
+              echo "      HINATA_S3_ADDRESSING_STYLE: path"
+              echo "      HINATA_S3_SSE: AES256"
+            } > docker-compose.override.yml
+            echo "override written"
+          '
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
+            docker:cli docker compose -p "$STACK" up -d --no-deps --force-recreate hinata-server
+          for i in $(seq 1 60); do
+            STATE=$(docker inspect -f '{{.State.Health.Status}}' "$SERVER" 2>/dev/null || docker inspect -f '{{.State.Status}}' "$SERVER")
+            [ "$STATE" = "healthy" ] || [ "$STATE" = "running" ] && break
+            sleep 3
+          done
+          echo "server state:          $STATE"
+          echo "server S3 endpoint:    $(env_of "$SERVER" HINATA_S3_ENDPOINT)"
+          echo "server SSE:            $(env_of "$SERVER" HINATA_S3_SSE)"
+          echo "::endgroup::"

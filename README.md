@@ -52,7 +52,7 @@
 | 📑 **Reports** | burndown, velocity, cycle time; state/priority/assignee distributions, created vs. resolved |
 | 📊 **Dashboard** | today's tasks, completion, ranking, tracker |
 | 📚 **Knowledge base** | hierarchical Markdown articles, global or per project, team/project access control, smart links |
-| 📎 **Attachments** | S3/MinIO storage, presigned downloads, **live (SSE)** add/remove events |
+| 📎 **Attachments** | S3 storage (bundled SeaweedFS or any S3/Azure store), presigned downloads, **live (SSE)** add/remove events |
 | 🔔 **Notifications** | in-app + e-mail (SMTP); **push via the [Hinata Connect gateway](#-hinata-connect-gateway)** (no per-server Firebase); sprint lifecycle, due-date reminders, mentions &amp; e-mail ingest |
 | 📨 **E-mail → ticket** | multi-connection **IMAP** ingest (managed at runtime) with attachments; **reply** to e-mail-created issues straight from the app |
 | 🔐 **Auth** | local credentials, **self-registration + e-mail verification**, forgot-password, optional admin approval, **2FA (TOTP)**, session management, GDPR export/delete |
@@ -105,7 +105,7 @@ docker compose up -d
 ```
 
 This starts the server, a MongoDB **replica set (2 data nodes + 1 arbiter)**,
-MinIO and Mailpit. Point the Hinata app at `HINATA_BASE_URL` and complete the
+SeaweedFS and Mailpit. Point the Hinata app at `HINATA_BASE_URL` and complete the
 in-app setup wizard (or set `HINATA_SETUP_AUTO_COMPLETE=true`).
 
 ---
@@ -113,13 +113,15 @@ in-app setup wizard (or set `HINATA_SETUP_AUTO_COMPLETE=true`).
 ## 🛠️ Local development
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d   # Mongo RS, Mailpit, MinIO
+COMPOSE_PROFILES=local-storage docker compose -f docker-compose.dev.yml up -d   # Mongo, Mailpit, SeaweedFS
+COMPOSE_PROFILES=local-storage docker compose -f docker-compose.dev.yml run --rm seaweedfs-setup
 HINATA_MONGODB_URI="mongodb://localhost:27017/hinata?replicaSet=rs0&directConnection=true" \
-HINATA_S3_ACCESS_KEY=hinata HINATA_S3_SECRET_KEY=hinata-dev-secret \
+HINATA_S3_ENDPOINT=http://localhost:8333 HINATA_S3_ADDRESSING_STYLE=path HINATA_S3_SSE=AES256 \
+HINATA_S3_ACCESS_KEY=hinata HINATA_S3_SECRET_KEY=hinata-dev-secret-0123456789abcdef \
 ./gradlew bootRun
 ```
 
-- 📬 Mailpit UI: <http://localhost:8025> · 🪣 MinIO console: <http://localhost:9001>
+- 📬 Mailpit UI: <http://localhost:8025> · 🪣 SeaweedFS S3: <http://localhost:8333> (credentials required)
 - ✅ Run tests: `./gradlew build`
 
 ---
@@ -162,7 +164,7 @@ the app's admin area; changes apply **without restart**.
 Attachments, avatars, voice notes and inline images live in an object store.
 Hinata supports two backends, selected with `HINATA_STORAGE_PROVIDER`:
 
-- **`s3`** (default) — any S3-compatible store: the **bundled MinIO**,
+- **`s3`** (default) — any S3-compatible store: the **bundled SeaweedFS**,
   **AWS S3**, **Google Cloud Storage** (S3-interoperable XML API with HMAC
   keys), **Cloudflare R2**, **DigitalOcean Spaces**, Hetzner Object Storage, …
 - **`azure`** — **Azure Blob Storage** via its native API (Azure does not speak
@@ -170,16 +172,28 @@ Hinata supports two backends, selected with `HINATA_STORAGE_PROVIDER`:
   account-key connection string; `HINATA_S3_BUCKET` is used as the container
   name.
 
-The bundled MinIO container is attached to the compose `local-storage` profile
-(`COMPOSE_PROFILES=local-storage`, the default in `.env.example`). To use an
+The bundled [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (Apache-2.0,
+pinned to 4.48) is attached to the compose `local-storage` profile
+(`COMPOSE_PROFILES=local-storage`, the default in `.env.example`). It runs with
+everything it offers turned on: credentials are required (an identity limited
+to the one bucket, and an admin identity only the setup job uses), every
+object is encrypted with SSE-S3 under `SEAWEEDFS_SSE_KEK`, which never touches
+the data volume, requests between its parts are signed, and only the server
+reaches it over the stack network. **Keep a copy of `SEAWEEDFS_SSE_KEK` apart
+from the server: without it nothing stored can be read again.** SeaweedFS
+encrypts only what is asked to be encrypted, so `HINATA_S3_SSE=AES256` makes the
+server ask for every object it writes or copies. To use an
 external store, clear `COMPOSE_PROFILES` and set the provider variables —
 ready-to-copy examples for AWS, GCS and Azure are in
 [.env.example](.env.example). The bucket/container is created automatically on
 first upload; presigned/SAS download URLs expire after 10 minutes.
 
 > ⚠️ Switching providers does not migrate existing objects. Copy the bucket
-> contents first (`mc mirror`, `aws s3 sync`, `azcopy`) if the instance already
-> holds data.
+> contents first (`rclone sync`, `aws s3 sync`, `azcopy`) if the instance already
+> holds data. Instances on the earlier bundled MinIO move with the same tool:
+> start SeaweedFS beside it, `rclone sync` with
+> `--s3-server-side-encryption AES256`, compare counts, then point the server at
+> SeaweedFS. Object keys stay the same, so nothing in the database changes.
 
 ---
 

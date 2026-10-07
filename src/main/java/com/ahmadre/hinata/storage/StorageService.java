@@ -14,7 +14,7 @@ import java.util.UUID;
 
 /**
  * Object storage behind a pluggable {@link StorageBackend}: any S3-compatible
- * store (MinIO in dev, AWS S3, Google Cloud Storage interop, R2, Spaces, …) or
+ * store (SeaweedFS bundled, MinIO, AWS S3, Google Cloud Storage interop, R2, Spaces, …) or
  * Azure Blob Storage, selected by {@code hivora.storage.provider}. Object keys
  * are random UUIDs – user-supplied file names never reach the file system or
  * bucket layout. This service owns all validation and error mapping; backends
