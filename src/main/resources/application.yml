@@ -262,7 +262,7 @@ hinata:
     # auto | virtual-host | path (S3 only)
     addressing-style: ${HINATA_S3_ADDRESSING_STYLE:auto}
     # Server-side encryption for every object written or copied: empty, or AES256 (SSE-S3).
-    # Needed for SeaweedFS, which ignores a bucket default encryption.
+    # The bundled SeaweedFS sets a bucket default too; the header makes sure regardless.
     sse: ${HINATA_S3_SSE:}
     # Only read when provider=azure; bucket doubles as the container name.
     azure-connection-string: ${HINATA_AZURE_CONNECTION_STRING:}

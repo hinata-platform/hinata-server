@@ -1,8 +1,7 @@
 #!/bin/sh
-# One-shot setup for hinata's bucket: creates it if missing and asks for SSE-S3 as its default.
-# SeaweedFS 4.48 stores that default without applying it, so hinata sends the header itself
-# (HINATA_S3_SSE=AES256); the default is set anyway for any other client and for later versions
-# that honour it. Idempotent; runs with the admin identity.
+# One-shot setup for hinata's bucket: creates it if missing and makes SSE-S3 its default, so an
+# object written without the header (by any client) is encrypted too. hinata sends the header
+# itself as well (HINATA_S3_SSE=AES256). Idempotent; runs with the admin identity.
 set -eu
 BUCKET=${HINATA_S3_BUCKET:-hinata}
 export AWS_ACCESS_KEY_ID="$SEAWEEDFS_ADMIN_ACCESS_KEY"
