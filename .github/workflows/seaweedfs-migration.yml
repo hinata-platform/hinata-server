@@ -9,6 +9,9 @@
 #   retire-minio  after the switch has been accepted: MinIO is put behind a profile nobody enables,
 #             hinata-server no longer depends on it, and its container is stopped and removed.
 #             Its data directory stays where it is until somebody deletes it on purpose.
+#   purge-minio   that deliberate deletion, only after retire-minio: removes MinIO's data
+#             directory and its image. Refuses while a MinIO container exists, while the server
+#             reads anything but SeaweedFS, or while the server is unhealthy.
 #
 # MinIO, its container and its data are never stopped, changed or removed by any of these: that is
 # a separate decision once the switch has been checked.
@@ -36,11 +39,11 @@ on:
         type: choice
         options: [hinata-bear, hinata]
       mode:
-        description: "inspect, copy, switch, rollback or retire-minio"
+        description: "inspect, copy, switch, rollback, retire-minio or purge-minio"
         required: true
         default: inspect
         type: choice
-        options: [inspect, copy, switch, rollback, retire-minio]
+        options: [inspect, copy, switch, rollback, retire-minio, purge-minio]
 
 concurrency:
   group: seaweedfs-migration
@@ -191,6 +194,29 @@ jobs:
             done
             echo "server state:          $STATE"
             in_stack 'test -d minio && echo "minio data dir kept:   $(du -sh minio | cut -f1)" || echo "minio data dir:        not here (named volume)"'
+            exit 0
+          fi
+
+          if [ "$MODE" = "purge-minio" ]; then
+            [ "$(env_of "$SERVER" HINATA_S3_ENDPOINT)" = "http://seaweedfs:8333" ] \
+              || { echo "::error::hinata-server does not read SeaweedFS; nothing is deleted"; exit 1; }
+            [ "$(docker inspect -f '{{.State.Health.Status}}' "$SERVER" 2>/dev/null)" = "healthy" ] \
+              || { echo "::error::hinata-server is not healthy; nothing is deleted"; exit 1; }
+            ! docker inspect "$MINIO" >/dev/null 2>&1 \
+              || { echo "::error::a MinIO container still exists; run retire-minio first"; exit 1; }
+            in_stack '
+              grep -q "profiles: !override \[retired\]" docker-compose.override.yml \
+                || { echo "::error::MinIO is not retired in the override; nothing is deleted"; exit 1; }
+              if [ -d minio ]; then
+                echo "minio data dir:        $(du -sh minio | cut -f1), deleting"
+                rm -rf minio
+              fi
+              test -d minio && { echo "::error::minio data dir still there"; exit 1; } || echo "minio data dir:        gone"
+            '
+            # Removed only while no container uses it; docker refuses otherwise.
+            for img in $(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E '^(minio/minio|quay.io/minio/minio):' || true); do
+              docker image rm "$img" >/dev/null 2>&1 && echo "image removed:         $img" || echo "image kept (in use):   $img"
+            done
             exit 0
           fi
 
