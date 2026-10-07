@@ -149,6 +149,9 @@ jobs:
               grep -q "HINATA_S3_ENDPOINT: http://seaweedfs:8333" docker-compose.override.yml \
                 || { echo "::error::override is not the one the switch wrote"; exit 1; }
               if grep -q "^  minio:" docker-compose.override.yml; then
+                # Compose joins profile lists across files; only !override replaces the stack
+                # file's own (bear has [local-storage], which COMPOSE_PROFILES enables).
+                sed -i "s/^    profiles: \[retired\]$/    profiles: !override [retired]/" docker-compose.override.yml
                 echo "override already retires MinIO"
               else
                 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
@@ -162,13 +165,17 @@ jobs:
                     print \"        required: false\"
                   }
                 " docker-compose.override.yml > o.tmp
-                printf "%s\n" "  minio:" "    profiles: [retired]" >> o.tmp
+                printf "%s\n" "  minio:" "    profiles: !override [retired]" >> o.tmp
                 mv o.tmp docker-compose.override.yml
                 echo "override: MinIO behind profile retired, server no longer depends on it"
               fi
             '
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
               docker:cli docker compose -p "$STACK" config --services | sed 's/^/  enabled service: /'
+            if docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
+                docker:cli docker compose -p "$STACK" config --services | grep -qx minio; then
+              echo "::error::minio is still an enabled service"; exit 1
+            fi
             docker stop "$MINIO" >/dev/null 2>&1 && echo "minio container stopped" || echo "minio container was not running"
             docker rm "$MINIO" >/dev/null 2>&1 && echo "minio container removed" || true
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/opt/stacks/$STACK:/work" -w /work \
