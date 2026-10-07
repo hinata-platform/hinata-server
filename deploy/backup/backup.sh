@@ -17,6 +17,8 @@
 # S3_BUCKET, S3_BACKUP_ACCESS_KEY, S3_BACKUP_SECRET_KEY, MONGO_HOSTS, MONGO_DB.
 # Files beside it: rest-server.crt (pinned TLS certificate), ca.crt and hinata-backup.pem (Mongo).
 set -eu
+# A failing dump in front of restic must fail the run, not leave an empty snapshot behind.
+set -o pipefail
 
 DIR=${BACKUP_DIR:-/opt/stacks/hinata/backup}
 cd /backup
@@ -52,13 +54,16 @@ restic_ cat config >/dev/null 2>&1 || { log "initialising the repository"; resti
 # 1. Database, streamed: dump → restic, never on disk.
 log "database"
 URI="mongodb://$MONGO_HOSTS/$MONGO_DB?replicaSet=rs0&tls=true&tlsCAFile=/certs/ca.crt&tlsCertificateKeyFile=/certs/hinata-backup.pem&authMechanism=MONGODB-X509&authSource=%24external&readPreference=secondaryPreferred"
-docker run --rm --network "$NETWORK" -v "$DIR/ca.crt:/certs/ca.crt:ro" -v "$DIR/hinata-backup.pem:/certs/hinata-backup.pem:ro" \
+docker run --rm --user 0:0 --network "$NETWORK" -v "$DIR/ca.crt:/certs/ca.crt:ro" -v "$DIR/hinata-backup.pem:/certs/hinata-backup.pem:ro" \
   "$MONGO_IMAGE" mongodump --uri "$URI" --archive --gzip --quiet \
   | restic_ backup --stdin --stdin-filename "$STACK-mongo.archive.gz" --tag mongo --json \
   | tail -n1 > /backup/mongo-summary.json
 MONGO_SNAP=$(sed -n 's/.*"snapshot_id":"\([0-9a-f]*\)".*/\1/p' /backup/mongo-summary.json | cut -c1-8)
+MONGO_BYTES=$(sed -n 's/.*"total_bytes_processed":\([0-9]*\).*/\1/p' /backup/mongo-summary.json)
 [ -n "$MONGO_SNAP" ] || { log "database snapshot missing"; exit 1; }
-log "database snapshot $MONGO_SNAP"
+# A gzip archive of even an empty database is bigger than this; less means the dump failed.
+[ "${MONGO_BYTES:-0}" -gt 1024 ] || { log "database dump empty ($MONGO_BYTES bytes)"; exit 1; }
+log "database snapshot $MONGO_SNAP ($MONGO_BYTES bytes)"
 
 # 2. Files: read-only copy of the bucket, then a restic snapshot of it.
 log "files"
