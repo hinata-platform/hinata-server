@@ -564,7 +564,7 @@ public class IssueService {
 
 	/**
 	 * Frees the audio blobs backing an issue's voice comments before the bulk
-	 * {@code deleteByIssueId} drops those rows — otherwise the S3/MinIO objects
+	 * {@code deleteByIssueId} drops those rows — otherwise the S3 objects
 	 * orphan forever. Best-effort (storage.delete logs on failure).
 	 */
 	private void freeVoiceBlobs(String issueId) {

@@ -384,7 +384,7 @@ public class DeletionService {
 		if (!issueIds.isEmpty()) {
 			Query byIssue = new Query(Criteria.where("issueId").in(issueIds));
 			// Free voice-comment audio blobs before the bulk row delete — a plain
-			// deleteByIssueId would drop the comments and orphan every S3/MinIO
+			// deleteByIssueId would drop the comments and orphan every S3
 			// object they reference (best-effort; storage.delete logs on failure).
 			freeVoiceBlobs(issueIds);
 			mongo.remove(byIssue, IssueComment.class);

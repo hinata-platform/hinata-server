@@ -252,7 +252,7 @@ hinata:
       quiet-window: ${HINATA_WATCH_QUIET_WINDOW:5m}
       max-delay: ${HINATA_WATCH_MAX_DELAY:30m}
   storage:
-    # s3 (MinIO, AWS S3, GCS interop, R2, Spaces, …) or azure (Azure Blob Storage)
+    # s3 (SeaweedFS, MinIO, AWS S3, GCS interop, R2, Spaces, …) or azure (Azure Blob Storage)
     provider: ${HINATA_STORAGE_PROVIDER:s3}
     endpoint: ${HINATA_S3_ENDPOINT:http://localhost:9000}
     access-key: ${HINATA_S3_ACCESS_KEY:}
@@ -261,6 +261,9 @@ hinata:
     region: ${HINATA_S3_REGION:us-east-1}
     # auto | virtual-host | path (S3 only)
     addressing-style: ${HINATA_S3_ADDRESSING_STYLE:auto}
+    # Server-side encryption for every object written or copied: empty, or AES256 (SSE-S3).
+    # Needed for SeaweedFS, which ignores a bucket default encryption.
+    sse: ${HINATA_S3_SSE:}
     # Only read when provider=azure; bucket doubles as the container name.
     azure-connection-string: ${HINATA_AZURE_CONNECTION_STRING:}
     max-upload-mb: ${HINATA_STORAGE_MAX_UPLOAD_MB:25}
