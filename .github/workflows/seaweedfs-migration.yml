@@ -82,7 +82,7 @@ jobs:
 
           # Reads one variable of a running container without printing it.
           env_of() {
-            docker inspect "$1" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            { docker inspect "$1" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null || true; } \
               | sed -n "s/^$2=//p" | head -n1
           }
 
@@ -120,7 +120,11 @@ jobs:
           MINIO_PASS=$(env_of "$MINIO" MINIO_ROOT_PASSWORD)
           export MINIO_USER MINIO_PASS
           S3_KEY=x S3_SECRET=x
-          echo "minio objects:         $(rclone_run size src:hinata --json | sed -n 's/.*"count":\([0-9]*\).*"bytes":\([0-9]*\).*/\1 objects, \2 bytes/p')"
+          if [ -n "$MINIO_USER" ]; then
+            echo "minio objects:         $(rclone_run size src:hinata --json | sed -n 's/.*"count":\([0-9]*\).*"bytes":\([0-9]*\).*/\1 objects, \2 bytes/p')"
+          else
+            echo "minio objects:         (no MinIO container)"
+          fi
           echo "::endgroup::"
 
           if [ "$MODE" = "inspect" ]; then
@@ -149,8 +153,8 @@ jobs:
               grep -q "HINATA_S3_ENDPOINT: http://seaweedfs:8333" docker-compose.override.yml \
                 || { echo "::error::override is not the one the switch wrote"; exit 1; }
               if grep -q "^  minio:" docker-compose.override.yml; then
-                # Compose joins profile lists across files; only !override replaces the stack
-                # file's own (bear has [local-storage], which COMPOSE_PROFILES enables).
+                # Compose joins profile lists across files; only !override replaces the list of
+                # the stack file (bear has [local-storage], which COMPOSE_PROFILES enables).
                 sed -i "s/^    profiles: \[retired\]$/    profiles: !override [retired]/" docker-compose.override.yml
                 echo "override already retires MinIO"
               else
