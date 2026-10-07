@@ -55,7 +55,7 @@ restic_ cat config >/dev/null 2>&1 || { log "initialising the repository"; resti
 log "database"
 URI="mongodb://$MONGO_HOSTS/$MONGO_DB?replicaSet=rs0&tls=true&tlsCAFile=/certs/ca.crt&tlsCertificateKeyFile=/certs/hinata-backup.pem&authMechanism=MONGODB-X509&authSource=%24external&readPreference=secondaryPreferred"
 docker run --rm --network "$NETWORK" -v "$DIR/ca.crt:/certs/ca.crt:ro" -v "$DIR/hinata-backup.pem:/certs/hinata-backup.pem:ro" \
-  "$MONGO_IMAGE" mongodump --uri "$URI" --archive --gzip --quiet \
+  "$MONGO_IMAGE" mongodump --uri "$URI" --archive --gzip \
   | restic_ backup --stdin --stdin-filename "$STACK-mongo.archive.gz" --tag mongo --json \
   | tail -n1 > /backup/mongo-summary.json
 MONGO_SNAP=$(sed -n 's/.*"snapshot_id":"\([0-9a-f]*\)".*/\1/p' /backup/mongo-summary.json | cut -c1-8)
