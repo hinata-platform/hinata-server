@@ -826,8 +826,8 @@ public class HinataProperties {
 		/**
 		 * Server-side encryption asked of the S3 store for every object written or copied:
 		 * empty for none (the store's own default applies), or {@code AES256} for SSE-S3, under
-		 * keys the store manages. For a store that encrypts only on request, such as SeaweedFS,
-		 * whose bucket default encryption is accepted and not applied.
+		 * keys the store manages. For a store whose default does not encrypt everything; the
+		 * bundled SeaweedFS sets a bucket default as well, so neither has to be relied on alone.
 		 */
 		private String sse = "";
 		/**

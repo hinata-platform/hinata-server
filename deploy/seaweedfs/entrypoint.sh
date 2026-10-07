@@ -5,10 +5,11 @@
 #   refuses to start without them. Two identities: hinata's, limited to its one bucket, and an
 #   admin one that only the setup job uses.
 # - Encryption at rest: SSE-S3 under WEED_S3_SSE_KEK, which lives in the environment and never on
-#   the data volume. hinata asks for it on every write and copy (HINATA_S3_SSE=AES256), because
-#   SeaweedFS 4.48 accepts a bucket default encryption and does not apply it.
-#   -filer.encryptVolumeData is deliberately off: in 4.48 an object copied with it on cannot be
-#   read back, and its chunk keys sit in the filer store on the same volume anyway.
+#   the data volume. The bucket default asks for it (setup.sh), and hinata asks again on every
+#   write and copy (HINATA_S3_SSE=AES256), so no object depends on one of the two alone.
+#   -s3.encryptVolumeData is deliberately off: in 4.48 it makes a copy of an SSE-S3 object
+#   unreadable (seaweedfs#11646) and makes the bucket default be skipped (seaweedfs#11647), and its
+#   chunk keys sit in the filer store on the same volume anyway.
 # - Volume and filer requests between the components are signed (WEED_JWT_* from the environment).
 # - Only the S3 port is meant to leave the container; master, volume and filer stay inside.
 set -eu

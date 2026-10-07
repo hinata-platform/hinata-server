@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * required and SSE-S3 under a key from the environment.
  *
  * <p>What is worth proving against the real thing: that every object hinata writes or copies is
- * stored encrypted (SeaweedFS ignores a bucket default, so the header is the only way), that a copy
+ * stored encrypted even in a bucket without a default (the test sets none), that a copy
  * of an encrypted object reads back, that a presigned link works, and that nobody gets in without
  * the credentials.
  */

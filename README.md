@@ -180,9 +180,9 @@ to the one bucket, and an admin identity only the setup job uses), every
 object is encrypted with SSE-S3 under `SEAWEEDFS_SSE_KEK`, which never touches
 the data volume, requests between its parts are signed, and only the server
 reaches it over the stack network. **Keep a copy of `SEAWEEDFS_SSE_KEK` apart
-from the server: without it nothing stored can be read again.** SeaweedFS
-encrypts only what is asked to be encrypted, so `HINATA_S3_SSE=AES256` makes the
-server ask for every object it writes or copies. To use an
+from the server: without it nothing stored can be read again.** The setup
+job makes SSE-S3 the bucket default, and `HINATA_S3_SSE=AES256` makes the server
+ask for it on every object it writes or copies as well. To use an
 external store, clear `COMPOSE_PROFILES` and set the provider variables —
 ready-to-copy examples for AWS, GCS and Azure are in
 [.env.example](.env.example). The bucket/container is created automatically on
