@@ -43,7 +43,7 @@ restic_ dump latest --tag mongo "/$STACK-mongo.archive.gz" \
   | docker exec -i "$TMPDB" mongorestore --archive --gzip --quiet
 echo "restored: $(docker exec "$TMPDB" mongosh --quiet "$MONGO_DB" --eval "$COUNT_JS")"
 URI="mongodb://$MONGO_HOSTS/$MONGO_DB?replicaSet=rs0&tls=true&tlsCAFile=/certs/ca.crt&tlsCertificateKeyFile=/certs/hinata-backup.pem&authMechanism=MONGODB-X509&authSource=%24external&readPreference=secondaryPreferred"
-echo "live:     $(docker run --rm --user 0:0 --network "$NETWORK" -v "$DIR/ca.crt:/certs/ca.crt:ro" -v "$DIR/hinata-backup.pem:/certs/hinata-backup.pem:ro" \
+echo "live:     $(docker run --rm --network "$NETWORK" -v "$DIR/ca.crt:/certs/ca.crt:ro" -v "$DIR/hinata-backup.pem:/certs/hinata-backup.pem:ro" \
   "$MONGO_IMAGE" mongosh --quiet "$URI" --eval "$COUNT_JS")"
 
 echo "== files"

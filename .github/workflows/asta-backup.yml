@@ -115,7 +115,10 @@ jobs:
               && echo "backup certificate verifies against the stack CA" \
               || { echo "::error::backup certificate does not belong to this stack CA"; exit 1; }
             echo "$SCRIPTS_B64" | base64 -d | tar -xz -C backup
-            chmod 600 backup/backup.env backup/hinata-backup.pem
+            chmod 600 backup/backup.env
+            # The mongo tools run as uid 999 in their image, like the keyfile of the replica set.
+            chown 999:999 backup/hinata-backup.pem
+            chmod 400 backup/hinata-backup.pem
             echo "backup directory written"
           '
           echo "::endgroup::"
