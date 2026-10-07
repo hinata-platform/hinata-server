@@ -71,7 +71,7 @@ jobs:
           # Both instances run the SAME ghcr server image (:latest) — the backend
           # URL is runtime env, not baked — so each stack just pulls + recreates
           # ONLY its server container (--no-deps keeps mongo1/mongo2/mongo-arbiter/
-          # minio online). Compose runs in a docker:cli sidecar against the host
+          # the object store online). Compose runs in a docker:cli sidecar against the host
           # socket. Stack dirs on ASTASRV01:
           #   asta -> /opt/stacks/hinata       (project "hinata",      inline values)
           #   bear -> /opt/stacks/hinata-bear  (project "hinata-bear", loads its .env)
