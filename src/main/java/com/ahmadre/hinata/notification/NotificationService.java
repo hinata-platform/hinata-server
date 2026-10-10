@@ -467,6 +467,33 @@ public class NotificationService {
 				link, null, Routing.of(Notification.Type.TIME_CORRECTION_ANSWERED));
 	}
 
+	/**
+	 * Tells people a colleague offered them a copy of an entry (HIN-95).
+	 *
+	 * <p>Names the colleague and nothing else: what the entry says is in the invitation, read
+	 * by the person it is for, and a push is read by whoever holds the phone (R7).
+	 */
+	public void notifyTimeEntryShared(Set<String> recipients, String sender) {
+		if (recipients == null || recipients.isEmpty()) return;
+		deliver(recipients, Notification.Type.TIME_ENTRY_SHARED,
+				locale -> words.in(locale, "notify.timeShared.title"),
+				locale -> words.in(locale, "notify.timeShared.body", sender),
+				locale -> words.in(locale, "notify.timeShare.push"),
+				SHARED_ENTRIES_LINK, null, Routing.of(Notification.Type.TIME_ENTRY_SHARED));
+	}
+
+	/** Tells the sender a colleague took the copy. A refusal is not reported, to anybody. */
+	public void notifyTimeShareAccepted(User sender, String recipient) {
+		if (sender == null || !sender.isActive()) return;
+		deliverGated(sender, Notification.Type.TIME_SHARE_ACCEPTED,
+				words.of(sender, "notify.timeShareAccepted.title"),
+				words.of(sender, "notify.timeShareAccepted.body", recipient),
+				words.of(sender, "notify.timeShare.push"), SHARED_ENTRIES_LINK + "?box=sent");
+	}
+
+	/** Where a person answers and follows their shared entries. */
+	private static final String SHARED_ENTRIES_LINK = "/time/shared";
+
 	/** Tells the administrators somebody asks for days they cannot record yet to be opened. */
 	public void notifyTimeBackfillRequested(Set<String> recipients, String requester, String link) {
 		if (recipients == null || recipients.isEmpty()) return;
@@ -1461,7 +1488,8 @@ public class NotificationService {
 					TIME_BUDGET_ALERT, TIME_ESTIMATE_REACHED, TIME_OFF_ENTITLEMENT_CHANGED,
 					TIME_OFF_REQUESTED, TIME_OFF_APPROVED, TIME_OFF_REJECTED, TIME_OFF_AUTO_APPROVED,
 					TIME_OFF_CANCELLED, TIME_OFF_SHORTENED, TIME_OFF_SUBSTITUTE_NAMED,
-					TIME_REPORT_SCHEDULED, TIME_OFF_BALANCE_SUMMARY -> "time";
+					TIME_REPORT_SCHEDULED, TIME_OFF_BALANCE_SUMMARY, TIME_ENTRY_SHARED,
+					TIME_SHARE_ACCEPTED -> "time";
 			// TIME_OFF_EXPIRY_NOTICE is deliberately absent and therefore locked: it is the notice
 			// without which no leave lapses (BAG 19.02.2019 – 9 AZR 541/15), and a preference that
 			// switched it off would switch off the protection it gives the person.

@@ -118,6 +118,13 @@ class ProjectReachTest {
 				.isEqualTo(singly);
 	}
 
+	/** The picker's list is the same rule seen from the project: everybody who passes it, nobody else. */
+	@Test
+	void everybodyWhoCanSeeIsWhoTheBulkAnswerAdmits() {
+		assertThat(reach.everyoneWhoCanSee(PROJECT)).isEqualTo(reach.whoCanSee(PROJECT, cast.keySet()));
+		assertThat(reach.everyoneWhoCanSee(OTHER_PROJECT)).isEmpty();
+	}
+
 	/** The table above is only meaningful if it actually splits the cast. */
 	@Test
 	void theCastCoversBothOutcomes() {

@@ -351,6 +351,9 @@ public class TimeRetentionService {
 		long removed = mongo.remove(Query.query(Criteria.where("_id").in(ids)), WorkItem.class)
 				.getDeletedCount();
 		run.setEntriesDeleted(run.getEntriesDeleted() + removed);
+		// An invitation carries a copy of its entry's text, so it goes with the entry.
+		mongo.remove(Query.query(Criteria.where("entryId").in(ids.stream().map(ObjectId::toHexString).toList())),
+				TimeEntryShare.class);
 		Map<String, Integer> minutesByIssue = new HashMap<>();
 		for (Row row : doomed) {
 			if (row.issueId() != null && row.minutes() != 0) {

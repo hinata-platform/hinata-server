@@ -102,6 +102,10 @@ import java.util.List;
 @CompoundIndex(name = "calendar_ref", unique = true,
 		def = "{'calendarRef.subscriptionId': 1, 'calendarRef.uid': 1, 'calendarRef.recurrenceId': 1}",
 		partialFilter = "{'calendarRef': {'$exists': true}}")
+// One copy per shared entry and person (HIN-95): what makes accepting twice idempotent. Partial,
+// so it holds only the copies.
+@CompoundIndex(name = "shared_from_user", unique = true, def = "{'sharedFromId': 1, 'userId': 1}",
+		partialFilter = "{'sharedFromId': {'$exists': true}}")
 public class WorkItem {
 
 	/** The index a project's recorded minutes are summed from; named once for the annotation and the hint. */

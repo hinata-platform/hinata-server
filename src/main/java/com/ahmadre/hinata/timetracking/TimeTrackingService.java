@@ -338,6 +338,11 @@ public class TimeTrackingService {
 		assertWritable(item, null, user);
 		workItems.delete(item);
 		shiftSpentTime(item.getIssueId(), -item.getDurationMinutes());
+		// An invitation to copy an entry that is gone is withdrawn; answered ones stay as they were.
+		mongo.updateMulti(Query.query(Criteria.where("entryId").is(item.getId())
+						.and("status").is(TimeEntryShare.Status.PENDING)),
+				new Update().set("status", TimeEntryShare.Status.REVOKED).set("decidedAt", clock.instant()),
+				TimeEntryShare.class);
 		if (!own) {
 			audit(AuditAction.TIME_ENTRY_DELETED, item, user);
 		}
@@ -756,7 +761,7 @@ public class TimeTrackingService {
 	 * page.
 	 */
 	public WorkItem create(NewEntry draft, WorkItem.Source source, User user) {
-		return create(draft, source, null, user);
+		return create(draft, source, null, null, user);
 	}
 
 	/**
@@ -766,10 +771,28 @@ public class TimeTrackingService {
 	 * anything else is written; the caller answers with the entry that is there.
 	 */
 	WorkItem createFromCalendar(NewEntry draft, WorkItem.CalendarRef ref, User user) {
-		return create(draft, WorkItem.Source.CALENDAR, ref, user);
+		return create(draft, WorkItem.Source.CALENDAR, ref, null, user);
 	}
 
-	private WorkItem create(NewEntry draft, WorkItem.Source source, WorkItem.CalendarRef ref, User user) {
+	/**
+	 * Files the copy of a shared entry (HIN-95) in the recipient's account, checked exactly as
+	 * {@link #create} checks one: their reach, their locks and approvals, the required fields.
+	 * One copy per original and person is unique among entries, so a second acceptance fails with
+	 * a {@link org.springframework.dao.DuplicateKeyException}; the caller answers with the copy that
+	 * is there.
+	 */
+	WorkItem createFromShare(NewEntry draft, String sharedFromId, User user) {
+		return create(draft, WorkItem.Source.SHARED, null, sharedFromId, user);
+	}
+
+	/** The copy {@code user} filed of a shared entry, if there is one. */
+	WorkItem copyOf(String sharedFromId, String userId) {
+		return mongo.findOne(Query.query(Criteria.where("sharedFromId").is(sharedFromId).and("userId").is(userId)),
+				WorkItem.class);
+	}
+
+	private WorkItem create(NewEntry draft, WorkItem.Source source, WorkItem.CalendarRef ref,
+			String sharedFromId, User user) {
 		// Placement first, then the body. The order is load-bearing on the 1.x
 		// route this now also serves: `POST /issues/{id}/work-items` has always
 		// answered 403 for an issue the caller cannot see, whatever else was
@@ -799,6 +822,7 @@ public class TimeTrackingService {
 				.tags(normalizeTags(draft.tags()))
 				.source(source == null ? WorkItem.Source.APP : source)
 				.calendarRef(ref)
+				.sharedFromId(sharedFromId)
 				.build();
 		assertWritable(null, item, user);
 		assertRequiredFields(contentOf(item), PlacementRule.ENFORCED);

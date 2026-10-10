@@ -110,6 +110,34 @@ public class ProjectReach {
 		return allowed;
 	}
 
+	/**
+	 * Every account that may see the project: its direct members and whoever a team grants it to.
+	 * The candidate list of a picker that may only offer such people; {@link #whoCanSee} answers
+	 * the same rule for ids a caller already holds. Empty for a project that does not exist.
+	 */
+	public Set<String> everyoneWhoCanSee(String projectId) {
+		Project project = projectId == null ? null : projects.findById(projectId).orElse(null);
+		if (project == null) {
+			return Set.of();
+		}
+		Set<String> allowed = new LinkedHashSet<>();
+		if (project.getMemberIds() != null) {
+			allowed.addAll(project.getMemberIds());
+		}
+		for (Team team : teams.findByProjectIdsContains(projectId)) {
+			if (team.getMembers() == null) continue;
+			team.getMembers().forEach(membership -> {
+				String userId = membership.getUserId();
+				if (userId != null && !allowed.contains(userId)
+						&& TeamAccess.grantedProjectIds(team, userId).contains(projectId)) {
+					allowed.add(userId);
+				}
+			});
+		}
+		allowed.remove(null);
+		return allowed;
+	}
+
 	/** Every project id {@code user} reaches through a team membership. */
 	public Set<String> teamGrantedProjectIds(User user) {
 		Set<String> granted = new HashSet<>();
