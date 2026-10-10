@@ -110,8 +110,12 @@ public class TimeCorrectionService {
 	public void request(String workItemId, String note, User user) {
 		WorkItem item = entries.requireOwn(workItemId, user);
 		String reason = requiredNote(note);
-		TimeLocks.LockState state =
-				locks.lockStateFor(item.getUserId(), item.getProjectId(), item.getDate());
+		// A billed entry first: it is the most binding of the locks and the one whose way
+		// back (a credit note) only accounting can take, so it is the one to ask about.
+		TimeLocks.LockState state = TimeLocks.invoiceLock(item);
+		if (state == null) {
+			state = locks.lockStateFor(item.getUserId(), item.getProjectId(), item.getDate());
+		}
 		if (state == null) {
 			throw ApiException.badRequest("error.time.entryNotLocked");
 		}
@@ -132,8 +136,12 @@ public class TimeCorrectionService {
 				: approvers.orgAdminIds();
 		recipients.remove(user.getId());
 		if (!recipients.isEmpty()) {
-			notifications.notifyTimeCorrectionRequested(recipients, user.getDisplayName(),
-					approval ? "/time/approvals" : "/admin?section=timeTracking");
+			notifications.notifyTimeCorrectionRequested(recipients, user.getDisplayName(), switch (state.reason()) {
+				case APPROVAL -> "/time/approvals";
+				// Accounting answers with a credit note, and the invoices are where it is written.
+				case INVOICE -> "/time/invoices";
+				default -> "/admin?section=timeTracking";
+			});
 		}
 		audit.event(AuditAction.TIME_CORRECTION_REQUESTED).actor(user)
 				.target(item.getId(), String.valueOf(item.getDate()))

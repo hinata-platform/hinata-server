@@ -19,7 +19,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.text.Collator;
+import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -107,6 +109,21 @@ public class TimeWorkloadReport {
 		}
 		return new Workload(new PageImpl<>(rows, pageable, people.getTotalElements()), truncated,
 				!viewer.isOrgAdmin());
+	}
+
+	/**
+	 * Capacity in minutes per person over [from, to] — for billing's utilization (HIN-96), which
+	 * only ever adds these up per team and never shows one person's. Asked here because this class
+	 * is the named reader of availability; billing may not ask availability itself.
+	 */
+	public Map<String, Integer> capacityMinutes(Collection<String> userIds, LocalDate from, LocalDate to) {
+		if (userIds.isEmpty()) {
+			return Map.of();
+		}
+		Map<String, Integer> minutes = new HashMap<>();
+		capacity.totals(List.copyOf(userIds), from, to)
+				.forEach((userId, total) -> minutes.put(userId, total.capacityMinutes()));
+		return minutes;
 	}
 
 	/** Every active account, by name, paged in the database: an administrator without a group. */

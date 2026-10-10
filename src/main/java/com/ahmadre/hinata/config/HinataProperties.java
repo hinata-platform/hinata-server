@@ -604,6 +604,14 @@ public class HinataProperties {
 		private String currency = "EUR";
 
 		/**
+		 * What every invoice number starts with, before the year and the running number
+		 * ({@code INV-2026-00001}). One sequence per prefix and year, so changing it starts a
+		 * new one rather than continuing the old.
+		 */
+		@Pattern(regexp = "^[A-Z0-9]{1,10}$")
+		private String invoicePrefix = "INV";
+
+		/**
 		 * Whether a project lead sees the entries of the project's members with
 		 * the person attached. Off ⇒ leads see the project's totals, not who
 		 * booked them (R2).

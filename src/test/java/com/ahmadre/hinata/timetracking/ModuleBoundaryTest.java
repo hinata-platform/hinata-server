@@ -157,8 +157,10 @@ class ModuleBoundaryTest {
 
 	@Test
 	void nothingOutsideBillingReachesIntoIt() {
-		// Billing arrives in stage 15 with nothing outside it entitled to know. Whether
-		// time tracking may ask it about invoiced days is decided there, on purpose.
+		// Billing (stage 15) has nothing outside it entitled to know. Time tracking learns that
+		// an entry is billed from a mark billing writes on the entry (WorkItem.invoiceId), and
+		// the deletion cascade asks the ProjectDeletionHook billing implements — so recording
+		// time never asks billing anything, and the core never names it.
 		noClasses()
 				.that(resideOutsideOfPackages("..billing.."))
 				.should().dependOnClassesThat().resideInAnyPackage("..billing..")
@@ -283,7 +285,10 @@ class ModuleBoundaryTest {
 			TEMPLATE + ".ProjectCopyService",
 			// And the door itself: it holds a nested calendar that caches one year's holidays,
 			// so it accesses its own reader.
-			TEMPLATE + ".HolidayCalendars");
+			TEMPLATE + ".HolidayCalendars",
+			// Utilization per team (HIN-96): capacity added up per team through
+			// TimeWorkloadReport, for administrators, in a report. It writes nothing.
+			ROOT + ".billing.BillingReportService");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {

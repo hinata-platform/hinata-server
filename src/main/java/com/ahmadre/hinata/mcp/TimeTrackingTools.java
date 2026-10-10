@@ -42,7 +42,8 @@ public class TimeTrackingTools {
 			LocalDate date, int durationMinutes, String activityType, String description,
 			Instant createdAt, Instant startedAt, Instant endedAt, boolean billable,
 			List<String> tags, String source, Instant updatedAt, String updatedBy,
-			String sharedFromId, String importId, WorkItem.CalendarRef calendarRef, boolean hidden) {
+			String sharedFromId, String importId, WorkItem.CalendarRef calendarRef, boolean hidden,
+			String invoiceId) {
 
 		static WorkItemView of(WorkItem item) {
 			return of(item, true);
@@ -53,14 +54,15 @@ public class TimeTrackingTools {
 				return new WorkItemView(item.getId(), item.getIssueId(), item.getProjectId(), null,
 						item.getDate(), item.getDurationMinutes(), item.getActivityType(), null, null,
 						null, null, item.isBillable(), List.of(), item.getSource().name(), null, null,
-						null, null, null, true);
+						null, null, null, true, item.getInvoiceId());
 			}
 			return new WorkItemView(item.getId(), item.getIssueId(), item.getProjectId(),
 					item.getUserId(), item.getDate(), item.getDurationMinutes(),
 					item.getActivityType(), item.getDescription(), item.getCreatedAt(),
 					item.getStartedAt(), item.getEndedAt(), item.isBillable(), item.getTags(),
 					item.getSource().name(), item.getUpdatedAt(), item.getUpdatedBy(),
-					item.getSharedFromId(), item.getImportId(), item.getCalendarRef(), false);
+					item.getSharedFromId(), item.getImportId(), item.getCalendarRef(), false,
+					item.getInvoiceId());
 		}
 	}
 

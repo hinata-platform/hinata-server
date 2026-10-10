@@ -440,7 +440,8 @@ public class TimeTagService {
 	 * be trusting an ordering it does not control.
 	 */
 	private long cascade(String name, Consumer<List<Object>> step) {
-		Criteria matches = carries(name);
+		// A billed entry is a booking record (HIN-96): its tags stay as they were billed.
+		Criteria matches = new Criteria().andOperator(carries(name), Criteria.where("invoiceId").exists(false));
 		LocalDate lock = policy.lockBefore();
 		if (lock != null) {
 			matches = new Criteria().andOperator(matches, Criteria.where("date").gte(lock));

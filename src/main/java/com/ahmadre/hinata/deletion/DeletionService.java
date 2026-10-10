@@ -96,6 +96,7 @@ public class DeletionService {
 	private final MongoTemplate mongo;
 	private final MessageSource messages;
 	private final com.ahmadre.hinata.issue.IssueWatcherCleanup watcherCleanup;
+	private final List<ProjectDeletionHook> projectHooks;
 
 	// ── public types ────────────────────────────────────────────────────────
 
@@ -187,6 +188,7 @@ public class DeletionService {
 	 */
 	public ProjectDeleteOptions validateProjectDelete(Project project, User user,
 			String strategy, String migrateToProjectId) {
+		projectHooks.forEach(hook -> hook.assertDeletable(project));
 		long issueCount = issues.countByProjectId(project.getId());
 		if (issueCount == 0) {
 			return new ProjectDeleteOptions(IssueStrategy.NONE, null, 0);
@@ -301,6 +303,8 @@ public class DeletionService {
 	private Map<String, Object> deleteProjectCascade(Project project, ProjectDeleteOptions options,
 			DeletionStream progress) {
 		String pid = project.getId();
+		// Asked again: an invoice may have been issued since the deletion was requested.
+		projectHooks.forEach(hook -> hook.assertDeletable(project));
 		List<Issue> projectIssues = issues.findByProjectId(pid, Pageable.unpaged()).getContent();
 		// Anything still queued for a watcher of this project would otherwise be
 		// mailed minutes after the project stopped existing. Run first, so a
@@ -339,6 +343,8 @@ public class DeletionService {
 		// entries themselves survive or go with the issue strategy above; this only
 		// removes the statement that they had been handed in.
 		mongo.remove(byProjectId(pid), TimesheetApproval.class);
+
+		projectHooks.forEach(hook -> hook.projectDeleted(pid));
 
 		progress.step("deletingProject");
 		projects.deleteById(pid);

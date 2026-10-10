@@ -248,6 +248,23 @@ class TimeRetentionIntegrationTest {
 	}
 
 	@Test
+	void aBilledEntryOutlivesItsRetentionPeriod() {
+		// HIN-96: an entry on an issued invoice is part of a booking record (§ 147 AO), and tax
+		// retention outranks the operator's period.
+		retain(null, 24);
+		LocalDate old = LocalDate.of(2024, 8, 5);
+		WorkItem billed = entry(member.getId(), old, 60, "billed");
+		WorkItem unbilled = entry(member.getId(), old, 30, "not billed");
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(billed.getId())),
+				new org.springframework.data.mongodb.core.query.Update().set("invoiceId", "inv-1"), WorkItem.class);
+
+		retention.run().orElseThrow();
+
+		assertThat(workItems.findById(billed.getId())).isPresent();
+		assertThat(workItems.findById(unbilled.getId())).isEmpty();
+	}
+
+	@Test
 	void anEntryRetentionShorterThanTwoYearsIsAppliedAsTwoYears() {
 		// Stored as 2 behind the admin area's back, or typed for 24 by mistake: the
 		// records the law asks to keep for two years stay for two years.

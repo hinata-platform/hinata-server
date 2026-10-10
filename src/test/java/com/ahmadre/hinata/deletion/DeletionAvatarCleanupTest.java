@@ -52,7 +52,7 @@ class DeletionAvatarCleanupTest {
 				mock(ProjectRepository.class), mock(ProjectService.class), mock(TeamRepository.class),
 				mock(TeamActivityRepository.class), projectAvatars, teamAvatars,
 				mock(StorageService.class), mock(MongoTemplate.class), mock(MessageSource.class),
-				mock(IssueWatcherCleanup.class));
+				mock(IssueWatcherCleanup.class), java.util.List.of());
 	}
 
 	@Test

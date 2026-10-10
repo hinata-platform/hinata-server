@@ -225,6 +225,18 @@ public enum AuditAction {
 	// and what they removed, as counts.
 	TIME_OFF_YEAR_RUN(DATA, NOTICE, true),
 	TIME_OFF_RETENTION_RUN(DATA, NOTICE, true),
+	// Billing (HIN-96). A rate written, changed or removed: who and which target, and the amount
+	// only for revenue — a cost rate is what a person costs, and the log is read more widely.
+	BILLING_RATE_CREATED(DATA, NOTICE, true),
+	BILLING_RATE_UPDATED(DATA, NOTICE, true),
+	BILLING_RATE_DELETED(DATA, NOTICE, true),
+	// An invoice drafted or thrown away, issued (numbered and frozen, its entries billed),
+	// reversed by a credit note, or taken out as a file. Never the recipient or the lines.
+	INVOICE_CREATED(DATA, INFO, true),
+	INVOICE_DELETED(DATA, INFO, true),
+	INVOICE_ISSUED(DATA, NOTICE, true),
+	INVOICE_CREDITED(DATA, WARNING, true),
+	INVOICE_EXPORTED(DATA, INFO, true),
 
 	// --- Integration (Personal Access Tokens + MCP writes) -------------------
 	PAT_CREATED(INTEGRATION, NOTICE, true),
@@ -303,7 +315,7 @@ public enum AuditAction {
 	}
 
 	/**
-	 * Records about people's working time, approvals and absences, and the
+	 * Records about people's working time, approvals, absences and billing, and the
 	 * organisation's rules for them. They belong to the organisation admins: the
 	 * platform administrator's feed leaves them out, because a sick report or a
 	 * refused timesheet is exactly what running the platform does not need.
@@ -311,7 +323,8 @@ public enum AuditAction {
 	public boolean organisational() {
 		String name = name();
 		return name.startsWith("TIME_") || name.startsWith("TIMESHEET_")
-				|| name.startsWith("AVAILABILITY_") || this == MCP_WORK_LOGGED || this == MCP_WORK_DELETED;
+				|| name.startsWith("AVAILABILITY_") || name.startsWith("BILLING_") || name.startsWith("INVOICE_")
+				|| this == MCP_WORK_LOGGED || this == MCP_WORK_DELETED;
 	}
 
 	/** Records about absences: requests, sick reports, balances, the absence catalogue. */
