@@ -24,6 +24,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -38,8 +39,9 @@ import java.util.stream.Collectors;
  * 404, so its existence is not given away by id either.
  *
  * <p><b>Who changes a space.</b> Its author. A space from before spaces had an author
- * is managed by an admin who sees it. Renaming rewrites the space on every page in it,
- * readable or not, which is why reading one page there is not enough.
+ * is managed by whoever reads every page in it, whatever their role. Renaming rewrites
+ * the space on every page in it, which is why reading one page there is not enough, and
+ * no role reaches pages its holder was not given.
  */
 @Tag(name = "Knowledge Base")
 @RestController
@@ -83,7 +85,7 @@ public class SpaceController {
 		return spaces.findAllByOrderBySortOrderAscNameAsc().stream()
 				.filter(space -> isAuthor(space, user) || reachable.contains(key(space.getName())))
 				.limit(LIST_CAP)
-				.map(space -> SpaceResponse.of(space, canManage(space, user)))
+				.map(space -> SpaceResponse.of(space, canManage(space, user, reachable)))
 				.toList();
 	}
 
@@ -150,10 +152,11 @@ public class SpaceController {
 	 */
 	private Space managed(String id, User user) {
 		Space space = spaces.findById(id).orElseThrow(() -> ApiException.notFound("space"));
-		if (!isAuthor(space, user) && !reachableSpaces(user).contains(key(space.getName()))) {
+		Set<String> reachable = reachableSpaces(user);
+		if (!isAuthor(space, user) && !reachable.contains(key(space.getName()))) {
 			throw ApiException.notFound("space");
 		}
-		if (!canManage(space, user)) {
+		if (!canManage(space, user, reachable)) {
 			throw ApiException.forbidden("error.accessDenied");
 		}
 		return space;
@@ -163,9 +166,17 @@ public class SpaceController {
 		return space.getAuthorId() != null && space.getAuthorId().equals(user.getId());
 	}
 
-	private static boolean canManage(Space space, User user) {
-		if (space.getAuthorId() == null) return user.isAdmin() || user.isOrgAdmin();
-		return isAuthor(space, user);
+	private boolean canManage(Space space, User user, Set<String> reachable) {
+		if (space.getAuthorId() != null) return isAuthor(space, user);
+		// No author on record: whoever reads all of its pages, and so would rename none
+		// they were not given. Not an admin as such; admins read no more than anybody.
+		if (!reachable.contains(key(space.getName()))) return false;
+		Criteria inSpace = Criteria.where("space")
+				.regex("^" + Pattern.quote(space.getName().trim()) + "$", "i");
+		long all = mongo.count(Query.query(inSpace), Article.class);
+		long readable = mongo.count(Query.query(new Criteria().andOperator(inSpace,
+				access.sightOf(user).criteria())), Article.class);
+		return all == readable;
 	}
 
 	/** The spaces of the pages [user] reads, by {@link #key}: one distinct over the readable pages. */
