@@ -362,7 +362,7 @@ class TimeOffYearRunIntegrationTest {
 	void theReportAddsUpTheReferenceCase() throws Exception {
 		when(currentUser.require()).thenReturn(admin);
 		HolidayController.CalendarResponse calendar = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Deutschland", "Bundesweit", null, true));
+				new HolidayController.CalendarRequest("Deutschland", "Bundesweit", null, null, true));
 		holidayApi.addHoliday(new HolidayController.HolidayRequest(calendar.id(), LocalDate.of(2026, 5, 14),
 				"Christi Himmelfahrt", null));
 		balances.grant(admin, member.getId(), vacation.getId(), 2025, null, null);

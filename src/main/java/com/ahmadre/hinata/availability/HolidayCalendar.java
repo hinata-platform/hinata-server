@@ -8,13 +8,16 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
- * A set of public holidays, kept by administrators: by hand, or imported from an ICS feed.
+ * A set of public holidays, kept by administrators: by hand, imported from an ICS feed, or
+ * filled from the statutory rules of a region ({@link #rules}).
  *
- * <p>No country logic in code. A region's holidays are whatever its calendar says, so a
- * Bundesland, a canton or a company's own closing days are all the same thing. People pick the
- * calendar they follow in their working-time pattern; without a pick, {@link #defaultCalendar}.
+ * <p>A calendar with rules or a feed fills each year on its own ({@link HolidayAutoFill}), once:
+ * a year in {@link #syncedYears} is not filled again unasked, so a day an administrator removed
+ * stays removed. People pick the calendar they follow in their working-time pattern; without a
+ * pick, {@link #defaultCalendar}.
  *
  * <p>The feed address is a credential in all but name and is stored encrypted, bound to this
  * calendar ({@code "holiday-calendar:" + id}). Only its host is ever shown.
@@ -48,6 +51,21 @@ public class HolidayCalendar {
 	private String sourceHost;
 
 	/**
+	 * The region whose statutory holidays fill this calendar, {@code DE} or {@code DE-BY}, or null.
+	 * A calendar has rules or a feed, never both.
+	 */
+	private String rules;
+
+	/**
+	 * The calendar the platform made from its holiday region. It follows that setting until the
+	 * organisation chooses another source for it; renaming it or editing its days keeps it following.
+	 */
+	private Boolean platformDefault;
+
+	/** Years filled on their own already, see the class comment. */
+	private List<Integer> syncedYears;
+
+	/**
 	 * The calendar for everybody who did not pick one. At most one is, and only that one carries the
 	 * field, so the sparse index is a single entry every capacity read finds it by.
 	 */
@@ -77,6 +95,19 @@ public class HolidayCalendar {
 
 	public boolean isDefaultCalendar() {
 		return Boolean.TRUE.equals(defaultCalendar);
+	}
+
+	public boolean isPlatformDefault() {
+		return Boolean.TRUE.equals(platformDefault);
+	}
+
+	/** Whether this calendar fills itself: from rules, or from a feed. */
+	public boolean fillsItself() {
+		return rules != null || source != null;
+	}
+
+	public boolean synced(int year) {
+		return syncedYears != null && syncedYears.contains(year);
 	}
 
 	/** What one import did, per year it covered. */

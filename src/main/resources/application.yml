@@ -298,6 +298,11 @@ hinata:
     # their own. Spelled out here because relaxed binding would only read the
     # variable without the underscores inside the property name.
     default-weekday-minutes: ${HINATA_AVAILABILITY_DEFAULT_WEEKDAY_MINUTES:480,480,480,480,480,0,0}
+    holidays:
+      # Every night and at start, holiday calendars with rules or a calendar
+      # address get this year and the next, once each. Off means every import
+      # by hand; a calendar with rules still fills when it is saved.
+      auto-fill: ${HINATA_HOLIDAYS_AUTO_FILL:true}
   project-templates:
     # Master switch for project templates, copying a project and deadlines kept
     # as an offset from the project's event date. Off by default; an instance

@@ -1227,34 +1227,39 @@ public class DemoSeeder {
 	 * <li>Lena works Monday to Thursday. Her Friday, which carries entries above, is a day
 	 * without planned hours: the marking beside hours that still count.</li>
 	 * <li>Nobody picks a calendar, so the default one applies to everybody.</li>
-	 * <li>The calendar holds the fixed national holidays of this year and the next, Christmas
-	 * Eve as a half day.</li>
+	 * <li>The calendar follows Germany's statutory holidays and adds Christmas Eve, this year and
+	 * the next, as a half day by hand.</li>
 	 * <li>Tomas is on vacation next Monday and Tuesday, Lena takes this Thursday afternoon
 	 * off.</li>
 	 * </ul>
 	 */
 	private void availability(User admin, User tomas, User lena) {
-		if (mongo.getCollection("holiday_calendars").countDocuments() > 0) {
+		if (mongo.getCollection("working_schedules").countDocuments() > 0) {
 			return;
 		}
 		LocalDate monday = LocalDate.now(ZoneOffset.UTC).with(DayOfWeek.MONDAY);
 		java.util.Date now = java.util.Date.from(Instant.now());
-		org.bson.types.ObjectId calendarId = new org.bson.types.ObjectId();
-		mongo.getCollection("holiday_calendars").insertOne(new org.bson.Document()
-				.append("_id", calendarId)
-				.append("name", "Deutschland")
-				.append("region", "Bundesweit")
-				.append("defaultCalendar", true)
-				.append("createdBy", admin.getId())
-				.append("createdAt", now)
-				.append("updatedAt", now));
+		// The platform makes its calendar once setup is done, which the seed did a moment ago; the
+		// demo takes that one over. Without it, the demo's own is the platform's, so the start makes
+		// no second one. Either way the automatic fill brings the statutory days.
+		org.bson.Document platform = mongo.getCollection("holiday_calendars")
+				.find(new org.bson.Document("platformDefault", true)).first();
+		org.bson.types.ObjectId calendarId = platform != null ? platform.getObjectId("_id")
+				: new org.bson.types.ObjectId();
+		if (platform == null) {
+			mongo.getCollection("holiday_calendars").insertOne(new org.bson.Document()
+					.append("_id", calendarId)
+					.append("name", "Deutschland")
+					.append("region", "Bundesweit")
+					.append("defaultCalendar", true)
+					.append("rules", "DE")
+					.append("platformDefault", true)
+					.append("createdBy", admin.getId())
+					.append("createdAt", now)
+					.append("updatedAt", now));
+		}
 		for (int year = monday.getYear(); year <= monday.getYear() + 1; year++) {
-			holiday(calendarId, LocalDate.of(year, 1, 1), "Neujahr", false, now);
-			holiday(calendarId, LocalDate.of(year, 5, 1), "Tag der Arbeit", false, now);
-			holiday(calendarId, LocalDate.of(year, 10, 3), "Tag der Deutschen Einheit", false, now);
 			holiday(calendarId, LocalDate.of(year, 12, 24), "Heiligabend", true, now);
-			holiday(calendarId, LocalDate.of(year, 12, 25), "1. Weihnachtstag", false, now);
-			holiday(calendarId, LocalDate.of(year, 12, 26), "2. Weihnachtstag", false, now);
 		}
 		mongo.getCollection("working_schedules").insertOne(new org.bson.Document()
 				.append("userId", lena.getId())
@@ -1517,18 +1522,20 @@ public class DemoSeeder {
 				.append("createdAt", now));
 	}
 
+	/** A day kept by hand, unless the calendar has that day already. */
 	private void holiday(org.bson.types.ObjectId calendarId, LocalDate date, String name, boolean halfDay,
 			java.util.Date now) {
 		org.bson.Document document = new org.bson.Document()
-				.append("calendarId", calendarId.toHexString())
-				.append("date", utcDay(date))
 				.append("name", name)
 				.append("source", "MANUAL")
 				.append("createdAt", now);
 		if (halfDay) {
 			document.append("halfDay", true);
 		}
-		mongo.getCollection("holidays").insertOne(document);
+		mongo.getCollection("holidays").updateOne(
+				new org.bson.Document("calendarId", calendarId.toHexString()).append("date", utcDay(date)),
+				new org.bson.Document("$setOnInsert", document),
+				new com.mongodb.client.model.UpdateOptions().upsert(true));
 	}
 
 	private static java.util.Date utcDay(LocalDate day) {

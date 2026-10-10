@@ -69,6 +69,8 @@ import static org.mockito.Mockito.when;
 		"hinata.demo.seed=false",
 		"hinata.rate-limit.enabled=false",
 		"management.health.mail.enabled=false",
+		// The rounds run when a test calls them, not when a feed is saved.
+		"hinata.availability.holidays.auto-fill=false",
 		// 32 bytes, so feed addresses can be stored.
 		"hinata.ics.secret=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 })
@@ -110,6 +112,10 @@ class AvailabilityIntegrationTest {
 	@Autowired
 	private HolidayService holidays;
 	@Autowired
+	private HolidayAutoFill autoFill;
+	@Autowired
+	private HolidaySettingsGuard settingsGuard;
+	@Autowired
 	private MeService me;
 	@MockitoSpyBean
 	private IcsFetcher fetcher;
@@ -125,7 +131,8 @@ class AvailabilityIntegrationTest {
 	@BeforeEach
 	void seed() {
 		for (String collection : List.of("projects", "users", "teams", "issues", "work_items", "working_schedules", "time_off",
-				"holiday_calendars", "holidays", "audit_log", "server_settings")) {
+				"holiday_calendars", "holidays", "audit_log", "server_settings",
+				HolidayAutoFill.STATE)) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		policy(false);
@@ -203,7 +210,7 @@ class AvailabilityIntegrationTest {
 	void withoutAPatternTheDefaultHoursAndTheDefaultCalendarApply() {
 		as(admin);
 		HolidayController.CalendarResponse calendar = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Deutschland", "Bundesweit", null, true));
+				new HolidayController.CalendarRequest("Deutschland", "Bundesweit", null, null, true));
 		holidayApi.addHoliday(new HolidayController.HolidayRequest(calendar.id(), day(12, 25), "1. Weihnachtstag",
 				null));
 		holidayApi.addHoliday(new HolidayController.HolidayRequest(calendar.id(), day(12, 24), "Heiligabend", true));
@@ -222,9 +229,9 @@ class AvailabilityIntegrationTest {
 	void aNewDefaultReplacesTheOld_andDeletingACalendarSendsItsFollowersBackToTheDefault() {
 		as(admin);
 		HolidayController.CalendarResponse bavaria = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Bayern", null, null, true));
+				new HolidayController.CalendarRequest("Bayern", null, null, null, true));
 		HolidayController.CalendarResponse germany = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Deutschland", null, null, true));
+				new HolidayController.CalendarRequest("Deutschland", null, null, null, true));
 		holidayApi.addHoliday(new HolidayController.HolidayRequest(bavaria.id(), day(12, 8), "Mariä Empfängnis", null));
 		holidayApi.addHoliday(new HolidayController.HolidayRequest(germany.id(), day(12, 25), "1. Weihnachtstag",
 				null));
@@ -476,7 +483,7 @@ class AvailabilityIntegrationTest {
 				.when(fetcher).fetch(eq(FEED), any(), any());
 		as(admin);
 		HolidayController.CalendarResponse created = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Feed", null, FEED, false));
+				new HolidayController.CalendarRequest("Feed", null, FEED, null, false));
 
 		assertThat(created.feedHost()).isEqualTo("feeds.example.org");
 		assertThat(mongo.findById(created.id(), HolidayCalendar.class).getSource())
@@ -500,7 +507,7 @@ class AvailabilityIntegrationTest {
 				.when(fetcher).fetch(eq(FEED), any(), any());
 		as(admin);
 		HolidayController.CalendarResponse created = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Feed", null, FEED, false));
+				new HolidayController.CalendarRequest("Feed", null, FEED, null, false));
 		holidays.importYear(admin, created.id(), 2026).get(20, TimeUnit.SECONDS);
 		String newYear = holidayApi.holidays(created.id(), 2026).getFirst().id();
 		holidayApi.updateHoliday(newYear, new HolidayController.HolidayPatchRequest(null, "Neujahr", null));
@@ -516,16 +523,168 @@ class AvailabilityIntegrationTest {
 	void aPrivateHostIsRefused_asAnAddressAndWhenFetched() throws Exception {
 		as(admin);
 		assertThatThrownBy(() -> holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Literal", null, "https://127.0.0.1/feed.ics", false)))
+				new HolidayController.CalendarRequest("Literal", null, "https://127.0.0.1/feed.ics", null, false)))
 				.hasMessage("error.ics.hostNotAllowed");
 
 		HolidayController.CalendarResponse local = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Local", null, "https://localhost/feed.ics", false));
+				new HolidayController.CalendarRequest("Local", null, "https://localhost/feed.ics", null, false));
 		HolidayCalendar result = holidays.importYear(admin, local.id(), 2026).get(30, TimeUnit.SECONDS);
 
 		assertThat(result.getImportState()).isEqualTo(HolidayCalendar.ImportState.FAILED);
 		assertThat(result.getLastImportError()).isEqualTo("error.ics.hostNotAllowed");
 		assertThat(mongo.count(new Query(), Holiday.class)).isZero();
+	}
+
+	@Test
+	void aCalendarWithRulesHoldsThisYearAndTheNext_andARemovedDayStaysRemoved() {
+		as(admin);
+		HolidayController.CalendarResponse bavaria = holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Bayern", null, null, "de-by", false));
+
+		assertThat(bavaria.rules()).isEqualTo("DE-BY");
+		assertThat(holidayApi.holidays(bavaria.id(), 2026)).extracting(HolidayController.HolidayResponse::date)
+				.contains(LocalDate.of(2026, 6, 4), LocalDate.of(2026, 11, 1));
+		List<HolidayController.HolidayResponse> next = holidayApi.holidays(bavaria.id(), 2027);
+		HolidayController.HolidayResponse epiphany = next.stream()
+				.filter(day -> day.date().equals(LocalDate.of(2027, 1, 6))).findFirst().orElseThrow();
+		holidayApi.deleteHoliday(epiphany.id());
+
+		autoFill.fillAll();
+
+		assertThat(holidayApi.holidays(bavaria.id(), 2027)).hasSize(next.size() - 1);
+		assertThat(mongo.findById(bavaria.id(), HolidayCalendar.class).getSyncedYears())
+				.containsExactlyInAnyOrder(2026, 2027);
+		assertThatThrownBy(() -> holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Nirgends", null, null, "DE-XX", false)))
+				.hasMessage("error.availability.rulesUnknown");
+		assertThatThrownBy(() -> holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Beides", null, FEED, "DE", false)))
+				.hasMessage("error.availability.oneSource");
+	}
+
+	@Test
+	void aFeedYearThatHoldsImportedDaysCountsAsFilled() {
+		as(admin);
+		HolidayController.CalendarResponse feed = holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Feed", null, FEED, null, false));
+		mongo.insert(Holiday.builder().calendarId(feed.id()).date(LocalDate.of(2026, 1, 1)).name("Neujahr")
+				.source(Holiday.Source.IMPORT).build());
+		doReturn(CompletableFuture.completedFuture(new IcsFetchResult(IcsFetchResult.Outcome.FETCHED,
+				feedOfDays(2027, 2), null, null, null, 200)))
+				.when(fetcher).fetch(eq(FEED), any(), any());
+
+		autoFill.fillAll();
+
+		assertThat(holidayApi.holidays(feed.id(), 2026)).hasSize(1);
+		assertThat(holidayApi.holidays(feed.id(), 2027)).hasSize(2);
+		assertThat(mongo.findById(feed.id(), HolidayCalendar.class).getSyncedYears())
+				.containsExactlyInAnyOrder(2026, 2027);
+	}
+
+	@Test
+	void thePlatformMakesItsCalendarFromTheZone_followsItsRegion_andLetsTheOrganisationTakeItOver() {
+		ServerSettings stored = settings.get();
+		stored.setSetupCompleted(true);
+		settings.save(stored);
+
+		HolidayCalendar platform = mongo.findOne(new Query(), HolidayCalendar.class);
+		assertThat(platform.getRules()).isEqualTo("DE");
+		assertThat(platform.isPlatformDefault()).isTrue();
+		assertThat(platform.isDefaultCalendar()).isTrue();
+		assertThat(platform.getName()).isEqualTo("Gesetzliche Feiertage");
+		assertThat(platform.getRegion()).isNull();
+		as(admin);
+		assertThat(holidayApi.holidays(platform.getId(), 2027)).hasSize(9);
+
+		region("DE-BE");
+		assertThat(mongo.count(new Query(), HolidayCalendar.class)).isOne();
+		assertThat(holidayApi.holidays(platform.getId(), 2027)).extracting(HolidayController.HolidayResponse::date)
+				.contains(LocalDate.of(2027, 3, 8));
+
+		holidayApi.updateCalendar(platform.getId(),
+				new HolidayController.CalendarPatchRequest(null, null, null, "DE-BY", null));
+		assertThat(mongo.findById(platform.getId(), HolidayCalendar.class).isPlatformDefault()).isFalse();
+		assertThat(holidayApi.holidays(platform.getId(), 2027)).extracting(HolidayController.HolidayResponse::date)
+				.contains(LocalDate.of(2027, 1, 6)).doesNotContain(LocalDate.of(2027, 3, 8));
+
+		region(ServerSettings.Holidays.NONE);
+		assertThat(mongo.count(new Query(), HolidayCalendar.class)).isOne();
+		assertThat(mongo.findById(platform.getId(), HolidayCalendar.class).getRules()).isEqualTo("DE-BY");
+	}
+
+	@Test
+	void aDeletedPlatformCalendarStaysDeleted_andAnUnknownRegionIsRefused() {
+		ServerSettings stored = settings.get();
+		stored.setSetupCompleted(true);
+		settings.save(stored);
+		as(admin);
+		String platform = mongo.findOne(new Query(), HolidayCalendar.class).getId();
+
+		holidayApi.deleteCalendar(platform);
+		settings.save(settings.get());
+		settings.save(settings.get());
+
+		assertThat(mongo.count(new Query(), HolidayCalendar.class)).isZero();
+		ServerSettings unknown = settings.get();
+		ServerSettings.Holidays block = new ServerSettings.Holidays();
+		block.setRegion("XX");
+		unknown.setHolidays(block);
+		assertThatThrownBy(() -> settingsGuard.check(settings.get(), unknown))
+				.hasMessage("error.availability.rulesUnknown");
+	}
+
+	@Test
+	void aFeedReplacedByRulesMakesWayFromThisYear_andRemovingTheRulesKeepsTheDays() {
+		as(admin);
+		HolidayController.CalendarResponse feed = holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Feed", null, FEED, null, false));
+		mongo.insert(Holiday.builder().calendarId(feed.id()).date(LocalDate.of(2025, 2, 14)).name("Alt")
+				.source(Holiday.Source.IMPORT).build());
+		mongo.insert(Holiday.builder().calendarId(feed.id()).date(LocalDate.of(2026, 2, 14)).name("Valentinstag")
+				.source(Holiday.Source.IMPORT).build());
+		mongo.insert(Holiday.builder().calendarId(feed.id()).date(LocalDate.of(2026, 12, 31)).name("Betriebsruhe")
+				.source(Holiday.Source.MANUAL).build());
+
+		holidayApi.updateCalendar(feed.id(),
+				new HolidayController.CalendarPatchRequest(null, null, null, "DE", null));
+
+		assertThat(holidayApi.holidays(feed.id(), 2026)).extracting(HolidayController.HolidayResponse::name)
+				.contains("Neujahr", "Betriebsruhe").doesNotContain("Valentinstag");
+		assertThat(holidayApi.holidays(feed.id(), 2025)).extracting(HolidayController.HolidayResponse::name)
+				.containsExactly("Alt");
+		HolidayCalendar rules = mongo.findById(feed.id(), HolidayCalendar.class);
+		assertThat(rules.getSource()).isNull();
+		assertThat(rules.getSyncedYears()).containsExactlyInAnyOrder(2026, 2027);
+
+		holidayApi.updateCalendar(feed.id(),
+				new HolidayController.CalendarPatchRequest(null, null, null, "", null));
+
+		assertThat(mongo.findById(feed.id(), HolidayCalendar.class).getRules()).isNull();
+		assertThat(holidayApi.holidays(feed.id(), 2027)).hasSize(9);
+	}
+
+	@Test
+	void theSourceDoesNotChangeUnderARunningImport() {
+		as(admin);
+		HolidayController.CalendarResponse feed = holidayApi.createCalendar(
+				new HolidayController.CalendarRequest("Feed", null, FEED, null, false));
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(feed.id())),
+				new org.springframework.data.mongodb.core.query.Update()
+						.set("importState", HolidayCalendar.ImportState.RUNNING).set("importStartedAt", NOW),
+				HolidayCalendar.class);
+
+		assertThatThrownBy(() -> holidayApi.updateCalendar(feed.id(),
+				new HolidayController.CalendarPatchRequest(null, null, null, "DE", null)))
+				.hasMessage("error.availability.importRunning");
+		assertThat(mongo.findById(feed.id(), HolidayCalendar.class).getSource()).isNotNull();
+	}
+
+	private void region(String code) {
+		ServerSettings stored = settings.get();
+		ServerSettings.Holidays block = new ServerSettings.Holidays();
+		block.setRegion(code);
+		stored.setHolidays(block);
+		settings.save(stored);
 	}
 
 	// --- the person's rights ----------------------------------------------------------------

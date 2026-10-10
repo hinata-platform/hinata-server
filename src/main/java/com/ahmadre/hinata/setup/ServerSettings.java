@@ -92,6 +92,12 @@ public class ServerSettings {
 	 * cleared the switch".
 	 */
 	private ProjectTemplates projectTemplates;
+	/**
+	 * Where the platform's holidays come from. Not initialised, for the reason
+	 * {@link #timeTracking} is not.
+	 */
+	@Valid
+	private Holidays holidays;
 	private Audit audit = new Audit();
 
 	@LastModifiedDate
@@ -792,6 +798,27 @@ public class ServerSettings {
 				return day <= java.time.Month.of(month).minLength();
 			}
 		}
+	}
+
+	/**
+	 * The statutory holidays the platform gives its organisation: the region a
+	 * holiday calendar is made from and kept filled with, every year, without an
+	 * import ({@code availability.HolidayAutoFill}). The organisation may rename
+	 * that calendar, edit its days, give it another source or delete it.
+	 */
+	@Data
+	public static class Holidays {
+
+		/** No platform calendar at all. */
+		public static final String NONE = "NONE";
+
+		/**
+		 * An ISO 3166 code, a country ({@code DE}) or a region of one
+		 * ({@code DE-BY}), or {@link #NONE}; null means the country of the
+		 * instance's time zone.
+		 */
+		@Pattern(regexp = "NONE|[A-Za-z]{2}(-[A-Za-z0-9]{1,6}){0,2}", message = "error.availability.rulesUnknown")
+		private String region;
 	}
 
 	/**
