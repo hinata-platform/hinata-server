@@ -119,7 +119,8 @@ class AdvancedTimeTrackingGateIntegrationTest {
 			// The real routes since stage 10: the admin's own patterns, and the calendars.
 			new Gated("/api/v1/availability/schedule", 200),
 			new Gated("/api/v1/availability/holidays/calendars", 200),
-			new Gated("/api/v1/billing/probe", 200),
+			// Billing is gated twice: by this module and by its own switch (BillingGate), which
+			// this test leaves off — BillingIntegrationTest turns it on and off.
 			// The real route since stage 13; the test switches the organisation's import on.
 			new Gated("/api/v1/me/calendar-subscriptions", 200));
 

@@ -95,7 +95,7 @@ public class TimeRetentionService {
 	private final Clock clock;
 
 	/** One entry as the purge needs it. */
-	private record Row(ObjectId id, String userId, String projectId, String issueId, int minutes) {
+	private record Row(ObjectId id, String userId, String projectId, String issueId, int minutes, boolean billed) {
 	}
 
 	/**
@@ -291,11 +291,12 @@ public class TimeRetentionService {
 					criteria = criteria.and("_id").gt(after);
 				}
 				Query batch = Query.query(criteria).with(Sort.by("_id")).limit(BATCH);
-				batch.fields().include("userId", "projectId", "issueId", "durationMinutes");
+				batch.fields().include("userId", "projectId", "issueId", "durationMinutes", "invoiceId");
 				List<Row> rows = raw(batch).stream()
 						.map(document -> new Row(document.getObjectId("_id"),
 								document.getString("userId"), document.getString("projectId"),
-								document.getString("issueId"), WorkItemDocuments.minutes(document)))
+								document.getString("issueId"), WorkItemDocuments.minutes(document),
+								document.getString("invoiceId") != null))
 						.toList();
 				if (rows.isEmpty()) {
 					break;
@@ -303,7 +304,9 @@ public class TimeRetentionService {
 				after = rows.getLast().id();
 				List<Row> doomed = new ArrayList<>(rows.size());
 				for (Row row : rows) {
-					if (frozen.holds(row.userId(), row.projectId(), day)) {
+					// A billed entry is kept as long as the booking record that names it: tax
+					// retention (§ 147 AO, § 257 HGB) outranks the operator's retention period.
+					if (row.billed() || frozen.holds(row.userId(), row.projectId(), day)) {
 						run.setEntriesKept(run.getEntriesKept() + 1);
 					}
 					else {

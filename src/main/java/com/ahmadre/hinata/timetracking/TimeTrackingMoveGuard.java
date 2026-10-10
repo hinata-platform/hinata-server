@@ -53,6 +53,14 @@ public class TimeTrackingMoveGuard implements WorkItemMoveGuard {
 
 	@Override
 	public void check(String issueId, String fromProjectId, String toProjectId) {
+		// A billed entry is part of a booking record whether or not the module is on now
+		// (see TimeLocks#invoiceLock), and a move rewrites its project. One indexed point
+		// read on the partial invoice index, so a move of an issue nobody billed pays nothing.
+		WorkItem billed = mongo.findOne(Query.query(Criteria.where("issueId").is(issueId)
+				.and("invoiceId").exists(true)), WorkItem.class);
+		if (billed != null) {
+			throw TimeLocks.invoiceLock(billed).refusal();
+		}
 		if (!policy.advancedEnabled()) {
 			// The module is off: nothing freezes anything, and the move behaves
 			// exactly as it did before this class existed.

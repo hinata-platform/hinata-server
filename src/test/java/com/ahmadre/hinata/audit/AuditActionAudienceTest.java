@@ -45,7 +45,9 @@ class AuditActionAudienceTest {
 			"TIME_OFF_REQUEST_APPROVED", "TIME_OFF_REQUEST_REJECTED", "TIME_OFF_REQUEST_WITHDRAWN",
 			"TIME_OFF_REQUEST_EDITED", "TIME_OFF_REQUEST_CANCELLED", "TIME_OFF_SICK_REPORTED",
 			"TIME_OFF_EXPIRY_NOTICE_SENT", "TIME_OFF_PROPOSAL_DECIDED", "TIME_OFF_REPORT_EXPORTED",
-			"TIME_OFF_YEAR_RUN", "TIME_OFF_RETENTION_RUN", "PAT_CREATED", "PAT_REVOKED", "PAT_DELETED",
+			"TIME_OFF_YEAR_RUN", "TIME_OFF_RETENTION_RUN", "BILLING_RATE_CREATED", "BILLING_RATE_UPDATED",
+			"BILLING_RATE_DELETED", "INVOICE_CREATED", "INVOICE_DELETED", "INVOICE_ISSUED", "INVOICE_CREDITED",
+			"INVOICE_EXPORTED", "PAT_CREATED", "PAT_REVOKED", "PAT_DELETED",
 			"MCP_ISSUE_CREATED", "MCP_ISSUE_UPDATED", "MCP_COMMENT_ADDED", "MCP_COMMENT_EDITED",
 			"MCP_COMMENT_DELETED", "MCP_KB_CREATED", "MCP_KB_UPDATED", "MCP_KB_DELETED", "MCP_WORK_LOGGED",
 			"MCP_WORK_DELETED", "MCP_SPRINT_CREATED", "MCP_SPRINT_UPDATED", "MCP_SPRINT_STARTED",
@@ -73,7 +75,8 @@ class AuditActionAudienceTest {
 		for (AuditAction action : AuditAction.values()) {
 			String name = action.name();
 			boolean expected = name.startsWith("TIME_") || name.startsWith("TIMESHEET_")
-					|| name.startsWith("AVAILABILITY_") || name.startsWith("MCP_WORK_");
+					|| name.startsWith("AVAILABILITY_") || name.startsWith("BILLING_")
+					|| name.startsWith("INVOICE_") || name.startsWith("MCP_WORK_");
 			assertThat(action.organisational()).as(name).isEqualTo(expected);
 		}
 	}

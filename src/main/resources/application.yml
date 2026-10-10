@@ -169,6 +169,9 @@ hinata:
     default-billable: ${HINATA_TIME_TRACKING_DEFAULT_BILLABLE:false}
     billing-enabled: ${HINATA_TIME_TRACKING_BILLING_ENABLED:false}
     currency: ${HINATA_TIME_TRACKING_CURRENCY:EUR}
+    # What invoice numbers start with (HIN-96): PREFIX-YEAR-00001, one gapless
+    # sequence per prefix and year.
+    invoice-prefix: ${HINATA_TIME_TRACKING_INVOICE_PREFIX:INV}
     # Every policy below is capable of watching a person rather than recording
     # work, so each one is off until an operator turns it on deliberately
     # (§ 87 Abs. 1 Nr. 6 BetrVG — co-determined before it runs).

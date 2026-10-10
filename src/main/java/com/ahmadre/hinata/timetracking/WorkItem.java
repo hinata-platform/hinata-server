@@ -106,6 +106,9 @@ import java.util.List;
 // so it holds only the copies.
 @CompoundIndex(name = "shared_from_user", unique = true, def = "{'sharedFromId': 1, 'userId': 1}",
 		partialFilter = "{'sharedFromId': {'$exists': true}}")
+// The entries one issued invoice froze (HIN-96): what a credit note releases, and what a draft
+// asks to learn which of its entries were billed meanwhile. Partial, so it holds only billed ones.
+@CompoundIndex(name = "invoice_id", def = "{'invoiceId': 1}", partialFilter = "{'invoiceId': {'$exists': true}}")
 public class WorkItem {
 
 	/** The index a project's recorded minutes are summed from; named once for the annotation and the hint. */
@@ -204,6 +207,14 @@ public class WorkItem {
 
 	/** The calendar occurrence this entry was taken over from (HIN-94), or null. */
 	private CalendarRef calendarRef;
+
+	/**
+	 * The issued invoice this entry is billed on (HIN-96), or null. Set by billing when an invoice
+	 * is issued and cleared only by its credit note. While set, the entry is a part of a booking
+	 * record: no write path changes it ({@link TimeLocks#assertWritable}) and the retention sweep
+	 * keeps it.
+	 */
+	private String invoiceId;
 
 	/**
 	 * Names one occurrence of a subscribed calendar: the subscription, the event's UID and, for an

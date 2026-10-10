@@ -66,7 +66,11 @@ public class TimeLocks {
 	 * pass its own answer is how those drift apart.
 	 */
 	public record LockState(TimePolicy.LockReason reason, LocalDate lockDate,
-			TimesheetApproval approval) {
+			TimesheetApproval approval, String invoiceId) {
+
+		public LockState(TimePolicy.LockReason reason, LocalDate lockDate, TimesheetApproval approval) {
+			this(reason, lockDate, approval, null);
+		}
 
 		public TimePolicy.LockHolder holder() {
 			return switch (reason) {
@@ -119,6 +123,9 @@ public class TimeLocks {
 				details.put("periodStart", String.valueOf(approval.getPeriodStart()));
 				details.put("periodEnd", String.valueOf(approval.getPeriodEnd()));
 			}
+			if (invoiceId != null) {
+				details.put("invoiceId", invoiceId);
+			}
 			return details;
 		}
 
@@ -131,6 +138,11 @@ public class TimeLocks {
 				// that can be recorded without an exception.
 				return new ApiException(HttpStatus.BAD_REQUEST, "error.time.dateBeyondLimit",
 						details(), day(lockDate));
+			}
+			if (reason == TimePolicy.LockReason.INVOICE) {
+				// No date in the sentence: an invoice freezes this entry, not a day. The
+				// day next to it stays open for anything that is not billed yet.
+				return ApiException.forbidden("error.time.invoiced", details());
 			}
 			if (reason == TimePolicy.LockReason.APPROVAL && approval != null) {
 				return ApiException.forbidden("error.time.approvalLocked", details(),
@@ -270,6 +282,26 @@ public class TimeLocks {
 				userId, date, date, clock.instant());
 	}
 
+	// --- the invoice ------------------------------------------------------------
+
+	/**
+	 * Why this entry cannot be changed because it is billed, or null.
+	 *
+	 * <p>An entry, never a day: an issued invoice names the entries it was built from, and the
+	 * entry recorded next to them on the same day is not part of any booking record. Asked of
+	 * the stored entry, which carries the mark — no read.
+	 *
+	 * <p>Not behind {@code advancedEnabled}, unlike every other lock here. An invoice that was
+	 * issued stays a booking record when somebody later switches the module or billing off, and
+	 * the frozen published app writing through the ungated 1.x routes must not be the way to
+	 * change what was billed (§ 147 AO, § 257 HGB). Only entries that were billed carry the
+	 * mark, so an instance that never billed anything never meets this.
+	 */
+	public static LockState invoiceLock(WorkItem item) {
+		return item == null || item.getInvoiceId() == null ? null
+				: new LockState(TimePolicy.LockReason.INVOICE, null, null, item.getInvoiceId());
+	}
+
 	// --- the whole question ----------------------------------------------------
 
 	/**
@@ -338,6 +370,12 @@ public class TimeLocks {
 	 * reopen — rather than an untraceable edit.
 	 */
 	public void assertWritable(WorkItem before, WorkItem after) {
+		for (WorkItem item : sides(before, after)) {
+			LockState billed = invoiceLock(item);
+			if (billed != null) {
+				throw billed.refusal();
+			}
+		}
 		if (!policy.advancedEnabled()) {
 			return;
 		}
