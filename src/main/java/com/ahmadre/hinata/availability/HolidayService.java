@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.ics.IcsCalendar;
 import com.ahmadre.hinata.ics.IcsFetchError;
 import com.ahmadre.hinata.ics.IcsFetchResult;
@@ -19,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import okhttp3.HttpUrl;
 import org.bson.types.ObjectId;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -43,6 +45,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -51,7 +54,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Holiday calendars and their days, kept by administrators by hand or imported from a feed.
+ * Holiday calendars and their days, kept by administrators by hand, imported from a feed, or
+ * filled from the statutory rules of a region ({@link HolidayRules}).
  *
  * <p>The import runs on its own. The route claims the calendar, answers at once, and the calendar
  * carries the outcome ({@link HolidayCalendar#getImportState()}): no request thread waits for a
@@ -94,6 +98,9 @@ public class HolidayService implements DisposableBean {
 	private final IcsUrlCipher cipher;
 	private final SettingsService settings;
 	private final AuditService audit;
+	private final HolidayRules rules;
+	private final ApplicationEventPublisher events;
+	private final UserWords words;
 	private final Clock clock;
 
 	private final ExecutorService imports = importPool();
@@ -105,11 +112,15 @@ public class HolidayService implements DisposableBean {
 	 */
 	private final Semaphore admitted = new Semaphore(IMPORT_QUEUE);
 
-	public record CalendarDraft(String name, String region, String icsUrl, Boolean defaultCalendar) {
+	/** A new calendar, with a feed, with rules ({@code DE-BY}), or with neither. */
+	public record CalendarDraft(String name, String region, String icsUrl, String rules, Boolean defaultCalendar) {
 	}
 
-	/** An edit; null leaves a field alone, a blank region clears it, a blank address removes the feed. */
-	public record CalendarPatch(String name, String region, String icsUrl, Boolean defaultCalendar) {
+	/**
+	 * An edit; null leaves a field alone, a blank region clears it, a blank address removes the feed
+	 * and blank rules remove the rules. A feed replaces rules and rules replace a feed.
+	 */
+	public record CalendarPatch(String name, String region, String icsUrl, String rules, Boolean defaultCalendar) {
 	}
 
 	public record HolidayDraft(String calendarId, LocalDate date, String name, Boolean halfDay) {
@@ -119,6 +130,10 @@ public class HolidayService implements DisposableBean {
 	}
 
 	private record Feed(String source, String host) {
+	}
+
+	/** A calendar got a feed it has not read yet; {@link HolidayAutoFill} reads it. */
+	record FeedChanged(String calendarId) {
 	}
 
 	// --- calendars ------------------------------------------------------------
@@ -138,6 +153,10 @@ public class HolidayService implements DisposableBean {
 			throw ApiException.badRequest("error.availability.calendarsTooMany", HolidayCalendar.COUNT_MAX);
 		}
 		String id = new ObjectId().toHexString();
+		String code = rulesOf(draft.rules());
+		if (code != null && draft.icsUrl() != null && !draft.icsUrl().isBlank()) {
+			throw ApiException.badRequest("error.availability.oneSource");
+		}
 		Feed feed = feedOf(id, draft.icsUrl());
 		Instant now = clock.instant();
 		HolidayCalendar saved = calendars.save(HolidayCalendar.builder()
@@ -146,16 +165,74 @@ public class HolidayService implements DisposableBean {
 				.region(optional(draft.region(), HolidayCalendar.REGION_MAX, "error.availability.regionTooLong"))
 				.source(feed.source())
 				.sourceHost(feed.host())
+				.rules(code)
 				.createdBy(admin.getId())
 				.createdAt(now)
 				.updatedAt(now)
 				.build());
 		if (Boolean.TRUE.equals(draft.defaultCalendar())) {
 			makeDefault(id);
-			saved = requireCalendar(id);
 		}
+		fillWithRules(admin, id);
+		if (feed.source() != null) {
+			events.publishEvent(new FeedChanged(id));
+		}
+		saved = requireCalendar(id);
 		recordCalendar(admin, saved, "created");
 		return saved;
+	}
+
+	/**
+	 * The calendar the platform makes from its holiday region, the instance's default unless the
+	 * organisation already chose one. Nobody's action: the record names no actor. Its region is
+	 * its rules, named in each reader's language, so it keeps no free text of its own.
+	 */
+	HolidayCalendar createPlatformCalendar(String code) {
+		if (calendars.count() >= HolidayCalendar.COUNT_MAX) {
+			return null;
+		}
+		Locale locale = instanceLocale();
+		Instant now = clock.instant();
+		String id = new ObjectId().toHexString();
+		calendars.save(HolidayCalendar.builder()
+				.id(id)
+				.name(words.in(locale, "availability.holidays.platformCalendar"))
+				.rules(code)
+				.platformDefault(true)
+				.createdAt(now)
+				.updatedAt(now)
+				.build());
+		if (!mongo.exists(Query.query(Criteria.where("defaultCalendar").is(true)), HolidayCalendar.class)) {
+			makeDefault(id);
+		}
+		fillWithRules(null, id);
+		HolidayCalendar saved = requireCalendar(id);
+		recordCalendar(null, saved, "created");
+		return saved;
+	}
+
+	/**
+	 * Points the platform's calendar at another region: the days it filled from today's year on
+	 * make way for the new region's, days kept by hand and past years stay.
+	 */
+	boolean followPlatformRegion(HolidayCalendar calendar, String code) {
+		if (importing(calendar)) {
+			// Its import finishes first; the next start or settings save points it on.
+			return false;
+		}
+		clearFutureFill(calendar.getId());
+		mongo.updateFirst(byId(calendar.getId()), new Update()
+				.set("rules", code)
+				.set("updatedAt", clock.instant()), HolidayCalendar.class);
+		fillWithRules(null, calendar.getId());
+		recordCalendar(null, requireCalendar(calendar.getId()), "updated");
+		return true;
+	}
+
+	/** The calendar that follows the platform's region, if the organisation kept it. */
+	Optional<HolidayCalendar> platformCalendar() {
+		return Optional.ofNullable(mongo.findOne(
+				Query.query(Criteria.where("platformDefault").is(true)), HolidayCalendar.class));
 	}
 
 	/**
@@ -164,7 +241,12 @@ public class HolidayService implements DisposableBean {
 	 */
 	public HolidayCalendar updateCalendar(User admin, String id, CalendarPatch patch) {
 		assertOrgAdmin(admin);
-		requireCalendar(id);
+		HolidayCalendar before = requireCalendar(id);
+		boolean newFeed = patch.icsUrl() != null && !patch.icsUrl().isBlank();
+		String code = rulesOf(patch.rules());
+		if (code != null && newFeed) {
+			throw ApiException.badRequest("error.availability.oneSource");
+		}
 		Update update = new Update().set("updatedAt", clock.instant());
 		if (patch.name() != null) {
 			update.set("name", required(patch.name(), HolidayCalendar.NAME_MAX));
@@ -179,6 +261,32 @@ public class HolidayService implements DisposableBean {
 			setOrUnset(update, "sourceHost", feed.host());
 			// Validators belong to the address they were earned on.
 			update.unset("etag").unset("lastModified");
+			if (newFeed) {
+				update.unset("rules");
+			}
+		}
+		if (patch.rules() != null) {
+			setOrUnset(update, "rules", code);
+			if (code != null) {
+				update.unset("source").unset("sourceHost").unset("etag").unset("lastModified");
+			}
+		}
+		// A new source takes over this year and the next: what the old one filled from this year on
+		// makes way. Removing a source alone keeps the days, to be kept by hand from now on.
+		boolean replaced = newFeed || (code != null && !code.equals(before.getRules()));
+		boolean removed = (patch.rules() != null && code == null && before.getRules() != null)
+				|| (patch.icsUrl() != null && !newFeed && before.getSource() != null);
+		if (replaced || removed) {
+			// Where the days come from is the organisation's choice now, not the platform's.
+			update.unset("platformDefault");
+		}
+		if (replaced) {
+			// An import still running would write the old source's days after they were cleared, and
+			// mark the year filled before the new source ever saw it.
+			if (importing(before)) {
+				throw ApiException.conflict("error.availability.importRunning");
+			}
+			clearFutureFill(id);
 		}
 		mongo.updateFirst(byId(id), update, HolidayCalendar.class);
 		if (Boolean.TRUE.equals(patch.defaultCalendar())) {
@@ -186,6 +294,12 @@ public class HolidayService implements DisposableBean {
 		}
 		else if (Boolean.FALSE.equals(patch.defaultCalendar())) {
 			mongo.updateFirst(byId(id), new Update().unset("defaultCalendar"), HolidayCalendar.class);
+		}
+		if (replaced) {
+			fillWithRules(admin, id);
+			if (newFeed) {
+				events.publishEvent(new FeedChanged(id));
+			}
 		}
 		HolidayCalendar saved = requireCalendar(id);
 		recordCalendar(admin, saved, "updated");
@@ -289,15 +403,111 @@ public class HolidayService implements DisposableBean {
 	public CompletableFuture<HolidayCalendar> importYear(User admin, String calendarId, Integer year) {
 		assertOrgAdmin(admin);
 		HolidayCalendar calendar = requireCalendar(calendarId);
+		ZoneId zone = instanceZone();
+		int wanted = year != null ? year : currentYear(zone);
+		assertYear(wanted);
+		if (calendar.getRules() != null) {
+			HolidayCalendar claimed = claim(calendarId);
+			if (claimed == null) {
+				throw ApiException.conflict("error.availability.importRunning");
+			}
+			return CompletableFuture.completedFuture(fillFromRules(admin, claimed, wanted));
+		}
+		return importFeed(admin, calendar, wanted, zone);
+	}
+
+	/**
+	 * Fills one year the calendar has not had filled yet: from its rules at once, from its feed when
+	 * the fetch is done. [actor] is the administrator whose save asked for it, or null for the
+	 * nightly round and the platform. A year that already holds imported days counts as filled, so
+	 * calendars from before the automatic fill keep what the organisation made of them. Completes
+	 * with null when there was nothing to do or no room to do it now.
+	 */
+	CompletableFuture<HolidayCalendar> fillYear(User actor, HolidayCalendar calendar, int year) {
+		if (!calendar.fillsItself() || calendar.synced(year)) {
+			return CompletableFuture.completedFuture(null);
+		}
+		if (mongo.exists(Query.query(inYear(calendar.getId(), year).and("source").is(Holiday.Source.IMPORT)),
+				Holiday.class)) {
+			mongo.updateFirst(byId(calendar.getId()), new Update().addToSet("syncedYears", year),
+					HolidayCalendar.class);
+			return CompletableFuture.completedFuture(null);
+		}
+		if (calendar.getRules() != null) {
+			HolidayCalendar claimed = claim(calendar.getId());
+			return CompletableFuture.completedFuture(claimed == null ? null : fillFromRules(actor, claimed, year));
+		}
+		if (!cipher.isConfigured()) {
+			return CompletableFuture.completedFuture(null);
+		}
+		try {
+			return importFeed(actor, calendar, year, instanceZone());
+		}
+		catch (ApiException busyOrUnreadable) {
+			// Running already, no room right now, or an address that can no longer be read: the next
+			// round tries again, and the card says what an administrator has to do.
+			return CompletableFuture.completedFuture(null);
+		}
+	}
+
+	/** The years the automatic fill keeps: this one and the next, in the instance's zone. */
+	List<Integer> yearsToFill() {
+		int year = currentYear(instanceZone());
+		return List.of(year, year + 1);
+	}
+
+	private HolidayCalendar fillFromRules(User actor, HolidayCalendar claimed, int year) {
+		try {
+			List<HolidayDays.Day> days = rules.holidays(claimed.getRules(), year, instanceLocale());
+			return done(actor, claimed, null, null, store(claimed.getId(), year, new HolidayDays.Result(days, 0), false));
+		}
+		catch (RuntimeException ex) {
+			log.warn("[availability] holiday rules {} for calendar {} failed: {}", claimed.getRules(), claimed.getId(),
+					ex.getClass().getName());
+			return fail(actor, claimed, year, "error.availability.importFailed", null);
+		}
+	}
+
+	/** Fills this year and the next of a calendar with rules, right away, so a new calendar is never empty. */
+	private void fillWithRules(User actor, String calendarId) {
+		for (int year : yearsToFill()) {
+			HolidayCalendar calendar = requireCalendar(calendarId);
+			if (calendar.getRules() == null) {
+				return;
+			}
+			fillYear(actor, calendar, year);
+		}
+	}
+
+	/** Whether an import holds the calendar now, one that has not gone stale. */
+	private boolean importing(HolidayCalendar calendar) {
+		return calendar.getImportState() == HolidayCalendar.ImportState.RUNNING
+				&& calendar.getImportStartedAt() != null
+				&& calendar.getImportStartedAt().isAfter(clock.instant().minus(IMPORT_STALE));
+	}
+
+	/**
+	 * Removes what a source filled from this year on, and forgets that those years were filled, so the
+	 * next source fills them afresh. Days kept by hand and the past stay as they are.
+	 */
+	private void clearFutureFill(String calendarId) {
+		int year = currentYear(instanceZone());
+		mongo.remove(Query.query(Criteria.where("calendarId").is(calendarId)
+				.and("source").is(Holiday.Source.IMPORT)
+				.and("date").gte(LocalDate.of(year, 1, 1))), Holiday.class);
+		mongo.updateFirst(byId(calendarId), new Update().pull("syncedYears", new org.bson.Document("$gte", year)),
+				HolidayCalendar.class);
+	}
+
+	private CompletableFuture<HolidayCalendar> importFeed(User admin, HolidayCalendar calendar, int wanted,
+			ZoneId zone) {
+		String calendarId = calendar.getId();
 		if (calendar.getSource() == null) {
 			throw ApiException.badRequest("error.availability.noFeed");
 		}
 		if (!cipher.isConfigured()) {
 			throw ApiException.badRequest("error.availability.icsSecretMissing");
 		}
-		ZoneId zone = instanceZone();
-		int wanted = year != null ? year : currentYear(zone);
-		assertYear(wanted);
 		String url;
 		try {
 			url = cipher.decrypt(calendar.getSource(), BINDING + calendarId);
@@ -350,13 +560,13 @@ public class HolidayService implements DisposableBean {
 			return switch (result.outcome()) {
 				case FAILED -> fail(admin, calendar, year, result.error().messageKey(),
 						result.httpStatus() == 0 ? null : result.httpStatus());
-				case NOT_MODIFIED -> done(admin, calendar, result,
+				case NOT_MODIFIED -> done(admin, calendar, result.etag(), result.lastModified(),
 						new HolidayCalendar.ImportSummary(year, 0, 0, (int) mongo.count(Query.query(
 								inYear(calendar.getId(), year)), Holiday.class), 0, false));
 				case FETCHED -> {
 					IcsCalendar parsed = IcsParser.parse(result.body(), startOf(year, zone), startOf(year + 1, zone),
 							zone);
-					yield done(admin, calendar, result,
+					yield done(admin, calendar, result.etag(), result.lastModified(),
 							store(calendar.getId(), year, HolidayDays.of(parsed.events(), year), parsed.truncated()));
 				}
 			};
@@ -439,7 +649,7 @@ public class HolidayService implements DisposableBean {
 		}
 	}
 
-	private HolidayCalendar done(User admin, HolidayCalendar calendar, IcsFetchResult result,
+	private HolidayCalendar done(User admin, HolidayCalendar calendar, String etag, String lastModified,
 			HolidayCalendar.ImportSummary summary) {
 		Update update = new Update()
 				.set("importState", HolidayCalendar.ImportState.DONE)
@@ -447,9 +657,18 @@ public class HolidayService implements DisposableBean {
 				.set("lastImport", summary)
 				.unset("lastImportError")
 				.unset("lastImportErrorArg");
-		setOrUnset(update, "etag", result.etag());
-		setOrUnset(update, "lastModified", result.lastModified());
+		setOrUnset(update, "etag", etag);
+		setOrUnset(update, "lastModified", lastModified);
+		// A year the source had nothing for yet (a feed that publishes next year in autumn) is tried
+		// again on the next round; a year with days is done until somebody asks again.
+		if (summary.added() + summary.updated() + summary.unchanged() > 0) {
+			update.addToSet("syncedYears", summary.year());
+		}
 		recordState(calendar, update);
+		// The nightly round asks every feed again until it has next year; only what changed is news.
+		if (admin == null && summary.added() == 0 && summary.updated() == 0) {
+			return calendars.findById(calendar.getId()).orElse(calendar);
+		}
 		audit.event(AuditAction.AVAILABILITY_HOLIDAYS_IMPORTED).actor(admin)
 				.target(calendar.getId(), calendar.getName())
 				.meta("feedHost", Objects.toString(calendar.getSourceHost(), ""))
@@ -469,6 +688,10 @@ public class HolidayService implements DisposableBean {
 					.set("lastImportError", messageKey);
 			setOrUnset(update, "lastImportErrorArg", arg);
 			recordState(calendar, update);
+			// A feed that keeps failing the same way is recorded once, not every night.
+			if (admin == null && messageKey.equals(calendar.getLastImportError())) {
+				return calendars.findById(calendar.getId()).orElse(calendar);
+			}
 			audit.event(AuditAction.AVAILABILITY_HOLIDAYS_IMPORTED).actor(admin)
 					.target(calendar.getId(), calendar.getName())
 					.outcome(AuditLog.Outcome.FAILURE)
@@ -544,6 +767,19 @@ public class HolidayService implements DisposableBean {
 		if (mongo.count(Query.query(inYear(calendarId, year)), Holiday.class) >= Holiday.PER_YEAR_MAX) {
 			throw ApiException.badRequest("error.availability.holidaysPerYear", Holiday.PER_YEAR_MAX);
 		}
+	}
+
+	/** A rules code as stored, null for blank, a 400 for a region without rules. */
+	private String rulesOf(String code) {
+		if (code == null || code.isBlank()) {
+			return null;
+		}
+		return rules.normalize(code).orElseThrow(() -> ApiException.badRequest("error.availability.rulesUnknown"));
+	}
+
+	private Locale instanceLocale() {
+		String tag = settings.get().getGeneral().getDefaultLocale();
+		return tag == null || tag.isBlank() ? Locale.GERMAN : Locale.forLanguageTag(tag);
 	}
 
 	private int currentYear(ZoneId zone) {

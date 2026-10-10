@@ -240,6 +240,9 @@ public class AdminSettingsController {
 		if (updated.getSecurity() == null) {
 			updated.setSecurity(current.getSecurity());
 		}
+		if (updated.getHolidays() == null) {
+			updated.setHolidays(current.getHolidays());
+		}
 		if (updated.getProjectTemplates() == null) {
 			updated.setProjectTemplates(current.getProjectTemplates());
 		} else if (updated.getProjectTemplates() != current.getProjectTemplates()) {

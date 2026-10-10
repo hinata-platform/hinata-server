@@ -67,6 +67,11 @@ val okhttpVersion = "4.12.0"
 // (Recur) is used; the package documentation of com.ahmadre.hinata.ics says why
 // its builder and model are not.
 val ical4jVersion = "4.3.0"
+// Public holiday rules for every country and its regions (availability package):
+// a new instance starts with the holidays of where it runs, and every calendar
+// that follows a region fills each year without anybody importing it.
+// Apache 2.0; the Jackson module matches Boot 4's Jackson 3.
+val jollydayVersion = "2.21.0"
 
 java {
     toolchain {
@@ -125,6 +130,9 @@ dependencies {
     // RRULEs the package has checked. Groovy, jparsec and Caffeine are optional
     // feature variants in ical4j's Gradle metadata and are not pulled in.
     implementation("org.mnode.ical4j:ical4j:$ical4jVersion")
+    // Statutory holidays by region, computed for any year without a network.
+    implementation("de.focus-shift:jollyday-core:$jollydayVersion")
+    implementation("de.focus-shift:jollyday-jackson:$jollydayVersion")
     // The HTTP client for requests to addresses somebody else chose: the calendar
     // fetcher and the logo fetcher, both through common/PublicDns. MinIO brings it
     // anyway; it is declared here because they depend on it directly: its Dns hook

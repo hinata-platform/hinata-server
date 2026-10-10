@@ -128,7 +128,7 @@ class AvailabilityMarkingIntegrationTest {
 
 		as(admin);
 		HolidayController.CalendarResponse calendar = holidayApi.createCalendar(
-				new HolidayController.CalendarRequest("Deutschland", null, null, true));
+				new HolidayController.CalendarRequest("Deutschland", null, null, null, true));
 		holidayApi.addHoliday(new HolidayController.HolidayRequest(calendar.id(), HOLIDAY, "Testfeiertag", null));
 
 		as(member);
