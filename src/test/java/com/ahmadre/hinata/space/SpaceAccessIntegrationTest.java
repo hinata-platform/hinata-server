@@ -33,8 +33,8 @@ import static org.mockito.Mockito.when;
 /**
  * A space is seen by its author and by whoever reads a page filed in it, and changed
  * only by its author. Spaces used to be listed to every account, so anybody saw the
- * names of other people's topics and could delete them; admins included, who read
- * no more pages than anybody else and so see no more spaces either.
+ * names of other people's topics and could delete them. No role widens this: admins
+ * read no more pages than anybody else and so see and manage no more spaces either.
  */
 @SpringBootTest(properties = {
 		"hinata.mongodb.tls.enabled=false",
@@ -131,7 +131,8 @@ class SpaceAccessIntegrationTest {
 		as(carol);
 		assertThat(controller.list()).extracting(SpaceController.SpaceResponse::name)
 				.containsExactlyInAnyOrder("Projektwissen", "Altbestand");
-		assertThat(controller.list()).noneMatch(SpaceController.SpaceResponse::canManage);
+		assertThat(controller.list()).filteredOn(s -> s.name().equals("Projektwissen"))
+				.singleElement().matches(s -> !s.canManage());
 		assertStatus(() -> controller.delete(projectSpace.getId()), HttpStatus.FORBIDDEN);
 		assertStatus(() -> controller.update(projectSpace.getId(),
 				new SpaceController.SpaceRequest("Umbenannt", null, null, null, null)), HttpStatus.FORBIDDEN);
@@ -139,19 +140,23 @@ class SpaceAccessIntegrationTest {
 	}
 
 	@Test
-	void aSpaceWithoutAuthor_isManagedByAnAdminWhoSeesIt_andHiddenFromOneWhoDoesNot() {
-		as(carol);
-		assertStatus(() -> controller.delete(legacySpace.getId()), HttpStatus.FORBIDDEN);
+	void aSpaceWithoutAuthor_isManagedByWhoeverReadsAllOfIt_neverByRole() {
+		// An admin outside the project sees nothing of it and manages nothing.
 		as(admin);
 		assertThat(controller.list()).isEmpty();
 		assertStatus(() -> controller.delete(legacySpace.getId()), HttpStatus.NOT_FOUND);
 
-		project.getMemberIds().add(admin.getId());
-		projects.save(project);
+		// Carol reads the one page in it, so renaming it touches nothing she was not given.
+		as(carol);
 		assertThat(controller.list()).filteredOn(s -> s.name().equals("Altbestand"))
 				.singleElement().matches(SpaceController.SpaceResponse::canManage);
-		assertThat(controller.list()).filteredOn(s -> s.name().equals("Projektwissen"))
+
+		// A private page of somebody else in the same space takes that away again.
+		mongo.save(Article.builder().title("Privat").space("Altbestand").authorId(bob.getId()).build());
+		assertThat(controller.list()).filteredOn(s -> s.name().equals("Altbestand"))
 				.singleElement().matches(s -> !s.canManage());
+		assertStatus(() -> controller.update(legacySpace.getId(),
+				new SpaceController.SpaceRequest("Neu", null, null, null, null)), HttpStatus.FORBIDDEN);
 	}
 
 	private void as(User user) {
