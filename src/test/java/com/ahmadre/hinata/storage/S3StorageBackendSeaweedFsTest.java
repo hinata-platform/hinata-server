@@ -107,6 +107,20 @@ class S3StorageBackendSeaweedFsTest {
 				assertThat(new String(stored.data(), StandardCharsets.UTF_8)).isEqualTo("copied content"));
 	}
 
+	/**
+	 * SeaweedFS writes the copy's LastModified without trailing zeros, which the client
+	 * cannot parse; a millisecond ending in zero made one copy in ten fail although it
+	 * had been made. Forty copies hit that case with near certainty.
+	 */
+	@Test
+	void everyCopySucceeds_whateverMillisecondItLandsOn() throws Exception {
+		put("attachments/source.txt", "many copies");
+		for (int i = 0; i < 40; i++) {
+			backend.copy("attachments/source.txt", "attachments/copy-" + i + ".txt");
+		}
+		assertThat(backend.get("attachments/copy-39.txt")).isPresent();
+	}
+
 	@Test
 	void aPresignedLinkServesTheObject() throws Exception {
 		put("attachments/link.txt", "linked content");

@@ -17,7 +17,9 @@ import io.minio.ServerSideEncryption;
 import io.minio.ServerSideEncryptionS3;
 import io.minio.RemoveObjectArgs;
 import io.minio.Result;
+import io.minio.StatObjectArgs;
 import io.minio.errors.ErrorResponseException;
+import io.minio.errors.XmlParserException;
 import io.minio.http.Method;
 import io.minio.messages.Item;
 
@@ -87,14 +89,28 @@ class S3StorageBackend implements StorageBackend {
 		// bucket, so a bucket that would have to be created is a copy that could
 		// never have found its source anyway — and the check is a request of its
 		// own, which a clone would pay per object and per thumbnail it duplicates.
-		client.copyObject(CopyObjectArgs.builder()
-				.bucket(bucket)
-				.object(toKey)
-				.source(CopySource.builder().bucket(bucket).object(fromKey).build())
-				// Asked again for the copy: a copy is a new object, and a store that encrypts only
-				// on request would otherwise write it in the clear.
-				.sse(sse)
-				.build());
+		try {
+			client.copyObject(CopyObjectArgs.builder()
+					.bucket(bucket)
+					.object(toKey)
+					.source(CopySource.builder().bucket(bucket).object(fromKey).build())
+					// Asked again for the copy: a copy is a new object, and a store that encrypts only
+					// on request would otherwise write it in the clear.
+					.sse(sse)
+					.build());
+		}
+		catch (XmlParserException ex) {
+			// SeaweedFS (4.48) answers a finished copy with a LastModified that drops trailing
+			// zeros ("…:10.12Z"), which this client cannot parse: one copy in ten failed
+			// although it had been made. The answer only arrives once the copy is done, so
+			// the object being there is the success the answer could not say.
+			try {
+				client.statObject(StatObjectArgs.builder().bucket(bucket).object(toKey).build());
+			}
+			catch (ErrorResponseException missing) {
+				throw ex;
+			}
+		}
 	}
 
 	@Override
