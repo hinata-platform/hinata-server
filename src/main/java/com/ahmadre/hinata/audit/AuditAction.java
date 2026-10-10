@@ -75,6 +75,12 @@ public enum AuditAction {
 	TIME_CALENDAR_SUBSCRIPTION_CREATED(DATA, INFO, true),
 	TIME_CALENDAR_SUBSCRIPTION_DELETED(DATA, INFO, true),
 	TIME_ENTRIES_IMPORTED(DATA, NOTICE, true),
+	// An entry offered to colleagues as a copy (HIN-95), the copy taken, the offer taken back.
+	// Between two people, so not the ordinary use of one's own record that TIME_ENTRY_CREATED is;
+	// the records name who and which entry, never its content.
+	TIME_ENTRY_SHARED(DATA, INFO, true),
+	TIME_SHARE_ACCEPTED(DATA, INFO, true),
+	TIME_SHARE_REVOKED(DATA, INFO, true),
 	ISSUE_WATCHED(DATA, INFO, true),
 	ISSUE_UNWATCHED(DATA, INFO, true),
 	// A lead or admin changing or removing someone else's logged time. Editing

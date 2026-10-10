@@ -91,6 +91,11 @@ public class TimeTrackingErasure {
 				CalendarEvent.class).getDeletedCount());
 		step("calendar subscription(s)", userId, () -> mongo.remove(Query.query(Criteria.where("userId").is(userId)),
 				CalendarSubscription.class).getDeletedCount());
+		// Shared entries (HIN-95): every invitation the person sent or received goes, in every state —
+		// each names them. The copies they accepted are entries like any other and stay.
+		step("entry share(s)", userId, () -> mongo.remove(Query.query(new Criteria().orOperator(
+				Criteria.where("fromUserId").is(userId), Criteria.where("toUserId").is(userId))),
+				TimeEntryShare.class).getDeletedCount());
 		step("pseudonym record", userId, () -> recordDeparture(userId));
 	}
 
