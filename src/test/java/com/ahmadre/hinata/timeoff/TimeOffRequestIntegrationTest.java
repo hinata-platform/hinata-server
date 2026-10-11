@@ -363,6 +363,30 @@ class TimeOffRequestIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("every other decider and keeper hears who decided, the decider does not")
+	void aDecisionReachesTheOtherDeciders() {
+		TimeOffRequest approvedOne = requests.submit(member, week(3));
+		requests.approve(approvedOne.getId(), null, admin);
+
+		assertThat(bellOf(secondAdmin)).extracting(Notification::getType)
+				.contains(Notification.Type.TIME_OFF_APPROVED);
+		assertThat(bellOf(keeper)).filteredOn(notice -> notice.getType() == Notification.Type.TIME_OFF_APPROVED)
+				.singleElement()
+				.satisfies(notice -> assertThat(notice.getBody()).contains("admin").contains("member"));
+		assertThat(bellOf(admin)).extracting(Notification::getType)
+				.doesNotContain(Notification.Type.TIME_OFF_APPROVED);
+
+		TimeOffRequest rejectedOne = requests.submit(member, week(5));
+		requests.reject(rejectedOne.getId(), "Two others are already away", secondAdmin);
+
+		assertThat(bellOf(admin)).extracting(Notification::getType)
+				.contains(Notification.Type.TIME_OFF_REJECTED);
+		// The reason stays on the request: nobody else reads it in a notification.
+		assertThat(bellOf(keeper)).extracting(Notification::getBody)
+				.noneMatch(body -> body.contains("Two others"));
+	}
+
+	@Test
 	@DisplayName("a rejection without a reason is refused (§ 7 Abs. 1 BUrlG)")
 	void rejectingNeedsAReason() {
 		TimeOffRequest filed = requests.submit(member, week(3));

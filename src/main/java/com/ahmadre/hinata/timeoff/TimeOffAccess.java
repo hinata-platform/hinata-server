@@ -2,12 +2,16 @@ package com.ahmadre.hinata.timeoff;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.timetracking.TimeTrackingSettings;
+import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Who may keep the catalogue, and whose balance somebody may read. Asked here so the rule is
@@ -49,6 +53,20 @@ public class TimeOffAccess {
 	public boolean isKeeper(User viewer) {
 		List<String> named = settings.absenceManagers();
 		return named.isEmpty() ? viewer.isOrgAdmin() : named.contains(viewer.getId());
+	}
+
+	/**
+	 * Everybody {@link #isKeeper} answers yes for: the named circle, or the active organisation
+	 * admins while nobody is named.
+	 */
+	public Set<String> keeperIds() {
+		List<String> named = settings.absenceManagers();
+		if (!named.isEmpty()) {
+			return new LinkedHashSet<>(named);
+		}
+		return users.findByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN).stream()
+				.map(User::getId)
+				.collect(Collectors.toCollection(LinkedHashSet::new));
 	}
 
 	/** 403 for anybody who does not keep absences for everybody. */

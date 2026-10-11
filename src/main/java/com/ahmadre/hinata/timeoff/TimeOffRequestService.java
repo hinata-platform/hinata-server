@@ -615,14 +615,12 @@ public class TimeOffRequestService {
 			notifications.notifyTimeOffAutoApproved(person, "/absences/requests");
 			notifySubstitute(saved, person);
 		} else {
-			notifications.notifyTimeOffDecided(person,
-					target == TimeOffRequest.Status.APPROVED
-							? NotificationService.TimeOffEvent.APPROVED
-							: NotificationService.TimeOffEvent.REJECTED,
-					"/absences/requests");
+			notifications.notifyTimeOffDecided(person, event(target), "/absences/requests");
 			if (target == TimeOffRequest.Status.APPROVED) {
 				notifySubstitute(saved, person);
 			}
+			notifications.notifyTimeOffDecidedToOthers(fellowDecidersOf(saved, decider), event(target),
+					decider.getDisplayName(), person.getDisplayName(), "/absences/inbox");
 		}
 		return saved;
 	}
@@ -986,6 +984,28 @@ public class TimeOffRequestService {
 			ids.add(request.getSubstituteId());
 		}
 		ids.remove(actor.getId());
+		ids.remove(request.getUserId());
+		return ids;
+	}
+
+	private static NotificationService.TimeOffEvent event(TimeOffRequest.Status target) {
+		return target == TimeOffRequest.Status.APPROVED
+				? NotificationService.TimeOffEvent.APPROVED
+				: NotificationService.TimeOffEvent.REJECTED;
+	}
+
+	/**
+	 * Everybody who could have decided a request except whoever did: the people it was routed
+	 * to, and every keeper besides.
+	 *
+	 * <p>Several keepers can each decide alone, and the first decision stands. How they agree is
+	 * theirs to settle, not the product's — but they can only settle it if each of them learns
+	 * that somebody else already said yes or no.
+	 */
+	private Set<String> fellowDecidersOf(TimeOffRequest request, User decider) {
+		Set<String> ids = new LinkedHashSet<>(request.getApproverIds());
+		ids.addAll(access.keeperIds());
+		ids.remove(decider.getId());
 		ids.remove(request.getUserId());
 		return ids;
 	}

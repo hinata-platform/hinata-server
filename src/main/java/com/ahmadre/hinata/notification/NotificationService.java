@@ -673,6 +673,22 @@ public class NotificationService {
 	}
 
 	/**
+	 * Tells the other people who could have decided a request that somebody did, and who.
+	 *
+	 * <p>Names the decider and the person, never the type or the reason, for the same lock-screen
+	 * reason as {@link #notifyTimeOffRequested}. The caller struck out the decider and the person.
+	 */
+	public void notifyTimeOffDecidedToOthers(Set<String> others, TimeOffEvent event, String decider,
+			String person, String link) {
+		if (others == null || others.isEmpty()) return;
+		deliver(others, event.type,
+				locale -> words.in(locale, "notify.timeOff." + event.key + ".title"),
+				locale -> words.in(locale, "notify.timeOff." + event.key + ".theirs", decider, person),
+				locale -> words.in(locale, "notify.timeOff.requestPush"),
+				link, null, Routing.of(event.type));
+	}
+
+	/**
 	 * Tells somebody their request was granted the moment it arrived.
 	 *
 	 * <p>Its own message rather than an approval with a different word: Art. 22 DSGVO is about
