@@ -50,7 +50,8 @@ class AuditActionAudienceTest {
 			"INVOICE_EXPORTED", "PAT_CREATED", "PAT_REVOKED", "PAT_DELETED",
 			"MCP_ISSUE_CREATED", "MCP_ISSUE_UPDATED", "MCP_COMMENT_ADDED", "MCP_COMMENT_EDITED",
 			"MCP_COMMENT_DELETED", "MCP_KB_CREATED", "MCP_KB_UPDATED", "MCP_KB_DELETED", "MCP_WORK_LOGGED",
-			"MCP_WORK_DELETED", "MCP_SPRINT_CREATED", "MCP_SPRINT_UPDATED", "MCP_SPRINT_STARTED",
+			"MCP_WORK_DELETED", "MCP_WORK_UPDATED", "MCP_TIMER_STARTED", "MCP_TIMER_STOPPED",
+			"MCP_TIMER_DISCARDED", "MCP_SPRINT_CREATED", "MCP_SPRINT_UPDATED", "MCP_SPRINT_STARTED",
 			"MCP_SPRINT_COMPLETED", "MCP_ATTACHMENT_READ", "MCP_OAUTH_AUTHORIZED",
 			"PROJECT_TEMPLATES_POLICY_CHANGED", "PROJECT_SCHEDULE_SHIFTED", "PROJECT_COPIED",
 			"PROJECT_TEMPLATE_MARKED", "PROJECT_INSTANTIATED", "ARTICLE_MOVED");
@@ -76,7 +77,8 @@ class AuditActionAudienceTest {
 			String name = action.name();
 			boolean expected = name.startsWith("TIME_") || name.startsWith("TIMESHEET_")
 					|| name.startsWith("AVAILABILITY_") || name.startsWith("BILLING_")
-					|| name.startsWith("INVOICE_") || name.startsWith("MCP_WORK_");
+					|| name.startsWith("INVOICE_") || name.startsWith("MCP_WORK_")
+					|| name.startsWith("MCP_TIMER_");
 			assertThat(action.organisational()).as(name).isEqualTo(expected);
 		}
 	}

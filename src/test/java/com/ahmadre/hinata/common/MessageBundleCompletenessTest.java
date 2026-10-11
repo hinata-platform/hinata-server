@@ -47,6 +47,29 @@ class MessageBundleCompletenessTest {
 		}
 	}
 
+	/**
+	 * A message with an argument goes through {@code MessageFormat}, where a single quote starts a
+	 * quoted run: "d'au moins {0}" prints without its number, and "{0}'s leave" loses the
+	 * apostrophe. Inside such a message an apostrophe is written twice.
+	 */
+	@Test
+	void everyFormattedMessageDoublesItsApostrophes() throws IOException {
+		Pattern argument = Pattern.compile("\\{\\d");
+		Pattern lone = Pattern.compile("(?<!')'(?!')");
+		Set<String> offenders = new TreeSet<>();
+		try (Stream<Path> files = Files.list(Path.of("src/main/resources"))) {
+			for (Path file : files.filter(path -> path.getFileName().toString().matches("messages.*\\.properties"))
+					.toList()) {
+				for (String line : Files.readAllLines(file)) {
+					if (!line.startsWith("#") && argument.matcher(line).find() && lone.matcher(line).find()) {
+						offenders.add(file.getFileName() + ": " + line);
+					}
+				}
+			}
+		}
+		assertThat(offenders).isEmpty();
+	}
+
 	private String read(Path path) {
 		try {
 			return Files.readString(path);

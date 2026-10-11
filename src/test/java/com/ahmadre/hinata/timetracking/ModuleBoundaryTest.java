@@ -86,8 +86,9 @@ class ModuleBoundaryTest {
 	 * the REST controller reaches, rather than reimplementing its rules.
 	 */
 	private static final Set<String> BRIDGES = Set.of(
-			// The MCP tools for logging and reading time.
+			// The MCP tools for logging and reading time, and for the caller's own timer.
 			ROOT + ".mcp.TimeTrackingTools",
+			ROOT + ".mcp.TimerTools",
 			// #time in a commit message, logged as the commit's author.
 			ROOT + ".git.GitService");
 	// DemoSeeder is deliberately not here. It names WorkItem and its repository,
