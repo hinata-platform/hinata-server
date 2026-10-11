@@ -58,12 +58,13 @@ public class ArticleController {
 	public record ArticleResponse(String id, String projectId, String teamId, String parentId,
 			String space, String icon, String title, String content, String contentDoc,
 			List<String> tags, String authorId, int sortOrder, java.time.Instant createdAt,
-			java.time.Instant updatedAt) {
+			java.time.Instant updatedAt, String lastEditorId) {
 
 		public static ArticleResponse from(Article a) {
 			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.getParentId(),
 					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getContentDoc(),
-					a.getTags(), a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt());
+					a.getTags(), a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt(),
+					a.getLastEditorId());
 		}
 
 		static List<ArticleResponse> from(List<Article> articles) {
@@ -157,6 +158,17 @@ public class ArticleController {
 	public ArticleResponse place(@PathVariable String id, @RequestBody PlaceRequest request) {
 		User user = currentUser.require();
 		return ArticleResponse.from(service.place(id, request.projectId(), request.teamId(), user));
+	}
+
+	/** Sibling pages in the order they should be shown. */
+	public record OrderRequest(@jakarta.validation.constraints.NotEmpty
+			@Size(max = ArticleService.MAX_ORDERED) List<@NotBlank String> ids) {
+	}
+
+	@PutMapping("/order")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void order(@RequestBody @Valid OrderRequest request) {
+		service.order(request.ids(), currentUser.require());
 	}
 
 	@DeleteMapping("/{id}")

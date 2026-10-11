@@ -42,6 +42,9 @@ public class ArticleService {
 	private final com.ahmadre.hinata.project.ProjectService projects;
 	private final com.ahmadre.hinata.team.TeamRepository teams;
 	private final com.ahmadre.hinata.audit.AuditService audit;
+	private final ArticleHistory history;
+	private final ArticleReading reading;
+	private final com.ahmadre.hinata.richtext.RichTextService richText;
 
 	/** The page, or 404 — also when it exists but the caller may not read it. */
 	public Article readable(String id, User user) {
@@ -134,7 +137,7 @@ public class ArticleService {
 			access.assertCanTarget(projectId, teamId, author);
 		}
 		RichText body = draft.body() != null ? draft.body() : RichText.EMPTY;
-		return articles.save(Article.builder()
+		Article created = articles.save(Article.builder()
 				.title(draft.title())
 				.content(body.text())
 				.contentDoc(body.doc())
@@ -147,7 +150,10 @@ public class ArticleService {
 				.tags(draft.tags() != null ? draft.tags() : List.of())
 				.sortOrder(draft.sortOrder() != null ? draft.sortOrder() : 0)
 				.authorId(author.getId())
+				.lastEditorId(author.getId())
 				.build());
+		history.created(created, author.getId());
+		return created;
 	}
 
 	/**
@@ -171,9 +177,60 @@ public class ArticleService {
 			article.setTeamId(to.teamId());
 		}
 		article.setParentId(parentId);
+		Article before = articles.findById(article.getId()).orElse(null);
+		boolean edited = before != null && (!Objects.equals(before.getTitle(), article.getTitle())
+				|| !Objects.equals(before.getContentDoc(), article.getContentDoc()));
+		if (edited) article.setLastEditorId(user.getId());
 		Article saved = articles.save(article);
+		if (edited) history.saved(before, saved, user.getId());
 		if (!to.equals(from)) moved(saved, from, user);
 		return saved;
+	}
+
+	/**
+	 * Brings back the title and text of an earlier version. Restoring is an edit
+	 * like any other: it becomes the newest version, and nothing in between is lost.
+	 */
+	public Article restore(Article article, int number, User user) {
+		ArticleVersion version = history.get(article.getId(), number);
+		RichText body = richText.fromLexical(version.getContentDoc());
+		article.setTitle(version.getTitle());
+		article.setContent(body.text());
+		article.setContentDoc(body.doc());
+		article.setReferencedIssueKeys(new ArrayList<>(body.issueKeys()));
+		return save(article, article.getParentId(), user);
+	}
+
+	/** Most pages one reorder touches; a level of a tree, not a whole space. */
+	public static final int MAX_ORDERED = 500;
+
+	/**
+	 * Puts sibling pages in the given order. Every page must be readable and share
+	 * one parent, and pages at the top must share one space: an order only means
+	 * something among the pages shown side by side.
+	 */
+	public void order(List<String> ids, User user) {
+		if (ids == null || ids.isEmpty()) return;
+		if (ids.size() > MAX_ORDERED || new java.util.HashSet<>(ids).size() != ids.size()) {
+			throw ApiException.badRequest("error.article.orderInvalid");
+		}
+		List<Article> pages = ids.stream().map(id -> readable(id, user)).toList();
+		Article first = pages.getFirst();
+		for (Article page : pages) {
+			boolean sameLevel = Objects.equals(page.getParentId(), first.getParentId())
+					&& (first.getParentId() != null || sameSpace(page.getSpace(), first.getSpace()));
+			if (!sameLevel) throw ApiException.badRequest("error.article.orderNotSiblings");
+		}
+		org.springframework.data.mongodb.core.BulkOperations bulk = mongo.bulkOps(
+				org.springframework.data.mongodb.core.BulkOperations.BulkMode.UNORDERED, Article.class);
+		for (int i = 0; i < ids.size(); i++) {
+			bulk.updateOne(Query.query(Criteria.where("_id").is(ids.get(i))), new Update().set("sortOrder", i));
+		}
+		bulk.execute();
+	}
+
+	private static boolean sameSpace(String a, String b) {
+		return a == null ? b == null : b != null && a.trim().equalsIgnoreCase(b.trim());
 	}
 
 	/**
@@ -263,6 +320,8 @@ public class ArticleService {
 			throw ApiException.conflict("error.article.hasChildren");
 		}
 		articles.deleteById(article.getId());
+		history.deleteOf(List.of(article.getId()));
+		reading.deleteOf(List.of(article.getId()));
 	}
 
 	/** Refuses to file a page under itself or under one of its own descendants. */
