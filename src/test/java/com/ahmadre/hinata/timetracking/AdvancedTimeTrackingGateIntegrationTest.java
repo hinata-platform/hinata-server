@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
@@ -31,6 +33,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -133,6 +136,9 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	@Autowired
 	private SettingsService settings;
 
+	@Autowired
+	private org.springframework.data.mongodb.core.MongoTemplate mongo;
+
 	@BeforeAll
 	static void dockerImagePinned() {
 		assertThat(MONGO.getDockerImageName()).contains(TestMongo.IMAGE);
@@ -208,6 +214,46 @@ class AdvancedTimeTrackingGateIntegrationTest {
 		// takes, and the only thing between "an admin flipped a switch" and "the
 		// next request is answered differently". No restart in sight.
 		settings.save(current);
+	}
+
+	// --- a stop from outside the app (HIN-100) -----------------------------
+
+	@Test
+	@DisplayName("a stop over HTTP from any client records nothing of where it came from")
+	void aStopFromANotificationLooksLikeAnyOther() {
+		// The demo admin has a timer running. A notification's "Stop" calls this same route; the
+		// record may say who and when, never through which surface.
+		enableModule(true);
+		ServerSettings current = settings.get();
+		if (current.getAudit() == null) {
+			current.setAudit(new ServerSettings.Audit());
+		}
+		current.getAudit().getEvents().put(AuditAction.TIME_TIMER_STOPPED.name(), true);
+		settings.save(current);
+		String token = login();
+
+		HttpResponse<String> stopped = send(HttpRequest.newBuilder(url("/api/v1/me/timer/stop"))
+				.header("Authorization", "Bearer " + token)
+				.header("User-Agent", "hinata-notification-action/1")
+				.header("X-Hinata-Surface", "android-ongoing")
+				.POST(HttpRequest.BodyPublishers.noBody()).build());
+
+		assertThat(stopped.statusCode()).isEqualTo(200);
+		List<AuditLog> records = mongo.find(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("action")
+						.is(AuditAction.TIME_TIMER_STOPPED.name())), AuditLog.class);
+		assertThat(records).singleElement().satisfies(record -> {
+			assertThat(record.getMetadata().keySet())
+					.isSubsetOf(Set.of("timer", "workItem", "mode", "project", "issue"));
+			assertThat(record.getMetadata().values()).noneMatch(value -> value != null
+					&& (value.contains("notification") || value.contains("android")));
+		});
+
+		// Leave the workspace as the seed made it: the gate test reads a running timer.
+		assertThat(send(HttpRequest.newBuilder(url("/api/v1/me/timer/start"))
+				.header("Authorization", "Bearer " + token)
+				.header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
+				.POST(HttpRequest.BodyPublishers.ofString("{}")).build()).statusCode()).isEqualTo(201);
 	}
 
 	// --- the flag off ------------------------------------------------------

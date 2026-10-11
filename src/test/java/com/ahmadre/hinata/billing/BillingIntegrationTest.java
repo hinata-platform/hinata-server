@@ -282,6 +282,31 @@ class BillingIntegrationTest {
 		assertThatThrownBy(() -> reports.report(lead, new BillingReportService.ReportQuery(
 				BillingReportService.Kind.BILLING, FROM, TO, List.of(other.getId()), null), 0, 20))
 				.satisfies(thrown -> assertThat(statusOf(thrown)).isEqualTo(HttpStatus.FORBIDDEN));
+		// By person or by team, a lead needs the switch that lets them see members' entries: a
+		// team of one is one person's figures.
+		for (BillingReportService.GroupBy byPeople : List.of(BillingReportService.GroupBy.USER,
+				BillingReportService.GroupBy.TEAM)) {
+			assertThatThrownBy(() -> reports.report(lead, new BillingReportService.ReportQuery(
+					BillingReportService.Kind.BILLING, FROM, TO, null, byPeople), 0, 20))
+					.as(byPeople.name())
+					.satisfies(thrown -> assertThat(statusOf(thrown)).isEqualTo(HttpStatus.FORBIDDEN));
+		}
+	}
+
+	@Test
+	void theNextPageOfAReportComesFromTheFirstPagesRead() {
+		BillingReportService.ReportQuery byIssue = new BillingReportService.ReportQuery(
+				BillingReportService.Kind.BILLING, FROM, TO, null, BillingReportService.GroupBy.ISSUE);
+		BillingReportService.Report first = reports.report(admin, byIssue, 0, 1);
+		long total = first.groups().getTotalElements();
+
+		// An entry booked between two pages does not reshuffle the scroll the person is in.
+		mongo.remove(new org.springframework.data.mongodb.core.query.Query(), WorkItem.class);
+		BillingReportService.Report second = reports.report(admin, byIssue, 1, 1);
+
+		assertThat(second.groups().getTotalElements()).isEqualTo(total);
+		// The first page always reads afresh.
+		assertThat(reports.report(admin, byIssue, 0, 1).groups().getTotalElements()).isZero();
 	}
 
 	// --- invoices ---------------------------------------------------------------------------------

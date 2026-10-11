@@ -113,31 +113,36 @@ public class BillingReportService {
 			Page<Row> groups, boolean costs) {
 	}
 
-	/** Running sums of one group. */
-	private static final class Sums {
-		long minutes;
-		long billable;
-		long revenueCentMinutes;
-		long unratedBillable;
-		long costCentMinutes;
-		long unrated;
-		final Set<String> people = new HashSet<>();
+	/** What one report reads and sums, before it is cut into pages. */
+	private record Snapshot(List<Row> ordered, Sums totals, Map<String, List<String>> teams, long at) {
 	}
 
-	public Report report(User viewer, ReportQuery query, int page, int size) {
-		BillingAccess.Reach reach = access.require(viewer);
-		Kind kind = query.kind() == null ? Kind.BILLING : query.kind();
-		GroupBy groupBy = query.groupBy() == null ? GroupBy.PROJECT : query.groupBy();
-		if (kind == Kind.PROFITABILITY) {
-			access.requireCosts(reach);
+	/** The last reports read, briefly, so the next pages of a scroll need no second read. */
+	private final Snapshots snapshots = new Snapshots();
+
+	private static final class Snapshots {
+		private static final long TTL_MILLIS = 60_000;
+		private static final int MAX = 64;
+		private final Map<String, Snapshot> held = new LinkedHashMap<>(16, 0.75f, true) {
+			@Override
+			protected boolean removeEldestEntry(Map.Entry<String, Snapshot> eldest) {
+				return size() > MAX;
+			}
+		};
+
+		synchronized Snapshot fresh(String key) {
+			Snapshot snapshot = held.get(key);
+			return snapshot != null && System.currentTimeMillis() - snapshot.at() < TTL_MILLIS ? snapshot : null;
 		}
-		checkGrouping(kind, groupBy);
-		if (groupBy == GroupBy.USER && !reach.admin() && !settings.leadsSeeMemberEntries()) {
-			throw ApiException.forbidden("error.billing.report.people");
+
+		synchronized void put(String key, Snapshot snapshot) {
+			held.put(key, snapshot);
 		}
-		checkWindow(query.from(), query.to());
+	}
+
+	private Snapshot compute(User viewer, BillingAccess.Reach reach, ReportQuery query, Kind kind, GroupBy groupBy,
+			boolean costs) {
 		Criteria criteria = scope(reach, query);
-		boolean costs = kind == Kind.PROFITABILITY;
 		RateResolver revenue = RateResolver.of(rates.all(BillingRate.Kind.BILLABLE));
 		RateResolver cost = costs ? RateResolver.of(rates.all(BillingRate.Kind.COST)) : null;
 		Map<String, List<String>> teams = names.teamsByPerson();
@@ -174,8 +179,6 @@ public class BillingReportService {
 			}
 		}
 
-		Pageable pageable = PageRequest.of(Math.clamp(page, 0, 10_000), Math.clamp(size, 1, PAGE_MAX));
-		boolean capacity = kind == Kind.UTILIZATION && reach.admin();
 		List<Row> rows = new ArrayList<>(groups.size());
 		groups.forEach((key, sums) -> rows.add(row(key.isEmpty() ? null : key, null, null, sums, kind, null)));
 		List<Row> ordered;
@@ -187,6 +190,52 @@ public class BillingReportService {
 			rows.sort(order(kind, groupBy));
 			ordered = rows;
 		}
+		return new Snapshot(List.copyOf(ordered), totals, teams, System.currentTimeMillis());
+	}
+
+	/** Running sums of one group. */
+	private static final class Sums {
+		long minutes;
+		long billable;
+		long revenueCentMinutes;
+		long unratedBillable;
+		long costCentMinutes;
+		long unrated;
+		final Set<String> people = new HashSet<>();
+	}
+
+	public Report report(User viewer, ReportQuery query, int page, int size) {
+		BillingAccess.Reach reach = access.require(viewer);
+		Kind kind = query.kind() == null ? Kind.BILLING : query.kind();
+		GroupBy groupBy = query.groupBy() == null ? GroupBy.PROJECT : query.groupBy();
+		if (kind == Kind.PROFITABILITY) {
+			access.requireCosts(reach);
+		}
+		checkGrouping(kind, groupBy);
+		// A team is people too: one-person teams would name exactly the figures the switch holds
+		// back, so TEAM is gated like USER (the time report's readsPeople() does the same).
+		if ((groupBy == GroupBy.USER || groupBy == GroupBy.TEAM) && !reach.admin()
+				&& !settings.leadsSeeMemberEntries()) {
+			throw ApiException.forbidden("error.billing.report.people");
+		}
+		checkWindow(query.from(), query.to());
+		boolean costs = kind == Kind.PROFITABILITY;
+		// The first page reads the window and keeps the result; the pages after it cut from that
+		// snapshot. Re-reading up to a year of entries for every 25 rows of an infinite scroll is
+		// the cost, and a scroll through one consistent snapshot is the better answer anyway.
+		String snapshotKey = viewer.getId() + "|" + kind + "|" + groupBy + "|" + query.from() + "|" + query.to()
+				+ "|" + (query.projectIds() == null ? "" : String.join(",", query.projectIds()));
+		Snapshot snapshot = page > 0 ? snapshots.fresh(snapshotKey) : null;
+		if (snapshot == null) {
+			snapshot = compute(viewer, reach, query, kind, groupBy, costs);
+			snapshots.put(snapshotKey, snapshot);
+		}
+		Sums totals = snapshot.totals();
+		Map<String, List<String>> teams = snapshot.teams();
+		List<Row> ordered = snapshot.ordered();
+
+		Pageable pageable = PageRequest.of(Math.clamp(page, 0, 10_000), Math.clamp(size, 1, PAGE_MAX));
+		boolean capacity = kind == Kind.UTILIZATION && reach.admin();
 		int fromIndex = (int) Math.min(pageable.getOffset(), ordered.size());
 		int toIndex = Math.min(fromIndex + pageable.getPageSize(), ordered.size());
 		List<Row> pageRows = ordered.subList(fromIndex, toIndex);
