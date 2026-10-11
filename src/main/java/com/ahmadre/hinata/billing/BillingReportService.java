@@ -122,7 +122,7 @@ public class BillingReportService {
 
 	private static final class Snapshots {
 		private static final long TTL_MILLIS = 60_000;
-		private static final int MAX = 64;
+		private static final int MAX = 16;
 		private final Map<String, Snapshot> held = new LinkedHashMap<>(16, 0.75f, true) {
 			@Override
 			protected boolean removeEldestEntry(Map.Entry<String, Snapshot> eldest) {
@@ -136,6 +136,9 @@ public class BillingReportService {
 		}
 
 		synchronized void put(String key, Snapshot snapshot) {
+			// Expired ones go now, not only when the map is full: a report can hold a few MB.
+			long now = System.currentTimeMillis();
+			held.values().removeIf(old -> now - old.at() >= TTL_MILLIS);
 			held.put(key, snapshot);
 		}
 	}
@@ -224,7 +227,7 @@ public class BillingReportService {
 		// snapshot. Re-reading up to a year of entries for every 25 rows of an infinite scroll is
 		// the cost, and a scroll through one consistent snapshot is the better answer anyway.
 		String snapshotKey = viewer.getId() + "|" + kind + "|" + groupBy + "|" + query.from() + "|" + query.to()
-				+ "|" + (query.projectIds() == null ? "" : String.join(",", query.projectIds()));
+				+ "|" + (query.projectIds() == null ? "" : String.join(",", query.projectIds().stream().sorted().toList()));
 		Snapshot snapshot = page > 0 ? snapshots.fresh(snapshotKey) : null;
 		if (snapshot == null) {
 			snapshot = compute(viewer, reach, query, kind, groupBy, costs);
