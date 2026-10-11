@@ -10,6 +10,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -347,5 +348,20 @@ class McpSecurityIntegrationTest {
 		mcpBody(initRes2);
 		JsonNode allowed = mcpBody(mcp(teamsRpc, teamsPat, sessionId2)).path("result");
 		assertThat(allowed.path("isError").asBoolean(false)).as("granted scope allowed").isFalse();
+	}
+
+	/** HIN-97: with the extended module off the new tools say so, and the 1.x tools carry on. */
+	@Test
+	@DisplayName("with the module off the time tools of 2.0 refuse in words and the 1.x tools still answer")
+	void theModuleSwitchReachesTheNewToolsOnly() {
+		McpTestClient agent = McpTestClient.withScopes(port, ADMIN_USER, ADMIN_PASS, "worklog:read", "worklog:write");
+
+		for (String tool : List.of("get_timer", "start_timer", "time_summary", "my_time_off_balance")) {
+			JsonNode refused = agent.call(tool, "{\"from\":\"2026-09-01\",\"to\":\"2026-09-30\"}");
+			assertThat(refused.path("isError").asBoolean(false)).as(tool + " refused").isTrue();
+			assertThat(McpTestClient.text(refused)).as(tool).contains("This feature is not enabled on this server");
+		}
+		JsonNode timesheet = agent.call("my_timesheet", "{\"from\":\"2026-09-01\",\"to\":\"2026-09-30\"}");
+		assertThat(timesheet.path("isError").asBoolean(false)).as("my_timesheet still answers").isFalse();
 	}
 }

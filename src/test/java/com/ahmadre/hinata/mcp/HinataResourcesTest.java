@@ -55,7 +55,8 @@ class HinataResourcesTest {
 		CurrentUser currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(CALLER);
 		resources = new HinataResources(scopeGuard, currentUser, issueService, reader,
-				mock(ProjectService.class), projects, knowledge);
+				mock(ProjectService.class), projects, knowledge, mock(TimerTools.class),
+				mock(TimeTrackingTools.class));
 	}
 
 	private static Issue.Attachment attachment() {

@@ -46,6 +46,8 @@ public class HinataResources {
 	private final ProjectService projectService;
 	private final ProjectRepository projects;
 	private final KnowledgeReadTools knowledge;
+	private final TimerTools timer;
+	private final TimeTrackingTools timeTracking;
 
 	@McpResource(name = "issue", uri = "hinata://issue/{readableId}",
 			description = "An issue rendered as markdown, by readable id (e.g. ASTA-42) or id.",
@@ -149,6 +151,28 @@ public class HinataResources {
 			md.append(body).append("\n");
 		}
 		return md.toString();
+	}
+
+	/**
+	 * The caller's own running timer. Gated exactly as {@code get_timer}: scope, module flag, and
+	 * no way to name anybody else's.
+	 */
+	@McpResource(name = "time-timer", uri = "hinata://time/timer",
+			description = "The caller's own running timer as markdown, or a line saying none runs.",
+			mimeType = "text/markdown")
+	public String timer() {
+		return timer.timerMarkdown();
+	}
+
+	/**
+	 * One of the caller's own work items. A colleague's id reads as a missing one, as in
+	 * {@code update_work_item}: the resource must not confirm what the tool would not.
+	 */
+	@McpResource(name = "time-entry", uri = "hinata://time/entries/{id}",
+			description = "One of the caller's own work items as markdown, by id.",
+			mimeType = "text/markdown")
+	public String timeEntry(String id) {
+		return timeTracking.entryMarkdown(id);
 	}
 
 	private static String nz(String value) {

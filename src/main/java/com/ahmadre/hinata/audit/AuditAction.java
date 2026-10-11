@@ -252,6 +252,14 @@ public enum AuditAction {
 	MCP_KB_DELETED(INTEGRATION, NOTICE, true),
 	MCP_WORK_LOGGED(INTEGRATION, INFO, true),
 	MCP_WORK_DELETED(INTEGRATION, NOTICE, true),
+	MCP_WORK_UPDATED(INTEGRATION, INFO, true),
+	// A token starting, stopping or discarding its holder's timer (HIN-97). Off by default for
+	// the reason TIME_TIMER_* are: a line per start and stop is a record of when somebody began
+	// and ended work (§ 87 Abs. 1 Nr. 6 BetrVG), and naming the agent that pressed the button
+	// would add how. Switching them on is for the works parties to decide.
+	MCP_TIMER_STARTED(INTEGRATION, INFO, false),
+	MCP_TIMER_STOPPED(INTEGRATION, INFO, false),
+	MCP_TIMER_DISCARDED(INTEGRATION, INFO, false),
 	MCP_SPRINT_CREATED(INTEGRATION, INFO, true),
 	MCP_SPRINT_UPDATED(INTEGRATION, INFO, true),
 	MCP_SPRINT_STARTED(INTEGRATION, NOTICE, true),
@@ -324,7 +332,7 @@ public enum AuditAction {
 		String name = name();
 		return name.startsWith("TIME_") || name.startsWith("TIMESHEET_")
 				|| name.startsWith("AVAILABILITY_") || name.startsWith("BILLING_") || name.startsWith("INVOICE_")
-				|| this == MCP_WORK_LOGGED || this == MCP_WORK_DELETED;
+				|| name.startsWith("MCP_WORK_") || name.startsWith("MCP_TIMER_");
 	}
 
 	/** Records about absences: requests, sick reports, balances, the absence catalogue. */
