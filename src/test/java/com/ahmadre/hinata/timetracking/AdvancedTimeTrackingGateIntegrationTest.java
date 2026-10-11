@@ -104,17 +104,17 @@ class AdvancedTimeTrackingGateIntegrationTest {
 	 * Every path the gate covers, one per prefix the epic reserves for the
 	 * module, with what it answers once the gate opens.
 	 *
-	 * <p>Not all 200: {@code GET /api/v1/me/timer} is a real route now and says
-	 * 204 when nothing is running, which is the point of naming the expectation
-	 * rather than asserting "anything but 404" — a route that started answering
-	 * 500 would pass that.
+	 * <p>Named rather than "anything but 404", because a route that started
+	 * answering 500 would pass that. {@code GET /api/v1/me/timer} answers 200
+	 * here: the demo workspace this test boots on gives the admin a running timer
+	 * (HIN-98), and with nothing running it would say 204.
 	 */
 	private record Gated(String path, int whenOn) {
 	}
 
 	private static final List<Gated> GATED = List.of(
 			new Gated("/api/v1/time/probe", 200),
-			new Gated("/api/v1/me/timer", 204),
+			new Gated("/api/v1/me/timer", 200),
 			new Gated("/api/v1/availability/probe", 200),
 			// The real routes since stage 10: the admin's own patterns, and the calendars.
 			new Gated("/api/v1/availability/schedule", 200),
