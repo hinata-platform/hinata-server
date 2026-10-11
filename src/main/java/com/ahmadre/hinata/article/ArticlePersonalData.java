@@ -43,6 +43,8 @@ public class ArticlePersonalData implements PersonalDataExport {
 
 	private final MongoTemplate mongo;
 	private final UserWords words;
+	private final ArticleHistory history;
+	private final ArticleReading reading;
 
 	@Override
 	public String key() {
@@ -63,6 +65,14 @@ public class ArticlePersonalData implements PersonalDataExport {
 			return row;
 		}).toList());
 		out.put("pagesTruncated", pages.size() > CAP);
+		// Favourites and recently opened pages are about this person, whoever's pages they are.
+		out.put("readerMarks", reading.allOf(user.getId()).stream().map(mark -> {
+			Map<String, Object> row = new LinkedHashMap<>();
+			row.put("articleId", mark.getArticleId());
+			row.put("starredAt", mark.getStarredAt());
+			row.put("viewedAt", mark.getViewedAt());
+			return row;
+		}).toList());
 		return out;
 	}
 
@@ -83,6 +93,12 @@ public class ArticlePersonalData implements PersonalDataExport {
 	@EventListener
 	public void onUserDeleted(UserService.UserDeletedEvent event) {
 		try {
+			reading.deleteAllOf(event.userId());
+			Query ids = Query.query(privateOf(event.userId()));
+			ids.fields().include("_id");
+			List<String> pageIds = mongo.find(ids, Article.class).stream().map(Article::getId).toList();
+			history.deleteOf(pageIds);
+			reading.deleteOf(pageIds);
 			long removed = mongo.remove(Query.query(privateOf(event.userId())), Article.class).getDeletedCount();
 			if (removed > 0) {
 				log.info("Removed {} private knowledge page(s) of a deleted account", removed);

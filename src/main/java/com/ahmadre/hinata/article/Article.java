@@ -76,6 +76,9 @@ public class Article {
 
 	private String authorId;
 
+	/** Who last changed the title or the text; {@code null} on pages untouched since this was recorded. */
+	private String lastEditorId;
+
 	@Builder.Default
 	private int sortOrder = 0;
 
