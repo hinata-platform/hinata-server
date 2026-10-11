@@ -45,7 +45,8 @@ public class ArticleController {
 			String parentId,
 			@Size(max = 60) String space,
 			@Size(max = 60) String icon,
-			List<String> tags,
+			/** Labels: a handful of short words, as the app's label field makes them. */
+			@Size(max = 30) List<@NotBlank @Size(max = 40) String> tags,
 			Integer sortOrder) {
 	}
 

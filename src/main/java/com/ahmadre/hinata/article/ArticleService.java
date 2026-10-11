@@ -147,7 +147,7 @@ public class ArticleService {
 				.parentId(draft.parentId())
 				.space(draft.space())
 				.icon(draft.icon())
-				.tags(draft.tags() != null ? draft.tags() : List.of())
+				.tags(labels(draft.tags()))
 				.sortOrder(draft.sortOrder() != null ? draft.sortOrder() : 0)
 				.authorId(author.getId())
 				.lastEditorId(author.getId())
@@ -177,6 +177,7 @@ public class ArticleService {
 			article.setTeamId(to.teamId());
 		}
 		article.setParentId(parentId);
+		article.setTags(labels(article.getTags()));
 		Article before = articles.findById(article.getId()).orElse(null);
 		boolean edited = before != null && (!Objects.equals(before.getTitle(), article.getTitle())
 				|| !Objects.equals(before.getContentDoc(), article.getContentDoc()));
@@ -199,6 +200,28 @@ public class ArticleService {
 		article.setContentDoc(body.doc());
 		article.setReferencedIssueKeys(new ArrayList<>(body.issueKeys()));
 		return save(article, article.getParentId(), user);
+	}
+
+	/** Labels one page carries at most, and the longest one. */
+	static final int MAX_LABELS = 30;
+	static final int MAX_LABEL_LENGTH = 40;
+
+	/**
+	 * Labels as stored: trimmed, inner whitespace collapsed, blanks and repeats
+	 * dropped, bounded in number and length. The REST request is validated
+	 * already; the MCP tools are not, and both end here.
+	 */
+	static List<String> labels(List<String> raw) {
+		if (raw == null) return new ArrayList<>();
+		java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+		for (String label : raw) {
+			if (label == null) continue;
+			String clean = label.strip().replaceAll("\\s+", " ");
+			if (clean.isEmpty()) continue;
+			out.add(clean.length() > MAX_LABEL_LENGTH ? clean.substring(0, MAX_LABEL_LENGTH) : clean);
+			if (out.size() == MAX_LABELS) break;
+		}
+		return new ArrayList<>(out);
 	}
 
 	/** Most pages one reorder touches; a level of a tree, not a whole space. */
