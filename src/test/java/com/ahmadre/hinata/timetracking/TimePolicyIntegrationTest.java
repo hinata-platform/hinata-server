@@ -851,6 +851,30 @@ class TimePolicyIntegrationTest {
 				.containsOnlyKeys("timer", "workItem", "mode", "project");
 	}
 
+	@Test
+	void stoppingOrDiscardingSaysNothingAboutHowEither() {
+		// HIN-100 adds "Stop" to a system notification. That button calls the same
+		// route as the one in the app, and the record must not be able to tell.
+		enable(AuditAction.TIME_TIMER_STOPPED);
+		enable(AuditAction.TIME_TIMER_DISCARDED);
+
+		timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(project.getId(), null, "worked", null, List.of(), false)),
+				member);
+		ageRunningTimer(Duration.ofHours(1));
+		timers.stop(new TimerService.StopRequest(null, NOW, null, null, null, null, null, null), member);
+		timers.start(TimerService.StartDraft.stopwatch(
+				new TimerService.TimerDraft(project.getId(), null, "worked", null, List.of(), false)),
+				member);
+		timers.discard(member);
+
+		for (AuditAction action : List.of(AuditAction.TIME_TIMER_STOPPED, AuditAction.TIME_TIMER_DISCARDED)) {
+			assertThat(onlyRecordOf(action).getMetadata())
+					.as(action.name())
+					.containsOnlyKeys("timer", "workItem", "mode", "project");
+		}
+	}
+
 	// --- the history of one entry -------------------------------------------------------------
 
 	@Test
