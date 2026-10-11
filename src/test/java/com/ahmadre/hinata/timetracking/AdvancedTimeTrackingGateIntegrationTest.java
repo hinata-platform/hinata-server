@@ -247,6 +247,10 @@ class AdvancedTimeTrackingGateIntegrationTest {
 					.isSubsetOf(Set.of("timer", "workItem", "mode", "project", "issue"));
 			assertThat(record.getMetadata().values()).noneMatch(value -> value != null
 					&& (value.contains("notification") || value.contains("android")));
+			// The request's own user agent is kept, as for every audited request (documented
+			// in the privacy page). The app sends a notification's action through the same
+			// client as its buttons, so that header says nothing about the surface either.
+			assertThat(record.getUserAgent()).isEqualTo("hinata-notification-action/1");
 		});
 
 		// Leave the workspace as the seed made it: the gate test reads a running timer.
