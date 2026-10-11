@@ -15,6 +15,7 @@ import com.ahmadre.hinata.git.GitDevInfo;
 import com.ahmadre.hinata.git.GitDevInfoRepository;
 import com.ahmadre.hinata.git.GitService;
 import com.ahmadre.hinata.git.TokenCipher;
+import com.ahmadre.hinata.ics.IcsUrlCipher;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueLink;
 import com.ahmadre.hinata.issue.IssueLinkRepository;
@@ -115,11 +116,21 @@ public class DemoSeeder {
 	private final GitService gitService;
 	private final GitDevInfoRepository gitDevInfos;
 	private final TokenCipher tokenCipher;
+	/** Calendar addresses are only ever stored encrypted, the demo's as well. */
+	private final IcsUrlCipher icsCipher;
 	/** The two halves of HIN-120 the seeder needs: whether the module is on, and the copy. */
 	private final ProjectTemplateSettings templates;
 	private final ProjectCopyService copies;
 
 	private final Map<String, Long> counters = new LinkedHashMap<>();
+
+	/** The module's collections a reset empties, beside the three it names on its own. */
+	static final List<String> MODULE_COLLECTIONS = List.of(
+			"time_tags", "time_entry_shares", "time_correction_requests", "time_backfill_grants",
+			"time_marks", "time_imports", "saved_reports", "calendar_subscriptions", "calendar_events",
+			"working_schedules", "time_off", "time_off_requests", "time_off_entitlements",
+			"time_off_ledger", "time_off_notices", "time_off_employment", "time_off_proposals",
+			"billing_rates", "invoices", "invoice_sequences", "notifications");
 
 	@EventListener(ApplicationReadyEvent.class)
 	public void seed() {
@@ -234,6 +245,16 @@ public class DemoSeeder {
 		mongo.getCollection("work_items").deleteMany(new org.bson.Document());
 		mongo.getCollection("running_timers").deleteMany(new org.bson.Document());
 		mongo.getCollection("timesheet_approvals").deleteMany(new org.bson.Document());
+		// Everything else the module keeps, emptied for the same reason. Each method below that
+		// fills one of these returns early when it finds rows, so a reset that left them would
+		// re-seed nothing and keep rows that point at people who no longer exist.
+		for (String collection : MODULE_COLLECTIONS) {
+			mongo.getCollection(collection).deleteMany(new org.bson.Document());
+		}
+		// The three built-in absence types stay: the module creates them once at startup, and
+		// nothing would put them back before the next restart.
+		mongo.getCollection("time_off_types").deleteMany(
+				new org.bson.Document("systemKey", new org.bson.Document("$exists", false)));
 		mongo.dropCollection(GitDevInfo.class);
 		mongo.dropCollection(IssueLink.class);
 		mongo.dropCollection(Issue.class);
@@ -1207,10 +1228,16 @@ public class DemoSeeder {
 				"Reviewing the filter serialisation", "Development", 1, 14, 0, 45,
 				List.of("Review"));
 		unfiled(admin, "Team retro", "Meeting", 1, 16, 0, 60, List.of("Meeting"));
+		List<WorkItem> lastWeek = lastWeek(hin, mob, admin, lena);
 		timeTags();
 		timesheetApprovals(hin, mob, admin, lena);
 		availability(admin, tomas, lena);
 		absenceManagement(admin, tomas, lena);
+		runningTimer(admin, hin);
+		savedReport(admin, hin, mob);
+		calendarSubscription(admin);
+		sharedEntry(admin, tomas, lastWeek);
+		billing(hin, admin, tomas, lastWeek);
 
 		syncSpent();
 		log.info("[demo] seeded {} work items", workItems.count());
@@ -1499,6 +1526,290 @@ public class DemoSeeder {
 		mongo.getCollection("time_off_requests").insertOne(request);
 	}
 
+	/**
+	 * Last week as a timer leaves it: entries that know their start and end, so the calendar shows
+	 * blocks on two weeks rather than one (HIN-98). Lena's afternoon on the redesign is billable,
+	 * and so are the admin's mornings on HIN, which is what the invoice draft below is made of.
+	 *
+	 * <p>Last week, not this one: this week is the 1.x rows above and stays the week the timesheet
+	 * opens on.
+	 */
+	private List<WorkItem> lastWeek(Project hin, Project mob, User admin, User lena) {
+		LocalDate monday = LocalDate.now(ZoneOffset.UTC).with(DayOfWeek.MONDAY).minusWeeks(1);
+		List<WorkItem> saved = new ArrayList<>();
+		String[][] adminWeek = {
+				{ "Wire the command palette to project quick-switch", "Palette ranking and recents" },
+				{ "Saved board filters per user", "Filter chips on the board header" },
+				{ "Sprint capacity overflow not flagged in header", "Reproducing the overflow" },
+				{ "Wire the command palette to project quick-switch", "Keyboard navigation in the list" },
+				{ "Saved board filters per user", "Persisting filters per person" },
+		};
+		for (int day = 0; day < adminWeek.length; day++) {
+			WorkItem morning = timedOn(admin, hin, adminWeek[day][0], adminWeek[day][1], "Development",
+					monday.plusDays(day), 8, 30, 150, List.of(), true);
+			if (morning != null) {
+				saved.add(morning);
+			}
+			timedOn(admin, hin, "Keyboard shortcut opens the command palette", "Code review", "Development",
+					monday.plusDays(day), 13, 0, 45, List.of("Review"), false);
+		}
+		timedOn(admin, mob, "Crash on rotate during sprint planning", "Pairing on the rotation crash",
+				"Testing", monday.plusDays(2), 15, 0, 90, List.of("Pairing"), false);
+		unfiledOn(admin, "Sprint planning", monday, 10, 0, 60);
+		unfiledOn(admin, "Team retro", monday.plusDays(4), 16, 0, 60);
+		for (int day = 0; day < 4; day++) {
+			timedOn(lena, hin, "Redesign the agile board with calmer column rhythm",
+					"Column rhythm, round " + (day + 1), "Development", monday.plusDays(day), 9, 0, 180,
+					List.of(), day % 2 == 0);
+			timedOn(lena, mob, "Bottom-nav liquid-glass refinement", "Glass tab bar states", "Development",
+					monday.plusDays(day), 13, 30, 120, List.of("Pairing"), false);
+		}
+		return saved;
+	}
+
+	/** {@link #timed} on a given day, billable or not; null when the issue was renamed. */
+	private WorkItem timedOn(User user, Project p, String title, String description, String activity,
+			LocalDate day, int hour, int minute, int minutes, List<String> tags, boolean billable) {
+		Issue issue = findIssue(p, title);
+		if (issue == null) {
+			return null;
+		}
+		return saveTimed(user, p.getId(), issue.getId(), description, activity, day, hour, minute,
+				minutes, WorkItem.Source.TIMER, tags, billable);
+	}
+
+	private void unfiledOn(User user, String description, LocalDate day, int hour, int minute,
+			int minutes) {
+		saveTimed(user, null, null, description, "Meeting", day, hour, minute, minutes,
+				WorkItem.Source.APP, List.of("Meeting"), false);
+	}
+
+	/**
+	 * A stopwatch the admin started twenty minutes ago, so the timer bar, the focus screen and
+	 * every screenshot taken as the admin show a timer that runs. A raw document, like the rest of
+	 * the module's data here; {@code userId} carries the unique index, so a second seed cannot
+	 * start a second one.
+	 */
+	private void runningTimer(User admin, Project hin) {
+		Issue issue = findIssue(hin, "Wire the command palette to project quick-switch");
+		if (issue == null || mongo.getCollection("running_timers")
+				.countDocuments(new org.bson.Document("userId", admin.getId())) > 0) {
+			return;
+		}
+		mongo.getCollection("running_timers").insertOne(new org.bson.Document()
+				.append("userId", admin.getId())
+				.append("startedAt", java.util.Date.from(Instant.now().minus(Duration.ofMinutes(20))))
+				.append("projectId", hin.getId())
+				.append("issueId", issue.getId())
+				.append("description", "Recents in the quick switcher")
+				.append("activityType", "Development")
+				.append("tags", List.of())
+				.append("billable", false)
+				.append("mode", "STOPWATCH"));
+	}
+
+	/** One saved report, so the "Saved" tab has a row: this week, by project, as bars. */
+	private void savedReport(User admin, Project hin, Project mob) {
+		if (mongo.getCollection("saved_reports").countDocuments() > 0) {
+			return;
+		}
+		java.util.Date now = java.util.Date.from(Instant.now());
+		mongo.getCollection("saved_reports").insertOne(new org.bson.Document()
+				.append("ownerId", admin.getId())
+				.append("name", "Product work this week")
+				.append("config", new org.bson.Document()
+						.append("range", "THIS_WEEK")
+						.append("projectIds", List.of(hin.getId(), mob.getId()))
+						.append("userIds", List.of())
+						.append("teamIds", List.of())
+						.append("tags", List.of())
+						.append("activities", List.of())
+						.append("groupBy", "PROJECT")
+						.append("chart", "BAR"))
+				.append("createdAt", now)
+				.append("updatedAt", now));
+	}
+
+	/**
+	 * A calendar the admin subscribed to, with this week's meetings in it, so the calendar layer
+	 * and "not taken over yet" have something to show (HIN-94).
+	 *
+	 * <p>The feed is a fixture: the events are written here and the seed needs no network. The
+	 * address is a placeholder, so the first scheduled read about half an hour later reports it
+	 * as unreachable and keeps the events, which is what a broken feed looks like. Skipped
+	 * without {@code HINATA_ICS_SECRET}, because the address is only ever stored encrypted.
+	 */
+	private void calendarSubscription(User admin) {
+		if (!icsCipher.isConfigured() || mongo.getCollection("calendar_subscriptions").countDocuments() > 0) {
+			return;
+		}
+		org.bson.types.ObjectId id = new org.bson.types.ObjectId();
+		String url = "https://calendar.example.com/team.ics";
+		java.util.Date now = java.util.Date.from(Instant.now());
+		mongo.getCollection("calendar_subscriptions").insertOne(new org.bson.Document()
+				.append("_id", id)
+				.append("userId", admin.getId())
+				.append("name", "Team calendar")
+				.append("color", "#6C8CD5")
+				// The binding CalendarSync decrypts with: the module's prefix and the record's id.
+				.append("encryptedUrl", icsCipher.encrypt(url, "calendar-subscription:" + id.toHexString()))
+				.append("hostMasked", "calendar.example.com")
+				.append("enabled", true)
+				.append("lastStatus", "OK")
+				.append("lastFetchedAt", now)
+				.append("failures", 0)
+				.append("eventCount", 8)
+				.append("createdAt", now)
+				.append("updatedAt", now));
+		LocalDate monday = LocalDate.now(ZoneOffset.UTC).with(DayOfWeek.MONDAY);
+		Object[][] meetings = {
+				{ 0, 9, 0, 15, "Daily stand-up" }, { 1, 9, 0, 15, "Daily stand-up" },
+				{ 2, 9, 0, 15, "Daily stand-up" }, { 3, 9, 0, 15, "Daily stand-up" },
+				{ 4, 9, 0, 15, "Daily stand-up" }, { 1, 14, 0, 60, "Design review" },
+				{ 3, 11, 0, 45, "Customer call" }, { 4, 15, 0, 60, "Sprint review" },
+		};
+		for (Object[] m : meetings) {
+			Instant start = monday.plusDays((int) m[0]).atTime((int) m[1], (int) m[2]).toInstant(ZoneOffset.UTC);
+			String uid = "demo-" + m[4].toString().toLowerCase(java.util.Locale.ROOT).replace(' ', '-')
+					+ "-" + m[0] + "@example.com";
+			mongo.getCollection("calendar_events").insertOne(new org.bson.Document()
+					.append("subscriptionId", id.toHexString())
+					.append("userId", admin.getId())
+					.append("uid", uid)
+					.append("startsAt", java.util.Date.from(start))
+					.append("endsAt", java.util.Date.from(start.plus(Duration.ofMinutes((int) m[3]))))
+					.append("timezone", "UTC")
+					.append("summary", m[4])
+					.append("allDay", false)
+					.append("free", false)
+					.append("status", "CONFIRMED")
+					.append("digest", uid));
+		}
+	}
+
+	/** The admin offers Tomas a copy of last Monday's review entry; it waits in Tomas's inbox (HIN-95). */
+	private void sharedEntry(User admin, User tomas, List<WorkItem> lastWeek) {
+		if (lastWeek.isEmpty() || mongo.getCollection("time_entry_shares").countDocuments() > 0) {
+			return;
+		}
+		WorkItem entry = lastWeek.get(0);
+		mongo.getCollection("time_entry_shares").insertOne(new org.bson.Document()
+				.append("entryId", entry.getId())
+				.append("fromUserId", admin.getId())
+				.append("toUserId", tomas.getId())
+				.append("projectId", entry.getProjectId())
+				.append("status", "PENDING")
+				.append("createdAt", java.util.Date.from(Instant.now()))
+				.append("entry", new org.bson.Document()
+						.append("issueId", entry.getIssueId())
+						.append("date", utcDay(entry.getDate()))
+						.append("durationMinutes", entry.getDurationMinutes())
+						.append("startedAt", java.util.Date.from(entry.getStartedAt()))
+						.append("endedAt", java.util.Date.from(entry.getEndedAt()))
+						.append("activityType", entry.getActivityType())
+						.append("description", entry.getDescription())
+						.append("billable", entry.isBillable())
+						.append("tags", List.of())));
+	}
+
+	/**
+	 * Rates and a draft invoice, only where billing is switched on (HIN-96).
+	 *
+	 * <p>A default revenue rate, a higher one on HIN and a cost rate, so the money reports show
+	 * revenue, cost and margin. The draft covers last week's billable mornings: a draft locks
+	 * nothing, so every entry it names stays editable, which is what makes it safe to seed.
+	 */
+	private void billing(Project hin, User admin, User tomas, List<WorkItem> lastWeek) {
+		if (!billingEnabled() || mongo.getCollection("billing_rates").countDocuments() > 0) {
+			return;
+		}
+		String currency = currency();
+		java.util.Date now = java.util.Date.from(Instant.now());
+		LocalDate from = LocalDate.now(ZoneOffset.UTC).withDayOfYear(1);
+		rate("BILLABLE", "DEFAULT", null, null, 9_500, currency, from, admin, now);
+		rate("BILLABLE", "PROJECT", hin.getId(), hin.getId(), 11_000, currency, from, admin, now);
+		rate("COST", "DEFAULT", null, null, 6_000, currency, from, admin, now);
+		if (lastWeek.isEmpty()) {
+			return;
+		}
+		long minutes = lastWeek.stream().mapToLong(WorkItem::getDurationMinutes).sum();
+		long rate = 11_000;
+		long net = minutes * rate / 60;
+		long tax = net * 1_900 / 10_000;
+		LocalDate periodFrom = lastWeek.get(0).getDate();
+		LocalDate periodTo = lastWeek.get(lastWeek.size() - 1).getDate();
+		mongo.getCollection("invoices").insertOne(new org.bson.Document()
+				.append("kind", "INVOICE")
+				.append("projectId", hin.getId())
+				.append("periodFrom", utcDay(periodFrom))
+				.append("periodTo", utcDay(periodTo))
+				.append("status", "DRAFT")
+				.append("grouping", "PROJECT")
+				.append("currency", currency)
+				.append("language", "en")
+				.append("recipient", new org.bson.Document()
+						.append("name", "Example Customer GmbH")
+						.append("address", "Musterstraße 1\n10115 Berlin"))
+				.append("taxBasisPoints", 1_900)
+				.append("notes", "Development of the command palette and saved filters.")
+				.append("lines", List.of(new org.bson.Document()
+						.append("id", new org.bson.types.ObjectId().toHexString())
+						.append("description", hin.getName())
+						.append("groupKey", hin.getId())
+						.append("entryIds", lastWeek.stream().map(WorkItem::getId).toList())
+						.append("minutes", minutes)
+						.append("rateCents", rate)
+						.append("amountCents", net)
+						.append("unrated", false)))
+				.append("totals", new org.bson.Document()
+						.append("minutes", minutes)
+						.append("netCents", net)
+						.append("taxCents", tax)
+						.append("grossCents", net + tax))
+				.append("createdBy", admin.getId())
+				.append("createdAt", now)
+				.append("updatedBy", admin.getId())
+				.append("updatedAt", now)
+				.append("version", 0L));
+	}
+
+	private void rate(String kind, String scope, String scopeId, String projectId, long cents,
+			String currency, LocalDate from, User admin, java.util.Date now) {
+		org.bson.Document rate = new org.bson.Document()
+				.append("kind", kind)
+				.append("scope", scope)
+				.append("amountCents", cents)
+				.append("currency", currency)
+				.append("validFrom", utcDay(from))
+				.append("createdBy", admin.getId())
+				.append("createdAt", now)
+				.append("version", 0L);
+		if (scopeId != null) {
+			rate.append("scopeId", scopeId);
+		}
+		if (projectId != null) {
+			rate.append("projectId", projectId);
+		}
+		mongo.getCollection("billing_rates").insertOne(rate);
+	}
+
+	/** The stored switch over the environment default, both under the extended module. */
+	private boolean billingEnabled() {
+		ServerSettings.TimeTracking stored = settings.get().getTimeTracking();
+		HinataProperties.TimeTracking env = properties.getTimeTracking();
+		boolean advanced = stored != null && stored.getAdvancedEnabled() != null ? stored.getAdvancedEnabled()
+				: env.isAdvancedEnabled();
+		boolean billing = stored != null && stored.getBillingEnabled() != null ? stored.getBillingEnabled()
+				: env.isBillingEnabled();
+		return advanced && billing;
+	}
+
+	private String currency() {
+		ServerSettings.TimeTracking stored = settings.get().getTimeTracking();
+		return stored != null && stored.getCurrency() != null ? stored.getCurrency()
+				: properties.getTimeTracking().getCurrency();
+	}
+
 	/** One person's grant for a year, and the accrual that follows from it. */
 	private void grantDemoYear(User person, Object typeId, int year, int allowance, int accrued,
 			User admin, java.util.Date now) {
@@ -1672,9 +1983,15 @@ public class DemoSeeder {
 	private void saveTimed(User user, String projectId, String issueId, String description,
 			String activity, int daysAgo, int hour, int minute, int minutes,
 			WorkItem.Source source, List<String> tags) {
-		LocalDate day = LocalDate.now(ZoneOffset.UTC).minusDays(daysAgo);
+		saveTimed(user, projectId, issueId, description, activity,
+				LocalDate.now(ZoneOffset.UTC).minusDays(daysAgo), hour, minute, minutes, source, tags, false);
+	}
+
+	private WorkItem saveTimed(User user, String projectId, String issueId, String description,
+			String activity, LocalDate day, int hour, int minute, int minutes,
+			WorkItem.Source source, List<String> tags, boolean billable) {
 		Instant start = day.atTime(hour, minute).toInstant(ZoneOffset.UTC);
-		workItems.save(WorkItem.builder()
+		return workItems.save(WorkItem.builder()
 				.issueId(issueId)
 				.projectId(projectId)
 				.userId(user.getId())
@@ -1686,7 +2003,7 @@ public class DemoSeeder {
 				.endedAt(start.plus(Duration.ofMinutes(minutes)))
 				.tags(new ArrayList<>(tags))
 				.source(source)
-				.billable(false)
+				.billable(billable)
 				.build());
 	}
 
