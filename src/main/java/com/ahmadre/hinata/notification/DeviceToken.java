@@ -40,7 +40,7 @@ public class DeviceToken {
 	@Id
 	private String id;
 
-	@Indexed
+	/** Found through the {@code user_kind} index, which starts with this field. */
 	private String userId;
 
 	@Indexed(unique = true)
