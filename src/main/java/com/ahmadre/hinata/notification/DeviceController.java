@@ -2,7 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.common.FeatureFlags;
+import com.ahmadre.hinata.timetracking.TimeTrackingSettings;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -37,9 +37,6 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class DeviceController {
 
-	/** The flag of the extended time tracking, which owns the timer and so its Live Activity. */
-	static final String TIME_FLAG = "advanced_time_tracking";
-
 	/** Live Activity tokens kept per person; the oldest give way. */
 	static final int MAX_LIVE_ACTIVITIES = 20;
 
@@ -54,7 +51,8 @@ public class DeviceController {
 	private final CurrentUser currentUser;
 	private final DeviceTokenRepository devices;
 	private final LiveActivityKeys keys;
-	private final FeatureFlags flags;
+	/** The extended time tracking owns the timer, and so its Live Activity. */
+	private final TimeTrackingSettings timeTracking;
 
 	public record RegisterRequest(@NotBlank @Size(max = 4096) String token, @Size(max = 32) String platform,
 			@Size(max = 32) String kind, @Size(max = 64) String activityId, @Size(max = 128) String contentKey,
@@ -95,7 +93,7 @@ public class DeviceController {
 	 * key stored in clear would protect nothing.
 	 */
 	private void registerLiveActivity(RegisterRequest request) {
-		if (!flags.enabled(TIME_FLAG)) {
+		if (!timeTracking.advancedEnabled()) {
 			throw new ApiException(HttpStatus.NOT_FOUND, "error.feature.disabled");
 		}
 		if (!keys.available()) {

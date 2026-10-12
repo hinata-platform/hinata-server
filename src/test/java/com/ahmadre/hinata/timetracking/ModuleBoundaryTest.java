@@ -90,7 +90,10 @@ class ModuleBoundaryTest {
 			ROOT + ".mcp.TimeTrackingTools",
 			ROOT + ".mcp.TimerTools",
 			// #time in a commit message, logged as the commit's author.
-			ROOT + ".git.GitService");
+			ROOT + ".git.GitService",
+			// Takes a Live Activity token only while the module whose timer it shows is on,
+			// asking the same switch the push of that timer asks (HIN-103).
+			ROOT + ".notification.DeviceController");
 	// DemoSeeder is deliberately not here. It names WorkItem and its repository,
 	// which the storage contract already allows, so exempting it would buy
 	// nothing today and cost the warning on the day it reaches for the service —
