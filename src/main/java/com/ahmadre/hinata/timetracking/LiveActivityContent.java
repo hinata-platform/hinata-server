@@ -46,7 +46,8 @@ public final class LiveActivityContent {
 	}
 
 	/**
-	 * What the activity shows for [timer]; null means the timer ended.
+	 * What the activity shows for [timer]; the state of a timer that ended comes
+	 * from {@link #ended(Instant)}.
 	 *
 	 * @param endsAt   the end of a countdown or a phase, null for a stopwatch
 	 * @param dismissAt when the activity goes away by itself at the latest
