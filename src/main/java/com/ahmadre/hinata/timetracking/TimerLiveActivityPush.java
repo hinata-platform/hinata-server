@@ -206,10 +206,16 @@ public class TimerLiveActivityPush {
 		}
 	}
 
-	/** Gives an end to the pool; when it is full, again a moment later, never on this thread. */
+	/**
+	 * Gives an end to the pool; when it is full, again a moment later, never on
+	 * this thread. Only activities registered before the end hear it: a late end
+	 * must not close the one the next timer started meanwhile.
+	 */
 	private void handEnd(String userId, Change change) {
 		try {
-			executor.execute(() -> sendTo(tokensOf(userId), change));
+			executor.execute(() -> sendTo(tokensOf(userId).stream()
+					.filter(token -> token.getCreatedAt() == null || !token.getCreatedAt().isAfter(change.at()))
+					.toList(), change));
 		}
 		catch (RejectedExecutionException full) {
 			after(Duration.ofSeconds(1), () -> handEnd(userId, change));
