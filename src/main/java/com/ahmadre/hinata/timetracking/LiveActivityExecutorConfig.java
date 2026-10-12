@@ -16,8 +16,8 @@ import java.util.concurrent.ThreadPoolExecutor;
  * request thread ever sends.
  *
  * <p>Not a default candidate, so the application's own task executor stays the
- * one every plain {@code @Async} runs on; only {@code @Async("liveActivityExecutor")}
- * and an injection qualified by that name reach this one.
+ * one every plain {@code @Async} runs on; only an injection qualified by that
+ * name ({@link TimerLiveActivityPush}) reaches this one.
  */
 @Configuration
 public class LiveActivityExecutorConfig {
