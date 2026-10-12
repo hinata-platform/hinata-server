@@ -210,6 +210,15 @@ class ArticleHistoryIntegrationTest {
 	}
 
 	@Test
+	void readerMarksAreFoundByTheirPage() {
+		// Declared rather than read back: every test here drops the database, indexes included.
+		var resolver = new org.springframework.data.mongodb.core.index.MongoPersistentEntityIndexResolver(
+				mongo.getConverter().getMappingContext());
+		assertThat(resolver.resolveIndexFor(ArticleReaderState.class))
+				.anySatisfy(index -> assertThat(index.getIndexKeys().keySet()).containsExactly("articleId"));
+	}
+
+	@Test
 	void deletingTheProject_takesTheHistoryAndMarksOfItsPagesAlong() {
 		Project other = projects.save(Project.builder().key("OTH").name("Andere").leadId(alice.getId())
 				.leadIds(new ArrayList<>(List.of(alice.getId())))
