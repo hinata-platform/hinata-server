@@ -20,10 +20,11 @@ import java.time.Instant;
  * Live Activity on one iPhone: it receives only the encrypted state of the
  * running timer, never a notification, and lives as long as the activity.
  *
- * <p>Every field added since the first version is an object type with a
- * getter default. Spring Data builds this document through its all-args
- * constructor, and a primitive field missing from a stored document would make
- * every token written before the field existed unreadable.
+ * <p>Every field added since the first version is an object type, so a missing
+ * field reads as null; {@code kind} has a getter default. Spring Data builds
+ * this document through its all-args constructor, and a primitive field missing
+ * from a stored document would make every token written before the field
+ * existed unreadable.
  */
 @Data
 @Builder
