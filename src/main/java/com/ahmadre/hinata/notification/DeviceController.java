@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -47,11 +48,11 @@ public class DeviceController {
 	static final Duration LIVE_ACTIVITY_TTL = Duration.ofHours(28);
 
 	/**
-	 * How long a push token has to be silent before another account may take it
-	 * over. Signing out deletes the token, so a device that changes hands the
-	 * usual way never meets this; a token still in use is never moved.
+	 * Live Activity tokens kept per phone (FCM token): it shows one timer, and a
+	 * second covers the moment a restarted activity overlaps the old one. More
+	 * would only multiply every update the person's timer sends.
 	 */
-	static final Duration TAKEOVER_AFTER = Duration.ofHours(24);
+	static final int MAX_LIVE_ACTIVITIES_PER_PHONE = 2;
 
 	private static final Pattern ACTIVITY_ID = Pattern.compile("[A-Za-z0-9-]{1,64}");
 
@@ -85,10 +86,10 @@ public class DeviceController {
 		String userId = currentUser.requireId();
 		Instant now = Instant.now();
 		DeviceToken device = devices.findByToken(request.token())
+				// The token is the device's: whoever holds it is signed in there now.
+				// An account that left without signing out (offline, a session that
+				// expired) must not keep receiving on a phone somebody else uses.
 				.map(existing -> {
-					if (!userId.equals(existing.getUserId()) && !abandoned(existing, now)) {
-						throw ApiException.conflict("error.device.inUse");
-					}
 					existing.setUserId(userId);
 					existing.setPlatform(request.platform());
 					existing.setLastSeenAt(now);
@@ -133,17 +134,29 @@ public class DeviceController {
 		List<DeviceToken> held = devices.findByUserIdAndKindOrderByCreatedAtAsc(userId,
 				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
 		// The same activity under a rotated token goes; of the others, the oldest
-		// give way so that this one makes at most MAX_LIVE_ACTIVITIES.
+		// give way so that this one makes at most MAX_LIVE_ACTIVITIES_PER_PHONE on
+		// its phone and MAX_LIVE_ACTIVITIES in all.
 		List<DeviceToken> others = new ArrayList<>();
+		List<DeviceToken> samePhone = new ArrayList<>();
 		for (DeviceToken old : held) {
 			if (old.getToken().equals(request.token())) continue;
 			if (activityId.equals(old.getActivityId())) {
 				devices.deleteByToken(old.getToken());
 			}
+			else if (request.fcmToken().equals(old.getFcmToken())) {
+				samePhone.add(old);
+			}
 			else {
 				others.add(old);
 			}
 		}
+		int onPhone = samePhone.size() - (MAX_LIVE_ACTIVITIES_PER_PHONE - 1);
+		for (int i = 0; i < samePhone.size(); i++) {
+			if (i < onPhone) devices.deleteByToken(samePhone.get(i).getToken());
+			else others.add(samePhone.get(i));
+		}
+		others.sort(Comparator.comparing(DeviceToken::getCreatedAt,
+				Comparator.nullsFirst(Comparator.naturalOrder())));
 		int excess = others.size() - (MAX_LIVE_ACTIVITIES - 1);
 		for (int i = 0; i < excess; i++) {
 			devices.deleteByToken(others.get(i).getToken());
@@ -163,11 +176,6 @@ public class DeviceController {
 				.lastSeenAt(now)
 				.expiresAt(now.plus(LIVE_ACTIVITY_TTL))
 				.build());
-	}
-
-	/** A push token nobody has registered for {@link #TAKEOVER_AFTER}. */
-	private static boolean abandoned(DeviceToken token, Instant now) {
-		return token.getLastSeenAt() == null || token.getLastSeenAt().isBefore(now.minus(TAKEOVER_AFTER));
 	}
 
 	private static DeviceToken.Kind kindOf(String kind) {

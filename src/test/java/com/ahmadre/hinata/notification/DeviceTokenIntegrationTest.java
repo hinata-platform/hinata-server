@@ -106,8 +106,12 @@ class DeviceTokenIntegrationTest {
 	}
 
 	private void registerActivity(String token, String activityId) {
+		registerActivity(token, activityId, "fcm-of-the-phone");
+	}
+
+	private void registerActivity(String token, String activityId, String fcmToken) {
 		controller.register(new DeviceController.RegisterRequest(token, "ios", "liveActivityUpdate",
-				activityId, key(), "fcm-of-the-phone"));
+				activityId, key(), fcmToken));
 	}
 
 	@Test
@@ -177,24 +181,29 @@ class DeviceTokenIntegrationTest {
 	}
 
 	@Test
-	void aPushTokenInUseByAnotherAccountIsNotTakenOver_untilItWasSilentForADay() {
+	void aPushTokenMovesToTheAccountNowSignedInOnTheDevice() {
+		// An account that left without signing out (offline, an expired session)
+		// must not keep receiving on a device somebody else now uses.
 		when(currentUser.requireId()).thenReturn("user-2");
 		controller.register(new DeviceController.RegisterRequest("fcm-shared", "ios", null, null, null, null));
 		when(currentUser.requireId()).thenReturn("user-1");
 
-		assertThatThrownBy(() -> controller.register(new DeviceController.RegisterRequest("fcm-shared", "ios",
-				null, null, null, null))).isInstanceOfSatisfying(ApiException.class, ex -> {
-					assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
-					assertThat(ex.getMessageKey()).isEqualTo("error.device.inUse");
-				});
-		assertThat(devices.findByToken("fcm-shared").orElseThrow().getUserId()).isEqualTo("user-2");
-
-		DeviceToken silent = devices.findByToken("fcm-shared").orElseThrow();
-		silent.setLastSeenAt(Instant.now().minus(DeviceController.TAKEOVER_AFTER).minusSeconds(60));
-		devices.save(silent);
 		controller.register(new DeviceController.RegisterRequest("fcm-shared", "ios", null, null, null, null));
 
 		assertThat(devices.findByToken("fcm-shared").orElseThrow().getUserId()).isEqualTo("user-1");
+		assertThat(devices.count()).isOne();
+	}
+
+	@Test
+	void aPhoneKeepsAtMostTwoActivities_theOldestGoes() {
+		registerActivity(la(1), "ref-1");
+		registerActivity(la(2), "ref-2");
+		registerActivity(la(3), "ref-3");
+		registerActivity(la(4), "ref-4", "fcm-of-another-phone");
+
+		List<DeviceToken> held = devices.findByUserIdAndKindOrderByCreatedAtAsc("user-1",
+				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
+		assertThat(held).extracting(DeviceToken::getToken).containsExactlyInAnyOrder(la(2), la(3), la(4));
 	}
 
 	@Test
@@ -222,7 +231,7 @@ class DeviceTokenIntegrationTest {
 		assertThat(devices.findByToken(la(902))).isPresent();
 
 		for (int i = 0; i < 25; i++) {
-			registerActivity(la(i), "ref-" + i);
+			registerActivity(la(i), "ref-" + i, "fcm-" + i);
 		}
 
 		List<DeviceToken> held = devices.findByUserIdAndKindOrderByCreatedAtAsc("user-1",
@@ -360,9 +369,11 @@ class DeviceTokenIntegrationTest {
 
 	private void awaitGone(String token) {
 		long until = System.currentTimeMillis() + 5_000;
-		while (devices.findByToken(token).isPresent() && System.currentTimeMillis() < until) {
-			Thread.onSpinWait();
+		while (devices.findByToken(token).isPresent()) {
+			if (System.currentTimeMillis() > until) {
+				org.junit.jupiter.api.Assertions.fail("token " + token + " was not removed within 5 s");
+			}
+			java.util.concurrent.locks.LockSupport.parkNanos(50_000_000L);
 		}
-		assertThat(devices.findByToken(token)).isEmpty();
 	}
 }
