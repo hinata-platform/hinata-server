@@ -46,6 +46,13 @@ public class DeviceController {
 	 */
 	static final Duration LIVE_ACTIVITY_TTL = Duration.ofHours(28);
 
+	/**
+	 * How long a push token has to be silent before another account may take it
+	 * over. Signing out deletes the token, so a device that changes hands the
+	 * usual way never meets this; a token still in use is never moved.
+	 */
+	static final Duration TAKEOVER_AFTER = Duration.ofHours(24);
+
 	private static final Pattern ACTIVITY_ID = Pattern.compile("[A-Za-z0-9-]{1,64}");
 
 	/**
@@ -78,6 +85,9 @@ public class DeviceController {
 		Instant now = Instant.now();
 		DeviceToken device = devices.findByToken(request.token())
 				.map(existing -> {
+					if (!userId.equals(existing.getUserId()) && !abandoned(existing, now)) {
+						throw ApiException.conflict("error.device.inUse");
+					}
 					existing.setUserId(userId);
 					existing.setPlatform(request.platform());
 					existing.setLastSeenAt(now);
@@ -114,6 +124,10 @@ public class DeviceController {
 		}
 		String userId = currentUser.requireId();
 		Instant now = Instant.now();
+		// Somebody else's token is theirs to end; never removed from here.
+		if (devices.findByToken(request.token()).filter(other -> !userId.equals(other.getUserId())).isPresent()) {
+			throw ApiException.conflict("error.device.inUse");
+		}
 		List<DeviceToken> held = devices.findByUserIdAndKindOrderByCreatedAtAsc(userId,
 				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
 		// The same activity under a rotated token goes; of the others, the oldest
@@ -147,6 +161,11 @@ public class DeviceController {
 				.lastSeenAt(now)
 				.expiresAt(now.plus(LIVE_ACTIVITY_TTL))
 				.build());
+	}
+
+	/** A push token nobody has registered for {@link #TAKEOVER_AFTER}. */
+	private static boolean abandoned(DeviceToken token, Instant now) {
+		return token.getLastSeenAt() == null || token.getLastSeenAt().isBefore(now.minus(TAKEOVER_AFTER));
 	}
 
 	private static DeviceToken.Kind kindOf(String kind) {
