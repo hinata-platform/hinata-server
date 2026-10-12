@@ -11,7 +11,6 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -21,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -79,7 +79,7 @@ public class TimerLiveActivityPush {
 	private final Executor executor;
 	private final Map<String, Slot> slots = new ConcurrentHashMap<>();
 
-	/** Only waits out a gap and hands the send back to {@link #executor}; never sends itself. */
+	/** Only waits out a gap and hands the send to {@link #executor}; never sends itself. */
 	private final ScheduledExecutorService delay = Executors.newSingleThreadScheduledExecutor(r -> {
 		Thread t = new Thread(r, "live-activity-delay");
 		t.setDaemon(true);
@@ -102,11 +102,17 @@ public class TimerLiveActivityPush {
 		delay.shutdownNow();
 	}
 
-	/** A change of a timer: the timer after it, or null once it stopped, and when it happened. */
-	private record Change(RunningTimer timer, Instant at) {
+	/**
+	 * A change of a timer and when it happened: the state its activities show
+	 * after it, or the end once the timer stopped or its time on screen is over.
+	 */
+	private record Change(LiveActivityContent.State state, Instant at, boolean ends) {
 
-		boolean ends() {
-			return timer == null || !LiveActivityContent.of(timer).dismissAt().isAfter(at);
+		static Change of(RunningTimer timer, Instant at) {
+			LiveActivityContent.State state = timer == null ? null : LiveActivityContent.of(timer);
+			return state == null || !state.dismissAt().isAfter(at)
+					? new Change(LiveActivityContent.ended(at), at, true)
+					: new Change(state, at, false);
 		}
 	}
 
@@ -121,7 +127,7 @@ public class TimerLiveActivityPush {
 
 		/** Takes [count] pushes from this minute's budget; false when it does not cover them. */
 		boolean spend(int count, Instant now) {
-			if (!windowStart.plus(Duration.ofMinutes(1)).isAfter(now)) {
+			if (!windowStart.plus(BUDGET_WINDOW).isAfter(now)) {
 				windowStart = now;
 				sentInWindow = 0;
 			}
@@ -129,74 +135,129 @@ public class TimerLiveActivityPush {
 			sentInWindow += count;
 			return true;
 		}
+
+		/** When this minute's budget is whole again. */
+		Instant budgetRenews() {
+			return windowStart.plus(BUDGET_WINDOW);
+		}
 	}
+
+	private static final Duration BUDGET_WINDOW = Duration.ofMinutes(1);
 
 	/**
 	 * Sends [timer] — or the end, for null — to every registered activity of
 	 * [userId]. [at] is the moment of the change, taken on the caller's thread.
 	 *
-	 * <p>At most one update per person every {@link #MIN_GAP}: a change inside
-	 * the gap waits, and a newer one replaces it, so a burst of taps costs one
-	 * push with the state it ended in. The end of a timer goes at once and drops
-	 * whatever was waiting.
+	 * <p>Only records the change and plans its send: the caller (a request
+	 * changing a timer) never waits on the gateway, not even when the pool is
+	 * full. At most one update per person every {@link #MIN_GAP}: a change
+	 * inside the gap waits, and a newer one replaces it, so a burst of taps
+	 * costs one push with the state it ended in. The end of a timer goes at once
+	 * and drops whatever was waiting.
 	 */
-	@Async(LiveActivityExecutorConfig.EXECUTOR)
 	public void onTimer(String userId, RunningTimer timer, Instant at) {
 		if (userId == null || !settings.advancedEnabled() || !gateway.registered()) return;
-		Change change = new Change(timer, at);
+		Change change = Change.of(timer, at);
 		if (change.ends()) {
 			slots.remove(userId);
-			sendAll(userId, change, null);
+			handEnd(userId, change);
 			return;
 		}
 		evictIdle();
 		Slot slot = slots.computeIfAbsent(userId, id -> new Slot());
-		Instant now = Instant.now();
 		synchronized (slot) {
 			if (slot.waiting == null || !slot.waiting.at().isAfter(at)) {
 				slot.waiting = change;
 			}
-			if (slot.scheduled && slot.scheduledAt.plus(STALLED).isAfter(now)) return;
-			Duration wait = Duration.between(now, slot.lastSent.plus(MIN_GAP));
-			if (wait.isPositive()) {
-				slot.scheduled = true;
-				slot.scheduledAt = now;
-				delay.schedule(() -> executor.execute(() -> flush(userId, slot)), wait.toMillis(),
-						TimeUnit.MILLISECONDS);
-				return;
-			}
-			change = slot.waiting;
-			slot.waiting = null;
-			slot.lastSent = now;
 		}
-		sendAll(userId, change, slot);
+		plan(userId, slot, Instant.now());
 	}
 
-	/** Sends what waited out the gap, unless an end has taken the slot away meanwhile. */
+	/**
+	 * Plans the send of what waits in [slot]: at once when the gap and the
+	 * budget allow, otherwise when they do. Nothing when a send is planned
+	 * already, unless that one never ran ({@link #STALLED}).
+	 */
+	private void plan(String userId, Slot slot, Instant now) {
+		Instant due;
+		synchronized (slot) {
+			if (slot.waiting == null) return;
+			if (slot.scheduled && slot.scheduledAt.plus(STALLED).isAfter(now)) return;
+			due = slot.lastSent.plus(MIN_GAP);
+			slot.scheduled = true;
+			slot.scheduledAt = now;
+		}
+		after(Duration.between(now, due), () -> hand(userId, slot));
+	}
+
+	/**
+	 * Gives the planned send to the pool. A full pool sends nothing on this
+	 * thread: the change stays in the slot and is handed over again a gap later.
+	 */
+	private void hand(String userId, Slot slot) {
+		try {
+			executor.execute(() -> flush(userId, slot));
+		}
+		catch (RejectedExecutionException full) {
+			synchronized (slot) {
+				slot.scheduledAt = Instant.now();
+			}
+			after(MIN_GAP, () -> hand(userId, slot));
+		}
+	}
+
+	/** Gives an end to the pool; when it is full, again a moment later, never on this thread. */
+	private void handEnd(String userId, Change change) {
+		try {
+			executor.execute(() -> sendTo(tokensOf(userId), change));
+		}
+		catch (RejectedExecutionException full) {
+			after(Duration.ofSeconds(1), () -> handEnd(userId, change));
+		}
+	}
+
+	/**
+	 * Sends what waited out the gap, unless an end has taken the slot away
+	 * meanwhile. Over the minute's budget the change stays and goes when the
+	 * budget renews.
+	 */
 	private void flush(String userId, Slot slot) {
+		List<DeviceToken> tokens = tokensOf(userId);
 		Change change;
 		synchronized (slot) {
 			slot.scheduled = false;
 			change = slot.waiting;
-			slot.waiting = null;
 			if (change == null || slots.get(userId) != slot) return;
-			slot.lastSent = Instant.now();
+			Instant now = Instant.now();
+			if (!slot.spend(tokens.size(), now)) {
+				slot.scheduled = true;
+				slot.scheduledAt = now;
+				after(Duration.between(now, slot.budgetRenews()), () -> hand(userId, slot));
+				return;
+			}
+			slot.waiting = null;
+			slot.lastSent = now;
 		}
-		sendAll(userId, change, slot);
+		sendTo(tokens, change);
 	}
 
-	/** Sends [change] to every activity of [userId]; an update only within the [slot]'s budget. */
-	private void sendAll(String userId, Change change, Slot slot) {
-		List<DeviceToken> tokens = devices.findByUserIdAndKindOrderByCreatedAtAsc(userId,
-				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
-		if (slot != null) {
-			synchronized (slot) {
-				if (!slot.spend(tokens.size(), Instant.now())) return;
-			}
+	private void after(Duration wait, Runnable task) {
+		try {
+			delay.schedule(task, Math.max(0, wait.toMillis()), TimeUnit.MILLISECONDS);
 		}
+		catch (RejectedExecutionException shuttingDown) {
+			// The application is stopping; nothing is sent any more.
+		}
+	}
+
+	private List<DeviceToken> tokensOf(String userId) {
+		return devices.findByUserIdAndKindOrderByCreatedAtAsc(userId, DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
+	}
+
+	private void sendTo(List<DeviceToken> tokens, Change change) {
 		for (DeviceToken token : tokens) {
 			try {
-				send(token, change.timer(), change.at());
+				send(token, change);
 			}
 			catch (RuntimeException ex) {
 				log.debug("[time] live activity push failed: {}", ex.toString());
@@ -217,7 +278,7 @@ public class TimerLiveActivityPush {
 		});
 	}
 
-	private void send(DeviceToken token, RunningTimer timer, Instant at) {
+	private void send(DeviceToken token, Change change) {
 		byte[] key;
 		try {
 			key = keys.open(token);
@@ -228,11 +289,9 @@ public class TimerLiveActivityPush {
 			devices.deleteByToken(token.getToken());
 			return;
 		}
-		LiveActivityContent.State state = timer == null ? null : LiveActivityContent.of(timer);
-		boolean end = state == null || !state.dismissAt().isAfter(at);
-		if (end) {
-			state = LiveActivityContent.ended(at);
-		}
+		LiveActivityContent.State state = change.state();
+		boolean end = change.ends();
+		Instant at = change.at();
 		GatewayService.PushResult result = gateway.pushLiveActivity(token.getFcmToken(), token.getToken(),
 				end ? GatewayService.LiveActivityEvent.END : GatewayService.LiveActivityEvent.UPDATE,
 				LiveActivityContent.seal(state, key, token.getActivityId()), at,

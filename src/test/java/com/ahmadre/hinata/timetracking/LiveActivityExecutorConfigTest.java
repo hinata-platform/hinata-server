@@ -10,17 +10,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LiveActivityExecutorConfigTest {
 
 	/**
-	 * A full queue must not drop work: a dropped send of the end would leave a
-	 * stopped timer on the lock screen, and a dropped planned send would hold
-	 * back every later update of that person.
+	 * A full queue refuses loudly instead of dropping quietly or running on the
+	 * caller: the push keeps the change and hands it over again.
 	 */
 	@Test
-	void aFullQueueNeverDropsASend() {
+	void aFullQueueRefusesTheTask() {
 		ThreadPoolTaskExecutor executor = new LiveActivityExecutorConfig().liveActivityExecutor();
 		executor.initialize();
 		try {
 			assertThat(executor.getThreadPoolExecutor().getRejectedExecutionHandler())
-					.isInstanceOf(ThreadPoolExecutor.CallerRunsPolicy.class);
+					.isInstanceOf(ThreadPoolExecutor.AbortPolicy.class);
 		}
 		finally {
 			executor.shutdown();

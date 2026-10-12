@@ -1168,7 +1168,8 @@ public class TimerService {
 		catch (RuntimeException ex) {
 			log.debug("[time] could not publish timer event for {}: {}", userId, ex.toString());
 		}
-		// The iPhones whose app sleeps (HIN-103). Its own pool thread; the moment
+		// The iPhones whose app sleeps (HIN-103). Only recorded here and sent from
+		// its own pool, never on this request; the moment
 		// is taken here, so two changes in a row keep their order at APNs.
 		try {
 			liveActivities.onTimer(userId, timer, clock.instant());
