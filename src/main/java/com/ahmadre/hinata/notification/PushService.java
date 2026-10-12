@@ -58,7 +58,9 @@ public class PushService {
 	public void sendToUser(String userId, String title, String body, String link,
 			Map<String, String> extra) {
 		if (userId == null) return;
-		List<DeviceToken> tokens = devices.findByUserId(userId);
+		// Never a Live Activity token: those carry a sealed timer state and nothing
+		// else, and a notification sent to one would reach an activity, not a person.
+		List<DeviceToken> tokens = devices.findByUserIdAndKindNot(userId, DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
 		for (DeviceToken device : tokens) {
 			GatewayService.PushResult result =
 					gateway.push(device.getToken(), title, body, link, extra);
