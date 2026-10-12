@@ -200,6 +200,26 @@ class ArticleHistoryIntegrationTest {
 	}
 
 	@Test
+	void orderingRefusesPagesTheCallerDoesNotRead_andChangesNothing() {
+		as(alice);
+		var a = create("A", DOC_A);
+		var b = create("B", DOC_A);
+		var mine = articles.create(new ArticleController.ArticleRequest("Privat", null, DOC_A, null, null, null,
+				"Wissen", null, null, null));
+
+		as(carol);
+		assertNotFound(() -> articles.order(new ArticleController.OrderRequest(List.of(b.id(), a.id()))));
+		as(bob);
+		assertNotFound(() -> articles.order(new ArticleController.OrderRequest(List.of(b.id(), mine.id()))));
+		assertNotFound(() -> articles.order(new ArticleController.OrderRequest(
+				List.of(b.id(), "64b000000000000000000000"))));
+
+		as(alice);
+		assertThat(articles.get(a.id()).sortOrder()).isZero();
+		assertThat(articles.get(b.id()).sortOrder()).isZero();
+	}
+
+	@Test
 	void deletingAPage_takesItsHistoryAndMarksAlong() {
 		as(alice);
 		var page = create("Runbook", DOC_A);

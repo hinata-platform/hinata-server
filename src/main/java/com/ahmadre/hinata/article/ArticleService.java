@@ -237,11 +237,19 @@ public class ArticleService {
 		if (ids.size() > MAX_ORDERED || new java.util.HashSet<>(ids).size() != ids.size()) {
 			throw ApiException.badRequest("error.article.orderInvalid");
 		}
-		List<Article> pages = ids.stream().map(id -> readable(id, user)).toList();
-		Article first = pages.getFirst();
-		for (Article page : pages) {
-			boolean sameLevel = Objects.equals(page.getParentId(), first.getParentId())
-					&& (first.getParentId() != null || sameSpace(page.getSpace(), first.getSpace()));
+		// One read for the whole level, through the same rule a listing applies, and
+		// only the fields the check needs. A page the caller does not read is simply
+		// not found, which is the same 404 as a page that does not exist.
+		Query level = Query.query(new Criteria().andOperator(Criteria.where("_id").in(ids),
+				access.sightOf(user).criteria()));
+		level.fields().include("_id").include("parentId").include("space");
+		List<org.bson.Document> pages = mongo.find(level, org.bson.Document.class, "articles");
+		if (pages.size() != ids.size()) throw ApiException.notFound("article");
+		org.bson.Document first = pages.getFirst();
+		for (org.bson.Document page : pages) {
+			boolean sameLevel = Objects.equals(page.getString("parentId"), first.getString("parentId"))
+					&& (first.getString("parentId") != null
+							|| sameSpace(page.getString("space"), first.getString("space")));
 			if (!sameLevel) throw ApiException.badRequest("error.article.orderNotSiblings");
 		}
 		org.springframework.data.mongodb.core.BulkOperations bulk = mongo.bulkOps(
