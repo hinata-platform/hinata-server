@@ -88,6 +88,13 @@ class DeviceTokenIntegrationTest {
 		when(gateway.registered()).thenReturn(true);
 	}
 
+	/** A Live Activity token as APNs hands it out: hex. */
+	private static final String ACTIVITY_TOKEN = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+	private static String la(int i) {
+		return String.format("bbbb%012x", i);
+	}
+
 	private static String key() {
 		byte[] key = new byte[32];
 		new SecureRandom().nextBytes(key);
@@ -117,19 +124,19 @@ class DeviceTokenIntegrationTest {
 	@Test
 	void aNotificationNeverReachesALiveActivityToken() {
 		controller.register(new DeviceController.RegisterRequest("fcm-phone", "ios", null, null, null, null));
-		registerActivity("activity-token", "ref-1");
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
 
 		push.sendToUser("user-1", "Title", "Body", "/issues/1");
 
 		verify(gateway, timeout(5_000)).push(eq("fcm-phone"), any(), any(), any(), any());
-		verify(gateway, never()).push(eq("activity-token"), any(), any(), any(), any());
+		verify(gateway, never()).push(eq(ACTIVITY_TOKEN), any(), any(), any(), any());
 	}
 
 	@Test
 	void theContentKeyIsStoredEncryptedAndOpensOnlyForItsOwner() {
-		registerActivity("activity-token", "ref-1");
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
 
-		DeviceToken stored = devices.findByToken("activity-token").orElseThrow();
+		DeviceToken stored = devices.findByToken(ACTIVITY_TOKEN).orElseThrow();
 
 		assertThat(stored.getKind()).isEqualTo(DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
 		assertThat(stored.getContentKey()).startsWith("v1:");
@@ -147,6 +154,11 @@ class DeviceTokenIntegrationTest {
 				"liveActivityUpdate", "../../etc", key(), "fcm"))).isInstanceOf(ApiException.class);
 		assertThatThrownBy(() -> controller.register(new DeviceController.RegisterRequest("t", "ios",
 				"somethingElse", null, null, null))).isInstanceOf(ApiException.class);
+		// Not an APNs token: too short, not hex, or far too long.
+		for (String token : List.of("abc123", "not-a-token-at-all-zz", "a".repeat(513))) {
+			assertThatThrownBy(() -> registerActivity(token, "ref-1")).isInstanceOfSatisfying(ApiException.class,
+					ex -> assertThat(ex.getMessageKey()).isEqualTo("error.device.invalid"));
+		}
 		assertThat(devices.count()).isZero();
 	}
 
@@ -162,25 +174,25 @@ class DeviceTokenIntegrationTest {
 
 	@Test
 	void aRotatedTokenReplacesTheOldOneAndThePersonKeepsAtMostTwenty() {
-		registerActivity("rotating-1", "ref-same");
-		registerActivity("rotating-2", "ref-same");
-		assertThat(devices.findByToken("rotating-1")).isEmpty();
-		assertThat(devices.findByToken("rotating-2")).isPresent();
+		registerActivity(la(901), "ref-same");
+		registerActivity(la(902), "ref-same");
+		assertThat(devices.findByToken(la(901))).isEmpty();
+		assertThat(devices.findByToken(la(902))).isPresent();
 
 		for (int i = 0; i < 25; i++) {
-			registerActivity("activity-" + i, "ref-" + i);
+			registerActivity(la(i), "ref-" + i);
 		}
 
 		List<DeviceToken> held = devices.findByUserIdAndKindOrderByCreatedAtAsc("user-1",
 				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
 		assertThat(held).hasSize(DeviceController.MAX_LIVE_ACTIVITIES);
-		assertThat(held).extracting(DeviceToken::getToken).contains("activity-24")
-				.doesNotContain("activity-0", "rotating-2");
+		assertThat(held).extracting(DeviceToken::getToken).contains(la(24))
+				.doesNotContain(la(0), la(902));
 	}
 
 	@Test
 	void expiresAtIsATtlIndex() {
-		registerActivity("activity-token", "ref-1");
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
 
 		boolean ttl = false;
 		for (Document index : mongo.getCollection("device_tokens").listIndexes()) {
@@ -194,20 +206,20 @@ class DeviceTokenIntegrationTest {
 
 	@Test
 	void theEndIsSentSealedAndDeletesTheToken() {
-		registerActivity("activity-token", "ref-1");
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
 		when(gateway.pushLiveActivity(anyString(), anyString(), any(), any(), any(), any(), any()))
 				.thenReturn(GatewayService.PushResult.SENT);
 
 		liveActivities.onTimer("user-1", null, Instant.now());
 
-		verify(gateway, timeout(5_000)).pushLiveActivity(eq("fcm-of-the-phone"), eq("activity-token"),
+		verify(gateway, timeout(5_000)).pushLiveActivity(eq("fcm-of-the-phone"), eq(ACTIVITY_TOKEN),
 				eq(GatewayService.LiveActivityEvent.END), any(SealedLiveActivityState.class), any(), eq(null), any());
-		awaitGone("activity-token");
+		awaitGone(ACTIVITY_TOKEN);
 	}
 
 	@Test
 	void anUpdateKeepsTheTokenAndADeadAnswerDropsIt() {
-		registerActivity("activity-token", "ref-1");
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
 		RunningTimer timer = RunningTimer.builder().id("t").userId("user-1").startedAt(Instant.now())
 				.mode(RunningTimer.Mode.COUNTDOWN).plannedMinutes(25).description("secret").build();
 		when(gateway.pushLiveActivity(anyString(), anyString(), any(), any(), any(), any(), any()))
@@ -215,14 +227,14 @@ class DeviceTokenIntegrationTest {
 
 		liveActivities.onTimer("user-1", timer, Instant.now());
 
-		verify(gateway, timeout(5_000)).pushLiveActivity(eq("fcm-of-the-phone"), eq("activity-token"),
+		verify(gateway, timeout(5_000)).pushLiveActivity(eq("fcm-of-the-phone"), eq(ACTIVITY_TOKEN),
 				eq(GatewayService.LiveActivityEvent.UPDATE), any(), any(), any(), eq(null));
-		assertThat(devices.findByToken("activity-token")).isPresent();
+		assertThat(devices.findByToken(ACTIVITY_TOKEN)).isPresent();
 
 		when(gateway.pushLiveActivity(anyString(), anyString(), any(), any(), any(), any(), any()))
 				.thenReturn(GatewayService.PushResult.DEAD);
 		liveActivities.onTimer("user-1", timer, Instant.now());
-		awaitGone("activity-token");
+		awaitGone(ACTIVITY_TOKEN);
 	}
 
 	@Test
@@ -230,7 +242,7 @@ class DeviceTokenIntegrationTest {
 		controller.register(new DeviceController.RegisterRequest("fcm-phone", "ios", null, null, null, null));
 		controller.register(new DeviceController.RegisterRequest("https://wns.example/channel", "windows",
 				null, null, null, null));
-		registerActivity("activity-token", "ref-1");
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
 		when(currentUser.requireId()).thenReturn("user-2");
 		controller.register(new DeviceController.RegisterRequest("fcm-other", "android", null, null, null, null));
 
@@ -242,9 +254,9 @@ class DeviceTokenIntegrationTest {
 
 	@Test
 	void unregisteringALiveActivityTokenDeletesItAndItsKey() {
-		registerActivity("activity-token", "ref-1");
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
 
-		controller.unregister(new DeviceController.UnregisterRequest("activity-token"));
+		controller.unregister(new DeviceController.UnregisterRequest(ACTIVITY_TOKEN));
 
 		assertThat(mongo.getCollection("device_tokens").countDocuments(new Document(Map.of()))).isZero();
 	}
