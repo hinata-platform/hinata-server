@@ -173,6 +173,44 @@ class DeviceTokenIntegrationTest {
 	}
 
 	@Test
+	void aPushTokenInUseByAnotherAccountIsNotTakenOver_untilItWasSilentForADay() {
+		when(currentUser.requireId()).thenReturn("user-2");
+		controller.register(new DeviceController.RegisterRequest("fcm-shared", "ios", null, null, null, null));
+		when(currentUser.requireId()).thenReturn("user-1");
+
+		assertThatThrownBy(() -> controller.register(new DeviceController.RegisterRequest("fcm-shared", "ios",
+				null, null, null, null))).isInstanceOfSatisfying(ApiException.class, ex -> {
+					assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+					assertThat(ex.getMessageKey()).isEqualTo("error.device.inUse");
+				});
+		assertThat(devices.findByToken("fcm-shared").orElseThrow().getUserId()).isEqualTo("user-2");
+
+		DeviceToken silent = devices.findByToken("fcm-shared").orElseThrow();
+		silent.setLastSeenAt(Instant.now().minus(DeviceController.TAKEOVER_AFTER).minusSeconds(60));
+		devices.save(silent);
+		controller.register(new DeviceController.RegisterRequest("fcm-shared", "ios", null, null, null, null));
+
+		assertThat(devices.findByToken("fcm-shared").orElseThrow().getUserId()).isEqualTo("user-1");
+	}
+
+	@Test
+	void aLiveActivityTokenOfAnotherAccountIsNeitherTakenNorDeleted() {
+		when(currentUser.requireId()).thenReturn("user-2");
+		registerActivity(ACTIVITY_TOKEN, "ref-theirs");
+		when(currentUser.requireId()).thenReturn("user-1");
+
+		assertThatThrownBy(() -> registerActivity(ACTIVITY_TOKEN, "ref-mine"))
+				.isInstanceOfSatisfying(ApiException.class, ex -> {
+					assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+					assertThat(ex.getMessageKey()).isEqualTo("error.device.inUse");
+				});
+
+		DeviceToken kept = devices.findByToken(ACTIVITY_TOKEN).orElseThrow();
+		assertThat(kept.getUserId()).isEqualTo("user-2");
+		assertThat(kept.getActivityId()).isEqualTo("ref-theirs");
+	}
+
+	@Test
 	void aRotatedTokenReplacesTheOldOneAndThePersonKeepsAtMostTwenty() {
 		registerActivity(la(901), "ref-same");
 		registerActivity(la(902), "ref-same");
