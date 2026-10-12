@@ -257,11 +257,13 @@ class ArticleHistoryIntegrationTest {
 						com.ahmadre.hinata.deletion.DeletionService.IssueStrategy.NONE, null, 0),
 				java.util.Locale.ENGLISH, new org.springframework.web.servlet.mvc.method.annotation.SseEmitter());
 		long until = System.currentTimeMillis() + 10_000;
-		while (projects.existsById(project.getId()) && System.currentTimeMillis() < until) {
-			Thread.onSpinWait();
+		while (projects.existsById(project.getId())) {
+			if (System.currentTimeMillis() > until) {
+				org.junit.jupiter.api.Assertions.fail("project deletion did not finish within 10 s");
+			}
+			java.util.concurrent.locks.LockSupport.parkNanos(50_000_000L);
 		}
 
-		assertThat(projects.existsById(project.getId())).isFalse();
 		var ofPage = org.springframework.data.mongodb.core.query.Query.query(
 				org.springframework.data.mongodb.core.query.Criteria.where("articleId").is(page.id()));
 		assertThat(mongo.count(ofPage, ArticleVersion.class)).isZero();

@@ -61,6 +61,13 @@ public class TimerLiveActivityPush {
 	 */
 	static final Duration STALLED = MIN_GAP.plusSeconds(30);
 
+	/**
+	 * Updates (not ends) one person may send per minute, counted per activity
+	 * reached: a timer changed every two seconds on a person with many phones
+	 * must not spend the gateway's budget of the whole server.
+	 */
+	static final int MAX_PUSHES_PER_MINUTE = 60;
+
 	/** People with a slot before idle ones are swept. */
 	private static final int MAX_TRACKED = 5_000;
 
@@ -104,11 +111,24 @@ public class TimerLiveActivityPush {
 	}
 
 	/** What is known about one person's pushes: when the last went out, and what waits for the next. */
-	private static final class Slot {
+	static final class Slot {
 		Instant lastSent = Instant.EPOCH;
 		Change waiting;
 		boolean scheduled;
 		Instant scheduledAt = Instant.EPOCH;
+		Instant windowStart = Instant.EPOCH;
+		int sentInWindow;
+
+		/** Takes [count] pushes from this minute's budget; false when it does not cover them. */
+		boolean spend(int count, Instant now) {
+			if (!windowStart.plus(Duration.ofMinutes(1)).isAfter(now)) {
+				windowStart = now;
+				sentInWindow = 0;
+			}
+			if (sentInWindow + count > MAX_PUSHES_PER_MINUTE) return false;
+			sentInWindow += count;
+			return true;
+		}
 	}
 
 	/**
@@ -126,7 +146,7 @@ public class TimerLiveActivityPush {
 		Change change = new Change(timer, at);
 		if (change.ends()) {
 			slots.remove(userId);
-			sendAll(userId, change);
+			sendAll(userId, change, null);
 			return;
 		}
 		evictIdle();
@@ -149,7 +169,7 @@ public class TimerLiveActivityPush {
 			slot.waiting = null;
 			slot.lastSent = now;
 		}
-		sendAll(userId, change);
+		sendAll(userId, change, slot);
 	}
 
 	/** Sends what waited out the gap, unless an end has taken the slot away meanwhile. */
@@ -162,12 +182,18 @@ public class TimerLiveActivityPush {
 			if (change == null || slots.get(userId) != slot) return;
 			slot.lastSent = Instant.now();
 		}
-		sendAll(userId, change);
+		sendAll(userId, change, slot);
 	}
 
-	private void sendAll(String userId, Change change) {
+	/** Sends [change] to every activity of [userId]; an update only within the [slot]'s budget. */
+	private void sendAll(String userId, Change change, Slot slot) {
 		List<DeviceToken> tokens = devices.findByUserIdAndKindOrderByCreatedAtAsc(userId,
 				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
+		if (slot != null) {
+			synchronized (slot) {
+				if (!slot.spend(tokens.size(), Instant.now())) return;
+			}
+		}
 		for (DeviceToken token : tokens) {
 			try {
 				send(token, change.timer(), change.at());
