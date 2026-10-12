@@ -54,6 +54,13 @@ public class TimerLiveActivityPush {
 	 */
 	static final Duration MIN_GAP = Duration.ofSeconds(2);
 
+	/**
+	 * A planned send that has not happened by then is taken as lost (the JVM
+	 * was busy, a task failed) and planned again, so one person's updates can
+	 * never stall behind it.
+	 */
+	static final Duration STALLED = MIN_GAP.plusSeconds(30);
+
 	/** People with a slot before idle ones are swept. */
 	private static final int MAX_TRACKED = 5_000;
 
@@ -101,6 +108,7 @@ public class TimerLiveActivityPush {
 		Instant lastSent = Instant.EPOCH;
 		Change waiting;
 		boolean scheduled;
+		Instant scheduledAt = Instant.EPOCH;
 	}
 
 	/**
@@ -128,10 +136,11 @@ public class TimerLiveActivityPush {
 			if (slot.waiting == null || !slot.waiting.at().isAfter(at)) {
 				slot.waiting = change;
 			}
-			if (slot.scheduled) return;
+			if (slot.scheduled && slot.scheduledAt.plus(STALLED).isAfter(now)) return;
 			Duration wait = Duration.between(now, slot.lastSent.plus(MIN_GAP));
 			if (wait.isPositive()) {
 				slot.scheduled = true;
+				slot.scheduledAt = now;
 				delay.schedule(() -> executor.execute(() -> flush(userId, slot)), wait.toMillis(),
 						TimeUnit.MILLISECONDS);
 				return;
@@ -173,9 +182,11 @@ public class TimerLiveActivityPush {
 	private void evictIdle() {
 		if (slots.size() <= MAX_TRACKED) return;
 		Instant quiet = Instant.now().minus(MIN_GAP);
+		Instant stalled = Instant.now().minus(STALLED);
 		slots.values().removeIf(slot -> {
 			synchronized (slot) {
-				return !slot.scheduled && slot.waiting == null && slot.lastSent.isBefore(quiet);
+				boolean planned = slot.scheduled && slot.scheduledAt.isAfter(stalled);
+				return !planned && slot.waiting == null && slot.lastSent.isBefore(quiet);
 			}
 		});
 	}
