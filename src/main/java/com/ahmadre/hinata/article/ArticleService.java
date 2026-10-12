@@ -178,14 +178,26 @@ public class ArticleService {
 		}
 		article.setParentId(parentId);
 		article.setTags(labels(article.getTags()));
-		Article before = articles.findById(article.getId()).orElse(null);
-		boolean edited = before != null && (!Objects.equals(before.getTitle(), article.getTitle())
-				|| !Objects.equals(before.getContentDoc(), article.getContentDoc()));
+		Article before = storedForHistory(article.getId());
+		boolean edited = before != null && ArticleHistory.changed(before, article);
 		if (edited) article.setLastEditorId(user.getId());
 		Article saved = articles.save(article);
 		if (edited) history.saved(before, saved, user.getId());
 		if (!to.equals(from)) moved(saved, from, user);
 		return saved;
+	}
+
+	/**
+	 * The stored page as far as its history needs it: what a version records and
+	 * whom and when a first version falls back to. The plain-text copy, the labels
+	 * and the issue links stay in the database.
+	 */
+	private Article storedForHistory(String id) {
+		Query query = Query.query(Criteria.where("_id").is(id));
+		// sortOrder rides along because the entity's constructor cannot take the primitive as null.
+		query.fields().include("title").include("contentDoc").include("lastEditorId").include("authorId")
+				.include("updatedAt").include("sortOrder");
+		return mongo.findOne(query, Article.class);
 	}
 
 	/**
