@@ -63,6 +63,8 @@ class ArticleHistoryIntegrationTest {
 	private ArticleHistoryController history;
 	@Autowired
 	private ArticleReadingController reading;
+	@Autowired
+	private com.ahmadre.hinata.deletion.DeletionService deletion;
 
 	@MockitoBean
 	private CurrentUser currentUser;
@@ -205,6 +207,40 @@ class ArticleHistoryIntegrationTest {
 		articles.delete(page.id());
 		assertThat(mongo.count(new org.springframework.data.mongodb.core.query.Query(), ArticleVersion.class)).isZero();
 		assertThat(mongo.count(new org.springframework.data.mongodb.core.query.Query(), ArticleReaderState.class)).isZero();
+	}
+
+	@Test
+	void deletingTheProject_takesTheHistoryAndMarksOfItsPagesAlong() {
+		Project other = projects.save(Project.builder().key("OTH").name("Andere").leadId(alice.getId())
+				.leadIds(new ArrayList<>(List.of(alice.getId())))
+				.memberIds(new ArrayList<>(List.of(alice.getId()))).build());
+		as(alice);
+		var page = create("Runbook", DOC_A);
+		articles.update(page.id(), edit("Runbook", DOC_B));
+		reading.star(page.id());
+		reading.viewed(page.id());
+		var kept = articles.create(new ArticleController.ArticleRequest("Bleibt", null, DOC_A, other.getId(), null,
+				null, "Wissen", null, null, null));
+		reading.star(kept.id());
+
+		deletion.deleteProject(project,
+				new com.ahmadre.hinata.deletion.DeletionService.ProjectDeleteOptions(
+						com.ahmadre.hinata.deletion.DeletionService.IssueStrategy.NONE, null, 0),
+				java.util.Locale.ENGLISH, new org.springframework.web.servlet.mvc.method.annotation.SseEmitter());
+		long until = System.currentTimeMillis() + 10_000;
+		while (projects.existsById(project.getId()) && System.currentTimeMillis() < until) {
+			Thread.onSpinWait();
+		}
+
+		assertThat(projects.existsById(project.getId())).isFalse();
+		var ofPage = org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("articleId").is(page.id()));
+		assertThat(mongo.count(ofPage, ArticleVersion.class)).isZero();
+		assertThat(mongo.count(ofPage, ArticleReaderState.class)).isZero();
+		var ofKept = org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("articleId").is(kept.id()));
+		assertThat(mongo.count(ofKept, ArticleVersion.class)).isEqualTo(1);
+		assertThat(mongo.count(ofKept, ArticleReaderState.class)).isEqualTo(1);
 	}
 
 	private ArticleController.ArticleResponse create(String title, String doc) {

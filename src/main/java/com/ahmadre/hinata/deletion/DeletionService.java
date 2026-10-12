@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.deletion;
 
 import com.ahmadre.hinata.article.Article;
+import com.ahmadre.hinata.article.ArticleService;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
@@ -97,6 +98,7 @@ public class DeletionService {
 	private final MessageSource messages;
 	private final com.ahmadre.hinata.issue.IssueWatcherCleanup watcherCleanup;
 	private final List<ProjectDeletionHook> projectHooks;
+	private final ArticleService articleService;
 
 	// ── public types ────────────────────────────────────────────────────────
 
@@ -500,9 +502,8 @@ public class DeletionService {
 	}
 
 	private long deleteArticles(String pid, DeletionStream progress) {
-		long count = mongo.count(byProjectId(pid), Article.class);
 		progress.progress("deletingArticles", 0, 1);
-		mongo.remove(byProjectId(pid), Article.class);
+		long count = articleService.deleteAllOfProject(pid);
 		progress.progress("deletingArticles", 1, 1);
 		return count;
 	}

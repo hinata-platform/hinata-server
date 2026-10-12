@@ -347,6 +347,24 @@ public class ArticleService {
 		reading.deleteOf(List.of(article.getId()));
 	}
 
+	/**
+	 * Removes every page of a deleted project, with their saved versions and
+	 * everybody's favourites and recently opened marks of them: those rows name
+	 * the pages and would otherwise outlive them for good. Returns how many pages
+	 * went.
+	 */
+	public long deleteAllOfProject(String projectId) {
+		Query ofProject = Query.query(Criteria.where("projectId").is(projectId));
+		ofProject.fields().include("_id");
+		List<String> ids = mongo.find(ofProject, org.bson.Document.class, "articles").stream()
+				.map(com.ahmadre.hinata.common.MongoIds::of).toList();
+		if (ids.isEmpty()) return 0;
+		mongo.remove(Query.query(Criteria.where("_id").in(ids)), Article.class);
+		history.deleteOf(ids);
+		reading.deleteOf(ids);
+		return ids.size();
+	}
+
 	/** Refuses to file a page under itself or under one of its own descendants. */
 	private void assertNotBelow(Article parent, String articleId) {
 		Article cursor = parent;
