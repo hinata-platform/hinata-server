@@ -75,6 +75,8 @@ class DeviceTokenIntegrationTest {
 	private LiveActivityKeys keys;
 	@Autowired
 	private ApplicationEventPublisher events;
+	@Autowired
+	private org.springframework.context.ApplicationContext context;
 
 	@MockitoBean
 	private CurrentUser currentUser;
@@ -255,6 +257,33 @@ class DeviceTokenIntegrationTest {
 		verify(gateway, timeout(5_000)).pushLiveActivity(eq("fcm-of-the-phone"), eq(ACTIVITY_TOKEN),
 				eq(GatewayService.LiveActivityEvent.END), any(SealedLiveActivityState.class), any(), eq(null), any());
 		awaitGone(ACTIVITY_TOKEN);
+	}
+
+	@Test
+	void liveActivityPushesRunOnTheirOwnPool_andPlainAsyncKeepsTheApplicationExecutor() {
+		registerActivity(ACTIVITY_TOKEN, "ref-1");
+		java.util.concurrent.atomic.AtomicReference<String> thread = new java.util.concurrent.atomic.AtomicReference<>();
+		when(gateway.pushLiveActivity(anyString(), anyString(), any(), any(), any(), any(), any()))
+				.thenAnswer(call -> {
+					thread.set(Thread.currentThread().getName());
+					return GatewayService.PushResult.SENT;
+				});
+
+		liveActivities.onTimer("user-1", null, Instant.now());
+
+		verify(gateway, timeout(5_000)).pushLiveActivity(anyString(), anyString(), any(), any(), any(), any(), any());
+		assertThat(thread.get()).startsWith("live-activity-");
+
+		controller.register(new DeviceController.RegisterRequest("fcm-phone", "ios", null, null, null, null));
+		java.util.concurrent.atomic.AtomicReference<String> pushThread = new java.util.concurrent.atomic.AtomicReference<>();
+		when(gateway.push(anyString(), any(), any(), any(), any())).thenAnswer(call -> {
+			pushThread.set(Thread.currentThread().getName());
+			return GatewayService.PushResult.SENT;
+		});
+		push.sendToUser("user-1", "Title", "Body", "/issues/1");
+		verify(gateway, timeout(5_000)).push(eq("fcm-phone"), any(), any(), any(), any());
+		assertThat(context.containsBean("applicationTaskExecutor")).isTrue();
+		assertThat(pushThread.get()).isNotNull().doesNotStartWith("live-activity-");
 	}
 
 	@Test

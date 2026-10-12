@@ -51,7 +51,7 @@ public class TimerLiveActivityPush {
 	 * Sends [timer] — or the end, for null — to every registered activity of
 	 * [userId]. [at] is the moment of the change, taken on the caller's thread.
 	 */
-	@Async
+	@Async(LiveActivityExecutorConfig.EXECUTOR)
 	public void onTimer(String userId, RunningTimer timer, Instant at) {
 		if (userId == null || !settings.advancedEnabled() || !gateway.registered()) return;
 		List<DeviceToken> tokens = devices.findByUserIdAndKindOrderByCreatedAtAsc(userId,

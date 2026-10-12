@@ -60,6 +60,12 @@ public class GatewayService {
 	private static final long LINK_TTL_SECONDS = 7L * 24 * 3600;
 	/** Grace after a handshake's declared expiry before the local poller gives up. */
 	private static final long HANDSHAKE_GRACE_MS = 5_000L;
+	/**
+	 * How long one Live Activity update may take. A lock screen that is a few
+	 * seconds behind is no loss; two pool threads held for a quarter minute each
+	 * would hold up every change behind them.
+	 */
+	private static final Duration LIVE_ACTIVITY_TIMEOUT = Duration.ofSeconds(5);
 
 	private final HinataProperties props;
 	private final ConnectEnrollmentRepository enrollments;
@@ -522,7 +528,7 @@ public class GatewayService {
 				+ "}}";
 		try {
 			HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(gw() + "/push/send"))
-					.timeout(Duration.ofSeconds(15))
+					.timeout(LIVE_ACTIVITY_TIMEOUT)
 					.header("Content-Type", "application/json")
 					.header("X-Server-Id", e.getServerId())
 					.header("X-Server-Secret", e.getSecret())
