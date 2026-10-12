@@ -48,6 +48,12 @@ public class DeviceController {
 
 	private static final Pattern ACTIVITY_ID = Pattern.compile("[A-Za-z0-9-]{1,64}");
 
+	/**
+	 * An APNs Live Activity token is hex. Anything else could never be delivered
+	 * and would only spend the gateway's budget on the way to being refused.
+	 */
+	private static final Pattern ACTIVITY_TOKEN = Pattern.compile("[0-9a-fA-F]{16,512}");
+
 	private final CurrentUser currentUser;
 	private final DeviceTokenRepository devices;
 	private final LiveActivityKeys keys;
@@ -101,7 +107,8 @@ public class DeviceController {
 		}
 		String activityId = request.activityId();
 		byte[] key = contentKeyOf(request.contentKey());
-		if (activityId == null || !ACTIVITY_ID.matcher(activityId).matches() || key == null
+		if (!ACTIVITY_TOKEN.matcher(request.token()).matches()
+				|| activityId == null || !ACTIVITY_ID.matcher(activityId).matches() || key == null
 				|| request.fcmToken() == null || request.fcmToken().isBlank()) {
 			throw ApiException.badRequest("error.device.invalid");
 		}
