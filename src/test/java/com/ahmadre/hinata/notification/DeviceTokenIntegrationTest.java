@@ -287,6 +287,34 @@ class DeviceTokenIntegrationTest {
 	}
 
 	@Test
+	void aBurstOfChangesBecomesOneLaterUpdateWithTheNewestState_andTheEndGoesAtOnce() {
+		when(currentUser.requireId()).thenReturn("user-burst");
+		registerActivity(ACTIVITY_TOKEN, "ref-burst");
+		when(gateway.pushLiveActivity(anyString(), anyString(), any(), any(), any(), any(), any()))
+				.thenReturn(GatewayService.PushResult.SENT);
+		Instant base = Instant.now();
+
+		for (int i = 0; i < 5; i++) {
+			RunningTimer timer = RunningTimer.builder().id("t").userId("user-burst").startedAt(base)
+					.mode(RunningTimer.Mode.COUNTDOWN).plannedMinutes(25 + i).build();
+			liveActivities.onTimer("user-burst", timer, base.plusMillis(i));
+		}
+
+		org.mockito.ArgumentCaptor<Instant> sentAt = org.mockito.ArgumentCaptor.forClass(Instant.class);
+		verify(gateway, timeout(5_000).times(2)).pushLiveActivity(anyString(), eq(ACTIVITY_TOKEN),
+				eq(GatewayService.LiveActivityEvent.UPDATE), any(), sentAt.capture(), any(), any());
+		verify(gateway, org.mockito.Mockito.after(500).times(2)).pushLiveActivity(anyString(), eq(ACTIVITY_TOKEN),
+				eq(GatewayService.LiveActivityEvent.UPDATE), any(), any(), any(), any());
+		assertThat(sentAt.getAllValues().getLast()).isEqualTo(base.plusMillis(4));
+
+		liveActivities.onTimer("user-burst", null, Instant.now());
+
+		verify(gateway, timeout(1_000)).pushLiveActivity(anyString(), eq(ACTIVITY_TOKEN),
+				eq(GatewayService.LiveActivityEvent.END), any(), any(), eq(null), any());
+		awaitGone(ACTIVITY_TOKEN);
+	}
+
+	@Test
 	void anUpdateKeepsTheTokenAndADeadAnswerDropsIt() {
 		registerActivity(ACTIVITY_TOKEN, "ref-1");
 		RunningTimer timer = RunningTimer.builder().id("t").userId("user-1").startedAt(Instant.now())
