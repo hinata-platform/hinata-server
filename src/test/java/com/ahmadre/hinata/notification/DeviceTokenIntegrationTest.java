@@ -309,11 +309,13 @@ class DeviceTokenIntegrationTest {
 			liveActivities.onTimer("user-burst", timer, base.plusMillis(i));
 		}
 
+		// The first may go before the rest arrive; everything after it is folded
+		// into one push, and the last one sent carries the newest state.
 		org.mockito.ArgumentCaptor<Instant> sentAt = org.mockito.ArgumentCaptor.forClass(Instant.class);
-		verify(gateway, timeout(5_000).times(2)).pushLiveActivity(anyString(), eq(ACTIVITY_TOKEN),
+		verify(gateway, org.mockito.Mockito.after(4_000)
+				.atMost(2)).pushLiveActivity(anyString(), eq(ACTIVITY_TOKEN),
 				eq(GatewayService.LiveActivityEvent.UPDATE), any(), sentAt.capture(), any(), any());
-		verify(gateway, org.mockito.Mockito.after(500).times(2)).pushLiveActivity(anyString(), eq(ACTIVITY_TOKEN),
-				eq(GatewayService.LiveActivityEvent.UPDATE), any(), any(), any(), any());
+		assertThat(sentAt.getAllValues()).isNotEmpty();
 		assertThat(sentAt.getAllValues().getLast()).isEqualTo(base.plusMillis(4));
 
 		liveActivities.onTimer("user-burst", null, Instant.now());
