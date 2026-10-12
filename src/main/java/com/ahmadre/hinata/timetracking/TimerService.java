@@ -96,6 +96,7 @@ public class TimerService {
 	private final UserRepository users;
 	private final UserEvents userEvents;
 	private final NotificationService notifications;
+	private final TimerLiveActivityPush liveActivities;
 	private final AuditService audit;
 	private final MongoTemplate mongo;
 	private final Clock clock;
@@ -1166,6 +1167,14 @@ public class TimerService {
 		}
 		catch (RuntimeException ex) {
 			log.debug("[time] could not publish timer event for {}: {}", userId, ex.toString());
+		}
+		// The iPhones whose app sleeps (HIN-103). Its own pool thread; the moment
+		// is taken here, so two changes in a row keep their order at APNs.
+		try {
+			liveActivities.onTimer(userId, timer, clock.instant());
+		}
+		catch (RuntimeException ex) {
+			log.debug("[time] could not hand the timer to the live activities of {}: {}", userId, ex.toString());
 		}
 	}
 }

@@ -484,6 +484,61 @@ public class GatewayService {
 		}
 	}
 
+	/** Which way a Live Activity push moves the activity. */
+	public enum LiveActivityEvent {
+		UPDATE("update"), END("end");
+
+		private final String wire;
+
+		LiveActivityEvent(String wire) {
+			this.wire = wire;
+		}
+	}
+
+	/**
+	 * Forwards one sealed Live Activity state to the gateway (HIN-103), which
+	 * hands it to FCM for APNs.
+	 *
+	 * <p>The gateway receives the device's FCM token, the activity's own token,
+	 * the sealed state and three times: when it was sent, when the activity goes
+	 * stale and when it goes away. It cannot read the state. {@code timestamp}
+	 * is when the change happened, not when it is sent: APNs drops an update
+	 * older than the one it already delivered, which keeps two pushes that
+	 * overtook each other from showing the earlier state last. Nothing here
+	 * carries a title or a body, so nothing is ever shown as a notification.
+	 */
+	public PushResult pushLiveActivity(String fcmToken, String activityToken, LiveActivityEvent event,
+			SealedLiveActivityState state, Instant timestamp, Instant staleDate, Instant dismissalDate) {
+		if (!props.getGateway().isEnabled() || !registered()) return PushResult.DISABLED;
+		ConnectEnrollment e = enrollment;
+		String json = "{\"token\":" + jstr(fcmToken)
+				+ ",\"liveActivity\":{\"token\":" + jstr(activityToken)
+				+ ",\"event\":" + jstr(event.wire)
+				+ ",\"timestamp\":" + timestamp.getEpochSecond()
+				+ ",\"contentState\":{\"v\":" + state.v() + ",\"n\":" + jstr(state.n())
+				+ ",\"c\":" + jstr(state.c()) + "}"
+				+ (staleDate == null ? "" : ",\"staleDate\":" + staleDate.getEpochSecond())
+				+ (dismissalDate == null ? "" : ",\"dismissalDate\":" + dismissalDate.getEpochSecond())
+				+ "}}";
+		try {
+			HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(gw() + "/push/send"))
+					.timeout(Duration.ofSeconds(15))
+					.header("Content-Type", "application/json")
+					.header("X-Server-Id", e.getServerId())
+					.header("X-Server-Secret", e.getSecret())
+					.POST(HttpRequest.BodyPublishers.ofString(json)).build(),
+					HttpResponse.BodyHandlers.ofString());
+			int sc = r.statusCode();
+			if (sc / 100 == 2) return PushResult.SENT;
+			if (sc == 404) return PushResult.DEAD;
+			log.warn("Gateway live activity push failed: HTTP {}", sc);
+			return PushResult.FAILED;
+		} catch (Exception ex) {
+			log.warn("Gateway live activity push error: {}", ex.getMessage());
+			return PushResult.FAILED;
+		}
+	}
+
 	private String gw() {
 		String u = props.getGateway().getBaseUrl();
 		return u.endsWith("/") ? u.substring(0, u.length() - 1) : u;
