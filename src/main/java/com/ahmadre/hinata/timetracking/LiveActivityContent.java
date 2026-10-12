@@ -16,7 +16,9 @@ import java.util.Base64;
  * The state of a Live Activity as it travels to the iPhone, sealed (HIN-103).
  *
  * <p>The plaintext is the timer's shape and nothing else: mode, phase, the
- * completed cycles, the start, the end of the stretch and whether it ended.
+ * completed cycles, the start, the end of the stretch, when the activity goes
+ * away and whether it ended. The extension takes that last moment as it is,
+ * so the rule for it lives here and in the app, never a third time.
  * No description, project, issue, tag or id ever goes in — the words on the
  * lock screen come from the app, in the reader's language, kept on the phone.
  *
@@ -62,6 +64,7 @@ public final class LiveActivityContent {
 			s.append(",\"cyclesDone\":").append(cyclesDone);
 			s.append(",\"startedAt\":").append(startedAt == null ? "null" : startedAt.toEpochMilli());
 			s.append(",\"endsAt\":").append(endsAt == null ? "null" : endsAt.toEpochMilli());
+			s.append(",\"dismissAt\":").append(dismissAt == null ? "null" : dismissAt.toEpochMilli());
 			s.append(",\"ended\":").append(ended);
 			return s.append('}').toString();
 		}

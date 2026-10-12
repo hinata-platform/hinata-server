@@ -46,7 +46,7 @@ class LiveActivityContentTest {
 				"user-1", "activity-secret", "billable", "description");
 		assertThat(json).isEqualTo("{\"mode\":\"pomodoro\",\"phase\":\"work\",\"cyclesDone\":2,\"startedAt\":"
 				+ START.toEpochMilli() + ",\"endsAt\":" + START.plusSeconds(25 * 60).toEpochMilli()
-				+ ",\"ended\":false}");
+				+ ",\"dismissAt\":" + START.plusSeconds(85 * 60).toEpochMilli() + ",\"ended\":false}");
 	}
 
 	@Test
@@ -104,9 +104,10 @@ class LiveActivityContentTest {
 		byte[] key = new byte[32];
 		for (int i = 0; i < key.length; i++) key[i] = (byte) i;
 		SealedLiveActivityState vector = new SealedLiveActivityState(1, "AAECAwQFBgcICQoL",
-				"PCC7dKGA4CGvIvj+350cAvS4pRjSCzcdSwLHv3McbN4tMs2FzK136zDLEYiqvRgUzCoU7Ciixr5+4wgjKdTM38cF9Erj4RZRLHiIC4HrfalMqPNTQVpiX8TPqPxIwIm959o8iMAkrDikel/eOxBcce5lDgxvbFZM1VoVi7P9Kg==");
+				"PCC7dKGA4CGvIvj+350cAvS4pRjSCzcdSwLHv3McbN4tMs2FzK136zDLEYiqvRgUzCoU7Ciixr5+4wgjKdTM38cF9Erj4RZRLHiIC4HrfalMqPNTQVpiX8TPqPxIwIm959o9j9csoWntXUqQckQWRotQW53R9RWqfc977+eICmvfcDqg1bu4NnUH+gPLNTHjDJ1OApcvwhH3");
 
 		assertThat(LiveActivityContent.open(vector, key, "vector-activity")).isEqualTo("{\"mode\":\"countdown\",\"phase\":null,"
-				+ "\"cyclesDone\":0,\"startedAt\":1791792000000,\"endsAt\":1791792600000,\"ended\":false}");
+				+ "\"cyclesDone\":0,\"startedAt\":1791792000000,\"endsAt\":1791792600000,"
+				+ "\"dismissAt\":1791796200000,\"ended\":false}");
 	}
 }
