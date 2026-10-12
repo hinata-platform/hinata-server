@@ -4,8 +4,9 @@ import com.ahmadre.hinata.notification.DeviceToken;
 import com.ahmadre.hinata.notification.DeviceTokenRepository;
 import com.ahmadre.hinata.notification.GatewayService;
 import com.ahmadre.hinata.notification.LiveActivityKeys;
-import lombok.RequiredArgsConstructor;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -16,6 +17,12 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Moves the Live Activities of a person's iPhones along with their timer
@@ -35,35 +42,142 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class TimerLiveActivityPush {
 
 	/** How long a token outlives the latest moment its activity can still be on screen. */
 	static final Duration TOKEN_GRACE = Duration.ofHours(4);
+
+	/**
+	 * The least time between two updates to one person's activities. Changes in
+	 * between are folded into one: only the newest state is sent when the gap is
+	 * over. An end never waits.
+	 */
+	static final Duration MIN_GAP = Duration.ofSeconds(2);
+
+	/** People with a slot before idle ones are swept. */
+	private static final int MAX_TRACKED = 5_000;
 
 	private final DeviceTokenRepository devices;
 	private final LiveActivityKeys keys;
 	private final GatewayService gateway;
 	private final TimeTrackingSettings settings;
 	private final MongoTemplate mongo;
+	private final Executor executor;
+	private final Map<String, Slot> slots = new ConcurrentHashMap<>();
+
+	/** Only waits out a gap and hands the send back to {@link #executor}; never sends itself. */
+	private final ScheduledExecutorService delay = Executors.newSingleThreadScheduledExecutor(r -> {
+		Thread t = new Thread(r, "live-activity-delay");
+		t.setDaemon(true);
+		return t;
+	});
+
+	public TimerLiveActivityPush(DeviceTokenRepository devices, LiveActivityKeys keys, GatewayService gateway,
+			TimeTrackingSettings settings, MongoTemplate mongo,
+			@Qualifier(LiveActivityExecutorConfig.EXECUTOR) Executor executor) {
+		this.devices = devices;
+		this.keys = keys;
+		this.gateway = gateway;
+		this.settings = settings;
+		this.mongo = mongo;
+		this.executor = executor;
+	}
+
+	@PreDestroy
+	void stop() {
+		delay.shutdownNow();
+	}
+
+	/** A change of a timer: the timer after it, or null once it stopped, and when it happened. */
+	private record Change(RunningTimer timer, Instant at) {
+
+		boolean ends() {
+			return timer == null || !LiveActivityContent.of(timer).dismissAt().isAfter(at);
+		}
+	}
+
+	/** What is known about one person's pushes: when the last went out, and what waits for the next. */
+	private static final class Slot {
+		Instant lastSent = Instant.EPOCH;
+		Change waiting;
+		boolean scheduled;
+	}
 
 	/**
 	 * Sends [timer] — or the end, for null — to every registered activity of
 	 * [userId]. [at] is the moment of the change, taken on the caller's thread.
+	 *
+	 * <p>At most one update per person every {@link #MIN_GAP}: a change inside
+	 * the gap waits, and a newer one replaces it, so a burst of taps costs one
+	 * push with the state it ended in. The end of a timer goes at once and drops
+	 * whatever was waiting.
 	 */
 	@Async(LiveActivityExecutorConfig.EXECUTOR)
 	public void onTimer(String userId, RunningTimer timer, Instant at) {
 		if (userId == null || !settings.advancedEnabled() || !gateway.registered()) return;
+		Change change = new Change(timer, at);
+		if (change.ends()) {
+			slots.remove(userId);
+			sendAll(userId, change);
+			return;
+		}
+		evictIdle();
+		Slot slot = slots.computeIfAbsent(userId, id -> new Slot());
+		Instant now = Instant.now();
+		synchronized (slot) {
+			if (slot.waiting == null || !slot.waiting.at().isAfter(at)) {
+				slot.waiting = change;
+			}
+			if (slot.scheduled) return;
+			Duration wait = Duration.between(now, slot.lastSent.plus(MIN_GAP));
+			if (wait.isPositive()) {
+				slot.scheduled = true;
+				delay.schedule(() -> executor.execute(() -> flush(userId, slot)), wait.toMillis(),
+						TimeUnit.MILLISECONDS);
+				return;
+			}
+			change = slot.waiting;
+			slot.waiting = null;
+			slot.lastSent = now;
+		}
+		sendAll(userId, change);
+	}
+
+	/** Sends what waited out the gap, unless an end has taken the slot away meanwhile. */
+	private void flush(String userId, Slot slot) {
+		Change change;
+		synchronized (slot) {
+			slot.scheduled = false;
+			change = slot.waiting;
+			slot.waiting = null;
+			if (change == null || slots.get(userId) != slot) return;
+			slot.lastSent = Instant.now();
+		}
+		sendAll(userId, change);
+	}
+
+	private void sendAll(String userId, Change change) {
 		List<DeviceToken> tokens = devices.findByUserIdAndKindOrderByCreatedAtAsc(userId,
 				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
 		for (DeviceToken token : tokens) {
 			try {
-				send(token, timer, at);
+				send(token, change.timer(), change.at());
 			}
 			catch (RuntimeException ex) {
 				log.debug("[time] live activity push failed: {}", ex.toString());
 			}
 		}
+	}
+
+	/** Slots nobody waits on say nothing a fresh one would not; dropped once there are many. */
+	private void evictIdle() {
+		if (slots.size() <= MAX_TRACKED) return;
+		Instant quiet = Instant.now().minus(MIN_GAP);
+		slots.values().removeIf(slot -> {
+			synchronized (slot) {
+				return !slot.scheduled && slot.waiting == null && slot.lastSent.isBefore(quiet);
+			}
+		});
 	}
 
 	private void send(DeviceToken token, RunningTimer timer, Instant at) {
