@@ -4,6 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.timetracking.RunningTimer;
+import com.ahmadre.hinata.timetracking.TimeTrackingSettings;
 import com.ahmadre.hinata.timetracking.TimerLiveActivityPush;
 import com.ahmadre.hinata.user.UserService;
 import org.bson.Document;
@@ -15,6 +16,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -76,6 +78,8 @@ class DeviceTokenIntegrationTest {
 	private CurrentUser currentUser;
 	@MockitoBean
 	private GatewayService gateway;
+	@MockitoSpyBean
+	private TimeTrackingSettings timeTracking;
 
 	@BeforeEach
 	void reset() {
@@ -143,6 +147,16 @@ class DeviceTokenIntegrationTest {
 				"liveActivityUpdate", "../../etc", key(), "fcm"))).isInstanceOf(ApiException.class);
 		assertThatThrownBy(() -> controller.register(new DeviceController.RegisterRequest("t", "ios",
 				"somethingElse", null, null, null))).isInstanceOf(ApiException.class);
+		assertThat(devices.count()).isZero();
+	}
+
+	@Test
+	void aLiveActivityIsRefusedWhileTheTimeModuleIsOff() {
+		when(timeTracking.advancedEnabled()).thenReturn(false);
+
+		assertThatThrownBy(() -> registerActivity("ab12cd34ef56ab78", "ref-1"))
+				.isInstanceOfSatisfying(ApiException.class,
+						ex -> assertThat(ex.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND));
 		assertThat(devices.count()).isZero();
 	}
 
