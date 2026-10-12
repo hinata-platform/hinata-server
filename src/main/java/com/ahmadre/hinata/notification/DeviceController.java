@@ -64,6 +64,7 @@ public class DeviceController {
 	private final CurrentUser currentUser;
 	private final DeviceTokenRepository devices;
 	private final LiveActivityKeys keys;
+	private final LiveActivityRegistrationLimiter registrations;
 	/** The extended time tracking owns the timer, and so its Live Activity. */
 	private final TimeTrackingSettings timeTracking;
 
@@ -128,6 +129,7 @@ public class DeviceController {
 		if (devices.findByToken(request.token()).filter(other -> !userId.equals(other.getUserId())).isPresent()) {
 			throw ApiException.conflict("error.device.inUse");
 		}
+		registrations.consume(userId);
 		List<DeviceToken> held = devices.findByUserIdAndKindOrderByCreatedAtAsc(userId,
 				DeviceToken.Kind.LIVE_ACTIVITY_UPDATE);
 		// The same activity under a rotated token goes; of the others, the oldest

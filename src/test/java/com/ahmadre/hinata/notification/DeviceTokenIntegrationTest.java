@@ -48,6 +48,8 @@ import static org.mockito.Mockito.when;
 		"hinata.mongodb.tls.enabled=false",
 		"hinata.demo.seed=false",
 		"hinata.rate-limit.enabled=false",
+		// Far above what the tests here register; the budget has a test of its own.
+		"hinata.rate-limit.live-activity-registrations-per-hour=1000",
 		"hinata.time-tracking.advanced-enabled=true",
 		"hinata.ics.secret=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
 		"management.health.mail.enabled=false"

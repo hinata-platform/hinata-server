@@ -381,6 +381,14 @@ public class HinataProperties {
 		 */
 		@Min(1)
 		private int timeOffRequestsPerDay = 50;
+		/**
+		 * Live Activity tokens one person may register per hour. Every token is a
+		 * target the server pushes to through the gateway, whose budget all
+		 * instances share; an iPhone registers one per timer it shows and again when
+		 * APNs rotates it, which stays far below this.
+		 */
+		@Min(1)
+		private int liveActivityRegistrationsPerHour = 20;
 		/** Failed logins per account before a temporary database-backed block. */
 		@Min(3)
 		private int maxLoginFailures = 5;
