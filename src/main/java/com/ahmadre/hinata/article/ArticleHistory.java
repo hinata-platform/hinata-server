@@ -51,14 +51,20 @@ public class ArticleHistory {
 	}
 
 	/**
+	 * Whether a save makes a new version: the title or the text differs. The one
+	 * place this rule lives; the service asks it to decide who edited last.
+	 */
+	static boolean changed(Article before, Article after) {
+		return !Objects.equals(before.getTitle(), after.getTitle())
+				|| !Objects.equals(before.getContentDoc(), after.getContentDoc());
+	}
+
+	/**
 	 * Records the state {@code after} if it differs from {@code before} in title or
 	 * text. {@code before} is the page as stored before this save.
 	 */
 	void saved(Article before, Article after, String editorId) {
-		if (Objects.equals(before.getTitle(), after.getTitle())
-				&& Objects.equals(before.getContentDoc(), after.getContentDoc())) {
-			return;
-		}
+		if (!changed(before, after)) return;
 		int latest = latestNumber(after.getId());
 		if (latest == 0) {
 			String previousEditor = before.getLastEditorId() != null ? before.getLastEditorId() : before.getAuthorId();
