@@ -58,14 +58,14 @@ public class ArticleController {
 	 * byte-for-byte match of the entity's current JSON, so the client
 	 * {@code Article.fromJson} is unchanged.
 	 */
-	public record ArticleResponse(String id, String projectId, String teamId, boolean organization,
+	public record ArticleResponse(String id, String projectId, String teamId, Boolean organization,
 			String parentId,
 			String space, String icon, String title, String content, String contentDoc,
 			List<String> tags, String authorId, int sortOrder, java.time.Instant createdAt,
 			java.time.Instant updatedAt, String lastEditorId) {
 
 		public static ArticleResponse from(Article a) {
-			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.isOrganizationWide(),
+			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.getOrganization(),
 					a.getParentId(),
 					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getContentDoc(),
 					a.getTags(), a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt(),
