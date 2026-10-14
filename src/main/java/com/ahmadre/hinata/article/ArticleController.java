@@ -42,6 +42,8 @@ public class ArticleController {
 			@Size(max = LexicalJson.MAX_JSON_CHARS) String contentDoc,
 			String projectId,
 			String teamId,
+			/** Shared with the whole organisation; only without project and team. */
+			Boolean organization,
 			String parentId,
 			@Size(max = 60) String space,
 			@Size(max = 60) String icon,
@@ -56,13 +58,15 @@ public class ArticleController {
 	 * byte-for-byte match of the entity's current JSON, so the client
 	 * {@code Article.fromJson} is unchanged.
 	 */
-	public record ArticleResponse(String id, String projectId, String teamId, String parentId,
+	public record ArticleResponse(String id, String projectId, String teamId, boolean organization,
+			String parentId,
 			String space, String icon, String title, String content, String contentDoc,
 			List<String> tags, String authorId, int sortOrder, java.time.Instant createdAt,
 			java.time.Instant updatedAt, String lastEditorId) {
 
 		public static ArticleResponse from(Article a) {
-			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.getParentId(),
+			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.isOrganizationWide(),
+					a.getParentId(),
 					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getContentDoc(),
 					a.getTags(), a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt(),
 					a.getLastEditorId());
@@ -113,7 +117,8 @@ public class ArticleController {
 		User user = currentUser.require();
 		RichText body = richText.fromRequest(request.contentDoc(), request.content());
 		return ArticleResponse.from(service.create(user, new ArticleService.Draft(request.title(), body,
-				request.projectId(), request.teamId(), request.parentId(), request.space(), request.icon(),
+				request.projectId(), request.teamId(), Boolean.TRUE.equals(request.organization()),
+				request.parentId(), request.space(), request.icon(),
 				request.tags(), request.sortOrder())));
 	}
 
@@ -146,19 +151,23 @@ public class ArticleController {
 		return ArticleResponse.from(service.save(article, request.parentId(), user));
 	}
 
-	/** Where a page lives. Both null makes it private to its author. */
-	public record PlaceRequest(String projectId, String teamId) {
+	/**
+	 * Where a page lives. {@code organization} shares it with every account; all
+	 * empty makes it private to its author.
+	 */
+	public record PlaceRequest(String projectId, String teamId, Boolean organization) {
 	}
 
 	/**
 	 * Moves a top-level page, with everything filed under it, into a project, a
-	 * team or the author's private pages. Who reads it changes with it, so the
+	 * team, the whole organisation or the author's private pages. Who reads it changes with it, so the
 	 * caller must reach the new place.
 	 */
 	@PutMapping("/{id}/place")
 	public ArticleResponse place(@PathVariable String id, @RequestBody PlaceRequest request) {
 		User user = currentUser.require();
-		return ArticleResponse.from(service.place(id, request.projectId(), request.teamId(), user));
+		return ArticleResponse.from(service.place(id, request.projectId(), request.teamId(),
+				Boolean.TRUE.equals(request.organization()), user));
 	}
 
 	/** Sibling pages in the order they should be shown. */

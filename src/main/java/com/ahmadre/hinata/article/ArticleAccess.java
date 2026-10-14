@@ -85,13 +85,14 @@ public class ArticleAccess implements TeamKnowledge {
 			if (article.getTeamId() != null) {
 				return wholeTeams.contains(article.getTeamId()) || grantedPages.contains(article.getId());
 			}
-			return userId.equals(article.getAuthorId());
+			return article.isOrganizationWide() || userId.equals(article.getAuthorId());
 		}
 
 		/** The same rule as a query, for listings and search. */
 		public Criteria criteria() {
 			List<Criteria> any = new ArrayList<>();
 			any.add(Criteria.where("projectId").is(null).and("teamId").is(null).and("authorId").is(userId));
+			any.add(Criteria.where("organization").is(true));
 			if (!projectIds.isEmpty()) any.add(Criteria.where("projectId").in(projectIds));
 			if (!wholeTeams.isEmpty()) {
 				any.add(Criteria.where("projectId").is(null).and("teamId").in(wholeTeams));
@@ -152,7 +153,7 @@ public class ArticleAccess implements TeamKnowledge {
 			return pages.getScope() == ProjectAccess.Scope.SOME && pages.getArticleIds() != null
 					&& grantedThroughAncestor(article, article.getTeamId(), Set.copyOf(pages.getArticleIds()));
 		}
-		return user.getId().equals(article.getAuthorId());
+		return article.isOrganizationWide() || user.getId().equals(article.getAuthorId());
 	}
 
 	/** Whether the page or one of its ancestors in the same team is among [granted]. */
@@ -175,10 +176,11 @@ public class ArticleAccess implements TeamKnowledge {
 	/**
 	 * A page may only be filed into a place the author can reach: a project they
 	 * see, or a team they belong to. No place at all means a private page, which
-	 * anybody may keep.
+	 * anybody may keep, or one shared with the whole organisation, which anybody may
+	 * share.
 	 */
-	public void assertCanTarget(String projectId, String teamId, User user) {
-		if (projectId != null && teamId != null) {
+	public void assertCanTarget(String projectId, String teamId, boolean organization, User user) {
+		if ((projectId != null && teamId != null) || (organization && (projectId != null || teamId != null))) {
 			throw ApiException.badRequest("error.article.oneScope");
 		}
 		if (projectId != null && !projects.visibleTo(user).stream().map(Project::getId)

@@ -122,6 +122,7 @@ public class ArticlePersonalData implements PersonalDataExport {
 	}
 
 	private static Criteria privateOf(String userId) {
-		return Criteria.where("authorId").is(userId).and("projectId").is(null).and("teamId").is(null);
+		return Criteria.where("authorId").is(userId).and("projectId").is(null).and("teamId").is(null)
+				.and("organization").ne(true);
 	}
 }

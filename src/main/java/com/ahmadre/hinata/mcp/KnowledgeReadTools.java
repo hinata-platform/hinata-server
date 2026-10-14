@@ -61,12 +61,12 @@ public class KnowledgeReadTools {
 
 	/** Article metadata without the (potentially large) markdown body. */
 	public record ArticleListItem(String id, String title, String space, String icon,
-			String projectId, String teamId, String parentId, List<String> tags,
+			String projectId, String teamId, boolean organization, String parentId, List<String> tags,
 			String authorId, Instant updatedAt) {
 
 		static ArticleListItem of(Article a) {
 			return new ArticleListItem(a.getId(), a.getTitle(), a.getSpace(), a.getIcon(),
-					a.getProjectId(), a.getTeamId(), a.getParentId(), a.getTags(),
+					a.getProjectId(), a.getTeamId(), a.isOrganizationWide(), a.getParentId(), a.getTags(),
 					a.getAuthorId(), a.getUpdatedAt());
 		}
 	}
@@ -90,7 +90,7 @@ public class KnowledgeReadTools {
 	 */
 	public record ArticleView(
 			String id, String title, String content, String space, String icon,
-			String projectId, String teamId, String parentId, List<String> tags,
+			String projectId, String teamId, boolean organization, String parentId, List<String> tags,
 			String authorId, Instant createdAt, Instant updatedAt) {
 
 		static ArticleView of(Article a) {
@@ -98,7 +98,7 @@ public class KnowledgeReadTools {
 					a.getId(), a.getTitle(),
 					LexicalToMarkdown.fromStored(a.getContentDoc(), a.getContent()),
 					a.getSpace(), a.getIcon(),
-					a.getProjectId(), a.getTeamId(), a.getParentId(), a.getTags(),
+					a.getProjectId(), a.getTeamId(), a.isOrganizationWide(), a.getParentId(), a.getTags(),
 					a.getAuthorId(), a.getCreatedAt(), a.getUpdatedAt());
 		}
 	}

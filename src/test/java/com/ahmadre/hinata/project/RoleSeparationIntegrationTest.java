@@ -317,16 +317,39 @@ class RoleSeparationIntegrationTest {
 		Article root = page(lead, null, null, null, "Draft");
 		Article child = page(lead, null, null, root.getId(), "Draft detail");
 
-		articles.place(root.getId(), project.getId(), null, lead);
+		articles.place(root.getId(), project.getId(), null, false, lead);
 
 		assertThat(articleAccess.canSee(child, member)).isFalse(); // stale object
 		Article reloaded = mongo.findById(child.getId(), Article.class);
 		assertThat(reloaded.getProjectId()).isEqualTo(project.getId());
 		assertThat(articleAccess.canSee(reloaded, member)).isTrue();
-		assertThatThrownBy(() -> articles.place(child.getId(), null, null, lead))
+		assertThatThrownBy(() -> articles.place(child.getId(), null, null, false, lead))
 				.isInstanceOf(ApiException.class).hasMessageContaining("placeFollowsParent");
-		assertThatThrownBy(() -> articles.place(root.getId(), null, null, member))
+		assertThatThrownBy(() -> articles.place(root.getId(), null, null, false, member))
 				.isInstanceOf(ApiException.class).hasMessageContaining("privateIsAuthorOnly");
+	}
+
+	@Test
+	void aPageSharedWithTheOrganisationReachesEveryAccountWithItsSubtree() {
+		Article root = page(member, null, null, null, "Onboarding");
+		Article child = page(member, null, null, root.getId(), "First day");
+
+		articles.place(root.getId(), null, null, true, member);
+
+		Article reloaded = mongo.findById(child.getId(), Article.class);
+		assertThat(reloaded.isOrganizationWide()).isTrue();
+		assertThat(articleAccess.canSee(reloaded, outsider)).isTrue();
+		assertThat(articles.list(outsider, false, null)).extracting(Article::getTitle)
+				.contains("Onboarding", "First day");
+		assertThat(articles.create(outsider, new ArticleService.Draft("Second day", RichText.EMPTY, null, null,
+				false, root.getId(), null, null, null, null)).isOrganizationWide()).isTrue();
+		assertThatThrownBy(() -> articles.place(root.getId(), project.getId(), null, false, outsider))
+				.isInstanceOf(ApiException.class).hasMessageContaining("moveNotAllowed");
+		assertThatThrownBy(() -> articles.place(root.getId(), project.getId(), null, true, member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("oneScope");
+
+		articles.place(root.getId(), null, null, false, member);
+		assertThat(articleAccess.canSee(mongo.findById(child.getId(), Article.class), outsider)).isFalse();
 	}
 
 	@Test
@@ -441,7 +464,7 @@ class RoleSeparationIntegrationTest {
 		Article plan = page(lead, project.getId(), null, null, "Plan");
 		Article mine = page(member, null, null, null, "Mine");
 
-		assertThatThrownBy(() -> articles.place(plan.getId(), null, team.getId(), member))
+		assertThatThrownBy(() -> articles.place(plan.getId(), null, team.getId(), false, member))
 				.isInstanceOf(ApiException.class).hasMessageContaining("moveNotAllowed");
 		Article reloaded = mongo.findById(plan.getId(), Article.class);
 		assertThatThrownBy(() -> articles.save(reloaded, mine.getId(), member))
@@ -456,7 +479,7 @@ class RoleSeparationIntegrationTest {
 		Article teamPage = mongo.save(Article.builder().title("Team notes").teamId(team.getId())
 				.parentId(root.getId()).authorId(teamAdmin.getId()).build());
 
-		articles.place(root.getId(), project.getId(), null, lead);
+		articles.place(root.getId(), project.getId(), null, false, lead);
 
 		Article after = mongo.findById(teamPage.getId(), Article.class);
 		assertThat(after.getTeamId()).isEqualTo(team.getId());
@@ -515,7 +538,7 @@ class RoleSeparationIntegrationTest {
 		Article theirs = mongo.save(Article.builder().title("Their notes").parentId(mine.getId())
 				.authorId(member.getId()).build());
 
-		articles.place(mine.getId(), project.getId(), null, lead);
+		articles.place(mine.getId(), project.getId(), null, false, lead);
 
 		Article after = mongo.findById(theirs.getId(), Article.class);
 		assertThat(after.getProjectId()).isNull();
@@ -605,7 +628,7 @@ class RoleSeparationIntegrationTest {
 
 	private Article page(User author, String projectId, String teamId, String parentId, String title) {
 		return articles.create(author, new ArticleService.Draft(title, RichText.EMPTY, projectId, teamId,
-				parentId, null, null, null, null));
+				false, parentId, null, null, null, null));
 	}
 
 	private User user(String name, Role... extra) {

@@ -188,7 +188,7 @@ class ArticleHistoryIntegrationTest {
 		as(alice);
 		var a = create("A", DOC_A);
 		var b = create("B", DOC_A);
-		var child = articles.create(new ArticleController.ArticleRequest("Kind", null, DOC_A, null, null, a.id(),
+		var child = articles.create(new ArticleController.ArticleRequest("Kind", null, DOC_A, null, null, null, a.id(),
 				"Wissen", null, null, null));
 
 		articles.order(new ArticleController.OrderRequest(List.of(b.id(), a.id())));
@@ -204,7 +204,7 @@ class ArticleHistoryIntegrationTest {
 		as(alice);
 		var a = create("A", DOC_A);
 		var b = create("B", DOC_A);
-		var mine = articles.create(new ArticleController.ArticleRequest("Privat", null, DOC_A, null, null, null,
+		var mine = articles.create(new ArticleController.ArticleRequest("Privat", null, DOC_A, null, null, null, null,
 				"Wissen", null, null, null));
 
 		as(carol);
@@ -249,7 +249,7 @@ class ArticleHistoryIntegrationTest {
 		reading.star(page.id());
 		reading.viewed(page.id());
 		var kept = articles.create(new ArticleController.ArticleRequest("Bleibt", null, DOC_A, other.getId(), null,
-				null, "Wissen", null, null, null));
+				null, null, "Wissen", null, null, null));
 		reading.star(kept.id());
 
 		deletion.deleteProject(project,
@@ -275,12 +275,12 @@ class ArticleHistoryIntegrationTest {
 	}
 
 	private ArticleController.ArticleResponse create(String title, String doc) {
-		return articles.create(new ArticleController.ArticleRequest(title, null, doc, project.getId(), null, null,
+		return articles.create(new ArticleController.ArticleRequest(title, null, doc, project.getId(), null, null, null,
 				"Wissen", null, null, null));
 	}
 
 	private static ArticleController.ArticleRequest edit(String title, String doc) {
-		return new ArticleController.ArticleRequest(title, null, doc, null, null, null, null, null, null, null);
+		return new ArticleController.ArticleRequest(title, null, doc, null, null, null, null, null, null, null, null);
 	}
 
 	private static String doc(String text) {

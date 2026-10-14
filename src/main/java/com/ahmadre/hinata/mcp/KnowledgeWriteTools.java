@@ -45,13 +45,13 @@ public class KnowledgeWriteTools {
 	 * {@code read_kb_article} returns and what these tools accept.
 	 */
 	public record ArticleView(String id, String title, String content, String projectId,
-			String teamId, String parentId, String space, List<String> tags,
+			String teamId, boolean organization, String parentId, String space, List<String> tags,
 			String authorId, Instant createdAt, Instant updatedAt) {
 
 		static ArticleView of(Article article) {
 			return new ArticleView(article.getId(), article.getTitle(),
 					LexicalToMarkdown.fromStored(article.getContentDoc(), article.getContent()),
-					article.getProjectId(), article.getTeamId(), article.getParentId(),
+					article.getProjectId(), article.getTeamId(), article.isOrganizationWide(), article.getParentId(),
 					article.getSpace(), article.getTags(), article.getAuthorId(),
 					article.getCreatedAt(), article.getUpdatedAt());
 		}
@@ -60,13 +60,14 @@ public class KnowledgeWriteTools {
 	@McpTool(name = "create_kb_article", title = "Create knowledge base article",
 			annotations = @McpTool.McpAnnotations(destructiveHint = false, openWorldHint = false),
 			description = "Create a knowledge base article authored by the current user. Scope it to a "
-					+ "project or a team by passing that id; leave both empty for a private article only "
-					+ "you can read. A child article lives where its parent lives. Returns the created article.")
+					+ "project or a team by passing that id, or share it with the whole organisation; leave "
+					+ "all of them empty for a private article only you can read. A child article lives where its parent lives. Returns the created article.")
 	public ArticleView create_kb_article(
 			@McpToolParam(required = true, description = "Article title") String title,
 			@McpToolParam(required = true, description = "Markdown body of the article") String content,
 			@McpToolParam(required = false, description = "Project id to scope the article to (only project members see it)") String projectId,
 			@McpToolParam(required = false, description = "Team id to scope the article to (only team members see it)") String teamId,
+			@McpToolParam(required = false, description = "Share the article with every account in the organisation (no project or team then)") Boolean organization,
 			@McpToolParam(required = false, description = "Parent article id for tree placement") String parentId,
 			@McpToolParam(required = false, description = "Knowledge-base space the article lives in (e.g. Engineering)") String space,
 			@McpToolParam(required = false, description = "Labels / tags") List<String> tags) {
@@ -75,7 +76,8 @@ public class KnowledgeWriteTools {
 		// An agent writes markdown; storage is Lexical.
 		RichText body = richText.fromMarkdown(content);
 		Article saved = articles.create(me, new ArticleService.Draft(title, body, blankToNull(projectId),
-				blankToNull(teamId), blankToNull(parentId), space, null, tags, null));
+				blankToNull(teamId), Boolean.TRUE.equals(organization), blankToNull(parentId), space, null, tags,
+				null));
 		audit.event(AuditAction.MCP_KB_CREATED).actor(me)
 				.meta("article", saved.getId()).log();
 		return ArticleView.of(saved);

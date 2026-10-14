@@ -34,6 +34,19 @@ public class Article {
 	@Indexed
 	private String teamId;
 
+	/**
+	 * Shared with the whole organisation: every account reads it. Only set (true)
+	 * on a top-level page without project or team and on the pages below it; absent
+	 * on every other page, so pages from before the option stay as they were.
+	 */
+	@Indexed(sparse = true)
+	private Boolean organization;
+
+	/** Whether the page is shared with the whole organisation. */
+	public boolean isOrganizationWide() {
+		return Boolean.TRUE.equals(organization);
+	}
+
 	/** Parent article id for hierarchical organization. */
 	@Indexed
 	private String parentId;
