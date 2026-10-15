@@ -105,7 +105,9 @@ public class IssueParticipantService {
 		if (!target.isActive()) {
 			throw ApiException.badRequest("error.issue.participantInactive");
 		}
-		if (issue.getParticipantIds() != null && issue.getParticipantIds().contains(userId)) {
+		// Already there, or a member of the project anyway: sharing would change nothing.
+		if ((issue.getParticipantIds() != null && issue.getParticipantIds().contains(userId))
+				|| projectReach.canSee(issue.getProjectId(), target)) {
 			return;
 		}
 		Instant now = Instant.now();
