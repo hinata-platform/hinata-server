@@ -70,13 +70,17 @@ public class IssueWatcherCleanup {
 					.filter(id -> id != null && !id.isBlank() && !stillReaching.contains(id))
 					.toList();
 			if (ids.isEmpty()) return;
-			// One write per person, leaving out the issues shared with them: those they still
-			// reach as participants, and still watch.
-			for (String id : ids) {
-				mongo.updateMulti(new Query(Criteria.where("projectId").is(projectId).and("watcherIds").is(id)
-						.and("participantIds").ne(id)),
-						new Update().pull("watcherIds", id), Issue.class);
-			}
+			mongo.updateMulti(
+					new Query(Criteria.where("projectId").is(projectId).and("watcherIds").in(ids)),
+					new Update().pullAll("watcherIds", ids.toArray()), Issue.class);
+			// A share made before somebody joined the project sleeps while they are a member;
+			// leaving the project must not wake it (HIN-136). Whoever should keep the issue is
+			// shared with again, visibly, by a member.
+			mongo.updateMulti(
+					new Query(Criteria.where("projectId").is(projectId).and("participantIds").in(ids)),
+					new Update().pullAll("participantIds", ids.toArray())
+							.pull("participantMeta", new org.bson.Document("userId", new org.bson.Document("$in", ids))),
+					Issue.class);
 			digests.discardFor(projectId, ids);
 			log.debug("Removed {} watcher(s) from project {}", ids.size(), projectId);
 		});
@@ -143,9 +147,7 @@ public class IssueWatcherCleanup {
 		List<String> watchers = issue.getWatcherIds();
 		if (watchers == null || watchers.isEmpty()) return;
 		bestEffort(targetProjectId, () -> {
-			Set<String> stillReaching = targetProjectId.equals(issue.getProjectId())
-					? issueReach.whoCanSee(issue, watchers)
-					: reach.whoCanSee(targetProjectId, watchers);
+			Set<String> stillReaching = issueReach.whoCanSee(issue, watchers);
 			List<String> removed = watchers.stream()
 					.filter(id -> id != null && !stillReaching.contains(id))
 					.toList();

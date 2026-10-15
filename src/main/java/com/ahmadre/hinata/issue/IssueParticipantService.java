@@ -60,7 +60,7 @@ public class IssueParticipantService {
 
 	/** A participant as the share dialog shows them. */
 	public record ParticipantView(String id, String displayName, String avatarUrl, String pronouns,
-			Instant addedAt, String addedById) {
+			Instant addedAt, String addedById, String addedByName) {
 	}
 
 	/**
@@ -79,15 +79,22 @@ public class IssueParticipantService {
 		if (issue.getParticipantMeta() != null) {
 			issue.getParticipantMeta().forEach(entry -> meta.put(entry.userId(), entry));
 		}
+		// The participants and whoever added them, in one read.
+		Set<String> wanted = new java.util.HashSet<>(ids);
+		meta.values().forEach(entry -> {
+			if (entry.addedById() != null) wanted.add(entry.addedById());
+		});
 		Map<String, User> byId = new HashMap<>();
-		users.findAllById(ids).forEach(user -> byId.put(user.getId(), user));
+		users.findAllById(wanted).forEach(user -> byId.put(user.getId(), user));
 		return ids.stream()
 				.filter(id -> !members.contains(id) && byId.containsKey(id))
 				.map(id -> {
 					User user = byId.get(id);
 					Issue.ParticipantMeta entry = meta.get(id);
+					User addedBy = entry == null || entry.addedById() == null ? null : byId.get(entry.addedById());
 					return new ParticipantView(id, user.getDisplayName(), user.getAvatarUrl(), user.getPronouns(),
-							entry == null ? null : entry.addedAt(), entry == null ? null : entry.addedById());
+							entry == null ? null : entry.addedAt(), entry == null ? null : entry.addedById(),
+							addedBy == null ? null : addedBy.getDisplayName());
 				})
 				.toList();
 	}
@@ -129,8 +136,8 @@ public class IssueParticipantService {
 		}
 		activities.save(IssueActivity.builder().issueId(issue.getId()).actorId(caller.getId())
 				.field(IssueActivity.Field.PARTICIPANT_ADDED).toValue(userId).build());
-		audit.event(AuditAction.ISSUE_PARTICIPANT_ADDED).actor(caller)
-				.meta("issue", issue.getReadableId()).meta("user", target.getUsername()).log();
+		audit.event(AuditAction.ISSUE_PARTICIPANT_ADDED).actor(caller).target(target)
+				.meta("issue", issue.getReadableId()).log();
 		try {
 			notifications.notifyShared(issue, caller, userId);
 		}
@@ -164,9 +171,10 @@ public class IssueParticipantService {
 		digests.discard(userId, issue.getId());
 		activities.save(IssueActivity.builder().issueId(issue.getId()).actorId(caller.getId())
 				.field(IssueActivity.Field.PARTICIPANT_REMOVED).fromValue(userId).build());
-		String username = users.findById(userId).map(User::getUsername).orElse(userId);
-		audit.event(AuditAction.ISSUE_PARTICIPANT_REMOVED).actor(caller)
-				.meta("issue", issue.getReadableId()).meta("user", username).log();
+		User removed = users.findById(userId).orElse(null);
+		var entry = audit.event(AuditAction.ISSUE_PARTICIPANT_REMOVED).actor(caller)
+				.meta("issue", issue.getReadableId());
+		(removed != null ? entry.target(removed) : entry.target(userId, userId)).log();
 	}
 
 	/**
@@ -179,7 +187,7 @@ public class IssueParticipantService {
 		Set<String> asked = new LinkedHashSet<>(userIds == null ? List.of() : userIds);
 		asked.remove(null);
 		if (asked.size() > MAX_REACH_CHECK) {
-			throw ApiException.badRequest("error.issue.bulkTooMany", MAX_REACH_CHECK);
+			throw ApiException.badRequest("error.issue.reachCheckTooMany", MAX_REACH_CHECK);
 		}
 		if (asked.isEmpty()) {
 			return List.of();
@@ -198,10 +206,13 @@ public class IssueParticipantService {
 	 */
 	private Issue editable(String idOrReadableId, User caller) {
 		Issue issue = issues.get(idOrReadableId);
-		if (!issues.canAccess(issue, caller)) {
+		if (!issueReach.canSee(issue, caller)) {
 			throw ApiException.notFound("issue");
 		}
-		issues.assertCanEdit(issue, caller);
+		// Seeing it and not only through a share means reaching the project.
+		if (issueReach.isParticipantOnly(issue, caller)) {
+			throw ApiException.forbidden("error.issue.participantReadOnly");
+		}
 		return issue;
 	}
 }

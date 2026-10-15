@@ -306,7 +306,7 @@ public class AttachmentController {
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
 				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
-		if (!mayRemove(issue, attachment, user)) {
+		if (!mayRemove(attachment, user, issueService.isParticipantOnly(issue, user))) {
 			throw ApiException.forbidden("error.issue.participantReadOnly");
 		}
 		Issue saved = store.remove(issue.getId(), attachmentId);
@@ -318,9 +318,9 @@ public class AttachmentController {
 	 * Members remove any attachment; somebody the issue is only shared with removes what they
 	 * uploaded themselves and nothing else.
 	 */
-	private boolean mayRemove(Issue issue, Issue.Attachment attachment, User user) {
+	private static boolean mayRemove(Issue.Attachment attachment, User user, boolean participantOnly) {
 		String uploader = attachment.getUploaderId();
-		return (uploader != null && uploader.equals(user.getId())) || !issueService.isParticipantOnly(issue, user);
+		return !participantOnly || (uploader != null && uploader.equals(user.getId()));
 	}
 
 	/** Drops an attachment's stored bytes and its derived thumbnail. */
@@ -347,10 +347,11 @@ public class AttachmentController {
 		Issue issue = issueService.getForUser(issueId, user);
 		List<Issue.Attachment> present = issue.getAttachments() == null
 				? List.of() : issue.getAttachments();
+		boolean participantOnly = issueService.isParticipantOnly(issue, user);
 		List<Issue.Attachment> targets = (ids == null || ids.isEmpty()
 				? present.stream()
 				: present.stream().filter(a -> ids.contains(a.getId())))
-				.filter(a -> mayRemove(issue, a, user))
+				.filter(a -> mayRemove(a, user, participantOnly))
 				.toList();
 		if (targets.isEmpty()) {
 			return;

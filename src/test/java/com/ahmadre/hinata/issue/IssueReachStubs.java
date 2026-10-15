@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.issue;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -13,6 +14,8 @@ final class IssueReachStubs {
 	static IssueReach everyoneSees() {
 		IssueReach reach = mock(IssueReach.class);
 		when(reach.canSee(any(), any())).thenReturn(true);
+		when(reach.whoCanSee(any(), anyCollection()))
+				.thenAnswer(call -> new java.util.HashSet<String>(call.getArgument(1)));
 		return reach;
 	}
 }

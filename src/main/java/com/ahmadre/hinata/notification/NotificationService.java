@@ -141,13 +141,37 @@ public class NotificationService {
 		Set<String> unreachable = new HashSet<>(recipients);
 		unreachable.removeAll(reachable);
 		recipients.retainAll(reachable);
+		// Somebody the issue is only shared with reads it, not the project's planning: a sprint
+		// change is left out of what they are told (HIN-136).
+		Set<String> participantsOnly = participantsOnly(issue, recipients);
+		recipients.removeAll(participantsOnly);
 
 		if (!recipients.isEmpty()) {
 			deliverChanges(issue, collapsed, recipients, watchers, true);
 		}
+		if (!participantsOnly.isEmpty()) {
+			List<FieldChange> withoutPlanning = collapsed.stream()
+					.filter(change -> !IssueChangeDiff.SPRINT.equals(change.field())).toList();
+			if (!withoutPlanning.isEmpty()) {
+				deliverChanges(issue, withoutPlanning, participantsOnly, watchers, true);
+			}
+		}
 		if (!unreachable.isEmpty()) {
 			deliverChanges(issue, collapsed, unreachable, watchers, false);
 		}
+	}
+
+	/**
+	 * Those of {@code recipients} who see {@code issue} only because it is shared with them:
+	 * the project question is asked about its participants alone, usually nobody.
+	 */
+	private Set<String> participantsOnly(Issue issue, Set<String> recipients) {
+		Set<String> shared = new HashSet<>();
+		for (String id : recipients) {
+			if (IssueReach.isParticipant(issue, id)) shared.add(id);
+		}
+		if (!shared.isEmpty()) shared.removeAll(reach.whoCanSee(issue.getProjectId(), shared));
+		return shared;
 	}
 
 	/**
@@ -265,7 +289,8 @@ public class NotificationService {
 						? words.in(locale, "notify.preview.body", actor.getDisplayName(), preview)
 						: words.in(locale, "notify.commentReply.body", actor.getDisplayName(),
 								issue.getTitle()),
-				commentLink(issue, comment.getId()), issue);
+				commentLink(issue, comment.getId()), LinkScope.issueKnown(issue, Set.of(recipient)),
+				Routing.of(Notification.Type.COMMENT_REPLY));
 	}
 
 	/**
@@ -292,6 +317,7 @@ public class NotificationService {
 		// text around it. The app offers to share the issue with them instead.
 		recipients.retainAll(issueReach.whoCanSee(issue, recipients));
 		if (recipients.isEmpty()) return;
+		Set<String> mayFollow = Set.copyOf(recipients);
 		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(recipients, Notification.Type.MENTION,
 				locale -> words.in(locale, "notify.mention.title", actor.getDisplayName(),
@@ -300,7 +326,7 @@ public class NotificationService {
 						? words.in(locale, "notify.preview.body", actor.getDisplayName(), preview)
 						: words.in(locale, "notify.mention.body", actor.getDisplayName(),
 								issue.getTitle()),
-				issueLink(issue), issue);
+				issueLink(issue), LinkScope.issueKnown(issue, mayFollow), Routing.of(Notification.Type.MENTION));
 	}
 
 	/**
@@ -865,7 +891,7 @@ public class NotificationService {
 
 	/**
 	 * As above, with a push body of its own — see the two-body
-	 * {@link #deliver(Set, Notification.Type, L10n, L10n, L10n, String, String, Routing)}
+	 * {@link #deliver(Set, Notification.Type, L10n, L10n, L10n, String, LinkScope, Routing)}
 	 * for why a lock screen gets told less than an inbox.
 	 */
 	private void deliverGated(User user, Notification.Type type, String title, String body,
@@ -931,12 +957,11 @@ public class NotificationService {
 			Set<String> followers = new HashSet<>();
 			list.forEach(issue -> followers.addAll(followersOf(issue)));
 			if (editor != null) followers.remove(editor.getId());
-			// One project question for the whole group; whoever an issue is shared with hears
-			// about that issue too (the rule IssueReach answers one issue at a time).
-			Set<String> allowed = reach.whoCanSee(projectId, followers);
+			// One project question for the whole group, and each issue's participants on top.
+			Map<String, Set<String>> allowed = issueReach.whoCanSeeEach(projectId, list, followers);
 			for (Issue issue : list) {
 				for (String userId : followersOf(issue)) {
-					if (!allowed.contains(userId) && !IssueReach.isParticipant(issue, userId)) continue;
+					if (!allowed.get(issue.getId()).contains(userId)) continue;
 					if (skip.getOrDefault(userId, Set.of()).contains(issue.getId())) continue;
 					countByUser.merge(userId, 1, Integer::sum);
 				}
@@ -1332,7 +1357,7 @@ public class NotificationService {
 	 * different language). {@code title}/{@code body} receive {@code true} for German.
 	 *
 	 * <p>For a link that only some recipients can follow, use
-	 * {@link #deliver(Set, Notification.Type, L10n, L10n, String, String)}.
+	 * {@link #deliver(Set, Notification.Type, L10n, L10n, String, Issue)}.
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link) {
@@ -1340,19 +1365,10 @@ public class NotificationService {
 	}
 
 	/**
-	 * As {@link #deliver(Set, Notification.Type, L10n, L10n, String)}, for a link into a
-	 * project: {@code linkProjectId} names the project whose access decides, per
-	 * recipient, whether the link is theirs to follow (see {@link #linkFor}). Pass
-	 * {@code null} for a link everyone can reach, such as a personal page.
-	 */
-	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
-			String link, String linkProjectId) {
-		deliver(userIds, type, title, body, link, LinkScope.project(linkProjectId), Routing.of(type));
-	}
-
-	/**
-	 * As above, for a link to one issue: the issue's own rule decides who may follow it, so
-	 * somebody the issue is shared with gets the link although its project is not theirs.
+	 * As {@link #deliver(Set, Notification.Type, L10n, L10n, String)}, for a link to one
+	 * issue: the issue's own rule ({@link IssueReach}) decides, per recipient, whether the
+	 * link is theirs to follow (see {@link #linkFor}), so somebody the issue is shared with
+	 * gets it although its project is not theirs.
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link, Issue linkIssue) {
@@ -1361,18 +1377,25 @@ public class NotificationService {
 
 	/**
 	 * Whose access decides whether a recipient gets a notice's link: nobody's (a personal page
-	 * everyone reaches), a project's, or one issue's.
+	 * everyone reaches), a project's, or one issue's. {@code followers} is the answer already
+	 * worked out by a caller that filtered its recipients by the same rule, so it is not asked
+	 * twice.
 	 */
-	private record LinkScope(String projectId, Issue issue) {
+	private record LinkScope(String projectId, Issue issue, Set<String> followers) {
 
-		static final LinkScope NONE = new LinkScope(null, null);
+		static final LinkScope NONE = new LinkScope(null, null, null);
 
 		static LinkScope project(String projectId) {
-			return new LinkScope(projectId, null);
+			return new LinkScope(projectId, null, null);
 		}
 
 		static LinkScope issue(Issue issue) {
-			return new LinkScope(null, issue);
+			return new LinkScope(null, issue, null);
+		}
+
+		/** Everyone in {@code followers} may follow the issue link; nobody else is asked about. */
+		static LinkScope issueKnown(Issue issue, Set<String> followers) {
+			return new LinkScope(null, issue, followers);
 		}
 
 		boolean open() {
@@ -1408,6 +1431,7 @@ public class NotificationService {
 		// a team query — so on a busy issue it re-asks the very thing the bulk
 		// primitive exists to answer, once per watcher, on every single edit.
 		Set<String> canFollowLink = link == null || scope.open() ? Set.of()
+				: scope.followers() != null ? scope.followers()
 				: scope.issue() != null ? issueReach.whoCanSee(scope.issue(), userIds)
 				: reach.whoCanSee(scope.projectId(), userIds);
 		// Composed once per language rather than once per recipient. A hundred
@@ -1524,8 +1548,8 @@ public class NotificationService {
 	 * in the push), and the app simply doesn't navigate.
 	 *
 	 * <p>Watchers are <em>not</em> on that list, and this method is not what stops
-	 * them: {@link #audienceFor} removes every watcher who cannot see the project
-	 * before delivery begins. A watcher arriving here therefore always has access.
+	 * them: {@link #audienceFor} removes every watcher who cannot see the issue
+	 * ({@link IssueReach}) before delivery begins. A watcher arriving here therefore always has access.
 	 * That split is load-bearing — dropping the filter upstream on the assumption
 	 * that this one covers it would turn a missing CTA into a leaked issue title.
 	 */

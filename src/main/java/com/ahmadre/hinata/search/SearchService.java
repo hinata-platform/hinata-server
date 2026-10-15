@@ -90,9 +90,11 @@ public class SearchService {
 
 		/** The issues of the projects reached, and the issues shared with the caller (HIN-136). */
 		Criteria issues(boolean archived) {
-			return new Criteria().andOperator(archivedIs(archived), new Criteria().orOperator(
-					Criteria.where("projectId").in(activeProjects),
-					Criteria.where("participantIds").is(userId)));
+			// A top-level $or with the archive filter in each branch, so each branch is planned
+			// on its own index (see IssueService#inScope).
+			return new Criteria().orOperator(
+					new Criteria().andOperator(archivedIs(archived), Criteria.where("projectId").in(activeProjects)),
+					new Criteria().andOperator(archivedIs(archived), Criteria.where("participantIds").is(userId)));
 		}
 
 		Criteria projects(boolean archived) {
