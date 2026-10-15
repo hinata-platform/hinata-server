@@ -74,6 +74,7 @@ class TimesheetNotificationTest {
 		RichTextService richText = new RichTextService();
 		service = new NotificationService(notifications, users, mail, push,
 				mock(GatewayService.class), richText, mock(ProjectReach.class),
+				new com.ahmadre.hinata.issue.IssueReach(mock(ProjectReach.class)),
 				new IssueChangeRenderer(users, mock(SprintRepository.class),
 						mock(IssueRepository.class), mock(ProjectRepository.class),
 						com.ahmadre.hinata.common.UserWordsFixture.real()),

@@ -84,6 +84,8 @@ class ParticipantAccessIntegrationTest {
 	private IssueWatchService watching;
 	@Autowired
 	private IssueWatcherCleanup watcherCleanup;
+	@Autowired
+	private com.ahmadre.hinata.notification.IssueDigestService digestService;
 
 	private User lead;
 	private User member;
@@ -510,6 +512,93 @@ class ParticipantAccessIntegrationTest {
 
 	private static int hits(com.ahmadre.hinata.search.SearchResponse response) {
 		return response.groups().stream().mapToInt(group -> group.items().size()).sum();
+	}
+
+	// --- notifications, links and the hierarchy -----------------------------
+
+	@Test
+	void aNewParticipantIsToldOnce() {
+		participants.add(issue.getId(), outsider.getId(), member);
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		List<Document> told = notificationsOf(outsider, "ISSUE_SHARED");
+		assertThat(told).singleElement().satisfies(row -> {
+			assertThat(row.getString("link")).isEqualTo("/issues/" + issue.getReadableId());
+			assertThat(row.getString("title")).contains("member").contains(issue.getReadableId());
+		});
+	}
+
+	@Test
+	void aParticipantHearsCommentsAndChangesLikeAWatcher() {
+		participants.add(issue.getId(), outsider.getId(), member);
+		User stranger = user("stranger");
+		mongo.updateFirst(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("_id").is(issue.getId())),
+				new org.springframework.data.mongodb.core.query.Update().addToSet("watcherIds", stranger.getId()),
+				Issue.class);
+
+		issues.addComment(issue.getId(), text("Ordered"), member);
+		issues.update(issue.getId(), i -> i.setTitle("Get an eSIM today"), lead);
+
+		assertThat(notificationsOf(outsider, "ISSUE_COMMENTED")).singleElement()
+				.satisfies(row -> assertThat(row.getString("link")).isEqualTo("/issues/" + issue.getReadableId()));
+		assertThat(notificationsOf(outsider, "ISSUE_UPDATED")).isNotEmpty()
+				.allSatisfy(row -> assertThat(row.getString("link")).isNotNull());
+		assertThat(notificationsOf(stranger, null)).isEmpty();
+	}
+
+	@Test
+	void aMentionOfSomebodyWithoutAccessStaysSilent() {
+		String doc = """
+				{"root":{"type":"root","children":[{"type":"paragraph","children":[\
+				{"type":"smartlink","kind":"user","targetId":"%s","text":"@outsider"},\
+				{"type":"smartlink","kind":"user","targetId":"%s","text":"@participant"}]}]}}"""
+				.formatted(outsider.getId(), participant.getId());
+
+		issues.addComment(issue.getId(), new RichText(doc, "@outsider @participant", List.of()), member);
+
+		assertThat(notificationsOf(outsider, "MENTION")).isEmpty();
+		assertThat(notificationsOf(participant, "MENTION")).singleElement()
+				.satisfies(row -> assertThat(row.getString("link")).isNotNull());
+	}
+
+	@Test
+	void aParticipantSeesOnlyVisibleLinksAndAncestors() {
+		Issue epic = issueRepository.save(Issue.builder().projectId(project.getId()).title("Phones")
+				.readableId("SEC-90").numberInProject(90).state("Open").type(Issue.Type.EPIC).build());
+		issue.setParentId(epic.getId());
+		issueRepository.save(issue);
+		Issue hidden = issue("Hidden neighbour");
+		linking.addLinks(issue.getId(), IssueLinkType.RELATES, true, List.of(hidden.getReadableId()), member);
+		Issue sharedToo = issue("Shared neighbour", participant.getId());
+		linking.addLinks(issue.getId(), IssueLinkType.BLOCKS, true, List.of(sharedToo.getReadableId()), member);
+
+		IssueService.IssueDetail detail = issues.detail(issue.getId(), 30, "newest", 30, participant);
+
+		assertThat(detail.hierarchy().ancestors()).isEmpty();
+		assertThat(linking.linksOf(issue.getId(), participant)).extracting(view -> view.issue().getId())
+				.containsExactly(sharedToo.getId());
+		assertThat(linking.linksOf(issue.getId(), member)).hasSize(2);
+	}
+
+	@Test
+	void theDigestKeepsParticipants() {
+		participants.add(issue.getId(), outsider.getId(), member);
+		// Watchers' change mails are bundled; the participant is one of them now.
+		issues.update(issue.getId(), i -> i.setTitle("Changed"), lead);
+
+		assertThat(mongo.getCollection("issue_mail_digests")
+				.countDocuments(new Document("userId", outsider.getId()))).isEqualTo(1);
+		java.util.Date past = java.util.Date.from(java.time.Instant.now().minusSeconds(3600));
+		mongo.getCollection("issue_mail_digests").updateMany(new Document("userId", outsider.getId()),
+				new Document("$set", new Document("softDueAt", past).append("hardDueAt", past)));
+		assertThat(digestService.sweep(50)).isEqualTo(1);
+	}
+
+	private List<Document> notificationsOf(User user, String type) {
+		Document filter = new Document("userId", user.getId());
+		if (type != null) filter.append("type", type);
+		return mongo.getCollection("notifications").find(filter).into(new ArrayList<>());
 	}
 
 	// --- helpers ------------------------------------------------------------

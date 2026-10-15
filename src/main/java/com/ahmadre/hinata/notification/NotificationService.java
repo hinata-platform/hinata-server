@@ -2,6 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
+import com.ahmadre.hinata.issue.IssueReach;
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -40,6 +41,9 @@ public class NotificationService {
 	// Decides per recipient whether a project-scoped link resolves for them. Injected as
 	// the rule component, not ProjectService — that service depends on this one.
 	private final ProjectReach reach;
+	// The same question about one issue: its project's people plus whoever it is shared with
+	// (HIN-136). Every notice about an issue asks this one; project reach is for project links.
+	private final IssueReach issueReach;
 	private final IssueChangeRenderer changeRenderer;
 	private final com.ahmadre.hinata.common.UserWords words;
 	private final NotificationDays days;
@@ -55,12 +59,12 @@ public class NotificationService {
 		if (recipients.isEmpty()) return;
 		// The notice carries the issue's key and title, so it goes only to people who
 		// can open the project, whatever reached the assignee list.
-		recipients.retainAll(reach.whoCanSee(issue.getProjectId(), recipients));
+		recipients.retainAll(issueReach.whoCanSee(issue, recipients));
 		if (recipients.isEmpty()) return;
 		deliver(recipients, Notification.Type.ISSUE_ASSIGNED,
 				locale -> words.in(locale, "notify.issueAssigned.title", issue.getReadableId()),
 				locale -> issue.getTitle(), // user content — same in every language
-				issueLink(issue), issue.getProjectId());
+				issueLink(issue), issue);
 	}
 
 	/**
@@ -94,7 +98,7 @@ public class NotificationService {
 				locale -> hasSender
 						? words.in(locale, "notify.issueIngested.body", senderEmail, issue.getTitle())
 						: issue.getTitle(),
-				issueLink(issue), issue.getProjectId());
+				issueLink(issue), issue);
 	}
 
 	/**
@@ -133,7 +137,7 @@ public class NotificationService {
 		// hear that their own request moved, but not what the issue now says: a
 		// notice that quoted the body would hand them through the inbox exactly the
 		// content the project answers with a 403.
-		Set<String> reachable = reach.whoCanSee(issue.getProjectId(), recipients);
+		Set<String> reachable = issueReach.whoCanSee(issue, recipients);
 		Set<String> unreachable = new HashSet<>(recipients);
 		unreachable.removeAll(reachable);
 		recipients.retainAll(reachable);
@@ -173,7 +177,7 @@ public class NotificationService {
 				// The bell entry and the push body get the one-line form of the very
 				// same diff the mail paints, so the three never tell different stories.
 				locale -> changeRenderer.summaryOf(diff.apply(locale), locale),
-				issueLink(issue), issue.getProjectId(),
+				issueLink(issue), LinkScope.issue(issue),
 				new Routing(
 						// A watcher subscribed themselves and switches that off under
 						// "watching"; an assignee or the reporter is on the issue by
@@ -231,7 +235,7 @@ public class NotificationService {
 							? words.in(locale, "notify.mention.body", author.getDisplayName(),
 									issue.getTitle())
 							: words.in(locale, "notify.preview.body", author.getDisplayName(), preview),
-					issueLink(issue), issue.getProjectId());
+					issueLink(issue), issue);
 		}
 	}
 
@@ -251,6 +255,8 @@ public class NotificationService {
 		if (recipient == null || recipient.isBlank()) return; // top-level comment
 		if (recipient.equals(actor.getId())) return; // replying to oneself
 		if (!notified.add(recipient)) return; // already mentioned — don't double-ping
+		// Somebody who has lost the issue (left a share, left the project) is not quoted to.
+		if (!issueReach.whoCanSee(issue, Set.of(recipient)).contains(recipient)) return;
 		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(Set.of(recipient), Notification.Type.COMMENT_REPLY,
 				locale -> words.in(locale, "notify.commentReply.title", actor.getDisplayName(),
@@ -259,7 +265,7 @@ public class NotificationService {
 						? words.in(locale, "notify.preview.body", actor.getDisplayName(), preview)
 						: words.in(locale, "notify.commentReply.body", actor.getDisplayName(),
 								issue.getTitle()),
-				commentLink(issue, comment.getId()), issue.getProjectId());
+				commentLink(issue, comment.getId()), issue);
 	}
 
 	/**
@@ -282,6 +288,10 @@ public class NotificationService {
 		Set<String> recipients = new HashSet<>(mentionedIds);
 		recipients.remove(actor.getId());
 		if (recipients.isEmpty()) return;
+		// A mention of somebody who cannot open the issue stays silent: the notice quotes the
+		// text around it. The app offers to share the issue with them instead.
+		recipients.retainAll(issueReach.whoCanSee(issue, recipients));
+		if (recipients.isEmpty()) return;
 		boolean hasPreview = preview != null && !preview.isBlank();
 		deliver(recipients, Notification.Type.MENTION,
 				locale -> words.in(locale, "notify.mention.title", actor.getDisplayName(),
@@ -290,7 +300,7 @@ public class NotificationService {
 						? words.in(locale, "notify.preview.body", actor.getDisplayName(), preview)
 						: words.in(locale, "notify.mention.body", actor.getDisplayName(),
 								issue.getTitle()),
-				issueLink(issue), issue.getProjectId());
+				issueLink(issue), issue);
 	}
 
 	/**
@@ -434,7 +444,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timesheetSubmitted.title"),
 				locale -> words.in(locale, "notify.timesheetSubmitted.body", submitter),
 				locale -> words.in(locale, "notify.timesheet.push"),
-				link, null, Routing.of(Notification.Type.TIMESHEET_SUBMITTED));
+				link, LinkScope.NONE, Routing.of(Notification.Type.TIMESHEET_SUBMITTED));
 	}
 
 	/**
@@ -469,7 +479,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeCorrection.title"),
 				locale -> words.in(locale, "notify.timeCorrection.body", requester),
 				locale -> words.in(locale, "notify.timesheet.push"),
-				link, null, Routing.of(Notification.Type.TIME_CORRECTION_REQUESTED));
+				link, LinkScope.NONE, Routing.of(Notification.Type.TIME_CORRECTION_REQUESTED));
 	}
 
 	/**
@@ -483,7 +493,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeCorrectionAnswered.title"),
 				locale -> words.in(locale, "notify.timeCorrectionAnswered.body", answeredBy),
 				locale -> words.in(locale, "notify.timesheet.push"),
-				link, null, Routing.of(Notification.Type.TIME_CORRECTION_ANSWERED));
+				link, LinkScope.NONE, Routing.of(Notification.Type.TIME_CORRECTION_ANSWERED));
 	}
 
 	/**
@@ -498,7 +508,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeShared.title"),
 				locale -> words.in(locale, "notify.timeShared.body", sender),
 				locale -> words.in(locale, "notify.timeShare.push"),
-				SHARED_ENTRIES_LINK, null, Routing.of(Notification.Type.TIME_ENTRY_SHARED));
+				SHARED_ENTRIES_LINK, LinkScope.NONE, Routing.of(Notification.Type.TIME_ENTRY_SHARED));
 	}
 
 	/** Tells the sender a colleague took the copy. A refusal is not reported, to anybody. */
@@ -520,7 +530,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeBackfillRequest.title"),
 				locale -> words.in(locale, "notify.timeBackfillRequest.body", requester),
 				locale -> words.in(locale, "notify.timesheet.push"),
-				link, null, Routing.of(Notification.Type.TIME_BACKFILL_REQUESTED));
+				link, LinkScope.NONE, Routing.of(Notification.Type.TIME_BACKFILL_REQUESTED));
 	}
 
 	/** Which of a person's own targets a reminder is about. */
@@ -672,7 +682,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeOffRequest.title"),
 				locale -> words.in(locale, "notify.timeOffRequest.body", person),
 				locale -> words.in(locale, "notify.timeOff.requestPush"),
-				link, null, Routing.of(Notification.Type.TIME_OFF_REQUESTED));
+				link, LinkScope.NONE, Routing.of(Notification.Type.TIME_OFF_REQUESTED));
 	}
 
 	/**
@@ -704,7 +714,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeOff." + event.key + ".title"),
 				locale -> words.in(locale, "notify.timeOff." + event.key + ".theirs", decider, person),
 				locale -> words.in(locale, "notify.timeOff.requestPush"),
-				link, null, Routing.of(event.type));
+				link, LinkScope.NONE, Routing.of(event.type));
 	}
 
 	/**
@@ -745,7 +755,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeOffCancelled.title"),
 				locale -> words.in(locale, "notify.timeOffCancelled.theirs", personName),
 				locale -> words.in(locale, "notify.timeOff.requestPush"),
-				link, null, Routing.of(Notification.Type.TIME_OFF_CANCELLED));
+				link, LinkScope.NONE, Routing.of(Notification.Type.TIME_OFF_CANCELLED));
 	}
 
 	/**
@@ -774,7 +784,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeOffShortened.title"),
 				locale -> words.in(locale, "notify.timeOffShortened.theirs", personName),
 				locale -> words.in(locale, "notify.timeOff.requestPush"),
-				link, null, Routing.of(Notification.Type.TIME_OFF_SHORTENED));
+				link, LinkScope.NONE, Routing.of(Notification.Type.TIME_OFF_SHORTENED));
 	}
 
 	/**
@@ -810,7 +820,7 @@ public class NotificationService {
 				locale -> words.in(locale, bodyKey,
 						projectName, percent, hours(locale, recordedMinutes), hours(locale, limitMinutes)),
 				locale -> words.in(locale, "notify.timeBudget.push"),
-				projectLink(projectId), projectId, Routing.of(Notification.Type.TIME_BUDGET_ALERT));
+				projectLink(projectId), LinkScope.project(projectId), Routing.of(Notification.Type.TIME_BUDGET_ALERT));
 	}
 
 	/**
@@ -825,7 +835,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.timeEstimate.body", readableId, percent,
 						hours(locale, recordedMinutes), hours(locale, estimateMinutes)),
 				locale -> words.in(locale, "notify.timeEstimate.push"),
-				"/issues/" + readableId, projectId, Routing.of(Notification.Type.TIME_ESTIMATE_REACHED));
+				"/issues/" + readableId, LinkScope.project(projectId), Routing.of(Notification.Type.TIME_ESTIMATE_REACHED));
 	}
 
 	/** Minutes as hours with one decimal in the reader's language, "6,5 h". */
@@ -921,10 +931,12 @@ public class NotificationService {
 			Set<String> followers = new HashSet<>();
 			list.forEach(issue -> followers.addAll(followersOf(issue)));
 			if (editor != null) followers.remove(editor.getId());
+			// One project question for the whole group; whoever an issue is shared with hears
+			// about that issue too (the rule IssueReach answers one issue at a time).
 			Set<String> allowed = reach.whoCanSee(projectId, followers);
 			for (Issue issue : list) {
 				for (String userId : followersOf(issue)) {
-					if (!allowed.contains(userId)) continue;
+					if (!allowed.contains(userId) && !IssueReach.isParticipant(issue, userId)) continue;
 					if (skip.getOrDefault(userId, Set.of()).contains(issue.getId())) continue;
 					countByUser.merge(userId, 1, Integer::sum);
 				}
@@ -995,7 +1007,7 @@ public class NotificationService {
 				locale -> words.in(locale, "notify.dueSoon.title", issue.getReadableId()),
 				locale -> words.in(locale, "notify.dueSoon.body", issue.getTitle(),
 						issue.getDueDate()),
-				issueLink(issue), issue.getProjectId());
+				issueLink(issue), issue);
 	}
 
 	/**
@@ -1297,7 +1309,7 @@ public class NotificationService {
 		// assignment earns them rather than being quietly moved into the digest.
 		watchers.removeAll(stakeholders);
 		if (!watchers.isEmpty()) {
-			watchers = new HashSet<>(reach.whoCanSee(issue.getProjectId(), watchers));
+			watchers = new HashSet<>(issueReach.whoCanSee(issue, watchers));
 		}
 		if (exclude != null) {
 			stakeholders.remove(exclude.getId());
@@ -1324,7 +1336,7 @@ public class NotificationService {
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link) {
-		deliver(userIds, type, title, body, link, null);
+		deliver(userIds, type, title, body, link, LinkScope.NONE, Routing.of(type));
 	}
 
 	/**
@@ -1335,7 +1347,37 @@ public class NotificationService {
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
 			String link, String linkProjectId) {
-		deliver(userIds, type, title, body, link, linkProjectId, Routing.of(type));
+		deliver(userIds, type, title, body, link, LinkScope.project(linkProjectId), Routing.of(type));
+	}
+
+	/**
+	 * As above, for a link to one issue: the issue's own rule decides who may follow it, so
+	 * somebody the issue is shared with gets the link although its project is not theirs.
+	 */
+	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
+			String link, Issue linkIssue) {
+		deliver(userIds, type, title, body, link, LinkScope.issue(linkIssue), Routing.of(type));
+	}
+
+	/**
+	 * Whose access decides whether a recipient gets a notice's link: nobody's (a personal page
+	 * everyone reaches), a project's, or one issue's.
+	 */
+	private record LinkScope(String projectId, Issue issue) {
+
+		static final LinkScope NONE = new LinkScope(null, null);
+
+		static LinkScope project(String projectId) {
+			return new LinkScope(projectId, null);
+		}
+
+		static LinkScope issue(Issue issue) {
+			return new LinkScope(null, issue);
+		}
+
+		boolean open() {
+			return projectId == null && issue == null;
+		}
 	}
 
 	/**
@@ -1344,8 +1386,8 @@ public class NotificationService {
 	 * their e-mail is bundled instead of sent now (see {@link Routing}).
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
-			String link, String linkProjectId, Routing routing) {
-		deliver(userIds, type, title, body, body, link, linkProjectId, routing);
+			String link, LinkScope scope, Routing routing) {
+		deliver(userIds, type, title, body, body, link, scope, routing);
 	}
 
 	/**
@@ -1360,14 +1402,14 @@ public class NotificationService {
 	 * split costs nothing where it is not wanted.
 	 */
 	private void deliver(Set<String> userIds, Notification.Type type, L10n title, L10n body,
-			L10n pushBody, String link, String linkProjectId, Routing routing) {
+			L10n pushBody, String link, LinkScope scope, Routing routing) {
 		// Who may follow the link, asked once for the whole set. The per-recipient
 		// question costs a project read and, for anyone who is not a direct member,
 		// a team query — so on a busy issue it re-asks the very thing the bulk
 		// primitive exists to answer, once per watcher, on every single edit.
-		Set<String> canFollowLink = (link == null || linkProjectId == null)
-				? Set.of()
-				: reach.whoCanSee(linkProjectId, userIds);
+		Set<String> canFollowLink = link == null || scope.open() ? Set.of()
+				: scope.issue() != null ? issueReach.whoCanSee(scope.issue(), userIds)
+				: reach.whoCanSee(scope.projectId(), userIds);
 		// Composed once per language rather than once per recipient. A hundred
 		// watchers of one issue read two or three languages between them, and every
 		// title and body here is at least a MessageSource lookup and at most a change
@@ -1391,7 +1433,7 @@ public class NotificationService {
 			Locale locale = words.localeOf(user);
 			String t = titles.computeIfAbsent(locale, title::of);
 			String b = bodies.computeIfAbsent(locale, body::of);
-			String userLink = linkFor(user, link, linkProjectId, canFollowLink);
+			String userLink = linkFor(user, link, scope, canFollowLink);
 			String eventId = routing.eventFor().apply(user.getId());
 			// The in-app (bell) notification is always recorded; e-mail and push
 			// are gated by the recipient's per-event channel preferences.
@@ -1487,8 +1529,8 @@ public class NotificationService {
 	 * That split is load-bearing — dropping the filter upstream on the assumption
 	 * that this one covers it would turn a missing CTA into a leaked issue title.
 	 */
-	private String linkFor(User user, String link, String linkProjectId, Set<String> canFollowLink) {
-		if (link == null || linkProjectId == null) return link;
+	private String linkFor(User user, String link, LinkScope scope, Set<String> canFollowLink) {
+		if (link == null || scope.open()) return link;
 		return canFollowLink.contains(user.getId()) ? link : null;
 	}
 

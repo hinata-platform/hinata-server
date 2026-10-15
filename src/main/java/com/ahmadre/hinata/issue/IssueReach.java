@@ -32,7 +32,7 @@ public class IssueReach {
 		if (issue == null || user == null) {
 			return false;
 		}
-		return participates(issue, user.getId()) || projects.canSee(issue.getProjectId(), user);
+		return isParticipant(issue, user.getId()) || projects.canSee(issue.getProjectId(), user);
 	}
 
 	/**
@@ -45,7 +45,7 @@ public class IssueReach {
 		}
 		Set<String> allowed = new HashSet<>(projects.whoCanSee(issue.getProjectId(), userIds));
 		for (String id : userIds) {
-			if (id != null && participates(issue, id)) {
+			if (id != null && isParticipant(issue, id)) {
 				allowed.add(id);
 			}
 		}
@@ -54,13 +54,18 @@ public class IssueReach {
 
 	/** Whether {@code user} sees {@code issue} only because it is shared with them. */
 	public boolean isParticipantOnly(Issue issue, User user) {
-		if (issue == null || user == null || !participates(issue, user.getId())) {
+		if (issue == null || user == null || !isParticipant(issue, user.getId())) {
 			return false;
 		}
 		return !projects.canSee(issue.getProjectId(), user);
 	}
 
-	private static boolean participates(Issue issue, String userId) {
+	/**
+	 * Whether the issue is shared with {@code userId}. The second half of the rule, for a caller
+	 * that has already asked {@link ProjectReach} about a whole group of issues of one project at
+	 * once and only needs to add the participants of each.
+	 */
+	public static boolean isParticipant(Issue issue, String userId) {
 		List<String> participants = issue.getParticipantIds();
 		return userId != null && participants != null && participants.contains(userId);
 	}

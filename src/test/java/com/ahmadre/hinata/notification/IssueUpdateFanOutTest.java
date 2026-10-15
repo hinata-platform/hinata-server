@@ -77,7 +77,7 @@ class IssueUpdateFanOutTest {
 		// A queued mail counts as handled, exactly as the real service reports it.
 		lenient().when(digests.queue(any(), any(), anyList())).thenReturn(true);
 		service = new NotificationService(notifications, users, mail, push,
-				mock(GatewayService.class), new RichTextService(), reach,
+				mock(GatewayService.class), new RichTextService(), reach, new com.ahmadre.hinata.issue.IssueReach(reach),
 				new IssueChangeRenderer(users, mock(SprintRepository.class),
 mock(IssueRepository.class), mock(ProjectRepository.class),
 com.ahmadre.hinata.common.UserWordsFixture.real()),

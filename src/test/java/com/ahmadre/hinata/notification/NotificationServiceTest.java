@@ -55,6 +55,9 @@ class NotificationServiceTest {
 		mail = mock(MailService.class);
 		push = mock(PushService.class);
 		reach = mock(ProjectReach.class);
+		// Everybody named reaches the project unless a test says otherwise.
+		lenient().when(reach.whoCanSee(anyString(), any())).thenAnswer(
+				call -> new java.util.HashSet<String>(call.getArgument(1)));
 		lenient().when(users.findById(anyString())).thenReturn(Optional.empty());
 		// The fan-out reads its audience in one go; every stub above is a `findById`, so this
 		// answers from them rather than making each test repeat itself.
@@ -71,7 +74,7 @@ class NotificationServiceTest {
 
 	private NotificationService serviceWith(NotificationDays days) {
 		return new NotificationService(notifications, users, mail, push,
-				mock(GatewayService.class), richText, reach,
+				mock(GatewayService.class), richText, reach, new com.ahmadre.hinata.issue.IssueReach(reach),
 				new IssueChangeRenderer(users, mock(SprintRepository.class),
 mock(IssueRepository.class), mock(ProjectRepository.class),
 com.ahmadre.hinata.common.UserWordsFixture.real()),
@@ -131,7 +134,7 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 	}
 
 	private Issue issue() {
-		return Issue.builder().id("i1").readableId("MOB-9").title("Login bug")
+		return Issue.builder().id("i1").projectId("p0").readableId("MOB-9").title("Login bug")
 				.watcherIds(new ArrayList<>()).build();
 	}
 
@@ -217,24 +220,19 @@ com.ahmadre.hinata.common.UserWordsFixture.real()),
 	}
 
 	@Test
-	void stillNotifiesAWatcherWhoCannotOpenTheProjectButDropsTheDeadLink() {
+	void aMentionOfSomebodyWhoCannotOpenTheIssueStaysSilent() {
 		recipient();
 		when(reach.whoCanSee(eq("p1"), any())).thenReturn(Set.of());
 		User actor = User.builder().id("u1").displayName("Sam").active(true).build();
 
-		// A mention delivers on both channels by default, so one event covers both.
+		// The notice would quote the text around the mention to somebody who may not read it;
+		// the app offers to share the issue with them instead (HIN-136).
 		service.notifyMentions(watchedIssue(), actor, Set.of("u-ext"), "look at this");
 
-		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
-		verify(notifications).save(saved.capture());
-		assertThat(saved.getValue()).satisfies(n -> {
-			assertThat(n.getUserId()).as("the notice itself still goes out").isEqualTo("u-ext");
-			assertThat(n.getLink()).as("no bell entry pointing at a 403").isNull();
-		});
-		// The e-mail is sent without a CTA, the push without a deep link.
-		verify(mail).sendNotification(eq("ext@example.org"), anyString(), anyString(), anyString(),
-				isNull(), anyString(), anyString(), anyString(), any());
-		verify(push).sendToUser(eq("u-ext"), anyString(), anyString(), isNull(), anyMap());
+		verify(notifications, never()).save(any(Notification.class));
+		verify(mail, never()).sendNotification(anyString(), anyString(), anyString(), anyString(),
+				any(), anyString(), anyString(), anyString(), any());
+		verify(push, never()).sendToUser(anyString(), anyString(), anyString(), any(), anyMap());
 	}
 
 	@Test
