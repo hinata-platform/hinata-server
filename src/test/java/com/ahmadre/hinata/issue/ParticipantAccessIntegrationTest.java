@@ -601,6 +601,38 @@ class ParticipantAccessIntegrationTest {
 		return mongo.getCollection("notifications").find(filter).into(new ArrayList<>());
 	}
 
+	@Test
+	void aParticipantResolvesTheSharedIssuesChipButNoOther() {
+		Issue unshared = issue("Not yours");
+
+		assertThat(issues.resolveIssues(List.of(issue.getReadableId(), unshared.getReadableId()), participant))
+				.extracting(Issue::getId).containsExactly(issue.getId());
+	}
+
+	// --- bulk routes --------------------------------------------------------
+
+	@Test
+	void bulkRoutesRefuseAParticipant() {
+		List<String> ids = List.of(issue.getId());
+
+		assertReadOnly(() -> issues.bulkUpdate(ids, "Done", null, null, participant));
+		assertReadOnly(() -> issues.archiveAll(ids, true, false, null, participant));
+		assertReadOnly(() -> issues.deleteAll(ids, participant));
+		assertReadOnly(() -> issues.updateAll(ids, i -> i.setDueDate(LocalDate.now()), participant));
+
+		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(stored.getState()).isEqualTo("Open");
+		assertThat(stored.isArchived()).isFalse();
+		assertThat(stored.getDueDate()).isNull();
+	}
+
+	@Test
+	void bulkRoutesStillAnswer404ToAnOutsider() {
+		assertThatThrownBy(() -> issues.bulkUpdate(List.of(issue.getId()), "Done", null, null, outsider))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(404));
+	}
+
 	// --- helpers ------------------------------------------------------------
 
 	private static void assertReadOnly(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
