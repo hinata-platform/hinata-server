@@ -2,6 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueReach;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.project.ProjectReach;
@@ -214,8 +215,10 @@ public class IssueDigestService {
 				Set<String> visible = issue == null
 						? Set.of()
 						: visibleByProject.getOrDefault(issue.getProjectId(), Set.of());
-				if (send(entry.getId(), issue, usersById.get(entry.getUserId()),
-						visible.contains(entry.getUserId()), now)) {
+				// Whoever the issue is shared with may read it as well (HIN-136).
+				boolean mayRead = visible.contains(entry.getUserId())
+						|| (issue != null && IssueReach.isParticipant(issue, entry.getUserId()));
+				if (send(entry.getId(), issue, usersById.get(entry.getUserId()), mayRead, now)) {
 					sent++;
 				}
 			}
