@@ -815,7 +815,7 @@ class ParticipantAccessIntegrationTest {
 
 		IssueService.IssueDetail detail = issues.detail(plain.getId(), 30, "newest", 30, outsider);
 
-		assertThat(detail.issue().getWatcherIds()).isEmpty();
+		assertThat(detail.issue().getWatcherIds()).containsExactly(outsider.getId());
 		assertThat(detail.issue().getParticipantIds()).containsExactly(outsider.getId());
 		assertThat(detail.issue().getSprintId()).isNull();
 		assertThat(detail.activity().content()).extracting(IssueActivity::getField)
@@ -824,7 +824,7 @@ class ParticipantAccessIntegrationTest {
 		assertThat(detail.activity().content()).filteredOn(a -> a.getField() == IssueActivity.Field.PARTICIPANT_ADDED)
 				.singleElement().satisfies(a -> assertThat(a.getToValue()).isEqualTo(outsider.getId()));
 		assertThat(issues.search(null, null, null, null, null, null, false, 0, 50, outsider).getContent())
-				.singleElement().satisfies(i -> assertThat(i.getWatcherIds()).isEmpty());
+				.singleElement().satisfies(i -> assertThat(i.getWatcherIds()).containsExactly(outsider.getId()));
 		assertThat(watching.watchedBy(outsider, 0, 20).getContent())
 				.allSatisfy(i -> assertThat(i.getParticipantIds()).containsExactly(outsider.getId()));
 		// The stored issue is untouched.
