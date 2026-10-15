@@ -111,7 +111,7 @@ public class IssueExportService {
 		// and reading them first is what lets every id in all of them be resolved
 		// in one query rather than one at a time.
 		List<IssueComment> thread = options.comments() ? readComments(issue) : List.of();
-		List<IssueActivity> history = options.activity() ? readActivity(issue) : List.of();
+		List<IssueActivity> history = options.activity() ? readActivity(issue, user) : List.of();
 		List<Issue.Attachment> files = options.attachments() && issue.getAttachments() != null
 				? issue.getAttachments() : List.of();
 
@@ -297,9 +297,12 @@ public class IssueExportService {
 		return out;
 	}
 
-	private List<IssueActivity> readActivity(Issue issue) {
-		return activities.findByIssueIdOrderByCreatedAtDesc(
+	private List<IssueActivity> readActivity(Issue issue, User user) {
+		List<IssueActivity> all = activities.findByIssueIdOrderByCreatedAtDesc(
 				issue.getId(), PageRequest.of(0, MAX_ACTIVITY)).getContent();
+		if (!issues.isParticipantOnly(issue, user)) return all;
+		// Somebody the issue is only shared with reads its history as the detail shows it.
+		return all.stream().filter(entry -> IssueService.participantMayRead(entry, user.getId())).toList();
 	}
 
 	private List<IssueExport.Activity> activity(List<IssueActivity> all, Map<String, String> names,

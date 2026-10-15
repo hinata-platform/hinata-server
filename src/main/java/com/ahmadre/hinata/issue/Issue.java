@@ -24,7 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Data
-@Builder
+@Builder(toBuilder = true)
 @Document("issues")
 @CompoundIndex(name = "project_number", def = "{'projectId': 1, 'numberInProject': 1}", unique = true)
 // Back the scoped filter+sort of the paginated issue list (ESR order: equality on

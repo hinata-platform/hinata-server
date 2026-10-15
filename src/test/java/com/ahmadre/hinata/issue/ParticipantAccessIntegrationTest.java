@@ -89,6 +89,10 @@ class ParticipantAccessIntegrationTest {
 	private com.ahmadre.hinata.notification.IssueDigestService digestService;
 	@Autowired
 	private IssueParticipationPersonalData participationData;
+	@Autowired
+	private com.ahmadre.hinata.team.TeamRepository teams;
+	@Autowired
+	private com.ahmadre.hinata.team.TeamService teamService;
 
 	private User lead;
 	private User member;
@@ -488,12 +492,8 @@ class ParticipantAccessIntegrationTest {
 	@Test
 	void aMemberWhoWasSharedBeforeLosesTheIssueWithTheProject() {
 		participants.add(issue.getId(), outsider.getId(), member);
-		project.getMemberIds().add(outsider.getId());
-		projects.save(project);
-
-		projectService.applyUpdate(project.getId(), new com.ahmadre.hinata.project.ProjectUpdateRequest(null, null,
-				null, null, null, List.of(lead.getId(), member.getId()), null, null, null, null, null, null, null,
-				null), lead);
+		setMembers(lead, member, outsider);
+		setMembers(lead, member);
 
 		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
 		assertThat(stored.getParticipantIds()).doesNotContain(outsider.getId());
@@ -750,6 +750,102 @@ class ParticipantAccessIntegrationTest {
 
 		assertThat(issues.detail(plain.getId(), 30, "newest", 30, lead).users())
 				.extracting(IssueService.DetailUser::id).contains(outsider.getId(), member.getId());
+	}
+
+	// --- adversarial round ---------------------------------------------------
+
+	@Test
+	void joiningTheProjectEndsTheShareAndSaysSo() {
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		setMembers(lead, member, outsider);
+
+		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(stored.getParticipantIds()).doesNotContain(outsider.getId());
+		assertThat(stored.getParticipantMeta()).noneMatch(meta -> meta.userId().equals(outsider.getId()));
+		assertThat(activitiesOf(issue, IssueActivity.Field.PARTICIPANT_REMOVED)).singleElement()
+				.satisfies(a -> {
+					assertThat(a.getFromValue()).isEqualTo(outsider.getId());
+					assertThat(a.getActorId()).isNull();
+				});
+		assertThat(issues.canAccess(stored, outsider)).isTrue();
+	}
+
+	@Test
+	void aTeamChangeKeepsTheShareOfSomebodyTheTeamDoesNotGiveTheProject() {
+		com.ahmadre.hinata.team.Team team = teams.save(com.ahmadre.hinata.team.Team.builder().key("ORG")
+				.name("Orga").projectIds(new ArrayList<>(List.of(project.getId(), otherProject.getId())))
+				.members(new ArrayList<>(List.of(com.ahmadre.hinata.team.TeamMembership.builder()
+						.userId(lead.getId()).role(com.ahmadre.hinata.team.TeamRole.ADMIN)
+						.access(com.ahmadre.hinata.team.ProjectAccess.all()).build())))
+				.build());
+		team = teamService.addMembers(team, lead, List.of(outsider.getId()), com.ahmadre.hinata.team.TeamRole.MEMBER,
+				com.ahmadre.hinata.team.ProjectAccess.none());
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		team = teamService.updateMembership(team, lead, outsider.getId(), com.ahmadre.hinata.team.TeamRole.MEMBER,
+				com.ahmadre.hinata.team.ProjectAccess.none());
+		teamService.removeMember(team, lead, outsider.getId());
+
+		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(stored.getParticipantIds()).contains(outsider.getId());
+		assertThat(stored.getWatcherIds()).contains(outsider.getId());
+	}
+
+	@Test
+	void movingIntoAProjectTheParticipantBelongsToEndsTheShare() {
+		participants.add(issue.getId(), participant.getId(), member);
+
+		moving.move(List.of(issue.getId()), otherProject.getId(), Map.of(), false, false, lead);
+
+		assertThat(issueRepository.findById(issue.getId()).orElseThrow().getParticipantIds())
+				.doesNotContain(participant.getId());
+	}
+
+	@Test
+	void aParticipantGetsTheirOwnViewOfTheIssue() {
+		Issue plain = issue("Plain");
+		participants.add(plain.getId(), outsider.getId(), member);
+		participants.add(plain.getId(), user("another").getId(), member);
+		watching.watch(plain.getId(), member);
+		plain = issueRepository.findById(plain.getId()).orElseThrow();
+		plain.setSprintId("sprint-1");
+		issueRepository.save(plain);
+		issues.update(plain.getId(), i -> i.setTitle("Renamed"), lead);
+
+		IssueService.IssueDetail detail = issues.detail(plain.getId(), 30, "newest", 30, outsider);
+
+		assertThat(detail.issue().getWatcherIds()).isEmpty();
+		assertThat(detail.issue().getParticipantIds()).containsExactly(outsider.getId());
+		assertThat(detail.issue().getSprintId()).isNull();
+		assertThat(detail.activity().content()).extracting(IssueActivity::getField)
+				.contains(IssueActivity.Field.TITLE)
+				.doesNotContain(IssueActivity.Field.SPRINT);
+		assertThat(detail.activity().content()).filteredOn(a -> a.getField() == IssueActivity.Field.PARTICIPANT_ADDED)
+				.singleElement().satisfies(a -> assertThat(a.getToValue()).isEqualTo(outsider.getId()));
+		assertThat(issues.search(null, null, null, null, null, null, false, 0, 50, outsider).getContent())
+				.singleElement().satisfies(i -> assertThat(i.getWatcherIds()).isEmpty());
+		assertThat(watching.watchedBy(outsider, 0, 20).getContent())
+				.allSatisfy(i -> assertThat(i.getParticipantIds()).containsExactly(outsider.getId()));
+		// The stored issue is untouched.
+		assertThat(issueRepository.findById(plain.getId()).orElseThrow().getWatcherIds()).contains(member.getId());
+	}
+
+	@Test
+	void aBulkNoticeSendsAParticipantToTheWatchedPage() {
+		participants.add(issue.getId(), outsider.getId(), member);
+		mongo.getCollection("notifications").deleteMany(new Document());
+
+		issues.bulkUpdate(List.of(issue.getId()), "Done", null, null, lead);
+
+		assertThat(notificationsOf(outsider, "ISSUE_UPDATED")).singleElement()
+				.satisfies(row -> assertThat(row.getString("link")).isEqualTo("/watched"));
+	}
+
+	private void setMembers(User... people) {
+		projectService.applyUpdate(project.getId(), new com.ahmadre.hinata.project.ProjectUpdateRequest(null, null,
+				null, null, null, java.util.Arrays.stream(people).map(User::getId).toList(), null, null, null, null,
+				null, null, null, null), lead);
 	}
 
 	// --- helpers ------------------------------------------------------------

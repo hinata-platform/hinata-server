@@ -426,7 +426,19 @@ public class ProjectService {
 		reconcileResolvedAt(saved);
 		notifyNewMembers(saved, previousMembers, user);
 		pruneWatchersOfRemovedMembers(saved, previousMembers);
+		endSharesOfNewMembers(saved, previousMembers);
 		return saved;
+	}
+
+	/**
+	 * Ends the issue shares of anyone this update made a member (HIN-136): they see every
+	 * issue now, and a share left behind would outlive their membership.
+	 */
+	private void endSharesOfNewMembers(Project saved, Set<String> previousMembers) {
+		Set<String> added = new HashSet<>(saved.getMemberIds());
+		added.removeAll(previousMembers);
+		if (added.isEmpty()) return;
+		watcherCleanup.endSharesOfMembers(saved.getId(), added);
 	}
 
 	/**
