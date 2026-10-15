@@ -1522,12 +1522,14 @@ public class IssueService {
 
 	/**
 	 * {@code issue} as somebody it is only shared with may read it (HIN-136): none of the
-	 * project's people (watchers, the other participants), sprint or dependencies. A copy; the
+	 * project's people (other watchers, the other participants), sprint or dependencies. A copy; the
 	 * stored issue is untouched.
 	 */
 	public static Issue participantView(Issue issue, String userId) {
+		boolean watching = issue.getWatcherIds() != null && issue.getWatcherIds().contains(userId);
 		return issue.toBuilder()
-				.watcherIds(new ArrayList<>())
+				// Their own subscription stays: the app shows from it whether they watch.
+				.watcherIds(watching ? new ArrayList<>(List.of(userId)) : new ArrayList<>())
 				.participantIds(new ArrayList<>(List.of(userId)))
 				.participantMeta(new ArrayList<>())
 				.sprintId(null)
