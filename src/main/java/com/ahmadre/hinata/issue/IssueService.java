@@ -469,6 +469,51 @@ public class IssueService {
 		if (!projects.canDeleteIssues(project, user)) {
 			throw ApiException.forbidden("error.issue.deleteForbidden");
 		}
+		deleteChecked(issue, user);
+	}
+
+	/**
+	 * Hard-deletes several issues at once, with the single delete's rules. All or
+	 * nothing on access: every project is checked before the first issue goes, so
+	 * one issue the caller may not delete refuses the whole request, and one they
+	 * cannot see answers like one that does not exist. Sub-tasks whose parent is in
+	 * the same request go with that parent. Returns how many issues were named and
+	 * deleted.
+	 */
+	public int deleteAll(List<String> ids, User user) {
+		List<String> distinct = ids == null ? List.of()
+				: ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+		if (distinct.size() > MAX_BULK) {
+			throw ApiException.badRequest("error.issue.bulkTooMany", MAX_BULK);
+		}
+		List<Issue> found = issues.findAllById(distinct);
+		if (found.size() != distinct.size()) {
+			throw ApiException.notFound("issue");
+		}
+		for (String projectId : found.stream().map(Issue::getProjectId).distinct().toList()) {
+			Project project = projects.get(projectId);
+			if (!projects.canSee(project, user)) {
+				throw ApiException.notFound("issue");
+			}
+			projects.assertMember(project, user);
+			if (!projects.canDeleteIssues(project, user)) {
+				throw ApiException.forbidden("error.issue.deleteForbidden");
+			}
+		}
+		java.util.Set<String> gone = new java.util.HashSet<>();
+		for (Issue issue : found) {
+			if (gone.contains(issue.getId())) continue;
+			gone.addAll(deleteChecked(issue, user));
+		}
+		return found.size();
+	}
+
+	/**
+	 * Deletes an issue whose access is already settled, with what hangs off it.
+	 * Returns the ids it removed: the issue and any sub-tasks that went with it.
+	 */
+	private java.util.Set<String> deleteChecked(Issue issue, User user) {
+		java.util.Set<String> removed = new java.util.HashSet<>();
 		if (issue.getType().isEpic()) {
 			// Standard children survive as top-level issues — just drop the epic link.
 			mongo.updateMulti(new Query(Criteria.where("parentId").is(issue.getId())),
@@ -483,6 +528,7 @@ public class IssueService {
 				workItems.detachFromIssue(child.getId());
 				deleteLinksOf(child.getId());
 				issues.delete(child);
+				removed.add(child.getId());
 			}
 		}
 		freeVoiceBlobs(issue.getId());
@@ -493,8 +539,10 @@ public class IssueService {
 		workItems.detachFromIssue(issue.getId());
 		deleteLinksOf(issue.getId());
 		issues.delete(issue);
+		removed.add(issue.getId());
 		audit.event(AuditAction.ISSUE_DELETED).actor(user)
 				.meta("issue", issue.getReadableId()).log();
+		return removed;
 	}
 
 	/**

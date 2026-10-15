@@ -267,9 +267,32 @@ class RoleSeparationIntegrationTest {
 	}
 
 	@Test
+	void aBulkDeleteRemovesEveryIssueOrNone() {
+		Issue a = issue("First");
+		Issue b = issue("Second");
+		Issue sub = issueRepository.save(Issue.builder().projectId(project.getId()).title("Child")
+				.readableId("SEC-9").numberInProject(9L).state("Open").type(Issue.Type.SUBTASK)
+				.parentId(a.getId()).build());
+
+		// A plain member may archive, not delete: nothing goes.
+		assertThatThrownBy(() -> issues.deleteAll(List.of(a.getId(), b.getId()), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("deleteForbidden");
+		// An outsider learns nothing about the issues.
+		assertThatThrownBy(() -> issues.deleteAll(List.of(a.getId()), outsider))
+				.isInstanceOf(ApiException.class).hasMessageContaining("notFound");
+		assertThat(issueRepository.count()).isEqualTo(3);
+
+		// The sub-task named next to its parent goes with the parent, once.
+		assertThat(issues.deleteAll(List.of(a.getId(), sub.getId(), b.getId(), a.getId()), lead)).isEqualTo(3);
+		assertThat(issueRepository.count()).isZero();
+	}
+
+	@Test
 	void aBulkChangeIsBounded() {
 		List<String> ids = IntStream.range(0, IssueService.MAX_BULK + 1).mapToObj(i -> "id-" + i).toList();
 		assertThatThrownBy(() -> issues.updateAll(ids, issue -> { }, member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
+		assertThatThrownBy(() -> issues.deleteAll(ids, lead))
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
 	}
 
