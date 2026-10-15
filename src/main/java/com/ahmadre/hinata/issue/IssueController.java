@@ -419,18 +419,24 @@ public class IssueController {
 		issueService.delete(id, currentUser.require());
 	}
 
-	/** Archives ({@code archived} true) or restores the named issues. */
+	/**
+	 * Archives ({@code archived} true) or restores the named issues. {@code cascade}
+	 * (default on) takes sub-tasks along; an undo sends exactly the ids the first
+	 * call switched, with it off.
+	 */
 	public record BulkArchiveRequest(@NotEmpty @Size(max = IssueService.MAX_BULK) List<String> issueIds,
-			boolean archived) {
+			boolean archived, Boolean cascade) {
 	}
 
 	/**
 	 * Archives or restores every named issue. Any member may, as with a single issue;
-	 * an issue the caller cannot see refuses the whole request.
+	 * an issue the caller cannot see refuses the whole request. Answers the named
+	 * issues and the ids of every issue it switched.
 	 */
 	@PostMapping("/bulk/archive")
-	public List<Issue> bulkArchive(@RequestBody @Valid BulkArchiveRequest request) {
-		return issueService.archiveAll(request.issueIds(), request.archived(), currentUser.require());
+	public IssueService.BulkArchive bulkArchive(@RequestBody @Valid BulkArchiveRequest request) {
+		return issueService.archiveAll(request.issueIds(), request.archived(),
+				!Boolean.FALSE.equals(request.cascade()), currentUser.require());
 	}
 
 	/**
