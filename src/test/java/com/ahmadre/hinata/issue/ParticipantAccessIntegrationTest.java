@@ -609,6 +609,16 @@ class ParticipantAccessIntegrationTest {
 				.extracting(Issue::getId).containsExactly(issue.getId());
 	}
 
+	@Test
+	void sharingWithSomebodyWhoReachesTheProjectChangesNothing() {
+		participants.add(issue.getId(), member.getId(), lead);
+
+		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(stored.getParticipantIds()).doesNotContain(member.getId());
+		assertThat(notificationsOf(member, "ISSUE_SHARED")).isEmpty();
+		assertThat(audits(com.ahmadre.hinata.audit.AuditAction.ISSUE_PARTICIPANT_ADDED)).isZero();
+	}
+
 	// --- bulk routes --------------------------------------------------------
 
 	@Test

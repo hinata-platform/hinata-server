@@ -1513,9 +1513,6 @@ public class IssueService {
 		}
 		List<String> capped = keys.stream().distinct().limit(MENTION_LIMIT).toList();
 		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
-		if (scope.isEmpty()) {
-			return List.of();
-		}
 		// Match the ids an issue carries *now* or carried before it was moved to
 		// another project, so a {{issue:…}} chip written under the old key keeps
 		// resolving — the same redirect the single-issue lookup performs. Without
@@ -1524,8 +1521,9 @@ public class IssueService {
 		List<String> normalized = capped.stream()
 				.map(key -> key.toUpperCase(java.util.Locale.ROOT))
 				.toList();
+		// The issues shared with the caller resolve too, so a chip in their own comment works.
 		Query query = Query.query(new Criteria().andOperator(
-				Criteria.where("projectId").in(scope),
+				scopeCriteria(scope, user),
 				new Criteria().orOperator(
 						Criteria.where("readableId").in(capped),
 						Criteria.where("formerReadableIds").in(normalized))));
