@@ -118,6 +118,9 @@ public class UserService {
 				new Update().unset("assigneeId"), "issues");
 		mongo.updateMulti(new Query(Criteria.where("watcherIds").is(id)),
 				new Update().pull("watcherIds", id), "issues");
+		mongo.updateMulti(new Query(Criteria.where("participantIds").is(id)),
+				new Update().pull("participantIds", id).pull("participantMeta", new org.bson.Document("userId", id)),
+				"issues");
 		// The subscriptions are gone; the mails queued for them would otherwise
 		// outlive the account by up to half an hour — and the rows themselves hold
 		// the deleted user's id alongside field values that can name other users.

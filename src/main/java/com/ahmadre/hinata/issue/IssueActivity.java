@@ -27,7 +27,11 @@ public class IssueActivity {
 		CREATED, TITLE, DESCRIPTION, STATE, ASSIGNEE, PRIORITY, TYPE, SPRINT,
 		START_DATE, DUE_DATE, ESTIMATE, STORY_POINTS, TAGS, PARENT,
 		/** Moved to another project; from/to hold the readable ids, e.g. VOR-42 → ERSTI-7. */
-		PROJECT
+		PROJECT,
+		/** Shared with somebody outside the project; {@code toValue} holds their user id. */
+		PARTICIPANT_ADDED,
+		/** Taken off the issue again; {@code fromValue} holds their user id. */
+		PARTICIPANT_REMOVED
 	}
 
 	@Id

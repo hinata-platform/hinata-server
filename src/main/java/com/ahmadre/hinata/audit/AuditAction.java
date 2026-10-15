@@ -83,6 +83,9 @@ public enum AuditAction {
 	TIME_SHARE_REVOKED(DATA, INFO, true),
 	ISSUE_WATCHED(DATA, INFO, true),
 	ISSUE_UNWATCHED(DATA, INFO, true),
+	// An issue shared with somebody outside its project (HIN-136), and taken back.
+	ISSUE_PARTICIPANT_ADDED(DATA, INFO, true),
+	ISSUE_PARTICIPANT_REMOVED(DATA, INFO, true),
 	// A lead or admin changing or removing someone else's logged time. Editing
 	// one's own entries is not audited — it is the ordinary use of the feature.
 	TIME_ENTRY_UPDATED(DATA, NOTICE, true),

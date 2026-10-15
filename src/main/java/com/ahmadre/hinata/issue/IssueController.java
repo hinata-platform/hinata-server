@@ -33,6 +33,7 @@ public class IssueController {
 
 	private final IssueService issueService;
 	private final IssueWatchService issueWatchService;
+	private final IssueParticipantService issueParticipantService;
 	private final IssueMoveService issueMoveService;
 	private final IssueCloneService issueCloneService;
 	private final CommentEvents commentEvents;
@@ -511,6 +512,42 @@ public class IssueController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void unwatch(@PathVariable String id) {
 		issueWatchService.unwatch(id, currentUser.require());
+	}
+
+	/**
+	 * The people this issue is shared with from outside its project (HIN-136). Members only; at
+	 * most {@link IssueParticipantService#MAX_PARTICIPANTS}, so not paged.
+	 */
+	@GetMapping("/{id}/participants")
+	public List<IssueParticipantService.ParticipantView> participants(@PathVariable String id) {
+		return issueParticipantService.list(id, currentUser.require());
+	}
+
+	/**
+	 * Shares the issue with somebody outside the project: they read and comment on it and watch
+	 * it. Idempotent. Members only.
+	 */
+	@PutMapping("/{id}/participants/{userId}")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void addParticipant(@PathVariable String id, @PathVariable String userId) {
+		issueParticipantService.add(id, userId, currentUser.require());
+	}
+
+	/** Takes somebody off the issue; members remove anybody, a participant only themselves. */
+	@DeleteMapping("/{id}/participants/{userId}")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void removeParticipant(@PathVariable String id, @PathVariable String userId) {
+		issueParticipantService.remove(id, userId, currentUser.require());
+	}
+
+	/**
+	 * Which of {@code userIds} could not open this issue, for the hint under a comment that
+	 * mentions them. Members only.
+	 */
+	@GetMapping("/{id}/participants/blocked")
+	public List<String> blockedFromIssue(@PathVariable String id,
+			@RequestParam(name = "userIds", required = false) List<String> userIds) {
+		return issueParticipantService.blocked(id, userIds, currentUser.require());
 	}
 
 	/** Soft delete — any project member may archive an issue. */

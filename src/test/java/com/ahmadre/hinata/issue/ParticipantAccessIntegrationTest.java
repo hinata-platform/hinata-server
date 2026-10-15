@@ -70,6 +70,12 @@ class ParticipantAccessIntegrationTest {
 	private IssueLinkService linking;
 	@Autowired
 	private TimeTrackingService time;
+	@Autowired
+	private IssueParticipantService participants;
+	@Autowired
+	private IssueActivityRepository activities;
+	@Autowired
+	private com.ahmadre.hinata.user.UserService userService;
 
 	private User lead;
 	private User member;
@@ -232,6 +238,176 @@ class ParticipantAccessIntegrationTest {
 	void permissionsSayAParticipantCannotDelete() {
 		assertThat(issues.permissionsOf(issue.getId(), participant).canDelete()).isFalse();
 		assertThat(issues.permissionsOf(issue.getId(), lead).canDelete()).isTrue();
+	}
+
+	// --- adding and removing participants -----------------------------------
+
+	@Test
+	void aMemberAddsAParticipantWhoThenWatches() {
+		Issue plain = issue("Plain");
+
+		participants.add(plain.getId(), outsider.getId(), member);
+
+		Issue stored = issueRepository.findById(plain.getId()).orElseThrow();
+		assertThat(stored.getParticipantIds()).containsExactly(outsider.getId());
+		assertThat(stored.getWatcherIds()).contains(outsider.getId());
+		assertThat(stored.getParticipantMeta()).singleElement()
+				.satisfies(meta -> assertThat(meta.addedById()).isEqualTo(member.getId()));
+		assertThat(activitiesOf(plain, IssueActivity.Field.PARTICIPANT_ADDED)).singleElement()
+				.satisfies(a -> assertThat(a.getToValue()).isEqualTo(outsider.getId()));
+		assertThat(audits(com.ahmadre.hinata.audit.AuditAction.ISSUE_PARTICIPANT_ADDED)).isEqualTo(1);
+		assertThat(issues.canAccess(stored, outsider)).isTrue();
+	}
+
+	@Test
+	void addingIsIdempotentAndAuditsOnce() {
+		Issue plain = issue("Plain");
+
+		participants.add(plain.getId(), outsider.getId(), member);
+		participants.add(plain.getId(), outsider.getId(), lead);
+
+		Issue stored = issueRepository.findById(plain.getId()).orElseThrow();
+		assertThat(stored.getParticipantIds()).containsExactly(outsider.getId());
+		assertThat(stored.getParticipantMeta()).hasSize(1);
+		assertThat(audits(com.ahmadre.hinata.audit.AuditAction.ISSUE_PARTICIPANT_ADDED)).isEqualTo(1);
+		assertThat(activitiesOf(plain, IssueActivity.Field.PARTICIPANT_ADDED)).hasSize(1);
+	}
+
+	@Test
+	void aParticipantMayNotAddOthersButMayLeave() {
+		participants.add(issue.getId(), participant.getId(), member); // meta + watch
+
+		assertReadOnly(() -> participants.add(issue.getId(), outsider.getId(), participant));
+		assertReadOnly(() -> participants.list(issue.getId(), participant));
+		participants.remove(issue.getId(), participant.getId(), participant);
+
+		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(stored.getParticipantIds()).isEmpty();
+		assertThat(stored.getParticipantMeta()).isEmpty();
+		assertThat(stored.getWatcherIds()).doesNotContain(participant.getId());
+		assertThat(issues.canAccess(stored, participant)).isFalse();
+	}
+
+	@Test
+	void aParticipantMayNotRemoveSomebodyElse() {
+		Issue shared = issue("Two guests", participant.getId(), outsider.getId());
+
+		assertReadOnly(() -> participants.remove(shared.getId(), outsider.getId(), participant));
+
+		assertThat(issueRepository.findById(shared.getId()).orElseThrow().getParticipantIds())
+				.contains(outsider.getId());
+	}
+
+	@Test
+	void aMemberRemovesAParticipant() {
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		participants.remove(issue.getId(), outsider.getId(), lead);
+
+		assertThat(issueRepository.findById(issue.getId()).orElseThrow().getParticipantIds())
+				.doesNotContain(outsider.getId());
+		assertThat(activitiesOf(issue, IssueActivity.Field.PARTICIPANT_REMOVED)).singleElement()
+				.satisfies(a -> assertThat(a.getFromValue()).isEqualTo(outsider.getId()));
+		assertThat(audits(com.ahmadre.hinata.audit.AuditAction.ISSUE_PARTICIPANT_REMOVED)).isEqualTo(1);
+	}
+
+	@Test
+	void theTwentySixthIsRefused() {
+		List<String> crowd = new ArrayList<>();
+		for (int i = 0; i < IssueParticipantService.MAX_PARTICIPANTS; i++) {
+			crowd.add(user("guest" + i).getId());
+		}
+		Issue full = issue("Full", crowd.toArray(String[]::new));
+
+		assertThatThrownBy(() -> participants.add(full.getId(), outsider.getId(), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("participantsFull");
+		assertThat(issueRepository.findById(full.getId()).orElseThrow().getParticipantIds())
+				.hasSize(IssueParticipantService.MAX_PARTICIPANTS);
+	}
+
+	@Test
+	void anInactiveAccountIsRefused() {
+		outsider.setActive(false);
+		users.save(outsider);
+
+		assertThatThrownBy(() -> participants.add(issue.getId(), outsider.getId(), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("participantInactive");
+	}
+
+	@Test
+	void anUnknownUserIs400() {
+		assertThatThrownBy(() -> participants.add(issue.getId(), "000000000000000000000000", member))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(400));
+	}
+
+	@Test
+	void anInvisibleIssueIs404ForAnOutsider() {
+		assertThatThrownBy(() -> participants.add(issue.getId(), member.getId(), outsider))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(404));
+		assertThatThrownBy(() -> participants.list(issue.getId(), outsider))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(404));
+		assertThatThrownBy(() -> participants.remove(issue.getId(), participant.getId(), outsider))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(404));
+	}
+
+	@Test
+	void listingLeavesOutProjectMembers() {
+		Issue plain = issue("Plain");
+		participants.add(plain.getId(), participant.getId(), member);
+		participants.add(plain.getId(), outsider.getId(), member);
+		// A member on the list (shared before they joined, or by a direct write) is not a participant.
+		mongo.updateFirst(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("_id").is(plain.getId())),
+				new org.springframework.data.mongodb.core.query.Update().addToSet("participantIds", member.getId()),
+				Issue.class);
+
+		List<IssueParticipantService.ParticipantView> listed = participants.list(plain.getId(), lead);
+
+		assertThat(listed).extracting(IssueParticipantService.ParticipantView::id)
+				.containsExactlyInAnyOrder(participant.getId(), outsider.getId());
+		assertThat(listed).allSatisfy(view -> assertThat(view.addedById()).isEqualTo(member.getId()));
+	}
+
+	@Test
+	void removingAnAssigneeParticipantKeepsTheAssignment() {
+		Issue assigned = issue("Assigned", participant.getId());
+		assigned.setAssigneeIds(new ArrayList<>(List.of(participant.getId())));
+		issueRepository.save(assigned);
+
+		participants.remove(assigned.getId(), participant.getId(), member);
+
+		assertThat(issueRepository.findById(assigned.getId()).orElseThrow().getAssigneeIds())
+				.containsExactly(participant.getId());
+	}
+
+	@Test
+	void aDeletedAccountLeavesEveryParticipantList() {
+		Issue second = issue("Second", participant.getId());
+
+		userService.delete(participant);
+
+		assertThat(issueRepository.findById(issue.getId()).orElseThrow().getParticipantIds()).isEmpty();
+		assertThat(issueRepository.findById(second.getId()).orElseThrow().getParticipantIds()).isEmpty();
+	}
+
+	@Test
+	void reachTellsAMemberWhichMentionedPeopleCannotSeeTheIssue() {
+		assertThat(participants.blocked(issue.getId(), List.of(member.getId(), participant.getId(),
+				outsider.getId(), "nobody"), member)).containsExactly(outsider.getId());
+		assertReadOnly(() -> participants.blocked(issue.getId(), List.of(outsider.getId()), participant));
+	}
+
+	private List<IssueActivity> activitiesOf(Issue of, IssueActivity.Field field) {
+		return activities.findAll().stream()
+				.filter(a -> a.getIssueId().equals(of.getId()) && a.getField() == field).toList();
+	}
+
+	private long audits(com.ahmadre.hinata.audit.AuditAction action) {
+		return mongo.getCollection("audit_log").countDocuments(new Document("action", action.name()));
 	}
 
 	// --- helpers ------------------------------------------------------------

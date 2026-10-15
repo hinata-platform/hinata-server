@@ -304,17 +304,18 @@ public class IssueExportService {
 		List<IssueExport.Activity> out = new ArrayList<>();
 		for (IssueActivity entry : all) {
 			out.add(new IssueExport.Activity(entry.getCreatedAt(),
-					person(entry.getActorId(), names), describe(entry, words)));
+					person(entry.getActorId(), names), describe(entry, names, words)));
 		}
 		return out;
 	}
 
-	private static String describe(IssueActivity entry, ExportWords words) {
+	private String describe(IssueActivity entry, Map<String, String> names, ExportWords words) {
 		String field = entry.getField() == null
 				? words.t("export.activity.changed")
 				: words.or("export.field." + fieldKey(entry.getField()), entry.getField().name());
-		String from = entry.getFromValue();
-		String to = entry.getToValue();
+		boolean person = isAboutAPerson(entry);
+		String from = person && entry.getFromValue() != null ? person(entry.getFromValue(), names) : entry.getFromValue();
+		String to = person && entry.getToValue() != null ? person(entry.getToValue(), names) : entry.getToValue();
 		if (from == null && to == null) {
 			return field;
 		}
@@ -344,7 +345,15 @@ public class IssueExportService {
 			case TAGS -> "labels";
 			case PARENT -> "parent";
 			case PROJECT -> "project";
+			case PARTICIPANT_ADDED -> "participantAdded";
+			case PARTICIPANT_REMOVED -> "participantRemoved";
 		};
+	}
+
+	/** Whether the entry's values are user ids, printed as the people they name. */
+	private static boolean isAboutAPerson(IssueActivity entry) {
+		return entry.getField() == IssueActivity.Field.PARTICIPANT_ADDED
+				|| entry.getField() == IssueActivity.Field.PARTICIPANT_REMOVED;
 	}
 
 	// --- naming --------------------------------------------------------------
@@ -385,6 +394,10 @@ public class IssueExportService {
 		}
 		for (IssueActivity entry : history) {
 			ids.add(entry.getActorId());
+			if (isAboutAPerson(entry)) {
+				ids.add(entry.getFromValue());
+				ids.add(entry.getToValue());
+			}
 		}
 		// The people the prose mentions belong in this batch too, for exactly the
 		// reason the batch exists: a description may @-mention anybody, and
