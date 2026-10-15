@@ -215,7 +215,10 @@ public class IssueExportService {
 		fields.add(field(words, "priority", priority(issue.getPriority(), words)));
 		fields.add(field(words, "assignees", people(issue.getAssigneeIds(), names)));
 		fields.add(field(words, "reporter", person(issue.getReporterId(), names)));
-		fields.add(field(words, "sprint", sprintName(issue)));
+		// Sprints are the project's planning; somebody the issue is only shared with sees none.
+		if (!issues.isParticipantOnly(issue, user)) {
+			fields.add(field(words, "sprint", sprintName(issue)));
+		}
 		fields.add(field(words, "startDate", words.date(issue.getStartDate())));
 		fields.add(field(words, "dueDate", words.date(issue.getDueDate())));
 		fields.add(field(words, "storyPoints",

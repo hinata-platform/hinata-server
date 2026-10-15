@@ -306,6 +306,19 @@ class ExportHardeningTest {
 				.doesNotContain("CLSD-1");
 	}
 
+	/** Sprints are the project's planning; somebody the issue is only shared with sees none. */
+	@Test
+	void aParticipantsExportLeavesOutTheSprint() {
+		Issue own = issue();
+		when(issues.getForUser(anyString(), any())).thenReturn(own);
+		when(issues.isParticipantOnly(own, caller)).thenReturn(true);
+
+		IssueExport export = exports.gather("HIN-50", IssueExport.Options.standard(), caller,
+				ExportWordsFixture.english());
+
+		assertThat(export.fields()).extracting(IssueExport.Field::key).doesNotContain("sprint");
+	}
+
 	/**
 	 * A parent has to live in its child's project when it is set, so this only
 	 * bites where the write path cannot reach — a parent left behind in another

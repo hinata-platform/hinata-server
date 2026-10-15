@@ -43,13 +43,41 @@ public class IssueReach {
 		if (issue == null || userIds == null || userIds.isEmpty()) {
 			return Set.of();
 		}
-		Set<String> allowed = new HashSet<>(projects.whoCanSee(issue.getProjectId(), userIds));
+		// Participants first: they are answered from the issue in hand, and leaving them out
+		// spares the project read and the team query for a list of only them.
+		Set<String> allowed = new HashSet<>();
+		List<String> rest = new java.util.ArrayList<>();
 		for (String id : userIds) {
-			if (id != null && isParticipant(issue, id)) {
-				allowed.add(id);
-			}
+			if (id == null) continue;
+			if (isParticipant(issue, id)) allowed.add(id);
+			else rest.add(id);
+		}
+		if (!rest.isEmpty()) {
+			allowed.addAll(projects.whoCanSee(issue.getProjectId(), rest));
 		}
 		return allowed;
+	}
+
+	/**
+	 * Of {@code issues}, all in one project, which each of {@code userIds} may see: one project
+	 * question for the whole group, then each issue's participants. The bulk form of
+	 * {@link #whoCanSee} for fan-outs over many issues at once.
+	 */
+	public java.util.Map<String, Set<String>> whoCanSeeEach(String projectId, Collection<Issue> issues,
+			Collection<String> userIds) {
+		// Somebody shared every one of these issues needs no project answer at all.
+		List<String> ask = userIds.stream().filter(java.util.Objects::nonNull)
+				.filter(id -> !issues.stream().allMatch(issue -> isParticipant(issue, id))).toList();
+		Set<String> members = ask.isEmpty() ? Set.of() : projects.whoCanSee(projectId, ask);
+		java.util.Map<String, Set<String>> out = new java.util.HashMap<>();
+		for (Issue issue : issues) {
+			Set<String> allowed = new HashSet<>(members);
+			for (String id : userIds) {
+				if (isParticipant(issue, id)) allowed.add(id);
+			}
+			out.put(issue.getId(), allowed);
+		}
+		return out;
 	}
 
 	/** Whether {@code user} sees {@code issue} only because it is shared with them. */

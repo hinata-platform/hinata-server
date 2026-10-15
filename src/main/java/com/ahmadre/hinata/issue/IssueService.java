@@ -197,11 +197,10 @@ public class IssueService {
 		for (String projectId : found.stream().map(Issue::getProjectId).distinct().toList()) {
 			Project project = projects.get(projectId);
 			if (!projects.canSee(project, user)) {
-				// Somebody an issue is shared with may read it, never change it in bulk:
-				// they hear "read only", everybody else learns nothing.
-				boolean shared = found.stream().anyMatch(issue -> projectId.equals(issue.getProjectId())
-						&& reach.canSee(issue, user));
-				throw shared ? participantReadOnly() : ApiException.notFound("issue");
+				// Somebody every named issue is shared with hears "read only". Anything else
+				// answers 404, so a participant cannot probe which other ids exist.
+				boolean allShared = found.stream().allMatch(issue -> reach.canSee(issue, user));
+				throw allShared ? participantReadOnly() : ApiException.notFound("issue");
 			}
 			byId.put(projectId, project);
 		}
@@ -886,6 +885,11 @@ public class IssueService {
 
 	public Hierarchy hierarchyOf(String idOrReadableId, User user) {
 		Issue issue = getForUser(idOrReadableId, user);
+		return hierarchyOf(issue, reach.isParticipantOnly(issue, user), user);
+	}
+
+	/** The hierarchy of an issue whose access is settled; see {@link #hierarchyOf(String, User)}. */
+	private Hierarchy hierarchyOf(Issue issue, boolean participantOnly, User user) {
 		LinkedList<Issue> ancestors = new LinkedList<>();
 		String parentId = issue.getParentId();
 		int guard = 0; // cycle guard — the hierarchy is at most 3 levels deep
@@ -897,11 +901,11 @@ public class IssueService {
 		}
 		List<Issue> children = new ArrayList<>(issues.findByParentId(issue.getId()));
 		children.sort(Comparator.comparingLong(Issue::getNumberInProject));
-		if (reach.isParticipantOnly(issue, user)) {
+		if (participantOnly) {
 			// Somebody the issue is shared with sees of its family only what is shared with them
 			// too; the rest of the project stays out of sight, the detail still opens.
-			ancestors.removeIf(other -> !participates(other, user));
-			children.removeIf(other -> !participates(other, user));
+			ancestors.removeIf(other -> !IssueReach.isParticipant(other, user.getId()));
+			children.removeIf(other -> !IssueReach.isParticipant(other, user.getId()));
 		}
 		return new Hierarchy(ancestors, children);
 	}
@@ -1062,16 +1066,18 @@ public class IssueService {
 
 	public IssueDetail detail(String idOrReadableId, int commentSize, String commentSort,
 			int activitySize, User user) {
-		Issue issue = getForUser(idOrReadableId, user); // primary ACL assert
+		// One access check and one read of the issue and its project for the whole view; the
+		// parts below are the standalone reads without their own gate.
+		Issue issue = getForUser(idOrReadableId, user);
 		String id = issue.getId();
 		Project project = projects.get(issue.getProjectId());
-		boolean participantOnly = reach.isParticipantOnly(issue, user);
-		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort, user);
-		List<IssueComment> pinned = pinnedComments(id, user);
-		Page<IssueActivity> activityPage = activityOf(id, 0, activitySize, user);
-		Hierarchy hierarchy = hierarchyOf(id, user);
-		List<DetailUser> dirUsers = referencedUsers(
-				issue, commentPage.getContent(), pinned, activityPage.getContent(), hierarchy);
+		boolean participantOnly = !projects.canSee(project, user);
+		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort);
+		List<IssueComment> pinned = pinnedComments(id);
+		Page<IssueActivity> activityPage = activityOf(id, 0, activitySize);
+		Hierarchy hierarchy = hierarchyOf(issue, participantOnly, user);
+		List<DetailUser> dirUsers = referencedUsers(issue, participantOnly,
+				commentPage.getContent(), pinned, activityPage.getContent(), hierarchy);
 		if (participantOnly) {
 			// Somebody the issue is shared with reads the issue, not the project: none of its
 			// people, sprints or logged hours (who worked how long is the members' business).
@@ -1114,9 +1120,6 @@ public class IssueService {
 		}
 	}
 
-	private static boolean participates(Issue issue, User user) {
-		return issue.getParticipantIds() != null && issue.getParticipantIds().contains(user.getId());
-	}
 
 	/**
 	 * Non-archived sprints across every board spanning the project, de-duplicated
@@ -1138,7 +1141,7 @@ public class IssueService {
 	 * The minimal user directory the detail view references, so an issue open
 	 * never ships the whole org over the wire.
 	 */
-	private List<DetailUser> referencedUsers(Issue issue,
+	private List<DetailUser> referencedUsers(Issue issue, boolean participantOnly,
 			List<IssueComment> commentPage, List<IssueComment> pinned,
 			List<IssueActivity> activityPage, Hierarchy hierarchy) {
 		Set<String> ids = new HashSet<>();
@@ -1164,6 +1167,10 @@ public class IssueService {
 		List<User> active = new ArrayList<>();
 		for (User u : userRepo.findAllById(ids)) {
 			if (u.isActive()) active.add(u);
+		}
+		if (participantOnly) {
+			// Who else reaches the issue is the project's business, not the participant's.
+			return active.stream().map(u -> DetailUser.of(u, true)).toList();
 		}
 		Set<String> canSee = reach.whoCanSee(issue, active.stream().map(User::getId).toList());
 		return active.stream().map(u -> DetailUser.of(u, canSee.contains(u.getId()))).toList();
@@ -1219,7 +1226,11 @@ public class IssueService {
 	}
 
 	public Page<IssueActivity> activityOf(String issueId, int page, int size, User user) {
-		String id = getForUser(issueId, user).getId();
+		return activityOf(getForUser(issueId, user).getId(), page, size);
+	}
+
+	/** A page of the history of an issue whose access is settled. */
+	private Page<IssueActivity> activityOf(String id, int page, int size) {
 		return activities.findByIssueIdOrderByCreatedAtDesc(id,
 				PageRequest.of(page, Math.min(size, 100)));
 	}
@@ -1402,15 +1413,8 @@ public class IssueService {
 		// projects, so it is exactly that scope.
 		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
 		Pageable pageable = PageRequest.of(p.page(), Math.min(p.size(), 100), sortFor(p.sort()));
-		if (p.projectId() != null) {
-			if (!scope.contains(p.projectId())) {
-				return Page.empty(pageable);
-			}
-			filters.add(Criteria.where("projectId").is(p.projectId()));
-		}
-		else {
-			// The issues shared with the caller come along, whatever project they sit in.
-			filters.add(scopeCriteria(scope, user));
+		if (p.projectId() != null && !scope.contains(p.projectId())) {
+			return Page.empty(pageable);
 		}
 		// State: multi-select wins over the single legacy param. Workflow-state
 		// names are free-form, mixed-case strings ("In Progress"); the client sends
@@ -1462,21 +1466,36 @@ public class IssueService {
 					Criteria.where("title").regex(quoted, "i"),
 					Criteria.where("readableId").regex("^" + quoted, "i")));
 		}
-		Query query = Query.query(new Criteria().andOperator(filters));
+		Query query = Query.query(p.projectId() != null
+				? new Criteria().andOperator(and(filters, Criteria.where("projectId").is(p.projectId())))
+				: inScope(filters, scope, user));
 		long total = mongo.count(query, Issue.class);
 		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
 		return new org.springframework.data.domain.PageImpl<>(content, pageable, total);
 	}
 
 	/**
-	 * Which issues a list may show {@code user}: those in the projects they reach
+	 * {@code filters} over the issues {@code user} may list: those in the projects they reach
 	 * ({@code visibleProjectIds}, from {@link ProjectService#visibleTo}) and those shared with
-	 * them. The one scope the issue list and the watched page share.
+	 * them (HIN-136).
+	 *
+	 * <p>A top-level {@code $or} whose branches each carry every filter, rather than one
+	 * {@code $or} inside the filters: so the planner plans each branch on its own index
+	 * ({@code proj_arch_updated}, {@code participants_updated}) instead of settling on a scan
+	 * of every unarchived issue followed by a sort of whole documents.
 	 */
-	public static Criteria scopeCriteria(List<String> visibleProjectIds, User user) {
-		Criteria shared = Criteria.where("participantIds").is(user.getId());
-		return visibleProjectIds.isEmpty() ? shared
-				: new Criteria().orOperator(Criteria.where("projectId").in(visibleProjectIds), shared);
+	private static Criteria inScope(List<Criteria> filters, List<String> visibleProjectIds, User user) {
+		Criteria shared = new Criteria().andOperator(and(filters, Criteria.where("participantIds").is(user.getId())));
+		if (visibleProjectIds.isEmpty()) return shared;
+		return new Criteria().orOperator(
+				new Criteria().andOperator(and(filters, Criteria.where("projectId").in(visibleProjectIds))),
+				shared);
+	}
+
+	private static List<Criteria> and(List<Criteria> filters, Criteria one) {
+		List<Criteria> all = new ArrayList<>(filters);
+		all.add(one);
+		return all;
 	}
 
 	private static boolean nonEmpty(List<String> list) {
@@ -1528,11 +1547,9 @@ public class IssueService {
 				.map(key -> key.toUpperCase(java.util.Locale.ROOT))
 				.toList();
 		// The issues shared with the caller resolve too, so a chip in their own comment works.
-		Query query = Query.query(new Criteria().andOperator(
-				scopeCriteria(scope, user),
-				new Criteria().orOperator(
-						Criteria.where("readableId").in(capped),
-						Criteria.where("formerReadableIds").in(normalized))));
+		Query query = Query.query(inScope(List.of(new Criteria().orOperator(
+				Criteria.where("readableId").in(capped),
+				Criteria.where("formerReadableIds").in(normalized))), scope, user));
 		return mongo.find(query, Issue.class);
 	}
 
@@ -1621,7 +1638,11 @@ public class IssueService {
 	 */
 	public Page<IssueComment> commentsOf(String issueId, int page, int size, String sort,
 			User user) {
-		String id = getForUser(issueId, user).getId();
+		return commentsOf(getForUser(issueId, user).getId(), page, size, sort);
+	}
+
+	/** A page of top-level comments of an issue whose access is settled. */
+	private Page<IssueComment> commentsOf(String id, int page, int size, String sort) {
 		Sort.Direction dir = "oldest".equalsIgnoreCase(sort)
 				? Sort.Direction.ASC
 				: Sort.Direction.DESC;
@@ -1875,7 +1896,11 @@ public class IssueService {
 
 	/** Pinned TOP-LEVEL comments of a thread, in pin order — surfaced above the feed. */
 	public List<IssueComment> pinnedComments(String issueId, User user) {
-		String id = getForUser(issueId, user).getId();
+		return pinnedComments(getForUser(issueId, user).getId());
+	}
+
+	/** The pinned comments of an issue whose access is settled. */
+	private List<IssueComment> pinnedComments(String id) {
 		List<IssueComment> pinned = comments.findByIssueIdAndPinnedIsTrueOrderByPinnedAtAsc(id)
 				.stream()
 				.filter(c -> c.getReplyToId() == null)

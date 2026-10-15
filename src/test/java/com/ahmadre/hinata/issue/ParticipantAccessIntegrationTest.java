@@ -30,6 +30,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -86,6 +87,8 @@ class ParticipantAccessIntegrationTest {
 	private IssueWatcherCleanup watcherCleanup;
 	@Autowired
 	private com.ahmadre.hinata.notification.IssueDigestService digestService;
+	@Autowired
+	private IssueParticipationPersonalData participationData;
 
 	private User lead;
 	private User member;
@@ -131,8 +134,8 @@ class ParticipantAccessIntegrationTest {
 
 		assertThat(issues.getForUser(issue.getReadableId(), participant).getId()).isEqualTo(issue.getId());
 		assertThat(issues.commentsOf(issue.getId(), 0, 20, participant).getContent()).hasSize(1);
-		assertThat(issues.activityOf(issue.getId(), 0, 20, participant)).isNotNull();
-		assertThat(issues.hierarchyOf(issue.getId(), participant)).isNotNull();
+		assertThatCode(() -> issues.activityOf(issue.getId(), 0, 20, participant)).doesNotThrowAnyException();
+		assertThatCode(() -> issues.hierarchyOf(issue.getId(), participant)).doesNotThrowAnyException();
 		assertThat(issues.canAccess(issue, participant)).isTrue();
 	}
 
@@ -144,7 +147,10 @@ class ParticipantAccessIntegrationTest {
 		issues.reactToComment(issue.getId(), root.getId(), "👍", participant);
 
 		assertThat(reply.getAuthorId()).isEqualTo(participant.getId());
-		assertThat(issues.commentsOf(issue.getId(), 0, 20, member).getContent()).isNotEmpty();
+		IssueComment stored = issues.commentsOf(issue.getId(), 0, 20, member).getContent().stream()
+				.filter(c -> c.getId().equals(root.getId())).findFirst().orElseThrow();
+		assertThat(stored.getReactions()).singleElement()
+				.satisfies(r -> assertThat(r.getUserId()).isEqualTo(participant.getId()));
 	}
 
 	@Test
@@ -442,13 +448,16 @@ class ParticipantAccessIntegrationTest {
 
 	@Test
 	void aMemberStillListsEveryIssueAndCombinedFiltersStillWork() {
-		issue("Get a new laptop");
+		Issue laptop = issue("Get a new laptop");
+		laptop.setAssigneeIds(new ArrayList<>(List.of(member.getId())));
+		issueRepository.save(laptop);
 
 		assertThat(issues.search(null, null, null, null, null, null, false, 0, 50, member).getContent()).hasSize(2);
 		IssueService.SearchParams combined = new IssueService.SearchParams(null, null, List.of("OPEN"), null,
 				List.of(member.getId(), lead.getId()), null, null, null, null, "Get", false, false, null, null,
 				null, null, null, 0, 50);
-		assertThat(issues.search(combined, member).getContent()).isEmpty();
+		assertThat(issues.search(combined, member).getContent()).extracting(Issue::getId)
+				.containsExactly(laptop.getId());
 	}
 
 	@Test
@@ -477,12 +486,19 @@ class ParticipantAccessIntegrationTest {
 	}
 
 	@Test
-	void watcherCleanupKeepsAParticipantsSubscription() {
+	void aMemberWhoWasSharedBeforeLosesTheIssueWithTheProject() {
 		participants.add(issue.getId(), outsider.getId(), member);
+		project.getMemberIds().add(outsider.getId());
+		projects.save(project);
 
-		watcherCleanup.removeFromProject(project.getId(), List.of(outsider.getId()));
+		projectService.applyUpdate(project.getId(), new com.ahmadre.hinata.project.ProjectUpdateRequest(null, null,
+				null, null, null, List.of(lead.getId(), member.getId()), null, null, null, null, null, null, null,
+				null), lead);
 
-		assertThat(issueRepository.findById(issue.getId()).orElseThrow().getWatcherIds()).contains(outsider.getId());
+		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(stored.getParticipantIds()).doesNotContain(outsider.getId());
+		assertThat(stored.getWatcherIds()).doesNotContain(outsider.getId());
+		assertThat(issues.canAccess(stored, outsider)).isFalse();
 	}
 
 	@Test
@@ -654,6 +670,77 @@ class ParticipantAccessIntegrationTest {
 		assertThatThrownBy(() -> issues.bulkUpdate(List.of(issue.getId()), "Done", null, null, outsider))
 				.isInstanceOf(ApiException.class)
 				.satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(404));
+	}
+
+	// --- review round -------------------------------------------------------
+
+	@Test
+	void bulkRoutesDoNotTellAParticipantWhichOtherIdsExist() {
+		Issue other = issue("Neighbour");
+
+		assertThatThrownBy(() -> issues.archiveAll(List.of(issue.getId(), other.getId()), true, false, null,
+				participant))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(404));
+	}
+
+	@Test
+	void aParticipantDoesNotLearnWhoElseCanSeeTheIssue() {
+		issue.setReporterId(outsider.getId());
+		issueRepository.save(issue);
+
+		assertThat(issues.detail(issue.getId(), 30, "newest", 30, participant).users())
+				.allSatisfy(user -> assertThat(user.canSeeIssue()).isTrue());
+	}
+
+	@Test
+	void theParticipantListNamesWhoShared() {
+		Issue plain = issue("Plain");
+		participants.add(plain.getId(), outsider.getId(), member);
+
+		assertThat(participants.list(plain.getId(), lead)).singleElement()
+				.satisfies(view -> assertThat(view.addedByName()).isEqualTo("member"));
+	}
+
+	@Test
+	void theAuditNamesTheParticipantAsItsTarget() {
+		Issue plain = issue("Plain");
+		participants.add(plain.getId(), outsider.getId(), member);
+
+		Document row = mongo.getCollection("audit_log")
+				.find(new Document("action", "ISSUE_PARTICIPANT_ADDED")).first();
+		assertThat(row).isNotNull();
+		assertThat(row.getString("targetId")).isEqualTo(outsider.getId());
+	}
+
+	@Test
+	void theDataExportListsTheIssuesSharedWithSomebody() {
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		Object data = participationData.data(outsider);
+
+		assertThat(data).asString().contains(issue.getReadableId()).contains("member");
+		assertThat(participationData.tables(outsider, java.util.Locale.GERMAN)).singleElement()
+				.satisfies(table -> assertThat(table.rows()).hasSize(1));
+	}
+
+	@Test
+	void tooManyMentionsAreRefusedWithTheirOwnMessage() {
+		List<String> many = new ArrayList<>();
+		for (int i = 0; i <= IssueParticipantService.MAX_REACH_CHECK; i++) many.add("id" + i);
+
+		assertThatThrownBy(() -> participants.blocked(issue.getId(), many, member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("reachCheckTooMany");
+	}
+
+	@Test
+	void aParticipantIsNotToldAboutSprintPlanning() {
+		participants.add(issue.getId(), outsider.getId(), member);
+		mongo.getCollection("notifications").deleteMany(new Document());
+
+		issues.update(issue.getId(), i -> i.setSprintId("sprint-1"), lead);
+
+		assertThat(notificationsOf(outsider, "ISSUE_UPDATED")).isEmpty();
 	}
 
 	// --- helpers ------------------------------------------------------------

@@ -5,7 +5,6 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueReach;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.me.NotificationPreferences;
-import com.ahmadre.hinata.project.ProjectReach;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -77,7 +76,7 @@ public class IssueDigestService {
 	private final com.ahmadre.hinata.common.UserWords words;
 	// The same rule the immediate fan-out applies — asked again here because time
 	// has passed since the change was queued.
-	private final ProjectReach reach;
+	private final IssueReach issueReach;
 	private final IssueChangeRenderer renderer;
 	private final HinataProperties properties;
 	private final NotificationDays days;
@@ -206,19 +205,15 @@ public class IssueDigestService {
 				IssueMailDigest::getIssueId)), Issue::getId);
 		Map<String, User> usersById = byId(users.findAllById(distinct(batch,
 				IssueMailDigest::getUserId)), User::getId);
-		Map<String, Set<String>> visibleByProject = visibleByProject(batch, issuesById);
+		Map<String, Set<String>> visibleByIssue = visibleByIssue(batch, issuesById);
 
 		int sent = 0;
 		for (IssueMailDigest entry : batch) {
 			try {
 				Issue issue = issuesById.get(entry.getIssueId());
-				Set<String> visible = issue == null
-						? Set.of()
-						: visibleByProject.getOrDefault(issue.getProjectId(), Set.of());
-				// Whoever the issue is shared with may read it as well (HIN-136).
-				boolean mayRead = visible.contains(entry.getUserId())
-						|| (issue != null && IssueReach.isParticipant(issue, entry.getUserId()));
-				if (send(entry.getId(), issue, usersById.get(entry.getUserId()), mayRead, now)) {
+				Set<String> visible = issue == null ? Set.of() : visibleByIssue.getOrDefault(issue.getId(), Set.of());
+				if (send(entry.getId(), issue, usersById.get(entry.getUserId()),
+						visible.contains(entry.getUserId()), now)) {
 					sent++;
 				}
 			}
@@ -270,22 +265,25 @@ public class IssueDigestService {
 	}
 
 	/**
-	 * Per live project, which of this batch's recipients may see it — one bulk
-	 * question per project instead of one per entry. Keyed by the project the
-	 * issue is in now, which is the only one the send-time check may trust.
+	 * Per issue, which of this batch's recipients may read it: one bulk question per
+	 * project, the people each issue is shared with on top (HIN-136). Keyed by the
+	 * project the issue is in now, which is the only one the send-time check may trust.
 	 */
-	private Map<String, Set<String>> visibleByProject(List<IssueMailDigest> batch,
+	private Map<String, Set<String>> visibleByIssue(List<IssueMailDigest> batch,
 			Map<String, Issue> issuesById) {
-		Map<String, Set<String>> candidates = new LinkedHashMap<>();
+		Map<String, Set<String>> recipients = new LinkedHashMap<>();
+		Map<String, Map<String, Issue>> issuesByProject = new LinkedHashMap<>();
 		for (IssueMailDigest entry : batch) {
 			Issue issue = issuesById.get(entry.getIssueId());
 			if (issue == null || issue.getProjectId() == null || entry.getUserId() == null) continue;
-			candidates.computeIfAbsent(issue.getProjectId(), key -> new LinkedHashSet<>())
+			recipients.computeIfAbsent(issue.getProjectId(), key -> new LinkedHashSet<>())
 					.add(entry.getUserId());
+			issuesByProject.computeIfAbsent(issue.getProjectId(), key -> new LinkedHashMap<>())
+					.put(issue.getId(), issue);
 		}
 		Map<String, Set<String>> visible = new HashMap<>();
-		candidates.forEach((projectId, userIds) ->
-				visible.put(projectId, reach.whoCanSee(projectId, userIds)));
+		recipients.forEach((projectId, userIds) -> visible.putAll(
+				issueReach.whoCanSeeEach(projectId, issuesByProject.get(projectId).values(), userIds)));
 		return visible;
 	}
 
