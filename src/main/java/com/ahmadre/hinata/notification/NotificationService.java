@@ -53,6 +53,10 @@ public class NotificationService {
 		Set<String> recipients = new HashSet<>(assigneeIds != null ? assigneeIds : Set.of());
 		if (actor != null) recipients.remove(actor.getId());
 		if (recipients.isEmpty()) return;
+		// The notice carries the issue's key and title, so it goes only to people who
+		// can open the project, whatever reached the assignee list.
+		recipients.retainAll(reach.whoCanSee(issue.getProjectId(), recipients));
+		if (recipients.isEmpty()) return;
 		deliver(recipients, Notification.Type.ISSUE_ASSIGNED,
 				locale -> words.in(locale, "notify.issueAssigned.title", issue.getReadableId()),
 				locale -> issue.getTitle(), // user content — same in every language
@@ -884,6 +888,15 @@ public class NotificationService {
 	 * issues moved, instead of once per issue. The editor hears nothing.
 	 */
 	public void notifyIssuesChanged(java.util.Collection<Issue> changed, User editor) {
+		notifyIssuesChanged(changed, editor, Set.of());
+	}
+
+	/**
+	 * As {@link #notifyIssuesChanged(java.util.Collection, User)}, leaving out
+	 * {@code skip}: people a bulk change has already told something more specific,
+	 * such as that the issues are now theirs.
+	 */
+	public void notifyIssuesChanged(java.util.Collection<Issue> changed, User editor, Set<String> skip) {
 		java.util.Map<String, Integer> countByUser = new java.util.HashMap<>();
 		java.util.Map<String, java.util.List<Issue>> byProject = changed.stream()
 				.collect(Collectors.groupingBy(Issue::getProjectId));
@@ -891,6 +904,7 @@ public class NotificationService {
 			Set<String> followers = new HashSet<>();
 			list.forEach(issue -> followers.addAll(followersOf(issue)));
 			if (editor != null) followers.remove(editor.getId());
+			followers.removeAll(skip);
 			Set<String> allowed = reach.whoCanSee(projectId, followers);
 			for (Issue issue : list) {
 				for (String userId : followersOf(issue)) {
@@ -907,6 +921,27 @@ public class NotificationService {
 						locale -> words.in(locale, "notify.issuesChanged.title", count),
 						locale -> words.in(locale, "notify.issuesChanged.body", editorName, count),
 						link));
+	}
+
+	/**
+	 * Tells each person what a bulk change handed them: one notice per person, not
+	 * one per issue. A single issue reads like any assignment, with its key and
+	 * title and a link to it; several are counted, linking to the list.
+	 */
+	public void notifyIssuesAssigned(java.util.Map<String, List<Issue>> assignedByUser, User actor) {
+		String actorName = actor == null ? "" : actor.getDisplayName();
+		assignedByUser.forEach((userId, issues) -> {
+			if (issues.isEmpty() || (actor != null && actor.getId().equals(userId))) return;
+			if (issues.size() == 1) {
+				notifyAssigned(issues.get(0), actor, Set.of(userId));
+				return;
+			}
+			int count = issues.size();
+			deliver(Set.of(userId), Notification.Type.ISSUE_ASSIGNED,
+					locale -> words.in(locale, "notify.issuesAssigned.title", count),
+					locale -> words.in(locale, "notify.issuesAssigned.body", actorName, count),
+					"/issues");
+		});
 	}
 
 	private static Set<String> followersOf(Issue issue) {

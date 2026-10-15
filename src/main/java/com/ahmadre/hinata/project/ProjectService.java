@@ -306,10 +306,12 @@ public class ProjectService {
 	}
 
 	/**
-	 * The ids of every active project in which {@code user} may hard-delete issues, for
-	 * the issue list to offer Delete only where it would work. Three queries however
-	 * many projects there are: the visible projects, then one read of the teams the
-	 * user administers, rather than one existence check per project.
+	 * The ids of every active project in which {@code user} may hard-delete issues,
+	 * for the issue list to offer Delete only where it would work. The same rule as
+	 * {@link #canDeleteIssues}, which is {@link #canManage}: the project's leads and
+	 * the admins of a team that owns it. Two queries however many projects there
+	 * are, each reading ids only: the teams the user administers, then the active
+	 * projects they lead or those teams own.
 	 */
 	public Set<String> issueDeletableProjectIds(User user) {
 		Query adminTeams = Query.query(Criteria.where("members").elemMatch(Criteria.where("userId").is(user.getId())
@@ -323,11 +325,29 @@ public class ProjectService {
 			List<?> ids = team.get("projectIds", List.class);
 			if (ids != null) ids.forEach(id -> administered.add(String.valueOf(id)));
 		}
+		List<Criteria> managed = new ArrayList<>(List.of(Criteria.where("leadIds").is(user.getId()),
+				Criteria.where("leadId").is(user.getId())));
+		// Ids as stored: a plain-document query skips the mapping that turns a hex
+		// string into an ObjectId.
+		if (!administered.isEmpty()) {
+			managed.add(Criteria.where("_id").in(administered.stream()
+					.map(id -> org.bson.types.ObjectId.isValid(id) ? (Object) new org.bson.types.ObjectId(id) : id)
+					.toList()));
+		}
+		Query projectsQuery = Query.query(Criteria.where("archived").ne(true)
+				.orOperator(managed.toArray(Criteria[]::new)));
+		projectsQuery.fields().include("_id");
 		Set<String> result = new LinkedHashSet<>();
-		for (Project project : visibleTo(user)) {
-			if (isLead(project, user) || administered.contains(project.getId())) result.add(project.getId());
+		for (org.bson.Document project : mongo.find(projectsQuery, org.bson.Document.class,
+				mongo.getCollectionName(Project.class))) {
+			result.add(String.valueOf(project.get("_id")));
 		}
 		return result;
+	}
+
+	/** Those of {@code userIds} who can open {@code project}, as members or through a team. */
+	public Set<String> whoCanSee(Project project, java.util.Collection<String> userIds) {
+		return projectReach.whoCanSee(project.getId(), userIds);
 	}
 
 	/** One indexed existence check: a team owning the project with this user as its admin. */

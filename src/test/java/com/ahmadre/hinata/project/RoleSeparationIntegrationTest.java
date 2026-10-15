@@ -288,24 +288,56 @@ class RoleSeparationIntegrationTest {
 	}
 
 	@Test
-	void aBulkArchiveTakesSubTasksAlongAndRestoresThem() {
+	void aBulkArchiveTakesSubTasksAlongAndAnUndoRestoresOnlyWhatItSwitched() {
 		Issue a = issue("First");
-		Issue sub = issueRepository.save(Issue.builder().projectId(project.getId()).title("Child")
-				.readableId("SEC-9").numberInProject(9L).state("Open").type(Issue.Type.SUBTASK)
-				.parentId(a.getId()).build());
+		Issue sub = subTask(a, "Child", 9);
+		Issue archivedBefore = subTask(a, "Archived on its own", 10);
+		issues.archiveAll(List.of(archivedBefore.getId()), true, true, member);
 
-		assertThatThrownBy(() -> issues.archiveAll(List.of(a.getId()), true, outsider))
+		assertThatThrownBy(() -> issues.archiveAll(List.of(a.getId()), true, true, outsider))
 				.isInstanceOf(ApiException.class).hasMessageContaining("notFound");
 		assertThat(issueRepository.findById(a.getId()).orElseThrow().isArchived()).isFalse();
 
-		// Any member may archive, as with a single issue.
-		assertThat(issues.archiveAll(List.of(a.getId(), a.getId()), true, member))
-				.singleElement().extracting(Issue::isArchived).isEqualTo(true);
+		// Any member may archive, as with a single issue; the sub-task goes along.
+		IssueService.BulkArchive done = issues.archiveAll(List.of(a.getId(), a.getId()), true, true, member);
+		assertThat(done.issues()).singleElement().extracting(Issue::isArchived).isEqualTo(true);
+		assertThat(done.toggledIds()).containsExactlyInAnyOrder(a.getId(), sub.getId());
 		assertThat(issueRepository.findById(sub.getId()).orElseThrow().isArchived()).isTrue();
 
-		issues.archiveAll(List.of(a.getId()), false, member);
+		// Archiving again switches nothing, and says so.
+		assertThat(issues.archiveAll(List.of(a.getId()), true, true, member).toggledIds()).isEmpty();
+
+		// The undo switches back exactly what was switched: the sub-task archived on
+		// its own before stays archived.
+		issues.archiveAll(done.toggledIds(), false, false, member);
 		assertThat(issueRepository.findById(a.getId()).orElseThrow().isArchived()).isFalse();
 		assertThat(issueRepository.findById(sub.getId()).orElseThrow().isArchived()).isFalse();
+		assertThat(issueRepository.findById(archivedBefore.getId()).orElseThrow().isArchived()).isTrue();
+	}
+
+	@Test
+	void nobodyIsHandedAnIssueInAProjectTheyCannotOpen() {
+		Issue a = issue("First");
+		// The single edit refuses an outsider, as the bulk one does.
+		assertThatThrownBy(() -> issues.update(a.getId(), issue -> issue.setAssigneeId(outsider.getId()), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("assigneeNoAccess");
+		assertThat(issueRepository.findById(a.getId()).orElseThrow().getAssigneeIds()).isEmpty();
+		// A team member with access may be assigned like a direct member.
+		assertThat(issues.update(a.getId(), issue -> issue.setAssigneeId(teamAdmin.getId()), member).getAssigneeId())
+				.isEqualTo(teamAdmin.getId());
+
+		// Creating drops the outsider rather than refusing: a copy may carry people
+		// the project does not have.
+		Issue created = issues.create(Issue.builder().projectId(project.getId()).title("New")
+				.type(Issue.Type.TASK).assigneeIds(new ArrayList<>(List.of(member.getId(), outsider.getId()))).build(),
+				member);
+		assertThat(created.getAssigneeIds()).containsExactly(member.getId());
+
+		// A deactivated account is nobody to hand work to.
+		member.setActive(false);
+		users.save(member);
+		assertThatThrownBy(() -> issues.bulkUpdate(List.of(a.getId()), null, null, member.getId(), lead))
+				.isInstanceOf(ApiException.class).hasMessageContaining("assigneeNoAccess");
 	}
 
 	@Test
@@ -345,7 +377,7 @@ class RoleSeparationIntegrationTest {
 	}
 
 	@Test
-	void deleteRightsAreReadInOneGo() {
+	void deleteRightsFollowWhoManagesTheProject() {
 		assertThat(projectService.issueDeletableProjectIds(lead)).containsExactly(project.getId());
 		assertThat(projectService.issueDeletableProjectIds(teamAdmin)).containsExactly(project.getId());
 		assertThat(projectService.issueDeletableProjectIds(member)).isEmpty();
@@ -359,7 +391,7 @@ class RoleSeparationIntegrationTest {
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
 		assertThatThrownBy(() -> issues.deleteAll(ids, lead))
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
-		assertThatThrownBy(() -> issues.archiveAll(ids, true, member))
+		assertThatThrownBy(() -> issues.archiveAll(ids, true, true, member))
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
 	}
 
@@ -707,6 +739,12 @@ class RoleSeparationIntegrationTest {
 
 	private static int hits(SearchResponse response) {
 		return response.groups().stream().mapToInt(group -> group.items().size()).sum();
+	}
+
+	private Issue subTask(Issue parent, String title, long number) {
+		return issueRepository.save(Issue.builder().projectId(project.getId()).title(title)
+				.readableId("SEC-" + number).numberInProject(number).state("Open").type(Issue.Type.SUBTASK)
+				.parentId(parent.getId()).build());
 	}
 
 	private Issue issue(String title) {

@@ -54,10 +54,21 @@ class IssueUpdateNotificationTest {
 		issues = mock(IssueRepository.class);
 		notifications = mock(NotificationService.class);
 		ProjectService projects = mock(ProjectService.class);
+		UserRepository users = mock(UserRepository.class);
+		when(users.findAllById(any())).thenAnswer(call -> {
+			List<User> found = new ArrayList<>();
+			for (Object id : (Iterable<?>) call.getArgument(0)) {
+				found.add(User.builder().id(String.valueOf(id)).email(id + "@b.c").roles(Set.of(Role.MEMBER)).build());
+			}
+			return found;
+		});
 		Project project = Project.builder().id("p1").key("HIN").name("Hinata")
 				.memberIds(new ArrayList<>(List.of("u1"))).build();
 		when(projects.get("p1")).thenReturn(project);
 		when(notifications.notifyNewMentions(any(), any(), any(), any())).thenReturn(Set.of());
+		// Everyone this test assigns is an active account that can open the project;
+		// who may be assigned is RoleSeparationIntegrationTest's business.
+		when(projects.whoCanSee(any(), any())).thenAnswer(call -> new java.util.HashSet<String>(call.getArgument(1)));
 
 		service = new IssueService(issues, mock(IssueCommentRepository.class),
 				mock(IssueActivityRepository.class), mock(IssueLinkRepository.class),
@@ -65,7 +76,7 @@ class IssueUpdateNotificationTest {
 				mock(StorageService.class), mock(WorkItemRepository.class),
 				mock(AuditService.class, RETURNS_DEEP_STUBS), mock(MongoTemplate.class),
 				mock(AgileBoardRepository.class), mock(SprintRepository.class),
-				mock(UserRepository.class),
+				users,
 				// Offsets are a module that can be switched off; this test is about
 				// everything else, so the policy answers nothing.
 				mock(IssueDeadlinePolicy.class));

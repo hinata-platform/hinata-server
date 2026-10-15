@@ -145,14 +145,21 @@ public class IssueService {
 		Bulk bulk = resolveBulk(ids, editor);
 		java.util.Map<String, Project> byId = bulk.projects();
 		List<Issue> found = bulk.issues();
-		if (precheck != null) {
-			found.forEach(issue -> precheck.accept(issue, byId.get(issue.getProjectId())));
+		for (Issue issue : found) {
+			if (precheck != null) precheck.accept(issue, byId.get(issue.getProjectId()));
+			// The one rule apply() reads from the database: a parent that no longer
+			// fits refuses here, before anything is saved, not halfway through.
+			validateHierarchy(issue);
 		}
+		java.util.Map<String, List<Issue>> assigned = new java.util.LinkedHashMap<>();
 		List<Issue> updated = found.stream()
-				.map(issue -> apply(issue, byId.get(issue.getProjectId()), mutator, editor, false))
+				.map(issue -> apply(issue, byId.get(issue.getProjectId()), mutator, editor, assigned))
 				.toList();
+		// One notice per person newly given issues, not one per issue, and nobody
+		// told twice: whoever got that notice is left out of the change summary.
 		try {
-			notifications.notifyIssuesChanged(updated, editor);
+			notifications.notifyIssuesAssigned(assigned, editor);
+			notifications.notifyIssuesChanged(updated, editor, assigned.keySet());
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("bulk change notification failed (updates kept)", ex);
@@ -192,24 +199,26 @@ public class IssueService {
 
 	/**
 	 * Sets the state, the priority or the assignee of several issues at once. Null
-	 * leaves a field alone; an empty {@code assigneeId} clears the assignees. Checked
-	 * for every issue before the first write: the state has to be in each project's
-	 * workflow, and the assignee has to be able to open each project, so nobody is
-	 * handed an issue they cannot see.
+	 * leaves a field alone; an empty {@code assigneeId} clears the assignees. Every
+	 * issue is checked before the first write: the state has to be in each project's
+	 * workflow, and the assignee has to be an active account that can open each
+	 * project, so nobody is handed an issue they cannot see. The writes themselves
+	 * are not one transaction; what can refuse is refused before they start.
 	 */
 	public List<Issue> bulkUpdate(List<String> ids, String state, Issue.Priority priority, String assigneeId,
 			User editor) {
 		if (state == null && priority == null && assigneeId == null) {
 			throw ApiException.badRequest("error.issue.bulkNothingToChange");
 		}
-		User assignee = assigneeId == null || assigneeId.isBlank() ? null
-				: userRepo.findById(assigneeId).orElseThrow(() -> ApiException.badRequest("error.issue.assigneeNoAccess"));
+		boolean assigning = assigneeId != null && !assigneeId.isBlank();
+		Set<String> assignableIn = new HashSet<>();
 		return updateAll(ids, (issue, project) -> {
 			if (state != null && !project.workflowStateNames().contains(state)) {
 				throw ApiException.badRequest("error.issue.unknownState", state);
 			}
-			if (assignee != null && !projects.canSee(project, assignee)) {
-				throw ApiException.badRequest("error.issue.assigneeNoAccess");
+			// Once per project, however many of its issues are in the request.
+			if (assigning && assignableIn.add(project.getId())) {
+				assertAssignable(project, List.of(assigneeId));
 			}
 		}, issue -> {
 			if (state != null) issue.setState(state);
@@ -219,32 +228,76 @@ public class IssueService {
 	}
 
 	/**
-	 * Archives or restores several issues at once, with the single route's rules:
-	 * any member may, and a standard issue takes its sub-tasks along. The people
-	 * following them get one notice for the whole change. Returns the named issues
-	 * as they now are.
+	 * Refuses unless every one of {@code userIds} is an active account that can open
+	 * {@code project}. An issue's assignee is told about it by name and title, so
+	 * handing it to somebody outside the project would tell them what they may not
+	 * read.
 	 */
-	public List<Issue> archiveAll(List<String> ids, boolean archived, User user) {
+	private void assertAssignable(Project project, java.util.Collection<String> userIds) {
+		if (assignable(project, userIds).size() != new HashSet<>(userIds).size()) {
+			throw ApiException.badRequest("error.issue.assigneeNoAccess");
+		}
+	}
+
+	/** Those of {@code userIds} who are active and can open {@code project}. */
+	private Set<String> assignable(Project project, java.util.Collection<String> userIds) {
+		Set<String> active = new HashSet<>();
+		for (User user : userRepo.findAllById(new HashSet<>(userIds))) {
+			if (user.isActive()) active.add(user.getId());
+		}
+		return projects.whoCanSee(project, active);
+	}
+
+	/** What a bulk archive did: the named issues as they now are, and every issue it switched. */
+	public record BulkArchive(List<Issue> issues, List<String> toggledIds) {
+	}
+
+	/**
+	 * Archives or restores several issues at once, with the single route's rules:
+	 * any member may, and with {@code cascade} a standard issue takes its sub-tasks
+	 * along. Only what actually switches is written, told and logged, in a fixed
+	 * number of queries however many issues there are. The answer names every issue
+	 * it switched, sub-tasks included, so an undo can switch back exactly those
+	 * (with {@code cascade} off) and not also a sub-task archived on its own before.
+	 */
+	public BulkArchive archiveAll(List<String> ids, boolean archived, boolean cascade, User user) {
 		Bulk bulk = resolveBulk(ids, user);
-		Instant at = archived ? Instant.now() : null;
-		List<Issue> changed = new ArrayList<>();
-		for (Issue issue : bulk.issues()) {
-			if (issue.isArchived() == archived) {
-				changed.add(issue);
-				continue;
+		List<String> named = bulk.issues().stream().map(Issue::getId).toList();
+		List<String> toggled = new ArrayList<>(bulk.issues().stream()
+				.filter(issue -> issue.isArchived() != archived).map(Issue::getId).toList());
+		if (cascade) {
+			List<String> parents = bulk.issues().stream()
+					.filter(issue -> issue.getType().isStandard()).map(Issue::getId).toList();
+			if (!parents.isEmpty()) {
+				Query children = Query.query(Criteria.where("parentId").in(parents).and("archived").ne(archived));
+				children.fields().include("_id");
+				for (org.bson.Document child : mongo.find(children, org.bson.Document.class,
+						mongo.getCollectionName(Issue.class))) {
+					String id = String.valueOf(child.get("_id"));
+					if (!toggled.contains(id)) toggled.add(id);
+				}
 			}
-			Issue saved = archiveChecked(issue, archived, at);
-			changed.add(saved);
+		}
+		if (toggled.isEmpty()) {
+			return new BulkArchive(bulk.issues(), List.of());
+		}
+		Update write = archived ? new Update().set("archived", true).set("archivedAt", Instant.now())
+				: new Update().set("archived", false).unset("archivedAt");
+		mongo.updateMulti(Query.query(Criteria.where("_id").in(toggled)), write, Issue.class);
+		List<Issue> now = issues.findAllById(named);
+		Set<String> switched = new HashSet<>(toggled);
+		List<Issue> changed = now.stream().filter(issue -> switched.contains(issue.getId())).toList();
+		for (Issue issue : changed) {
 			audit.event(archived ? AuditAction.ISSUE_ARCHIVED : AuditAction.ISSUE_UNARCHIVED)
-					.actor(user).meta("issue", saved.getReadableId()).log();
+					.actor(user).meta("issue", issue.getReadableId()).log();
 		}
 		try {
-			notifications.notifyIssuesChanged(changed, user);
+			if (!changed.isEmpty()) notifications.notifyIssuesChanged(changed, user, Set.of());
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("bulk archive notification failed (changes kept)", ex);
 		}
-		return changed;
+		return new BulkArchive(now, toggled);
 	}
 
 	/** True when {@code user} may see the issue (a member of its project); never throws. */
@@ -296,6 +349,12 @@ public class IssueService {
 		issue.setTags(issue.getTags());
 		if (author != null) {
 			projects.assertMember(project, author); // only project members may add issues (A01)
+		}
+		// Nobody is handed an issue in a project they cannot open. Dropped rather than
+		// refused: a copy or a template may carry people the new project does not have.
+		if (!issue.getAssigneeIds().isEmpty()) {
+			Set<String> allowed = assignable(project, issue.getAssigneeIds());
+			issue.setAssigneeIds(issue.getAssigneeIds().stream().filter(allowed::contains).toList());
 		}
 		// A new issue holds to the label limits, a copy as much as one written by hand.
 		IssueLabels.check(List.of(), issue.getTags());
@@ -385,7 +444,7 @@ public class IssueService {
 		if (editor != null) {
 			assertAccess(issue, editor);
 		}
-		return apply(issue, projects.get(issue.getProjectId()), mutator, editor, true);
+		return apply(issue, projects.get(issue.getProjectId()), mutator, editor, null);
 	}
 
 	/**
@@ -396,13 +455,21 @@ public class IssueService {
 	 * since each is about that issue.
 	 */
 	private Issue apply(Issue issue, Project project, java.util.function.Consumer<Issue> mutator, User editor,
-			boolean announce) {
+			java.util.Map<String, List<Issue>> assignedOut) {
+		boolean announce = assignedOut == null;
 		Issue before = snapshot(issue);
 		Set<String> previousAssignees = new HashSet<>(
 				issue.getAssigneeIds() != null ? issue.getAssigneeIds() : List.of());
 		String previousSprint = issue.getSprintId();
 		mutator.accept(issue);
 		IssueLabels.check(before.getTags(), issue.getTags());
+		// Only people who can open the project may be handed one of its issues. The
+		// bulk path checked its one assignee per project already.
+		if (announce) {
+			Set<String> added = new HashSet<>(issue.getAssigneeIds() != null ? issue.getAssigneeIds() : List.of());
+			added.removeAll(previousAssignees);
+			if (!added.isEmpty()) assertAssignable(project, added);
+		}
 		validateHierarchy(issue);
 
 		// Keep the issue's state in step with its sprint membership:
@@ -442,7 +509,12 @@ public class IssueService {
 				saved.getAssigneeIds() != null ? saved.getAssigneeIds() : List.of());
 		newlyAssigned.removeAll(previousAssignees);
 		if (!newlyAssigned.isEmpty()) {
-			notifications.notifyAssigned(saved, editor, newlyAssigned);
+			if (announce) {
+				notifications.notifyAssigned(saved, editor, newlyAssigned);
+			}
+			else {
+				newlyAssigned.forEach(userId -> assignedOut.computeIfAbsent(userId, k -> new ArrayList<>()).add(saved));
+			}
 			notified.addAll(newlyAssigned);
 		}
 		// One notice per save, summarising everything that moved — replacing the
