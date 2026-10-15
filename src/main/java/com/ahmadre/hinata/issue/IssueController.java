@@ -418,6 +418,23 @@ public class IssueController {
 		issueService.delete(id, currentUser.require());
 	}
 
+	/** The issues the list's selection deletes in one go. */
+	public record BulkDeleteRequest(@NotEmpty @Size(max = IssueService.MAX_BULK) List<String> issueIds) {
+	}
+
+	/** How many issues a bulk delete removed. */
+	public record BulkDeleteResponse(int deleted) {
+	}
+
+	/**
+	 * Hard-deletes every named issue, with the single delete's role check. All or
+	 * nothing: one issue the caller may not delete refuses the whole request.
+	 */
+	@PostMapping("/bulk/delete")
+	public BulkDeleteResponse bulkDelete(@RequestBody @Valid BulkDeleteRequest request) {
+		return new BulkDeleteResponse(issueService.deleteAll(request.issueIds(), currentUser.require()));
+	}
+
 	/**
 	 * Subscribes the caller to every change to this issue.
 	 *
