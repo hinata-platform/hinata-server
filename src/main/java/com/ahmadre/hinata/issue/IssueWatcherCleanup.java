@@ -46,6 +46,9 @@ public class IssueWatcherCleanup {
 	// Asked before pruning: the caller knows it revoked something, not whether the
 	// user still reaches the project by another route.
 	private final ProjectReach reach;
+	// A participant reaches the issue without reaching its project (HIN-136); their
+	// subscription stays as long as the share does.
+	private final IssueReach issueReach;
 
 	/**
 	 * Drops from every watcher list in one project those of {@code userIds} who can
@@ -67,9 +70,13 @@ public class IssueWatcherCleanup {
 					.filter(id -> id != null && !id.isBlank() && !stillReaching.contains(id))
 					.toList();
 			if (ids.isEmpty()) return;
-			mongo.updateMulti(
-					new Query(Criteria.where("projectId").is(projectId).and("watcherIds").in(ids)),
-					new Update().pullAll("watcherIds", ids.toArray()), Issue.class);
+			// One write per person, leaving out the issues shared with them: those they still
+			// reach as participants, and still watch.
+			for (String id : ids) {
+				mongo.updateMulti(new Query(Criteria.where("projectId").is(projectId).and("watcherIds").is(id)
+						.and("participantIds").ne(id)),
+						new Update().pull("watcherIds", id), Issue.class);
+			}
 			digests.discardFor(projectId, ids);
 			log.debug("Removed {} watcher(s) from project {}", ids.size(), projectId);
 		});
@@ -124,6 +131,9 @@ public class IssueWatcherCleanup {
 	 * The delivery-time check refuses those bundles anyway; this is what stops them
 	 * accumulating.
 	 *
+	 * <p>{@code issue} already belongs to {@code targetProjectId}; whoever it is shared with keeps
+	 * it, and their subscription with it.
+	 *
 	 * <p>Mutates {@code issue}'s in-memory list as well as the document, so the
 	 * change notice the move raises immediately afterwards fans out to the watchers
 	 * that are left rather than to the ones it just removed.
@@ -133,7 +143,9 @@ public class IssueWatcherCleanup {
 		List<String> watchers = issue.getWatcherIds();
 		if (watchers == null || watchers.isEmpty()) return;
 		bestEffort(targetProjectId, () -> {
-			Set<String> stillReaching = reach.whoCanSee(targetProjectId, watchers);
+			Set<String> stillReaching = targetProjectId.equals(issue.getProjectId())
+					? issueReach.whoCanSee(issue, watchers)
+					: reach.whoCanSee(targetProjectId, watchers);
 			List<String> removed = watchers.stream()
 					.filter(id -> id != null && !stillReaching.contains(id))
 					.toList();

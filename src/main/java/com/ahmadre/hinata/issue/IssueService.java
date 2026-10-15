@@ -1381,11 +1381,13 @@ public class IssueService {
 	}
 
 	public Page<Issue> search(SearchParams p, User user) {
-		Query query = new Query();
+		// Every condition goes into one $and: several of them are $or groups, and a query holds
+		// only one top-level $or.
+		List<Criteria> filters = new ArrayList<>();
 		// Archived issues are soft-deleted: hidden everywhere by default, listed
 		// only when explicitly requested (the "Archived" view). `ne(true)` keeps
 		// matching pre-migration documents that lack the flag.
-		query.addCriteria(p.archived()
+		filters.add(p.archived()
 				? Criteria.where("archived").is(true)
 				: Criteria.where("archived").ne(true));
 		// Everyone is limited to active (non-archived) projects — an archived
@@ -1398,45 +1400,43 @@ public class IssueService {
 			if (!scope.contains(p.projectId())) {
 				return Page.empty(pageable);
 			}
-			query.addCriteria(Criteria.where("projectId").is(p.projectId()));
+			filters.add(Criteria.where("projectId").is(p.projectId()));
 		}
 		else {
-			if (scope.isEmpty()) {
-				return Page.empty(pageable);
-			}
-			query.addCriteria(Criteria.where("projectId").in(scope));
+			// The issues shared with the caller come along, whatever project they sit in.
+			filters.add(scopeCriteria(scope, user));
 		}
 		// State: multi-select wins over the single legacy param. Workflow-state
 		// names are free-form, mixed-case strings ("In Progress"); the client sends
 		// UPPER-CASE facet codes ("IN PROGRESS"), so the multi-select match is
 		// anchored + case-insensitive (regex, term quoted so it is injection-safe).
 		if (nonEmpty(p.states())) {
-			query.addCriteria(new Criteria().orOperator(p.states().stream()
+			filters.add(new Criteria().orOperator(p.states().stream()
 					.map(s -> Criteria.where("state").regex("^" + Pattern.quote(s) + "$", "i"))
 					.toArray(Criteria[]::new)));
 		}
-		else if (p.state() != null) query.addCriteria(Criteria.where("state").is(p.state()));
+		else if (p.state() != null) filters.add(Criteria.where("state").is(p.state()));
 		// Assignee: membership in the list (primary + secondary), legacy field too.
 		if (nonEmpty(p.assigneeIds())) {
-			query.addCriteria(new Criteria().orOperator(
+			filters.add(new Criteria().orOperator(
 					Criteria.where("assigneeIds").in(p.assigneeIds()),
 					Criteria.where("assigneeId").in(p.assigneeIds())));
 		}
 		else if (p.assigneeId() != null) {
-			query.addCriteria(new Criteria().orOperator(
+			filters.add(new Criteria().orOperator(
 					Criteria.where("assigneeIds").is(p.assigneeId()),
 					Criteria.where("assigneeId").is(p.assigneeId())));
 		}
-		if (p.sprintId() != null) query.addCriteria(Criteria.where("sprintId").is(p.sprintId()));
-		else if (p.noSprint()) query.addCriteria(Criteria.where("sprintId").is(null));
-		if (nonEmpty(p.types())) query.addCriteria(Criteria.where("type").in(p.types()));
-		else if (p.type() != null) query.addCriteria(Criteria.where("type").is(p.type()));
-		if (nonEmpty(p.priorities())) query.addCriteria(Criteria.where("priority").in(p.priorities()));
+		if (p.sprintId() != null) filters.add(Criteria.where("sprintId").is(p.sprintId()));
+		else if (p.noSprint()) filters.add(Criteria.where("sprintId").is(null));
+		if (nonEmpty(p.types())) filters.add(Criteria.where("type").in(p.types()));
+		else if (p.type() != null) filters.add(Criteria.where("type").is(p.type()));
+		if (nonEmpty(p.priorities())) filters.add(Criteria.where("priority").in(p.priorities()));
 		if (p.dueFrom() != null || p.dueTo() != null) {
 			Criteria due = Criteria.where("dueDate");
 			if (p.dueFrom() != null) due = due.gte(p.dueFrom());
 			if (p.dueTo() != null) due = due.lte(p.dueTo());
-			query.addCriteria(due);
+			filters.add(due);
 		}
 		if (p.createdFrom() != null || p.createdTo() != null) {
 			Criteria created = Criteria.where("createdAt");
@@ -1448,17 +1448,29 @@ public class IssueService {
 				created = created.lt(p.createdTo().plusDays(1)
 						.atStartOfDay(java.time.ZoneOffset.UTC).toInstant());
 			}
-			query.addCriteria(created);
+			filters.add(created);
 		}
 		if (p.text() != null && !p.text().isBlank()) {
 			String quoted = Pattern.quote(p.text().trim());
-			query.addCriteria(new Criteria().orOperator(
+			filters.add(new Criteria().orOperator(
 					Criteria.where("title").regex(quoted, "i"),
 					Criteria.where("readableId").regex("^" + quoted, "i")));
 		}
+		Query query = Query.query(new Criteria().andOperator(filters));
 		long total = mongo.count(query, Issue.class);
 		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
 		return new org.springframework.data.domain.PageImpl<>(content, pageable, total);
+	}
+
+	/**
+	 * Which issues a list may show {@code user}: those in the projects they reach
+	 * ({@code visibleProjectIds}, from {@link ProjectService#visibleTo}) and those shared with
+	 * them. The one scope the issue list and the watched page share.
+	 */
+	public static Criteria scopeCriteria(List<String> visibleProjectIds, User user) {
+		Criteria shared = Criteria.where("participantIds").is(user.getId());
+		return visibleProjectIds.isEmpty() ? shared
+				: new Criteria().orOperator(Criteria.where("projectId").in(visibleProjectIds), shared);
 	}
 
 	private static boolean nonEmpty(List<String> list) {
