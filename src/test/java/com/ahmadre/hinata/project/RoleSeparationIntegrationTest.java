@@ -292,24 +292,34 @@ class RoleSeparationIntegrationTest {
 		Issue a = issue("First");
 		Issue sub = subTask(a, "Child", 9);
 		Issue archivedBefore = subTask(a, "Archived on its own", 10);
-		issues.archiveAll(List.of(archivedBefore.getId()), true, true, member);
+		issues.archiveAll(List.of(archivedBefore.getId()), true, true, null, member);
 
-		assertThatThrownBy(() -> issues.archiveAll(List.of(a.getId()), true, true, outsider))
+		assertThatThrownBy(() -> issues.archiveAll(List.of(a.getId()), true, true, null, outsider))
 				.isInstanceOf(ApiException.class).hasMessageContaining("notFound");
 		assertThat(issueRepository.findById(a.getId()).orElseThrow().isArchived()).isFalse();
 
 		// Any member may archive, as with a single issue; the sub-task goes along.
-		IssueService.BulkArchive done = issues.archiveAll(List.of(a.getId(), a.getId()), true, true, member);
+		IssueService.BulkArchive done = issues.archiveAll(List.of(a.getId(), a.getId()), true, true, null, member);
 		assertThat(done.issues()).singleElement().extracting(Issue::isArchived).isEqualTo(true);
-		assertThat(done.toggledIds()).containsExactlyInAnyOrder(a.getId(), sub.getId());
+		assertThat(done.toggledIds()).containsExactly(a.getId());
+		assertThat(done.toggledSubtaskIds()).containsExactly(sub.getId());
 		assertThat(issueRepository.findById(sub.getId()).orElseThrow().isArchived()).isTrue();
 
 		// Archiving again switches nothing, and says so.
-		assertThat(issues.archiveAll(List.of(a.getId()), true, true, member).toggledIds()).isEmpty();
+		assertThat(issues.archiveAll(List.of(a.getId()), true, true, null, member).toggledIds()).isEmpty();
+
+		// Sub-task ids are taken only for sub-tasks in projects the caller can open.
+		assertThatThrownBy(() -> issues.archiveAll(List.of(a.getId()), false, false, List.of(sub.getId()), outsider))
+				.isInstanceOf(ApiException.class).hasMessageContaining("notFound");
+		assertThatThrownBy(() -> issues.archiveAll(List.of(a.getId()), false, false, List.of(a.getId()), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("notFound");
+
+		assertThatThrownBy(() -> issues.archiveAll(List.of(), false, false, List.of(), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("bulkNothingToChange");
 
 		// The undo switches back exactly what was switched: the sub-task archived on
 		// its own before stays archived.
-		issues.archiveAll(done.toggledIds(), false, false, member);
+		issues.archiveAll(done.toggledIds(), false, false, done.toggledSubtaskIds(), member);
 		assertThat(issueRepository.findById(a.getId()).orElseThrow().isArchived()).isFalse();
 		assertThat(issueRepository.findById(sub.getId()).orElseThrow().isArchived()).isFalse();
 		assertThat(issueRepository.findById(archivedBefore.getId()).orElseThrow().isArchived()).isTrue();
@@ -326,12 +336,17 @@ class RoleSeparationIntegrationTest {
 		assertThat(issues.update(a.getId(), issue -> issue.setAssigneeId(teamAdmin.getId()), member).getAssigneeId())
 				.isEqualTo(teamAdmin.getId());
 
-		// Creating drops the outsider rather than refusing: a copy may carry people
-		// the project does not have.
+		// A copy drops the outsider rather than refusing: it may carry people the
+		// project does not have.
 		Issue created = issues.create(Issue.builder().projectId(project.getId()).title("New")
 				.type(Issue.Type.TASK).assigneeIds(new ArrayList<>(List.of(member.getId(), outsider.getId()))).build(),
-				member);
+				member, IssueService.Mentions.SUPPRESS);
 		assertThat(created.getAssigneeIds()).containsExactly(member.getId());
+
+		// A person writing an issue hears about it instead of finding it unassigned.
+		assertThatThrownBy(() -> issues.create(Issue.builder().projectId(project.getId()).title("Typed")
+				.type(Issue.Type.TASK).assigneeIds(new ArrayList<>(List.of(outsider.getId()))).build(), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("assigneeNoAccess");
 
 		// A deactivated account is nobody to hand work to.
 		member.setActive(false);
@@ -391,7 +406,7 @@ class RoleSeparationIntegrationTest {
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
 		assertThatThrownBy(() -> issues.deleteAll(ids, lead))
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
-		assertThatThrownBy(() -> issues.archiveAll(ids, true, true, member))
+		assertThatThrownBy(() -> issues.archiveAll(ids, true, true, null, member))
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
 	}
 

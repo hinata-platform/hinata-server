@@ -888,15 +888,17 @@ public class NotificationService {
 	 * issues moved, instead of once per issue. The editor hears nothing.
 	 */
 	public void notifyIssuesChanged(java.util.Collection<Issue> changed, User editor) {
-		notifyIssuesChanged(changed, editor, Set.of());
+		notifyIssuesChanged(changed, editor, java.util.Map.of());
 	}
 
 	/**
-	 * As {@link #notifyIssuesChanged(java.util.Collection, User)}, leaving out
-	 * {@code skip}: people a bulk change has already told something more specific,
-	 * such as that the issues are now theirs.
+	 * As {@link #notifyIssuesChanged(java.util.Collection, User)}, leaving out for
+	 * each person in {@code skip} the issues a bulk change has already told them
+	 * about more specifically, such as that the issues are now theirs. Any other
+	 * changed issue they follow is still counted.
 	 */
-	public void notifyIssuesChanged(java.util.Collection<Issue> changed, User editor, Set<String> skip) {
+	public void notifyIssuesChanged(java.util.Collection<Issue> changed, User editor,
+			java.util.Map<String, Set<String>> skip) {
 		java.util.Map<String, Integer> countByUser = new java.util.HashMap<>();
 		java.util.Map<String, java.util.List<Issue>> byProject = changed.stream()
 				.collect(Collectors.groupingBy(Issue::getProjectId));
@@ -904,11 +906,12 @@ public class NotificationService {
 			Set<String> followers = new HashSet<>();
 			list.forEach(issue -> followers.addAll(followersOf(issue)));
 			if (editor != null) followers.remove(editor.getId());
-			followers.removeAll(skip);
 			Set<String> allowed = reach.whoCanSee(projectId, followers);
 			for (Issue issue : list) {
 				for (String userId : followersOf(issue)) {
-					if (allowed.contains(userId)) countByUser.merge(userId, 1, Integer::sum);
+					if (!allowed.contains(userId)) continue;
+					if (skip.getOrDefault(userId, Set.of()).contains(issue.getId())) continue;
+					countByUser.merge(userId, 1, Integer::sum);
 				}
 			}
 		});
