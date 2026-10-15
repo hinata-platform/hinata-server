@@ -76,6 +76,14 @@ class ParticipantAccessIntegrationTest {
 	private IssueActivityRepository activities;
 	@Autowired
 	private com.ahmadre.hinata.user.UserService userService;
+	@Autowired
+	private com.ahmadre.hinata.project.ProjectService projectService;
+	@Autowired
+	private com.ahmadre.hinata.search.SearchService search;
+	@Autowired
+	private IssueWatchService watching;
+	@Autowired
+	private IssueWatcherCleanup watcherCleanup;
 
 	private User lead;
 	private User member;
@@ -408,6 +416,100 @@ class ParticipantAccessIntegrationTest {
 
 	private long audits(com.ahmadre.hinata.audit.AuditAction action) {
 		return mongo.getCollection("audit_log").countDocuments(new Document("action", action.name()));
+	}
+
+	// --- lists, search and the watched page --------------------------------
+
+	@Test
+	void aParticipantFindsTheIssueInTheListSearchAndWatchedPage() {
+		Issue unshared = issue("Get a new laptop");
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		assertThat(issues.search(null, null, null, null, null, null, false, 0, 50, outsider).getContent())
+				.extracting(Issue::getId).containsExactly(issue.getId());
+		assertThat(issues.search(null, null, null, null, null, "Get", false, 0, 50, outsider).getContent())
+				.extracting(Issue::getId).containsExactly(issue.getId()).doesNotContain(unshared.getId());
+		assertThat(hits(search.search(outsider, "Get", "ISSUES", false))).isEqualTo(1);
+		assertThat(watching.watchedBy(outsider, 0, 20).getContent())
+				.extracting(Issue::getId).containsExactly(issue.getId());
+		// Even after unwatching, the share keeps it on the page.
+		watching.unwatch(issue.getId(), outsider);
+		assertThat(watching.watchedBy(outsider, 0, 20).getContent())
+				.extracting(Issue::getId).containsExactly(issue.getId());
+	}
+
+	@Test
+	void aMemberStillListsEveryIssueAndCombinedFiltersStillWork() {
+		issue("Get a new laptop");
+
+		assertThat(issues.search(null, null, null, null, null, null, false, 0, 50, member).getContent()).hasSize(2);
+		IssueService.SearchParams combined = new IssueService.SearchParams(null, null, List.of("OPEN"), null,
+				List.of(member.getId(), lead.getId()), null, null, null, null, "Get", false, false, null, null,
+				null, null, null, 0, 50);
+		assertThat(issues.search(combined, member).getContent()).isEmpty();
+	}
+
+	@Test
+	void aParticipantDoesNotSeeTheProjectBoardsOrPages() {
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		assertThat(projectService.visibleTo(outsider)).isEmpty();
+		assertThat(hits(search.search(outsider, "Secret", "PROJECTS", false))).isZero();
+		assertThatThrownBy(() -> projectService.assertMember(project, outsider)).isInstanceOf(ApiException.class);
+		assertThat(issues.search(project.getId(), null, null, null, null, null, false, 0, 50, outsider)
+				.getContent()).isEmpty();
+	}
+
+	@Test
+	void losingProjectAccessKeepsTheParticipation() {
+		participants.add(issue.getId(), outsider.getId(), member);
+		watching.watch(issue.getId(), member);
+
+		projectService.applyUpdate(project.getId(), new com.ahmadre.hinata.project.ProjectUpdateRequest(null, null,
+				null, null, null, List.of(lead.getId()), null, null, null, null, null, null, null, null), lead);
+
+		Issue stored = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(issues.canAccess(stored, outsider)).isTrue();
+		assertThat(issues.canAccess(stored, member)).isFalse();
+		assertThat(stored.getWatcherIds()).contains(outsider.getId()).doesNotContain(member.getId());
+	}
+
+	@Test
+	void watcherCleanupKeepsAParticipantsSubscription() {
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		watcherCleanup.removeFromProject(project.getId(), List.of(outsider.getId()));
+
+		assertThat(issueRepository.findById(issue.getId()).orElseThrow().getWatcherIds()).contains(outsider.getId());
+	}
+
+	@Test
+	void aParticipantWhoJoinsTheProjectIsNoLongerListed() {
+		participants.add(issue.getId(), outsider.getId(), member);
+		project.getMemberIds().add(outsider.getId());
+		projects.save(project);
+
+		assertThat(participants.list(issue.getId(), member)).extracting(IssueParticipantService.ParticipantView::id)
+				.doesNotContain(outsider.getId());
+		assertThat(issues.detail(issue.getId(), 30, "newest", 30, outsider).participation().role())
+				.isEqualTo(IssueService.Participation.Role.MEMBER);
+	}
+
+	@Test
+	void moveKeepsParticipantsAndTheirWatch() {
+		participants.add(issue.getId(), outsider.getId(), member);
+
+		moving.move(List.of(issue.getId()), otherProject.getId(), Map.of(), false, false, lead);
+
+		Issue moved = issueRepository.findById(issue.getId()).orElseThrow();
+		assertThat(moved.getProjectId()).isEqualTo(otherProject.getId());
+		assertThat(moved.getParticipantIds()).contains(outsider.getId());
+		assertThat(moved.getWatcherIds()).contains(outsider.getId());
+		assertThat(issues.canAccess(moved, outsider)).isTrue();
+	}
+
+	private static int hits(com.ahmadre.hinata.search.SearchResponse response) {
+		return response.groups().stream().mapToInt(group -> group.items().size()).sum();
 	}
 
 	// --- helpers ------------------------------------------------------------

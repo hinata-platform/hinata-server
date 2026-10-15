@@ -95,7 +95,7 @@ public class IssueWatchService {
 	}
 
 	/**
-	 * The caller's watched issues, newest-touched first.
+	 * The caller's watched issues and the issues shared with them, newest-touched first.
 	 *
 	 * <p>Scoped to the projects they can currently see rather than filtered after
 	 * paging: a subscription survives losing access to its project, and a page
@@ -110,17 +110,20 @@ public class IssueWatchService {
 				// none) when several issues share an updatedAt.
 				Sort.by(Sort.Order.desc("updatedAt"), Sort.Order.desc("_id")));
 		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
-		if (scope.isEmpty()) {
-			return Page.empty(pageable);
-		}
-		Query query = new Query(Criteria.where("watcherIds").is(user.getId())
-				// Archived issues are soft-deleted and hidden from every default
-				// listing; the watch list is no exception. Asked as an EQUALITY, not
-				// as $ne: a $ne is a two-interval bound, and a multi-interval bound
-				// sitting before the sort keys is exactly what stops Mongo taking the
-				// sort from the index (see the watchers_updated index on Issue).
-				.and("archived").is(false)
-				.and("projectId").in(scope));
+		// The issues shared with the caller belong here too (HIN-136): it is where somebody
+		// outside a project finds them. Each branch of the $or starts on its own index
+		// (watchers_updated, participants_updated), with archived as an equality in both.
+		Criteria shared = Criteria.where("participantIds").is(user.getId()).and("archived").is(false);
+		Query query = new Query(scope.isEmpty() ? shared : new Criteria().orOperator(
+				Criteria.where("watcherIds").is(user.getId())
+						// Archived issues are soft-deleted and hidden from every default
+						// listing; the watch list is no exception. Asked as an EQUALITY, not
+						// as $ne: a $ne is a two-interval bound, and a multi-interval bound
+						// sitting before the sort keys is exactly what stops Mongo taking the
+						// sort from the index (see the watchers_updated index on Issue).
+						.and("archived").is(false)
+						.and("projectId").in(scope),
+				shared));
 		long total = mongo.count(query, Issue.class);
 		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
 		return new PageImpl<>(content, pageable, total);

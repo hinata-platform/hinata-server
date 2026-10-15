@@ -86,11 +86,13 @@ public class SearchService {
 
 	/** What one caller may find, worked out once per search. */
 	private record Reach(Set<String> activeProjects, Set<String> archivedProjects,
-			Criteria pages) {
+			Criteria pages, String userId) {
 
+		/** The issues of the projects reached, and the issues shared with the caller (HIN-136). */
 		Criteria issues(boolean archived) {
-			return new Criteria().andOperator(archivedIs(archived),
-					Criteria.where("projectId").in(activeProjects));
+			return new Criteria().andOperator(archivedIs(archived), new Criteria().orOperator(
+					Criteria.where("projectId").in(activeProjects),
+					Criteria.where("participantIds").is(userId)));
 		}
 
 		Criteria projects(boolean archived) {
@@ -113,7 +115,7 @@ public class SearchService {
 				.map(Project::getId).collect(Collectors.toSet());
 		Set<String> archived = archivedSearch ? projectService.archivedVisibleTo(user).stream()
 				.map(Project::getId).collect(Collectors.toSet()) : Set.of();
-		return new Reach(active, archived, articleAccess.sightOf(user, active).criteria());
+		return new Reach(active, archived, articleAccess.sightOf(user, active).criteria(), user.getId());
 	}
 
 	public SearchResponse search(User user, String rawQuery, String scope) {
