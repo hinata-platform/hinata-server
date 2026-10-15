@@ -1155,7 +1155,15 @@ public class IssueService {
 				for (IssueComment.Reaction r : c.getReactions()) ids.add(r.getUserId());
 			}
 		}
-		for (IssueActivity a : activityPage) ids.add(a.getActorId());
+		for (IssueActivity a : activityPage) {
+			ids.add(a.getActorId());
+			// A share names a person by id; the history reads "… shared it with Helen".
+			if (a.getField() == IssueActivity.Field.PARTICIPANT_ADDED
+					|| a.getField() == IssueActivity.Field.PARTICIPANT_REMOVED) {
+				ids.add(a.getFromValue());
+				ids.add(a.getToValue());
+			}
+		}
 		List<Issue> related = new ArrayList<>(hierarchy.ancestors());
 		related.addAll(hierarchy.children());
 		for (Issue h : related) {

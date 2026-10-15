@@ -743,6 +743,15 @@ class ParticipantAccessIntegrationTest {
 		assertThat(notificationsOf(outsider, "ISSUE_UPDATED")).isEmpty();
 	}
 
+	@Test
+	void theDetailNamesThePeopleTheHistorySharedWith() {
+		Issue plain = issue("Plain");
+		participants.add(plain.getId(), outsider.getId(), member);
+
+		assertThat(issues.detail(plain.getId(), 30, "newest", 30, lead).users())
+				.extracting(IssueService.DetailUser::id).contains(outsider.getId(), member.getId());
+	}
+
 	// --- helpers ------------------------------------------------------------
 
 	private static void assertReadOnly(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
