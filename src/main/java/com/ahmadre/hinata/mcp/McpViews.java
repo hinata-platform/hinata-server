@@ -35,7 +35,9 @@ public final class McpViews {
 			List<String> tags, String parentId, List<String> dependsOnIds, String sprintId,
 			LocalDate startDate, LocalDate dueDate,
 			Integer estimateMinutes, Integer storyPoints, int spentMinutes,
-			Instant resolvedAt, Instant createdAt, Instant updatedAt) {
+			Instant resolvedAt, Instant createdAt, Instant updatedAt,
+			/** People outside the project this issue is shared with (HIN-136). */
+			List<String> participantIds) {
 
 		public static IssueView of(Issue issue) {
 			return new IssueView(
@@ -49,7 +51,8 @@ public final class McpViews {
 					issue.getDependsOnIds(), issue.getSprintId(),
 					issue.getStartDate(), issue.getDueDate(),
 					issue.getEstimateMinutes(), issue.getStoryPoints(), issue.getSpentMinutes(),
-					issue.getResolvedAt(), issue.getCreatedAt(), issue.getUpdatedAt());
+					issue.getResolvedAt(), issue.getCreatedAt(), issue.getUpdatedAt(),
+					issue.getParticipantIds() == null ? List.of() : issue.getParticipantIds());
 		}
 	}
 
