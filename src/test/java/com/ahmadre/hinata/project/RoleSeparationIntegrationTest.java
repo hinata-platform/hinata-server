@@ -288,11 +288,78 @@ class RoleSeparationIntegrationTest {
 	}
 
 	@Test
+	void aBulkArchiveTakesSubTasksAlongAndRestoresThem() {
+		Issue a = issue("First");
+		Issue sub = issueRepository.save(Issue.builder().projectId(project.getId()).title("Child")
+				.readableId("SEC-9").numberInProject(9L).state("Open").type(Issue.Type.SUBTASK)
+				.parentId(a.getId()).build());
+
+		assertThatThrownBy(() -> issues.archiveAll(List.of(a.getId()), true, outsider))
+				.isInstanceOf(ApiException.class).hasMessageContaining("notFound");
+		assertThat(issueRepository.findById(a.getId()).orElseThrow().isArchived()).isFalse();
+
+		// Any member may archive, as with a single issue.
+		assertThat(issues.archiveAll(List.of(a.getId(), a.getId()), true, member))
+				.singleElement().extracting(Issue::isArchived).isEqualTo(true);
+		assertThat(issueRepository.findById(sub.getId()).orElseThrow().isArchived()).isTrue();
+
+		issues.archiveAll(List.of(a.getId()), false, member);
+		assertThat(issueRepository.findById(a.getId()).orElseThrow().isArchived()).isFalse();
+		assertThat(issueRepository.findById(sub.getId()).orElseThrow().isArchived()).isFalse();
+	}
+
+	@Test
+	void aBulkUpdateWritesEveryIssueOrNone() {
+		Project other = projects.save(Project.builder().key("OTH").name("Other")
+				.leadIds(new ArrayList<>(List.of(lead.getId())))
+				.memberIds(new ArrayList<>(List.of(lead.getId(), member.getId())))
+				.workflowStates(new ArrayList<>(List.of(
+						Project.WorkflowState.builder().id("o1").name("Todo").build(),
+						Project.WorkflowState.builder().id("o2").name("Done").build())))
+				.resolvedStates(new ArrayList<>(List.of("Done")))
+				.build());
+		Issue a = issue("First");
+		Issue b = issueRepository.save(Issue.builder().projectId(other.getId()).title("Elsewhere")
+				.readableId("OTH-1").numberInProject(1L).state("Todo").type(Issue.Type.TASK).build());
+
+		// "Open" is not in the other project's workflow: neither issue moves.
+		assertThatThrownBy(() -> issues.bulkUpdate(List.of(a.getId(), b.getId()), "Open", null, null, member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("unknownState");
+		assertThat(issueRepository.findById(a.getId()).orElseThrow().getState()).isEqualTo("Open");
+
+		// Nobody is handed an issue in a project they cannot open.
+		assertThatThrownBy(() -> issues.bulkUpdate(List.of(a.getId()), null, null, outsider.getId(), member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("assigneeNoAccess");
+		assertThatThrownBy(() -> issues.bulkUpdate(List.of(a.getId()), null, null, null, member))
+				.isInstanceOf(ApiException.class).hasMessageContaining("bulkNothingToChange");
+
+		List<Issue> updated = issues.bulkUpdate(List.of(a.getId(), b.getId()), "Done", Issue.Priority.CRITICAL,
+				member.getId(), member);
+		assertThat(updated).extracting(Issue::getState).containsOnly("Done");
+		assertThat(updated).extracting(Issue::getPriority).containsOnly(Issue.Priority.CRITICAL);
+		assertThat(updated).extracting(Issue::getAssigneeId).containsOnly(member.getId());
+		assertThat(updated).allSatisfy(issue -> assertThat(issue.getResolvedAt()).isNotNull());
+
+		assertThat(issues.bulkUpdate(List.of(a.getId()), null, null, "", member))
+				.singleElement().satisfies(issue -> assertThat(issue.getAssigneeIds()).isEmpty());
+	}
+
+	@Test
+	void deleteRightsAreReadInOneGo() {
+		assertThat(projectService.issueDeletableProjectIds(lead)).containsExactly(project.getId());
+		assertThat(projectService.issueDeletableProjectIds(teamAdmin)).containsExactly(project.getId());
+		assertThat(projectService.issueDeletableProjectIds(member)).isEmpty();
+		assertThat(projectService.issueDeletableProjectIds(outsider)).isEmpty();
+	}
+
+	@Test
 	void aBulkChangeIsBounded() {
 		List<String> ids = IntStream.range(0, IssueService.MAX_BULK + 1).mapToObj(i -> "id-" + i).toList();
 		assertThatThrownBy(() -> issues.updateAll(ids, issue -> { }, member))
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
 		assertThatThrownBy(() -> issues.deleteAll(ids, lead))
+				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
+		assertThatThrownBy(() -> issues.archiveAll(ids, true, member))
 				.isInstanceOf(ApiException.class).hasMessageContaining("bulkTooMany");
 	}
 
