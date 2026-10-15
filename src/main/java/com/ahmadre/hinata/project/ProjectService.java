@@ -305,6 +305,31 @@ public class ProjectService {
 		return canManage(project, user);
 	}
 
+	/**
+	 * The ids of every active project in which {@code user} may hard-delete issues, for
+	 * the issue list to offer Delete only where it would work. Three queries however
+	 * many projects there are: the visible projects, then one read of the teams the
+	 * user administers, rather than one existence check per project.
+	 */
+	public Set<String> issueDeletableProjectIds(User user) {
+		Query adminTeams = Query.query(Criteria.where("members").elemMatch(Criteria.where("userId").is(user.getId())
+				.and("role").is(com.ahmadre.hinata.team.TeamRole.ADMIN)));
+		adminTeams.fields().include("projectIds");
+		// Read as a plain document: a projected Team cannot be built, its constructor
+		// wants the primitive fields the projection leaves out.
+		Set<String> administered = new HashSet<>();
+		for (org.bson.Document team : mongo.find(adminTeams, org.bson.Document.class,
+				mongo.getCollectionName(com.ahmadre.hinata.team.Team.class))) {
+			List<?> ids = team.get("projectIds", List.class);
+			if (ids != null) ids.forEach(id -> administered.add(String.valueOf(id)));
+		}
+		Set<String> result = new LinkedHashSet<>();
+		for (Project project : visibleTo(user)) {
+			if (isLead(project, user) || administered.contains(project.getId())) result.add(project.getId());
+		}
+		return result;
+	}
+
 	/** One indexed existence check: a team owning the project with this user as its admin. */
 	private boolean isTeamAdminOf(Project project, User user) {
 		return mongo.exists(Query.query(Criteria.where("projectIds").is(project.getId())

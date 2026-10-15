@@ -38,6 +38,7 @@ public class IssueController {
 	private final CurrentUser currentUser;
 	private final RichTextService richText;
 	private final IssueDeadlinePolicy deadlines;
+	private final com.ahmadre.hinata.project.ProjectService projectService;
 
 	/**
 	 * An offset a client may actually store.
@@ -416,6 +417,53 @@ public class IssueController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String id) {
 		issueService.delete(id, currentUser.require());
+	}
+
+	/** Archives ({@code archived} true) or restores the named issues. */
+	public record BulkArchiveRequest(@NotEmpty @Size(max = IssueService.MAX_BULK) List<String> issueIds,
+			boolean archived) {
+	}
+
+	/**
+	 * Archives or restores every named issue. Any member may, as with a single issue;
+	 * an issue the caller cannot see refuses the whole request.
+	 */
+	@PostMapping("/bulk/archive")
+	public List<Issue> bulkArchive(@RequestBody @Valid BulkArchiveRequest request) {
+		return issueService.archiveAll(request.issueIds(), request.archived(), currentUser.require());
+	}
+
+	/**
+	 * The fields the list's selection changes in one go. Null leaves a field alone;
+	 * an empty {@code assigneeId} clears the assignees.
+	 */
+	public record BulkUpdateRequest(@NotEmpty @Size(max = IssueService.MAX_BULK) List<String> issueIds,
+			@Size(max = 200) String state, Issue.Priority priority, @Size(max = 64) String assigneeId) {
+	}
+
+	/**
+	 * Sets the state, priority or assignee of every named issue. All or nothing: a
+	 * state one project lacks, or an assignee who cannot open one project, refuses
+	 * the request before anything is written.
+	 */
+	@PostMapping("/bulk/update")
+	public List<Issue> bulkUpdate(@RequestBody @Valid BulkUpdateRequest request) {
+		return issueService.bulkUpdate(request.issueIds(), request.state(), request.priority(),
+				request.assigneeId(), currentUser.require());
+	}
+
+	/** The projects in which the caller may hard-delete issues. */
+	public record IssuePermissions(java.util.Set<String> deletableProjectIds) {
+	}
+
+	/**
+	 * What the caller may do to issues across the projects they see, so the list
+	 * offers Delete only where the server would accept it. The server still checks
+	 * every request; this only spares people an action that cannot work.
+	 */
+	@GetMapping("/permissions")
+	public IssuePermissions permissions() {
+		return new IssuePermissions(projectService.issueDeletableProjectIds(currentUser.require()));
 	}
 
 	/** The issues the list's selection deletes in one go. */

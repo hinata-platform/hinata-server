@@ -131,6 +131,45 @@ public class IssueService {
 	 * those issues get one notice for the whole change rather than one per issue.
 	 */
 	public List<Issue> updateAll(List<String> ids, java.util.function.Consumer<Issue> mutator, User editor) {
+		return updateAll(ids, null, mutator, editor);
+	}
+
+	/**
+	 * {@link #updateAll(List, java.util.function.Consumer, User)} with a check that runs
+	 * against every issue and its project before the first write. A change one issue
+	 * cannot take — a state its project's workflow lacks — then refuses the request
+	 * instead of failing at issue 37 with 36 already saved.
+	 */
+	public List<Issue> updateAll(List<String> ids, java.util.function.BiConsumer<Issue, Project> precheck,
+			java.util.function.Consumer<Issue> mutator, User editor) {
+		Bulk bulk = resolveBulk(ids, editor);
+		java.util.Map<String, Project> byId = bulk.projects();
+		List<Issue> found = bulk.issues();
+		if (precheck != null) {
+			found.forEach(issue -> precheck.accept(issue, byId.get(issue.getProjectId())));
+		}
+		List<Issue> updated = found.stream()
+				.map(issue -> apply(issue, byId.get(issue.getProjectId()), mutator, editor, false))
+				.toList();
+		try {
+			notifications.notifyIssuesChanged(updated, editor);
+		}
+		catch (RuntimeException ex) {
+			LOGGER.warn("bulk change notification failed (updates kept)", ex);
+		}
+		return updated;
+	}
+
+	/** The issues of one bulk request and their projects, access already settled. */
+	private record Bulk(List<Issue> issues, java.util.Map<String, Project> projects) {
+	}
+
+	/**
+	 * Loads the issues one bulk request names, each once, at most {@link #MAX_BULK}.
+	 * An id that does not exist, or whose project the caller cannot see, answers 404
+	 * for the whole request, so nobody learns which of them exist.
+	 */
+	private Bulk resolveBulk(List<String> ids, User user) {
 		List<String> distinct = ids == null ? List.of()
 				: ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
 		if (distinct.size() > MAX_BULK) {
@@ -143,21 +182,69 @@ public class IssueService {
 		java.util.Map<String, Project> byId = new java.util.HashMap<>();
 		for (String projectId : found.stream().map(Issue::getProjectId).distinct().toList()) {
 			Project project = projects.get(projectId);
-			if (!projects.canSee(project, editor)) {
+			if (!projects.canSee(project, user)) {
 				throw ApiException.notFound("issue");
 			}
 			byId.put(projectId, project);
 		}
-		List<Issue> updated = found.stream()
-				.map(issue -> apply(issue, byId.get(issue.getProjectId()), mutator, editor, false))
-				.toList();
+		return new Bulk(found, byId);
+	}
+
+	/**
+	 * Sets the state, the priority or the assignee of several issues at once. Null
+	 * leaves a field alone; an empty {@code assigneeId} clears the assignees. Checked
+	 * for every issue before the first write: the state has to be in each project's
+	 * workflow, and the assignee has to be able to open each project, so nobody is
+	 * handed an issue they cannot see.
+	 */
+	public List<Issue> bulkUpdate(List<String> ids, String state, Issue.Priority priority, String assigneeId,
+			User editor) {
+		if (state == null && priority == null && assigneeId == null) {
+			throw ApiException.badRequest("error.issue.bulkNothingToChange");
+		}
+		User assignee = assigneeId == null || assigneeId.isBlank() ? null
+				: userRepo.findById(assigneeId).orElseThrow(() -> ApiException.badRequest("error.issue.assigneeNoAccess"));
+		return updateAll(ids, (issue, project) -> {
+			if (state != null && !project.workflowStateNames().contains(state)) {
+				throw ApiException.badRequest("error.issue.unknownState", state);
+			}
+			if (assignee != null && !projects.canSee(project, assignee)) {
+				throw ApiException.badRequest("error.issue.assigneeNoAccess");
+			}
+		}, issue -> {
+			if (state != null) issue.setState(state);
+			if (priority != null) issue.setPriority(priority);
+			if (assigneeId != null) issue.setAssigneeId(assigneeId);
+		}, editor);
+	}
+
+	/**
+	 * Archives or restores several issues at once, with the single route's rules:
+	 * any member may, and a standard issue takes its sub-tasks along. The people
+	 * following them get one notice for the whole change. Returns the named issues
+	 * as they now are.
+	 */
+	public List<Issue> archiveAll(List<String> ids, boolean archived, User user) {
+		Bulk bulk = resolveBulk(ids, user);
+		Instant at = archived ? Instant.now() : null;
+		List<Issue> changed = new ArrayList<>();
+		for (Issue issue : bulk.issues()) {
+			if (issue.isArchived() == archived) {
+				changed.add(issue);
+				continue;
+			}
+			Issue saved = archiveChecked(issue, archived, at);
+			changed.add(saved);
+			audit.event(archived ? AuditAction.ISSUE_ARCHIVED : AuditAction.ISSUE_UNARCHIVED)
+					.actor(user).meta("issue", saved.getReadableId()).log();
+		}
 		try {
-			notifications.notifyIssuesChanged(updated, editor);
+			notifications.notifyIssuesChanged(changed, user);
 		}
 		catch (RuntimeException ex) {
-			LOGGER.warn("bulk change notification failed (updates kept)", ex);
+			LOGGER.warn("bulk archive notification failed (changes kept)", ex);
 		}
-		return updated;
+		return changed;
 	}
 
 	/** True when {@code user} may see the issue (a member of its project); never throws. */
@@ -481,21 +568,9 @@ public class IssueService {
 	 * deleted.
 	 */
 	public int deleteAll(List<String> ids, User user) {
-		List<String> distinct = ids == null ? List.of()
-				: ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
-		if (distinct.size() > MAX_BULK) {
-			throw ApiException.badRequest("error.issue.bulkTooMany", MAX_BULK);
-		}
-		List<Issue> found = issues.findAllById(distinct);
-		if (found.size() != distinct.size()) {
-			throw ApiException.notFound("issue");
-		}
-		for (String projectId : found.stream().map(Issue::getProjectId).distinct().toList()) {
-			Project project = projects.get(projectId);
-			if (!projects.canSee(project, user)) {
-				throw ApiException.notFound("issue");
-			}
-			projects.assertMember(project, user);
+		Bulk bulk = resolveBulk(ids, user);
+		List<Issue> found = bulk.issues();
+		for (Project project : bulk.projects().values()) {
 			if (!projects.canDeleteIssues(project, user)) {
 				throw ApiException.forbidden("error.issue.deleteForbidden");
 			}
@@ -554,19 +629,7 @@ public class IssueService {
 		Issue issue = get(id);
 		assertAccess(issue, user);
 		if (issue.isArchived() == archived) return issue;
-		Instant at = archived ? Instant.now() : null;
-		if (issue.getType().isStandard()) {
-			for (Issue child : issues.findByParentId(issue.getId())) {
-				if (child.isArchived() != archived) {
-					child.setArchived(archived);
-					child.setArchivedAt(at);
-					issues.save(child);
-				}
-			}
-		}
-		issue.setArchived(archived);
-		issue.setArchivedAt(at);
-		Issue saved = issues.save(issue);
+		Issue saved = archiveChecked(issue, archived, archived ? Instant.now() : null);
 		// Archiving does not go through update(), so it has to raise its own notice
 		// — and it is the change a watcher most needs to hear about: the issue they
 		// subscribed to has just disappeared from every list they look at.
@@ -581,6 +644,22 @@ public class IssueService {
 		audit.event(archived ? AuditAction.ISSUE_ARCHIVED : AuditAction.ISSUE_UNARCHIVED)
 				.actor(user).meta("issue", saved.getReadableId()).log();
 		return saved;
+	}
+
+	/** Archives or restores an issue whose access is settled, its sub-tasks with it. */
+	private Issue archiveChecked(Issue issue, boolean archived, Instant at) {
+		if (issue.getType().isStandard()) {
+			for (Issue child : issues.findByParentId(issue.getId())) {
+				if (child.isArchived() != archived) {
+					child.setArchived(archived);
+					child.setArchivedAt(at);
+					issues.save(child);
+				}
+			}
+		}
+		issue.setArchived(archived);
+		issue.setArchivedAt(at);
+		return issues.save(issue);
 	}
 
 	/** Per-user capabilities on an issue, for the client's archive/delete UI. */
