@@ -112,7 +112,7 @@ public class IssueCloneService {
 	static final List<String> LEFT_BEHIND = List.of(
 			"id", "numberInProject", "readableId", "formerReadableIds", "state", "reporterId",
 			"reporterEmail", "inboundMessageId", "inboundSubject", "ingestConnectionId",
-			"watcherIds", "spentMinutes", "rank", "resolvedAt", "archived",
+			"watcherIds", "participantIds", "participantMeta", "spentMinutes", "rank", "resolvedAt", "archived",
 			"archivedAt", "dueReminderFor", "createdAt", "updatedAt",
 			"subtaskCount", "subtaskDoneCount", "searchText");
 
@@ -133,6 +133,8 @@ public class IssueCloneService {
 	 */
 	public Issue clone(String idOrReadableId, Options options, User user) {
 		Issue original = issues.getForUser(idOrReadableId, user);
+		// A copy lands in the project, so it takes somebody who works there.
+		issues.assertCanEdit(original, user);
 		// The copy is a new issue and holds to the label limits: asked before any file is copied.
 		IssueLabels.check(List.of(), original.getTags());
 		String title = requireTitle(options.title());

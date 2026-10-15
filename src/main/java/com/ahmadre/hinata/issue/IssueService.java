@@ -83,6 +83,9 @@ public class IssueService {
 	 */
 	private final IssueDeadlinePolicy deadlines;
 
+	/** Who may see an issue: its project's people and those it is shared with. */
+	private final IssueReach reach;
+
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
 	/** Audio MIME types accepted for voice comments (per recording platform). */
@@ -194,7 +197,11 @@ public class IssueService {
 		for (String projectId : found.stream().map(Issue::getProjectId).distinct().toList()) {
 			Project project = projects.get(projectId);
 			if (!projects.canSee(project, user)) {
-				throw ApiException.notFound("issue");
+				// Somebody an issue is shared with may read it, never change it in bulk:
+				// they hear "read only", everybody else learns nothing.
+				boolean shared = found.stream().anyMatch(issue -> projectId.equals(issue.getProjectId())
+						&& reach.canSee(issue, user));
+				throw shared ? participantReadOnly() : ApiException.notFound("issue");
 			}
 			byId.put(projectId, project);
 		}
@@ -353,20 +360,40 @@ public class IssueService {
 				.toList();
 	}
 
-	/** True when {@code user} may see the issue (a member of its project); never throws. */
+	/** True when {@code user} may see the issue (see {@link IssueReach}); never throws. */
 	public boolean canAccess(Issue issue, User user) {
-		try {
-			assertAccess(issue, user);
-			return true;
-		}
-		catch (RuntimeException denied) {
-			return false;
+		return reach.canSee(issue, user);
+	}
+
+	/**
+	 * Throws 403 unless {@code user} may see the issue: a member of its project, through a team,
+	 * or somebody it is shared with.
+	 */
+	private void assertAccess(Issue issue, User user) {
+		if (!reach.canSee(issue, user)) {
+			throw ApiException.forbidden("error.project.notMember");
 		}
 	}
 
-	/** Throws 403 unless {@code user} may see the project, as a member or through a team. */
-	private void assertAccess(Issue issue, User user) {
+	/**
+	 * Throws unless {@code user} may change the issue, which takes reaching its project: 403
+	 * {@code participantReadOnly} for somebody it is only shared with, 403 {@code notMember} for
+	 * anyone else.
+	 */
+	public void assertCanEdit(Issue issue, User user) {
+		if (reach.isParticipantOnly(issue, user)) {
+			throw participantReadOnly();
+		}
 		projects.assertMember(projects.get(issue.getProjectId()), user);
+	}
+
+	/** Whether {@code user} sees {@code issue} only because it is shared with them. */
+	public boolean isParticipantOnly(Issue issue, User user) {
+		return reach.isParticipantOnly(issue, user);
+	}
+
+	private static ApiException participantReadOnly() {
+		return ApiException.forbidden("error.issue.participantReadOnly");
 	}
 
 	/**
@@ -504,7 +531,7 @@ public class IssueService {
 	public Issue update(String id, java.util.function.Consumer<Issue> mutator, User editor) {
 		Issue issue = get(id);
 		if (editor != null) {
-			assertAccess(issue, editor);
+			assertCanEdit(issue, editor);
 		}
 		return apply(issue, projects.get(issue.getProjectId()), mutator, editor, null);
 	}
@@ -685,8 +712,8 @@ public class IssueService {
 	 */
 	public void delete(String id, User user) {
 		Issue issue = get(id);
+		assertCanEdit(issue, user);
 		Project project = projects.get(issue.getProjectId());
-		projects.assertMember(project, user);
 		if (!projects.canDeleteIssues(project, user)) {
 			throw ApiException.forbidden("error.issue.deleteForbidden");
 		}
@@ -761,7 +788,7 @@ public class IssueService {
 	 */
 	public Issue setArchived(String id, boolean archived, User user) {
 		Issue issue = get(id);
-		assertAccess(issue, user);
+		assertCanEdit(issue, user);
 		if (issue.isArchived() == archived) return issue;
 		Issue saved = archiveChecked(issue, archived, archived ? Instant.now() : null);
 		// Archiving does not go through update(), so it has to raise its own notice
@@ -802,9 +829,11 @@ public class IssueService {
 
 	public Permissions permissionsOf(String id, User user) {
 		Issue issue = get(id);
-		Project project = projects.get(issue.getProjectId());
-		projects.assertMember(project, user);
-		return new Permissions(projects.canDeleteIssues(project, user));
+		assertAccess(issue, user);
+		if (reach.isParticipantOnly(issue, user)) {
+			return new Permissions(false);
+		}
+		return new Permissions(projects.canDeleteIssues(projects.get(issue.getProjectId()), user));
 	}
 
 	/**
@@ -862,6 +891,12 @@ public class IssueService {
 		}
 		List<Issue> children = new ArrayList<>(issues.findByParentId(issue.getId()));
 		children.sort(Comparator.comparingLong(Issue::getNumberInProject));
+		if (reach.isParticipantOnly(issue, user)) {
+			// Somebody the issue is shared with sees of its family only what is shared with them
+			// too; the rest of the project stays out of sight, the detail still opens.
+			ancestors.removeIf(other -> !participates(other, user));
+			children.removeIf(other -> !participates(other, user));
+		}
 		return new Hierarchy(ancestors, children);
 	}
 
@@ -1001,8 +1036,9 @@ public class IssueService {
 			long workItemsTotal,
 			Hierarchy hierarchy,
 			List<Sprint> sprints,
-			List<UserController.DirectoryUser> users,
-			boolean canDelete) {
+			List<DetailUser> users,
+			boolean canDelete,
+			Participation participation) {
 
 		/**
 		 * Slim {@code {content, totalElements}} slice mirroring Spring Data's
@@ -1023,19 +1059,57 @@ public class IssueService {
 		Issue issue = getForUser(idOrReadableId, user); // primary ACL assert
 		String id = issue.getId();
 		Project project = projects.get(issue.getProjectId());
+		boolean participantOnly = reach.isParticipantOnly(issue, user);
 		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort, user);
 		List<IssueComment> pinned = pinnedComments(id, user);
 		Page<IssueActivity> activityPage = activityOf(id, 0, activitySize, user);
+		Hierarchy hierarchy = hierarchyOf(id, user);
+		List<DetailUser> dirUsers = referencedUsers(
+				issue, commentPage.getContent(), pinned, activityPage.getContent(), hierarchy);
+		if (participantOnly) {
+			// Somebody the issue is shared with reads the issue, not the project: none of its
+			// people, sprints or logged hours (who worked how long is the members' business).
+			return new IssueDetail(issue, project.publicView(), IssueDetail.PageSlice.of(commentPage), pinned,
+					IssueDetail.PageSlice.of(activityPage), List.of(), 0, hierarchy, List.of(), dirUsers, false,
+					Participation.PARTICIPANT);
+		}
 		Page<WorkItem> items = workItems.findByIssueId(id,
 				PageRequest.of(0, DETAIL_WORK_ITEMS, WorkItemRepository.NEWEST_FIRST));
-		Hierarchy hierarchy = hierarchyOf(id, user);
 		List<Sprint> sprintList = sprintsForProject(project.getId());
 		boolean canDelete = projects.canDeleteIssues(project, user);
-		List<UserController.DirectoryUser> dirUsers = referencedUsers(
-				issue, commentPage.getContent(), pinned, activityPage.getContent(), hierarchy);
 		return new IssueDetail(issue, project, IssueDetail.PageSlice.of(commentPage), pinned,
 				IssueDetail.PageSlice.of(activityPage), items.getContent(), items.getTotalElements(),
-				hierarchy, sprintList, dirUsers, canDelete);
+				hierarchy, sprintList, dirUsers, canDelete, Participation.MEMBER);
+	}
+
+	/**
+	 * How the caller stands to an issue: a member of its project, or somebody it is shared with.
+	 * Only members add and remove participants; a participant may only leave.
+	 */
+	public record Participation(Role role, boolean canManageParticipants) {
+
+		public static final Participation MEMBER = new Participation(Role.MEMBER, true);
+		public static final Participation PARTICIPANT = new Participation(Role.PARTICIPANT, false);
+
+		public enum Role { MEMBER, PARTICIPANT }
+	}
+
+	/**
+	 * A person the detail view names, with whether they can open the issue: the app warns before
+	 * a comment mentions somebody who would never see it. The keys of
+	 * {@link UserController.DirectoryUser} plus {@code canSeeIssue}.
+	 */
+	public record DetailUser(String id, String username, String displayName, String avatarUrl,
+			String title, String pronouns, boolean canSeeIssue) {
+
+		static DetailUser of(User user, boolean canSeeIssue) {
+			return new DetailUser(user.getId(), user.getUsername(), user.getDisplayName(),
+					user.getAvatarUrl(), user.getTitle(), user.getPronouns(), canSeeIssue);
+		}
+	}
+
+	private static boolean participates(Issue issue, User user) {
+		return issue.getParticipantIds() != null && issue.getParticipantIds().contains(user.getId());
 	}
 
 	/**
@@ -1058,7 +1132,7 @@ public class IssueService {
 	 * The minimal user directory the detail view references, so an issue open
 	 * never ships the whole org over the wire.
 	 */
-	private List<UserController.DirectoryUser> referencedUsers(Issue issue,
+	private List<DetailUser> referencedUsers(Issue issue,
 			List<IssueComment> commentPage, List<IssueComment> pinned,
 			List<IssueActivity> activityPage, Hierarchy hierarchy) {
 		Set<String> ids = new HashSet<>();
@@ -1081,11 +1155,12 @@ public class IssueService {
 		}
 		ids.remove(null);
 		if (ids.isEmpty()) return List.of();
-		List<UserController.DirectoryUser> out = new ArrayList<>();
+		List<User> active = new ArrayList<>();
 		for (User u : userRepo.findAllById(ids)) {
-			if (u.isActive()) out.add(UserController.DirectoryUser.from(u));
+			if (u.isActive()) active.add(u);
 		}
-		return out;
+		Set<String> canSee = reach.whoCanSee(issue, active.stream().map(User::getId).toList());
+		return active.stream().map(u -> DetailUser.of(u, canSee.contains(u.getId()))).toList();
 	}
 
 	/** Permanently deletes a label from a project: removes it from the project's
@@ -1762,9 +1837,12 @@ public class IssueService {
 		return withReplyCount(saved);
 	}
 
-	/** Pins/unpins a comment. Any project member may pin and unpin. */
+	/** Pins/unpins a comment. Any project member may pin and unpin; a participant may not. */
 	public IssueComment setPinned(String issueId, String commentId, boolean pinned, User user) {
-		IssueComment comment = requireComment(issueId, commentId, user);
+		Issue issue = get(issueId);
+		// Pinning decides what every reader sees first, so it stays with the project.
+		assertCanEdit(issue, user);
+		IssueComment comment = commentOf(issue, commentId);
 		// Atomic $set of just the pin fields, so pinning doesn't overwrite a
 		// concurrent reaction/edit on the same comment.
 		IssueComment saved = mongo.findAndModify(
@@ -1799,6 +1877,10 @@ public class IssueService {
 	private IssueComment requireComment(String issueId, String commentId, User user) {
 		Issue issue = get(issueId);
 		assertAccess(issue, user);
+		return commentOf(issue, commentId);
+	}
+
+	private IssueComment commentOf(Issue issue, String commentId) {
 		return comments.findById(commentId)
 				.filter(c -> c.getIssueId().equals(issue.getId()))
 				.orElseThrow(() -> ApiException.notFound("comment"));
