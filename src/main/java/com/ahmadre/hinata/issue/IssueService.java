@@ -906,6 +906,9 @@ public class IssueService {
 			// too; the rest of the project stays out of sight, the detail still opens.
 			ancestors.removeIf(other -> !IssueReach.isParticipant(other, user.getId()));
 			children.removeIf(other -> !IssueReach.isParticipant(other, user.getId()));
+			return new Hierarchy(
+					ancestors.stream().map(other -> participantView(other, user.getId())).toList(),
+					children.stream().map(other -> participantView(other, user.getId())).toList());
 		}
 		return new Hierarchy(ancestors, children);
 	}
@@ -1074,14 +1077,17 @@ public class IssueService {
 		boolean participantOnly = !projects.canSee(project, user);
 		Page<IssueComment> commentPage = commentsOf(id, 0, commentSize, commentSort);
 		List<IssueComment> pinned = pinnedComments(id);
-		Page<IssueActivity> activityPage = activityOf(id, 0, activitySize);
+		Page<IssueActivity> activityPage = participantOnly
+				? participantHistory(id, 0, activitySize, user.getId())
+				: activityOf(id, 0, activitySize);
 		Hierarchy hierarchy = hierarchyOf(issue, participantOnly, user);
 		List<DetailUser> dirUsers = referencedUsers(issue, participantOnly,
 				commentPage.getContent(), pinned, activityPage.getContent(), hierarchy);
 		if (participantOnly) {
 			// Somebody the issue is shared with reads the issue, not the project: none of its
 			// people, sprints or logged hours (who worked how long is the members' business).
-			return new IssueDetail(issue, project.publicView(), IssueDetail.PageSlice.of(commentPage), pinned,
+			return new IssueDetail(participantView(issue, user.getId()), project.publicView(),
+					IssueDetail.PageSlice.of(commentPage), pinned,
 					IssueDetail.PageSlice.of(activityPage), List.of(), 0, hierarchy, List.of(), dirUsers, false,
 					Participation.PARTICIPANT);
 		}
@@ -1234,7 +1240,39 @@ public class IssueService {
 	}
 
 	public Page<IssueActivity> activityOf(String issueId, int page, int size, User user) {
-		return activityOf(getForUser(issueId, user).getId(), page, size);
+		Issue issue = getForUser(issueId, user);
+		if (reach.isParticipantOnly(issue, user)) {
+			return participantHistory(issue.getId(), page, size, user.getId());
+		}
+		return activityOf(issue.getId(), page, size);
+	}
+
+	/**
+	 * Whether somebody the issue is only shared with reads {@code entry}: not the project's
+	 * sprint planning, and of the shares only their own. The rule {@link #participantHistory}
+	 * asks the database.
+	 */
+	public static boolean participantMayRead(IssueActivity entry, String userId) {
+		if (entry.getField() == IssueActivity.Field.SPRINT) return false;
+		if (entry.getField() == IssueActivity.Field.PARTICIPANT_ADDED
+				|| entry.getField() == IssueActivity.Field.PARTICIPANT_REMOVED) {
+			return userId.equals(entry.getToValue()) || userId.equals(entry.getFromValue());
+		}
+		return true;
+	}
+
+	/** A page of an issue's history as a participant reads it; see {@link #participantMayRead}. */
+	private Page<IssueActivity> participantHistory(String id, int page, int size, String userId) {
+		Criteria otherShares = new Criteria().andOperator(
+				Criteria.where("field").in(IssueActivity.Field.PARTICIPANT_ADDED, IssueActivity.Field.PARTICIPANT_REMOVED),
+				Criteria.where("toValue").ne(userId),
+				Criteria.where("fromValue").ne(userId));
+		Query query = Query.query(Criteria.where("issueId").is(id)
+				.norOperator(Criteria.where("field").is(IssueActivity.Field.SPRINT), otherShares));
+		Pageable pageable = PageRequest.of(page, Math.min(size, 100), Sort.by(Sort.Direction.DESC, "createdAt"));
+		long total = mongo.count(query, IssueActivity.class);
+		return new org.springframework.data.domain.PageImpl<>(
+				mongo.find(query.with(pageable), IssueActivity.class), pageable, total);
 	}
 
 	/** A page of the history of an issue whose access is settled. */
@@ -1478,8 +1516,37 @@ public class IssueService {
 				? new Criteria().andOperator(and(filters, Criteria.where("projectId").is(p.projectId())))
 				: inScope(filters, scope, user));
 		long total = mongo.count(query, Issue.class);
-		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
+		List<Issue> content = viewedFrom(mongo.find(query.with(pageable), Issue.class), scope, user);
 		return new org.springframework.data.domain.PageImpl<>(content, pageable, total);
+	}
+
+	/**
+	 * {@code issue} as somebody it is only shared with may read it (HIN-136): none of the
+	 * project's people (watchers, the other participants), sprint or dependencies. A copy; the
+	 * stored issue is untouched.
+	 */
+	public static Issue participantView(Issue issue, String userId) {
+		return issue.toBuilder()
+				.watcherIds(new ArrayList<>())
+				.participantIds(new ArrayList<>(List.of(userId)))
+				.participantMeta(new ArrayList<>())
+				.sprintId(null)
+				.dependsOnIds(new ArrayList<>())
+				.build();
+	}
+
+	/** {@code issue} as {@code user} may read it; see {@link #participantView}. */
+	public Issue viewFor(Issue issue, User user) {
+		return reach.isParticipantOnly(issue, user) ? participantView(issue, user.getId()) : issue;
+	}
+
+	/**
+	 * A list as {@code user} reads it: the issues outside the projects they reach
+	 * ({@code visibleProjectIds}) are only shared with them and go out as {@link #participantView}.
+	 */
+	public static List<Issue> viewedFrom(List<Issue> found, Collection<String> visibleProjectIds, User user) {
+		return found.stream().map(issue -> visibleProjectIds.contains(issue.getProjectId()) ? issue
+				: participantView(issue, user.getId())).toList();
 	}
 
 	/**
@@ -1558,7 +1625,7 @@ public class IssueService {
 		Query query = Query.query(inScope(List.of(new Criteria().orOperator(
 				Criteria.where("readableId").in(capped),
 				Criteria.where("formerReadableIds").in(normalized))), scope, user));
-		return mongo.find(query, Issue.class);
+		return viewedFrom(mongo.find(query, Issue.class), scope, user);
 	}
 
 	public IssueComment addComment(String issueId, RichText content, User author) {

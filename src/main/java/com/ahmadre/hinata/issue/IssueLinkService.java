@@ -43,7 +43,7 @@ public class IssueLinkService {
 			// Skip dangling links and links to issues this user can't see (A01).
 			if (other == null || !issues.canAccess(other, user)) continue;
 			views.add(new LinkView(link.getId(), link.getType(), outward,
-					link.getType().verb(outward), other));
+					link.getType().verb(outward), issues.viewFor(other, user)));
 		}
 		// Group visually by verb, then by readable id within a group.
 		views.sort(Comparator.comparing(LinkView::verb)

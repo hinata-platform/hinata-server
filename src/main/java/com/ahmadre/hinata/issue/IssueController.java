@@ -6,6 +6,7 @@ import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
+import com.ahmadre.hinata.user.User;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -229,7 +230,8 @@ public class IssueController {
 
 	@GetMapping("/{id}")
 	public Issue get(@PathVariable String id) {
-		return issueService.getForUser(id, currentUser.require());
+		User user = currentUser.require();
+		return issueService.viewFor(issueService.getForUser(id, user), user);
 	}
 
 	/**

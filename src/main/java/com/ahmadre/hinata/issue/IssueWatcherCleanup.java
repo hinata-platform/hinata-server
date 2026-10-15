@@ -1,9 +1,12 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.notification.IssueDigestService;
 import com.ahmadre.hinata.project.ProjectReach;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -49,6 +52,8 @@ public class IssueWatcherCleanup {
 	// A participant reaches the issue without reaching its project (HIN-136); their
 	// subscription stays as long as the share does.
 	private final IssueReach issueReach;
+	private final IssueActivityRepository activities;
+	private final AuditService audit;
 
 	/**
 	 * Drops from every watcher list in one project those of {@code userIds} who can
@@ -70,20 +75,57 @@ public class IssueWatcherCleanup {
 					.filter(id -> id != null && !id.isBlank() && !stillReaching.contains(id))
 					.toList();
 			if (ids.isEmpty()) return;
-			mongo.updateMulti(
-					new Query(Criteria.where("projectId").is(projectId).and("watcherIds").in(ids)),
-					new Update().pullAll("watcherIds", ids.toArray()), Issue.class);
-			// A share made before somebody joined the project sleeps while they are a member;
-			// leaving the project must not wake it (HIN-136). Whoever should keep the issue is
-			// shared with again, visibly, by a member.
-			mongo.updateMulti(
-					new Query(Criteria.where("projectId").is(projectId).and("participantIds").in(ids)),
-					new Update().pullAll("participantIds", ids.toArray())
-							.pull("participantMeta", new org.bson.Document("userId", new org.bson.Document("$in", ids))),
-					Issue.class);
+			// One write for the whole project. Each issue keeps the subscriptions of the people
+			// it is shared with (HIN-136): a team change can name somebody the team never gave
+			// this project, whose only way in is a share. watcherIds minus (ids minus participants).
+			List<Document> pipeline = List.of(new Document("$set", new Document("watcherIds",
+					new Document("$setDifference", List.of("$watcherIds",
+							new Document("$setDifference", List.of(ids,
+									new Document("$ifNull", List.of("$participantIds", List.of())))))))));
+			mongo.getCollection(mongo.getCollectionName(Issue.class)).updateMany(
+					new Document("projectId", projectId).append("watcherIds", new Document("$in", ids)), pipeline);
 			digests.discardFor(projectId, ids);
 			log.debug("Removed {} watcher(s) from project {}", ids.size(), projectId);
 		});
+	}
+
+	/**
+	 * Ends the shares of those of {@code userIds} who now reach the project (HIN-136): somebody
+	 * who joins sees every issue anyway, and a share left behind would wake up the day they
+	 * leave again. Each ended share is written to the issue's history and the audit log, with
+	 * no actor: nobody removed them, the membership made the share redundant.
+	 *
+	 * <p>Called from every path that grants a project (member list, team grants, moving an
+	 * issue, migrating a project's issues); its failure is logged, never thrown at the caller.
+	 */
+	public void endSharesOfMembers(String projectId, Collection<String> userIds) {
+		if (projectId == null || userIds == null || userIds.isEmpty()) return;
+		bestEffort(projectId, () -> {
+			Set<String> reaching = reach.whoCanSee(projectId, userIds);
+			if (reaching.isEmpty()) return;
+			Query shared = new Query(Criteria.where("projectId").is(projectId).and("participantIds").in(reaching));
+			shared.fields().include("_id", "readableId", "participantIds");
+			for (Document issue : mongo.find(shared, Document.class, mongo.getCollectionName(Issue.class))) {
+				List<String> ended = new ArrayList<>(issue.getList("participantIds", String.class));
+				ended.retainAll(reaching);
+				endShares(String.valueOf(issue.get("_id")), issue.getString("readableId"), ended);
+			}
+		});
+	}
+
+	/** Takes {@code ended} off one issue, with a history row and an audit entry each. */
+	private void endShares(String issueId, String readableId, List<String> ended) {
+		if (ended.isEmpty()) return;
+		mongo.updateFirst(new Query(Criteria.where("_id").is(issueId)), new Update()
+				.pullAll("participantIds", ended.toArray())
+				.pull("participantMeta", new Document("userId", new Document("$in", ended))), Issue.class);
+		for (String userId : ended) {
+			activities.save(IssueActivity.builder().issueId(issueId).field(IssueActivity.Field.PARTICIPANT_REMOVED)
+					.fromValue(userId).build());
+			audit.event(AuditAction.ISSUE_PARTICIPANT_REMOVED).target(userId, userId)
+					.meta("issue", readableId).meta("reason", "joinedProject").log();
+		}
+		log.debug("Ended {} share(s) on issue {}: they joined its project", ended.size(), issueId);
 	}
 
 	/**
@@ -144,6 +186,18 @@ public class IssueWatcherCleanup {
 	 */
 	public void pruneAfterMove(Issue issue, String targetProjectId) {
 		if (issue == null || targetProjectId == null) return;
+		// Whoever the issue is shared with and who belongs to the target project needs the
+		// share no longer.
+		List<String> shared = issue.getParticipantIds();
+		if (shared != null && !shared.isEmpty()) {
+			bestEffort(targetProjectId, () -> {
+				List<String> ended = new ArrayList<>(reach.whoCanSee(targetProjectId, shared));
+				endShares(issue.getId(), issue.getReadableId(), ended);
+				List<String> remaining = new ArrayList<>(shared);
+				remaining.removeAll(ended);
+				issue.setParticipantIds(remaining);
+			});
+		}
 		List<String> watchers = issue.getWatcherIds();
 		if (watchers == null || watchers.isEmpty()) return;
 		bestEffort(targetProjectId, () -> {

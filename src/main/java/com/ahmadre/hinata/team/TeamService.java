@@ -360,6 +360,10 @@ public class TeamService {
 			revoked.add(userId);
 		}
 		if (changed) projects.save(project);
+		// Whoever the teams give the project needs no issue of it shared any more (HIN-136).
+		if (!grantedNow.isEmpty()) {
+			watcherCleanup.endSharesOfMembers(project.getId(), grantedNow);
+		}
 		// Whoever just lost the project also loses the subscriptions that access
 		// allowed. Best-effort — the cleanup owns that guard, and the delivery-time
 		// access check is what actually stops the notifications.

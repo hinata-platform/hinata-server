@@ -455,6 +455,13 @@ public class DeletionService {
 		// that is about to vanish. They move with the rest of the project's time.
 		mongo.updateMulti(new Query(Criteria.where("projectId").is(pid).and("issueId").is(null)),
 				new Update().set("projectId", target.getId()), WorkItem.class);
+		// Whoever an issue was shared with and who belongs to the target project needs the
+		// share no longer (HIN-136).
+		Set<String> shared = new HashSet<>();
+		projectIssues.forEach(issue -> {
+			if (issue.getParticipantIds() != null) shared.addAll(issue.getParticipantIds());
+		});
+		watcherCleanup.endSharesOfMembers(target.getId(), shared);
 	}
 
 	/** Deletes boards solely owned by the project; dereferences shared boards. */

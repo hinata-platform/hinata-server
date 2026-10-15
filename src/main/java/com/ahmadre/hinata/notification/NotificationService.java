@@ -968,14 +968,19 @@ public class NotificationService {
 			}
 		});
 		String editorName = editor == null ? "" : editor.getDisplayName();
-		String link = byProject.size() == 1 ? "/issues?projectId=" + byProject.keySet().iterator().next() : "/issues";
+		// One project: its list, for whoever reaches it. Somebody who only follows issues shared
+		// with them cannot open that list and is sent to the watched page instead (HIN-136).
+		String onlyProject = byProject.size() == 1 ? byProject.keySet().iterator().next() : null;
+		Set<String> reachProject = onlyProject == null ? Set.of() : reach.whoCanSee(onlyProject, countByUser.keySet());
+		java.util.function.Function<String, String> linkOf = userId -> onlyProject == null ? "/issues"
+				: reachProject.contains(userId) ? "/issues?projectId=" + onlyProject : "/watched";
 		countByUser.entrySet().stream()
-				.collect(Collectors.groupingBy(java.util.Map.Entry::getValue,
+				.collect(Collectors.groupingBy(entry -> java.util.Map.entry(entry.getValue(), linkOf.apply(entry.getKey())),
 						Collectors.mapping(java.util.Map.Entry::getKey, Collectors.toSet())))
-				.forEach((count, ids) -> deliver(ids, Notification.Type.ISSUE_UPDATED,
-						locale -> words.in(locale, "notify.issuesChanged.title", count),
-						locale -> words.in(locale, "notify.issuesChanged.body", editorName, count),
-						link));
+				.forEach((group, ids) -> deliver(ids, Notification.Type.ISSUE_UPDATED,
+						locale -> words.in(locale, "notify.issuesChanged.title", group.getKey()),
+						locale -> words.in(locale, "notify.issuesChanged.body", editorName, group.getKey()),
+						group.getValue()));
 	}
 
 	/**

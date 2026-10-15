@@ -125,7 +125,7 @@ public class IssueWatchService {
 						.and("projectId").in(scope),
 				shared));
 		long total = mongo.count(query, Issue.class);
-		List<Issue> content = mongo.find(query.with(pageable), Issue.class);
+		List<Issue> content = IssueService.viewedFrom(mongo.find(query.with(pageable), Issue.class), scope, user);
 		return new PageImpl<>(content, pageable, total);
 	}
 

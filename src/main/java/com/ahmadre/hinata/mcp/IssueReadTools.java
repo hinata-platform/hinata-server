@@ -82,7 +82,7 @@ public class IssueReadTools {
 			@McpToolParam(description = "Issue id or readable id (e.g. ASTA-42)") String idOrReadableId) {
 		scopeGuard.require(Scopes.ISSUES_READ);
 		User user = currentUser.require();
-		return IssueView.of(issueService.getForUser(idOrReadableId, user));
+		return IssueView.of(issueService.viewFor(issueService.getForUser(idOrReadableId, user), user));
 	}
 
 	@McpTool(name = "get_issue_hierarchy", title = "Get an issue's hierarchy",
