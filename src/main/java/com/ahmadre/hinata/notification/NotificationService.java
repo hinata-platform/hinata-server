@@ -64,6 +64,21 @@ public class NotificationService {
 	}
 
 	/**
+	 * Tells {@code participantId} that {@code actor} shared the issue with them. The bell always;
+	 * push and mail as their "assigned" preference says. The link is theirs to follow: the share
+	 * that triggers this notice is what lets them open the issue.
+	 */
+	public void notifyShared(Issue issue, User actor, String participantId) {
+		if (participantId == null || (actor != null && participantId.equals(actor.getId()))) return;
+		String actorName = actor == null ? "" : actor.getDisplayName() != null ? actor.getDisplayName()
+				: actor.getUsername();
+		deliver(Set.of(participantId), Notification.Type.ISSUE_SHARED,
+				locale -> words.in(locale, "notify.issueShared.title", actorName, issue.getReadableId()),
+				locale -> issue.getTitle(), // user content — same in every language
+				issueLink(issue));
+	}
+
+	/**
 	 * Notifies a project's members that a new issue landed via inbound e-mail
 	 * ingestion. There is no human actor — the sender is an external e-mail
 	 * address — so every active member is a recipient. Delivery is gated by each
@@ -1529,7 +1544,8 @@ public class NotificationService {
 	private static String eventId(Notification.Type type) {
 		return switch (type) {
 			case MENTION, COMMENT_REPLY -> "mentions";
-			case ISSUE_ASSIGNED -> "assigned";
+			// Being handed an issue to follow is told like being handed one to do.
+			case ISSUE_ASSIGNED, ISSUE_SHARED -> "assigned";
 			case ISSUE_COMMENTED -> "comments";
 			case ISSUE_UPDATED -> "status";
 			case ISSUE_INGESTED -> "ingest";
