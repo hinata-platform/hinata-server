@@ -9,6 +9,7 @@ import com.ahmadre.hinata.richtext.RichTextService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -421,11 +422,13 @@ public class IssueController {
 
 	/**
 	 * Archives ({@code archived} true) or restores the named issues. {@code cascade}
-	 * (default on) takes sub-tasks along; an undo sends exactly the ids the first
-	 * call switched, with it off.
+	 * (default on) takes sub-tasks along. An undo sends back what the first call
+	 * switched: the chosen issues as {@code issueIds}, their sub-tasks as
+	 * {@code subtaskIds}, with cascade off.
 	 */
-	public record BulkArchiveRequest(@NotEmpty @Size(max = IssueService.MAX_BULK) List<String> issueIds,
-			boolean archived, Boolean cascade) {
+	public record BulkArchiveRequest(@NotNull @Size(max = IssueService.MAX_BULK) List<String> issueIds,
+			boolean archived, Boolean cascade,
+			@Size(max = IssueService.MAX_BULK_SUBTASKS) List<String> subtaskIds) {
 	}
 
 	/**
@@ -436,7 +439,7 @@ public class IssueController {
 	@PostMapping("/bulk/archive")
 	public IssueService.BulkArchive bulkArchive(@RequestBody @Valid BulkArchiveRequest request) {
 		return issueService.archiveAll(request.issueIds(), request.archived(),
-				!Boolean.FALSE.equals(request.cascade()), currentUser.require());
+				!Boolean.FALSE.equals(request.cascade()), request.subtaskIds(), currentUser.require());
 	}
 
 	/**

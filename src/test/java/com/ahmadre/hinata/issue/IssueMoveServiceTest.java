@@ -268,6 +268,17 @@ class IssueMoveServiceTest {
 	}
 
 	@Test
+	void anAssigneeWhoCannotOpenTheTargetIsTakenOffTheIssue() {
+		issue("i1", "In Progress").setAssigneeIds(new ArrayList<>(List.of("stays", "leaves")));
+		when(projects.whoCanSee(any(), any())).thenReturn(Set.of("stays"));
+
+		List<Issue> moved = service.move(List.of("i1"), ERSTI,
+				Map.of("In Progress", "In Arbeit"), false, true, user);
+
+		assertThat(moved.get(0).getAssigneeIds()).containsExactly("stays");
+	}
+
+	@Test
 	void anUnmappedStatusFallsBackToTheSuggestionRatherThanFailing() {
 		issue("i1", "In Progress");
 

@@ -156,10 +156,14 @@ public class IssueService {
 				.map(issue -> apply(issue, byId.get(issue.getProjectId()), mutator, editor, assigned))
 				.toList();
 		// One notice per person newly given issues, not one per issue, and nobody
-		// told twice: whoever got that notice is left out of the change summary.
+		// told twice: the summary leaves out, for each person, the issues that notice
+		// already named, and still counts any other issue of theirs that changed.
 		try {
 			notifications.notifyIssuesAssigned(assigned, editor);
-			notifications.notifyIssuesChanged(updated, editor, assigned.keySet());
+			java.util.Map<String, Set<String>> told = new java.util.HashMap<>();
+			assigned.forEach((userId, given) -> told.put(userId,
+					given.stream().map(Issue::getId).collect(java.util.stream.Collectors.toSet())));
+			notifications.notifyIssuesChanged(updated, editor, told);
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("bulk change notification failed (updates kept)", ex);
@@ -248,56 +252,105 @@ public class IssueService {
 		return projects.whoCanSee(project, active);
 	}
 
-	/** What a bulk archive did: the named issues as they now are, and every issue it switched. */
-	public record BulkArchive(List<Issue> issues, List<String> toggledIds) {
+	/**
+	 * What a bulk archive did: the named issues as they now are, which of them it
+	 * switched, and which of their sub-tasks it switched along with them.
+	 */
+	public record BulkArchive(List<Issue> issues, List<String> toggledIds, List<String> toggledSubtaskIds) {
 	}
+
+	/** Most sub-tasks one bulk archive may name for an undo: a hundred parents' worth. */
+	public static final int MAX_BULK_SUBTASKS = 2000;
 
 	/**
 	 * Archives or restores several issues at once, with the single route's rules:
 	 * any member may, and with {@code cascade} a standard issue takes its sub-tasks
 	 * along. Only what actually switches is written, told and logged, in a fixed
-	 * number of queries however many issues there are. The answer names every issue
-	 * it switched, sub-tasks included, so an undo can switch back exactly those
-	 * (with {@code cascade} off) and not also a sub-task archived on its own before.
+	 * number of queries however many issues there are.
+	 *
+	 * <p>The answer names what it switched, the chosen issues and their sub-tasks
+	 * apart. An undo sends exactly those back with {@code cascade} off and the
+	 * sub-tasks as {@code subtaskIds}, so a sub-task archived on its own before is
+	 * left alone. Those are accepted only as sub-tasks in projects the caller can
+	 * open; any other id refuses the request like an unknown one.
 	 */
-	public BulkArchive archiveAll(List<String> ids, boolean archived, boolean cascade, User user) {
+	public BulkArchive archiveAll(List<String> ids, boolean archived, boolean cascade, List<String> subtaskIds,
+			User user) {
+		// An undo may carry only sub-tasks, when their parents had been archived
+		// already; with neither there is nothing to do.
+		if ((ids == null || ids.isEmpty()) && (subtaskIds == null || subtaskIds.isEmpty())) {
+			throw ApiException.badRequest("error.issue.bulkNothingToChange");
+		}
 		Bulk bulk = resolveBulk(ids, user);
 		List<String> named = bulk.issues().stream().map(Issue::getId).toList();
-		List<String> toggled = new ArrayList<>(bulk.issues().stream()
-				.filter(issue -> issue.isArchived() != archived).map(Issue::getId).toList());
-		if (cascade) {
-			List<String> parents = bulk.issues().stream()
-					.filter(issue -> issue.getType().isStandard()).map(Issue::getId).toList();
-			if (!parents.isEmpty()) {
-				Query children = Query.query(Criteria.where("parentId").in(parents).and("archived").ne(archived));
-				children.fields().include("_id");
-				for (org.bson.Document child : mongo.find(children, org.bson.Document.class,
-						mongo.getCollectionName(Issue.class))) {
-					String id = String.valueOf(child.get("_id"));
-					if (!toggled.contains(id)) toggled.add(id);
+		List<String> toggled = bulk.issues().stream()
+				.filter(issue -> issue.isArchived() != archived).map(Issue::getId).toList();
+		List<String> children = new ArrayList<>();
+		List<String> parents = bulk.issues().stream()
+				.filter(issue -> issue.getType().isStandard()).map(Issue::getId).toList();
+		List<String> undoChildren = subtaskIds == null ? List.of()
+				: subtaskIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+		if (undoChildren.size() > MAX_BULK_SUBTASKS) {
+			throw ApiException.badRequest("error.issue.bulkTooMany", MAX_BULK_SUBTASKS);
+		}
+		if (!undoChildren.isEmpty()) {
+			Query listed = Query.query(Criteria.where("_id").in(objectIds(undoChildren)));
+			listed.fields().include("_id").include("projectId").include("type").include("archived");
+			List<org.bson.Document> found = mongo.find(listed, org.bson.Document.class,
+					mongo.getCollectionName(Issue.class));
+			// Each one a sub-task in a project the caller can open, checked per project;
+			// anything else answers like an id that does not exist.
+			if (found.size() != undoChildren.size()
+					|| !found.stream().allMatch(child -> "SUBTASK".equals(child.getString("type")))) {
+				throw ApiException.notFound("issue");
+			}
+			for (String projectId : found.stream().map(child -> child.getString("projectId")).distinct().toList()) {
+				Project project = bulk.projects().containsKey(projectId) ? bulk.projects().get(projectId)
+						: projects.get(projectId);
+				if (!projects.canSee(project, user)) {
+					throw ApiException.notFound("issue");
 				}
 			}
+			found.stream().filter(child -> !Boolean.valueOf(archived).equals(child.getBoolean("archived")))
+					.forEach(child -> children.add(String.valueOf(child.get("_id"))));
 		}
-		if (toggled.isEmpty()) {
-			return new BulkArchive(bulk.issues(), List.of());
+		else if (cascade && !parents.isEmpty()) {
+			Query listed = Query.query(Criteria.where("parentId").in(parents).and("archived").ne(archived));
+			listed.fields().include("_id");
+			for (org.bson.Document child : mongo.find(listed, org.bson.Document.class,
+					mongo.getCollectionName(Issue.class))) {
+				children.add(String.valueOf(child.get("_id")));
+			}
+		}
+		List<String> all = new ArrayList<>(toggled);
+		children.stream().filter(id -> !all.contains(id)).forEach(all::add);
+		if (all.isEmpty()) {
+			return new BulkArchive(bulk.issues(), List.of(), List.of());
 		}
 		Update write = archived ? new Update().set("archived", true).set("archivedAt", Instant.now())
 				: new Update().set("archived", false).unset("archivedAt");
-		mongo.updateMulti(Query.query(Criteria.where("_id").in(toggled)), write, Issue.class);
+		mongo.updateMulti(Query.query(Criteria.where("_id").in(objectIds(all))), write, Issue.class);
 		List<Issue> now = issues.findAllById(named);
-		Set<String> switched = new HashSet<>(toggled);
+		Set<String> switched = new HashSet<>(all);
 		List<Issue> changed = now.stream().filter(issue -> switched.contains(issue.getId())).toList();
 		for (Issue issue : changed) {
 			audit.event(archived ? AuditAction.ISSUE_ARCHIVED : AuditAction.ISSUE_UNARCHIVED)
 					.actor(user).meta("issue", issue.getReadableId()).log();
 		}
 		try {
-			if (!changed.isEmpty()) notifications.notifyIssuesChanged(changed, user, Set.of());
+			if (!changed.isEmpty()) notifications.notifyIssuesChanged(changed, user, java.util.Map.of());
 		}
 		catch (RuntimeException ex) {
 			LOGGER.warn("bulk archive notification failed (changes kept)", ex);
 		}
-		return new BulkArchive(now, toggled);
+		return new BulkArchive(now, toggled, children.stream().filter(id -> !toggled.contains(id)).toList());
+	}
+
+	/** Ids as stored, for a query that skips the mapping from hex strings to ObjectIds. */
+	private static List<Object> objectIds(java.util.Collection<String> ids) {
+		return ids.stream()
+				.map(id -> org.bson.types.ObjectId.isValid(id) ? (Object) new org.bson.types.ObjectId(id) : id)
+				.toList();
 	}
 
 	/** True when {@code user} may see the issue (a member of its project); never throws. */
@@ -330,7 +383,16 @@ public class IssueService {
 		SUPPRESS
 	}
 
+	/**
+	 * Creates an issue somebody wrote: an assignee who cannot open the project is
+	 * refused, so the person creating it hears about it rather than finding the
+	 * issue unassigned. Copies, which may carry people the project lacks, use
+	 * {@link #create(Issue, User, Mentions)}, which leaves them out quietly.
+	 */
 	public Issue create(Issue issue, User author) {
+		if (author != null && issue.getAssigneeIds() != null && !issue.getAssigneeIds().isEmpty()) {
+			assertAssignable(projects.get(issue.getProjectId()), issue.getAssigneeIds());
+		}
 		return create(issue, author, Mentions.NOTIFY);
 	}
 

@@ -250,6 +250,11 @@ public class IssueMoveService {
 			issue.setSprintId(null);
 		}
 
+		// Nobody keeps an issue in a project they cannot open; the preflight warned.
+		if (!issue.getAssigneeIds().isEmpty()) {
+			Set<String> reachable = projects.whoCanSee(target, issue.getAssigneeIds());
+			issue.setAssigneeIds(issue.getAssigneeIds().stream().filter(reachable::contains).toList());
+		}
 		issue.setProjectId(target.getId());
 		issue.setState(nextState);
 		boolean resolved = target.getResolvedStates() != null
@@ -404,7 +409,11 @@ public class IssueMoveService {
 
 	private void collectWarnings(List<Issue> ordered, Set<String> movingIds, Project target,
 			List<MoveWarning> warnings) {
-		List<String> members = target.getMemberIds() != null ? target.getMemberIds() : List.of();
+		// The same rule the move applies: whoever cannot open the target, as a member
+		// or through a team, is taken off the issue there.
+		Set<String> assignees = new LinkedHashSet<>();
+		ordered.forEach(issue -> assignees.addAll(issue.getAssigneeIds()));
+		Set<String> reachable = projects.whoCanSee(target, assignees);
 		Set<String> flaggedAssignees = new LinkedHashSet<>();
 		for (Issue issue : ordered) {
 			if (issue.getParentId() != null && !movingIds.contains(issue.getParentId())) {
@@ -417,7 +426,7 @@ public class IssueMoveService {
 						sprintName(issue.getSprintId())));
 			}
 			for (String assignee : issue.getAssigneeIds()) {
-				if (!members.contains(assignee) && flaggedAssignees.add(assignee)) {
+				if (!reachable.contains(assignee) && flaggedAssignees.add(assignee)) {
 					warnings.add(new MoveWarning(WarningCode.ASSIGNEE_NOT_MEMBER,
 							issue.getReadableId(), assignee));
 				}
