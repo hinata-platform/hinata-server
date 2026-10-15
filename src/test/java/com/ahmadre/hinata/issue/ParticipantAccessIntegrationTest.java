@@ -619,6 +619,19 @@ class ParticipantAccessIntegrationTest {
 		assertThat(audits(com.ahmadre.hinata.audit.AuditAction.ISSUE_PARTICIPANT_ADDED)).isZero();
 	}
 
+	@Test
+	void assigningSomebodyWithoutAccessNamesThemForTheShareOffer() {
+		assertThatThrownBy(() -> issues.update(issue.getId(),
+				i -> i.setAssigneeIds(new ArrayList<>(List.of(outsider.getId()))), member))
+				.isInstanceOf(ApiException.class)
+				.satisfies(ex -> {
+					ApiException api = (ApiException) ex;
+					assertThat(api.getMessageKey()).isEqualTo("error.issue.assigneeNoAccess");
+					assertThat(api.getDetails()).containsEntry("reason", "assigneeNoAccess")
+							.containsEntry("userIds", outsider.getId());
+				});
+	}
+
 	// --- bulk routes --------------------------------------------------------
 
 	@Test

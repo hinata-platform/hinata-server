@@ -245,8 +245,14 @@ public class IssueService {
 	 * read.
 	 */
 	private void assertAssignable(Project project, java.util.Collection<String> userIds) {
-		if (assignable(project, userIds).size() != new HashSet<>(userIds).size()) {
-			throw ApiException.badRequest("error.issue.assigneeNoAccess");
+		Set<String> allowed = assignable(project, userIds);
+		Set<String> refused = new java.util.TreeSet<>(userIds.stream().filter(java.util.Objects::nonNull).toList());
+		refused.removeAll(allowed);
+		if (!refused.isEmpty()) {
+			// Named, so the app can offer to share the issue with them instead (HIN-136). The ids
+			// are the caller's own picks; nothing about the project is revealed by echoing them.
+			throw new ApiException(org.springframework.http.HttpStatus.BAD_REQUEST, "error.issue.assigneeNoAccess",
+					Map.of("reason", "assigneeNoAccess", "userIds", String.join(",", refused)));
 		}
 	}
 
