@@ -54,6 +54,10 @@ import java.util.List;
 // narrowed to one person's watch list, which is a small set by construction.
 @CompoundIndex(name = "watchers_updated",
 		def = "{'watcherIds': 1, 'archived': 1, 'updatedAt': -1, '_id': -1}")
+// "Issues I take part in" — the mirror of watchers_updated for participantIds, so the issue
+// list and the watched page can add "or participantIds = me" without a collection scan.
+@CompoundIndex(name = "participants_updated",
+		def = "{'participantIds': 1, 'archived': 1, 'updatedAt': -1, '_id': -1}")
 // The board reads (board/BoardReader), each off the index that bounds it to the fewest cards
 // (board/BoardCriteria#index). Every one starts with equality on projectId and archived.
 //
@@ -250,6 +254,15 @@ public class Issue {
 	 */
 	@Builder.Default
 	private List<String> watcherIds = new ArrayList<>();
+
+	/**
+	 * People outside the project this one issue is shared with: they read and comment on it
+	 * and see nothing else of the project ({@link IssueReach}). Written only by
+	 * {@code IssueParticipantService} with {@code $addToSet}/{@code $pull}, capped there. An
+	 * entry for somebody who later joins the project stays and is simply without effect.
+	 */
+	@Builder.Default
+	private List<String> participantIds = new ArrayList<>();
 
 	/** Parent epic / parent task for subtasks. */
 	private String parentId;
