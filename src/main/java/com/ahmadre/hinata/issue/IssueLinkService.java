@@ -85,12 +85,15 @@ public class IssueLinkService {
 			List<String> targetIds, User user) {
 		if (type == null) throw ApiException.badRequest("error.issueLink.typeRequired");
 		Issue issue = issues.getForUser(idOrReadableId, user);
+		issues.assertCanEdit(issue, user);
 		List<String> targets = targetIds == null ? List.of() : targetIds;
 		boolean wrote = false;
 		try {
 			for (String ref : targets) {
 				if (ref == null || ref.isBlank()) continue;
 				Issue other = issues.getForUser(ref.trim(), user); // 403/404 if not accessible
+				// The link shows on both issues, so both have to be the caller's to change.
+				issues.assertCanEdit(other, user);
 				if (Objects.equals(other.getId(), issue.getId())) {
 					throw ApiException.badRequest("error.issueLink.self");
 				}
@@ -139,6 +142,7 @@ public class IssueLinkService {
 	/** Removes one link; the caller must be able to see one of its endpoints. */
 	public List<LinkView> deleteLink(String idOrReadableId, String linkId, User user) {
 		Issue issue = issues.getForUser(idOrReadableId, user);
+		issues.assertCanEdit(issue, user);
 		IssueLink link = links.findById(linkId)
 				.orElseThrow(() -> ApiException.notFound("issueLink"));
 		if (!issue.getId().equals(link.getSourceId()) && !issue.getId().equals(link.getTargetId())) {

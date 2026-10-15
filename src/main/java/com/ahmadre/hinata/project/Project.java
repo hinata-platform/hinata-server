@@ -185,6 +185,28 @@ public class Project {
 	@LastModifiedDate
 	private Instant updatedAt;
 
+	/**
+	 * What somebody an issue of this project is shared with may know of the project: enough to
+	 * render the issue (name, key, colour, states, labels), none of its people, repositories or
+	 * settings. Empty lists rather than nulls, so a client that iterates them keeps working.
+	 */
+	public Project publicView() {
+		return Project.builder()
+				.id(id)
+				.key(key)
+				.name(name)
+				.color(color)
+				.avatarUrl(avatarUrl)
+				.archived(archived)
+				.workflowStates(workflowStates == null ? new ArrayList<>() : new ArrayList<>(workflowStates))
+				.resolvedStates(resolvedStates == null ? new ArrayList<>() : new ArrayList<>(resolvedStates))
+				.labels(labels == null ? new ArrayList<>() : new ArrayList<>(labels))
+				.leadIds(new ArrayList<>())
+				.memberIds(new ArrayList<>())
+				.extraRepos(new ArrayList<>())
+				.build();
+	}
+
 	/** Ordered workflow state names — what issues/boards key off of. */
 	public List<String> workflowStateNames() {
 		List<String> names = new ArrayList<>();

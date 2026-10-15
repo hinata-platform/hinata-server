@@ -264,6 +264,20 @@ public class Issue {
 	@Builder.Default
 	private List<String> participantIds = new ArrayList<>();
 
+	/**
+	 * Who added each participant and when, for the share dialog and the audit trail. Kept beside
+	 * {@link #participantIds} rather than in place of it, so the index and every
+	 * {@code participantIds = me} query stay on a plain list of ids. Not part of the issue's JSON:
+	 * {@code GET /issues/{id}/participants} is where it is read.
+	 */
+	@JsonIgnore
+	@Builder.Default
+	private List<ParticipantMeta> participantMeta = new ArrayList<>();
+
+	/** One participant's entry in {@link #participantMeta}. */
+	public record ParticipantMeta(String userId, Instant addedAt, String addedById) {
+	}
+
 	/** Parent epic / parent task for subtasks. */
 	private String parentId;
 

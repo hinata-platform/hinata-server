@@ -4,6 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -299,14 +300,27 @@ public class AttachmentController {
 	@DeleteMapping("/{attachmentId}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String issueId, @PathVariable String attachmentId) {
-		Issue issue = issueService.getForUser(issueId, currentUser.require());
+		User user = currentUser.require();
+		Issue issue = issueService.getForUser(issueId, user);
 		Issue.Attachment attachment = issue.getAttachments().stream()
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
 				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
+		if (!mayRemove(issue, attachment, user)) {
+			throw ApiException.forbidden("error.issue.participantReadOnly");
+		}
 		Issue saved = store.remove(issue.getId(), attachmentId);
 		deleteObjects(attachment);
 		events.publishRemoved(saved.getId(), attachmentId);
+	}
+
+	/**
+	 * Members remove any attachment; somebody the issue is only shared with removes what they
+	 * uploaded themselves and nothing else.
+	 */
+	private boolean mayRemove(Issue issue, Issue.Attachment attachment, User user) {
+		String uploader = attachment.getUploaderId();
+		return (uploader != null && uploader.equals(user.getId())) || !issueService.isParticipantOnly(issue, user);
 	}
 
 	/** Drops an attachment's stored bytes and its derived thumbnail. */
@@ -329,12 +343,15 @@ public class AttachmentController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void deleteAll(@PathVariable String issueId,
 			@RequestParam(name = "ids", required = false) List<String> ids) {
-		Issue issue = issueService.getForUser(issueId, currentUser.require());
+		User user = currentUser.require();
+		Issue issue = issueService.getForUser(issueId, user);
 		List<Issue.Attachment> present = issue.getAttachments() == null
 				? List.of() : issue.getAttachments();
-		List<Issue.Attachment> targets = ids == null || ids.isEmpty()
-				? List.copyOf(present)
-				: present.stream().filter(a -> ids.contains(a.getId())).toList();
+		List<Issue.Attachment> targets = (ids == null || ids.isEmpty()
+				? present.stream()
+				: present.stream().filter(a -> ids.contains(a.getId())))
+				.filter(a -> mayRemove(issue, a, user))
+				.toList();
 		if (targets.isEmpty()) {
 			return;
 		}

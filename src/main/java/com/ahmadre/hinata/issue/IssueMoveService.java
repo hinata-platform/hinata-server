@@ -402,7 +402,9 @@ public class IssueMoveService {
 	private Project sourceProject(Issue issue, Map<String, Project> cache, User user) {
 		return cache.computeIfAbsent(issue.getProjectId(), id -> {
 			Project project = projects.get(id);
-			projects.assertMember(project, user); // may only move out of a project one belongs to
+			// May only move out of a project one belongs to; being a participant is not
+			// belonging, and is told apart from not seeing the issue at all.
+			if (!projects.canSee(project, user)) issueService.assertCanEdit(issue, user);
 			return project;
 		});
 	}

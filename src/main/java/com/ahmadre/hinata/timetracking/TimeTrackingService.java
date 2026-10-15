@@ -206,9 +206,14 @@ public class TimeTrackingService {
 
 	// --- reads -------------------------------------------------------------
 
-	/** The issue behind an id or readable id, if {@code user} may see it (403 otherwise). */
+	/**
+	 * The issue behind an id or readable id, if {@code user} works in its project (403 otherwise).
+	 * Somebody the issue is only shared with neither logs time on it nor reads who did.
+	 */
 	public Issue resolveIssue(String issueIdOrKey, User user) {
-		return issues.getForUser(issueIdOrKey, user);
+		Issue issue = issues.getForUser(issueIdOrKey, user);
+		issues.assertCanEdit(issue, user);
+		return issue;
 	}
 
 	/** An issue's entries, newest first, capped at {@link #LIST_CAP}. */
