@@ -100,6 +100,7 @@ public class DataExportPdfService {
 		profileSection(blocks, user, locale);
 		securitySection(blocks, user, locale);
 		notificationSection(blocks, user, locale);
+		appearanceSection(blocks, user, locale);
 		sessionsSection(blocks, user, locale);
 		membershipsSection(blocks, user, locale);
 		issuesSection(blocks, user, locale);
@@ -153,6 +154,7 @@ public class DataExportPdfService {
 			rows.add(kv(t(locale, "export.pdf.pendingEmail"), user.getPendingEmail()));
 		}
 		rows.add(kv(t(locale, "export.pdf.locale"), user.getLocale()));
+		rows.add(kv(t(locale, "export.pdf.timezone"), orNone(user.getTimezone())));
 		rows.add(kv(t(locale, "export.pdf.origin"), user.getOrigin() == null ? NONE : user.getOrigin().name()));
 		rows.add(kv(t(locale, "export.pdf.roles"),
 				String.join(", ", user.getRoles().stream().map(Enum::name).sorted().toList())));
@@ -186,6 +188,22 @@ public class DataExportPdfService {
 			rows.add(List.of(id, yesNo(c != null && c.isEmail(), locale), yesNo(c != null && c.isPush(), locale)));
 		}
 		blocks.add(table(List.of(t(locale, "export.pdf.event"), "E-Mail", "Push"), rows, List.of(1f, 1f, 1f)));
+	}
+
+	/** The tint (HIN-150), in words: a hue number alone is no answer to an Art. 15 request. */
+	private void appearanceSection(List<ExportBlock> blocks, User user, Locale locale) {
+		TintPreferences stored = user.getTint();
+		TintPreferences tint = (stored == null ? TintPreferences.defaults() : stored).sanitized();
+		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.appearance")));
+		List<ExportBlock.KeyValue> rows = new ArrayList<>();
+		rows.add(kv(t(locale, "export.pdf.appearanceStyle"),
+				t(locale, "export.pdf.appearanceStyle." + tint.getStyle().name())));
+		if (tint.getStyle() == TintPreferences.TintStyle.TINTED) {
+			rows.add(kv(t(locale, "export.pdf.appearanceTint"),
+					t(locale, TintHueNames.key(tint.getHue())) + " (" + tint.getHue() + "°), "
+							+ t(locale, "export.pdf.appearanceLevel") + " " + tint.getLevel()));
+		}
+		blocks.add(new ExportBlock.KeyValues(rows));
 	}
 
 	private void sessionsSection(List<ExportBlock> blocks, User user, Locale locale) {
