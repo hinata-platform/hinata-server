@@ -3,6 +3,7 @@ package com.ahmadre.hinata.me;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TimePolicy;
+import com.ahmadre.hinata.user.ProfileChange;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -71,7 +72,7 @@ public class MeController {
 			String origin, List<String> roles, boolean active, String avatarUrl, Instant createdAt,
 			Instant passwordChangedAt, TwoFactorDto twoFactor,
 			NotificationPreferences notificationPreferences, String timezone,
-			TimePreferences timePreferences) {
+			TimePreferences timePreferences, TintPreferences tint) {
 
 		static MeResponse from(User u) {
 			NotificationPreferences prefs = u.getNotificationPreferences();
@@ -83,6 +84,10 @@ public class MeController {
 			// gets a working rhythm rather than a pomodoro of no minutes.
 			TimePreferences time = u.getTimePreferences();
 			time = (time == null ? TimePreferences.defaults() : time).sanitized();
+			// Same again for the tint (HIN-150): null before the field existed, and
+			// a style this build does not know reads as the default.
+			TintPreferences tint = u.getTint();
+			tint = (tint == null ? TintPreferences.defaults() : tint).sanitized();
 			return new MeResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
 					u.isEmailVerified(), u.getPendingEmail(), u.getTitle(), u.getPronouns(),
 					u.getLocale(), u.getOrigin().name(),
@@ -90,7 +95,7 @@ public class MeController {
 					u.getAvatarUrl(), u.getCreatedAt(), u.getPasswordChangedAt(),
 					new TwoFactorDto(u.isTotpEnabled(), "TOTP", u.recoveryCodesRemaining(),
 							u.getTotpEnabledAt()),
-					prefs, u.getTimezone(), time);
+					prefs, u.getTimezone(), time, tint);
 		}
 	}
 
@@ -117,7 +122,29 @@ public class MeController {
 			@Size(max = 120) String title, @Size(max = 120) String pronouns,
 			@Pattern(regexp = com.ahmadre.hinata.config.LocaleConfig.LANGUAGE_PATTERN) String locale,
 			@Size(max = com.ahmadre.hinata.user.UserZones.MAX_LENGTH) String timezone,
-			@Valid TimePreferencesRequest timePreferences) {
+			@Valid TimePreferencesRequest timePreferences,
+			@Valid TintRequest tint) {
+	}
+
+	/**
+	 * The tint (HIN-150), merged onto what is stored: a slider sends the one
+	 * value it moved. The bounds are stated here, so a client learns what was
+	 * wrong, and in {@link TintPreferences#sanitized()}, so a stored document
+	 * outside them still reads. An unknown style fails Jackson's enum binding
+	 * and is a 400 like any malformed body.
+	 */
+	public record TintRequest(TintPreferences.TintStyle style,
+			@Min(0) @Max(TintPreferences.MAX_HUE) Integer hue,
+			@Min(0) @Max(TintPreferences.MAX_LEVEL) Integer level) {
+
+		TintPreferences merge(TintPreferences current) {
+			TintPreferences base = (current == null ? TintPreferences.defaults() : current).sanitized();
+			TintPreferences next = new TintPreferences();
+			next.setStyle(style != null ? style : base.getStyle());
+			next.setHue(hue != null ? hue : base.getHue());
+			next.setLevel(level != null ? level : base.getLevel());
+			return next.sanitized();
+		}
 	}
 
 	/**
@@ -204,9 +231,12 @@ public class MeController {
 	public MeResponse updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
 		User user = currentUser.require();
 		TimePreferencesRequest time = request.timePreferences();
-		User saved = me.updateProfile(user, request.displayName(), request.title(),
-				request.pronouns(), request.locale(), request.timezone(),
-				time == null ? null : time.merge(user.getTimePreferences()));
+		TintRequest tint = request.tint();
+		User saved = me.updateProfile(user, ProfileChange.of()
+				.displayName(request.displayName()).title(request.title())
+				.pronouns(request.pronouns()).locale(request.locale()).timezone(request.timezone())
+				.timePreferences(time == null ? null : time.merge(user.getTimePreferences()))
+				.tint(tint == null ? null : tint.merge(user.getTint())));
 		return withDefaultDays(MeResponse.from(saved), saved);
 	}
 

@@ -71,10 +71,8 @@ public class MeService {
 	 * Patching a profile lives in {@code user}, where the user does — this is
 	 * the account-self-service door to it.
 	 */
-	public User updateProfile(User user, String displayName, String title, String pronouns,
-			String locale, String timezone, TimePreferences timePreferences) {
-		return userService.updateProfile(user, displayName, title, pronouns, locale, timezone,
-				timePreferences);
+	public User updateProfile(User user, com.ahmadre.hinata.user.ProfileChange change) {
+		return userService.updateProfile(user, change);
 	}
 
 	/**

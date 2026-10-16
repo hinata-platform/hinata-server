@@ -124,8 +124,9 @@ public class UserController {
 	 */
 	@PatchMapping("/api/v1/users/me")
 	public User updateProfile(@RequestBody @Valid UpdateProfileRequest request) {
-		return userService.updateProfile(currentUser.require(), request.displayName(),
-				request.title(), request.pronouns(), request.locale(), request.timezone(), null);
+		return userService.updateProfile(currentUser.require(), ProfileChange.of()
+				.displayName(request.displayName()).title(request.title())
+				.pronouns(request.pronouns()).locale(request.locale()).timezone(request.timezone()));
 	}
 
 	// Admin user management lives in com.ahmadre.hinata.admin.AdminUserController.
