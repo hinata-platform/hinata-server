@@ -86,8 +86,7 @@ public class MeController {
 			time = (time == null ? TimePreferences.defaults() : time).sanitized();
 			// Same again for the tint (HIN-150): null before the field existed, and
 			// a style this build does not know reads as the default.
-			TintPreferences tint = u.getTint();
-			tint = (tint == null ? TintPreferences.defaults() : tint).sanitized();
+			TintPreferences tint = TintPreferences.resolve(u.getTint());
 			return new MeResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
 					u.isEmailVerified(), u.getPendingEmail(), u.getTitle(), u.getPronouns(),
 					u.getLocale(), u.getOrigin().name(),
@@ -138,7 +137,7 @@ public class MeController {
 			@Min(0) @Max(TintPreferences.MAX_LEVEL) Integer level) {
 
 		TintPreferences merge(TintPreferences current) {
-			TintPreferences base = (current == null ? TintPreferences.defaults() : current).sanitized();
+			TintPreferences base = TintPreferences.resolve(current);
 			TintPreferences next = new TintPreferences();
 			next.setStyle(style != null ? style : base.getStyle());
 			next.setHue(hue != null ? hue : base.getHue());

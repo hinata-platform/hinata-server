@@ -2,11 +2,11 @@ package com.ahmadre.hinata.user;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.me.TimePreferences;
+import com.ahmadre.hinata.me.TintPreferences;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import com.ahmadre.hinata.me.TintPreferences;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -42,25 +42,44 @@ public class UserService {
 	 */
 	public User updateProfile(User user, ProfileChange change) {
 		String zone = change.timezone() == null ? null : UserZones.normalize(change.timezone());
-		if (change.displayName() != null) user.setDisplayName(change.displayName().trim());
-		if (change.title() != null) user.setTitle(change.title().trim());
-		if (change.pronouns() != null) user.setPronouns(Pronouns.sanitize(change.pronouns()));
-		if (change.locale() != null) user.setLocale(change.locale());
-		if (change.timezone() != null) user.setTimezone(zone);
-		if (change.timePreferences() != null) user.setTimePreferences(change.timePreferences());
-		if (change.touchesProfile()) {
-			user = users.save(user);
+		// Targeted $sets, not a save of the whole document: a slider writes the
+		// tint often, the app writes the time zone and the locale on every start,
+		// and a full save would carry whatever this request loaded a moment ago
+		// over whichever of them landed in between.
+		Update update = new Update();
+		if (change.displayName() != null) {
+			user.setDisplayName(change.displayName().trim());
+			update.set("displayName", user.getDisplayName());
+		}
+		if (change.title() != null) {
+			user.setTitle(change.title().trim());
+			update.set("title", user.getTitle());
+		}
+		if (change.pronouns() != null) {
+			user.setPronouns(Pronouns.sanitize(change.pronouns()));
+			update.set("pronouns", user.getPronouns());
+		}
+		if (change.locale() != null) {
+			user.setLocale(change.locale());
+			update.set("locale", user.getLocale());
+		}
+		if (change.timezone() != null) {
+			user.setTimezone(zone);
+			update.set("timezone", zone);
+		}
+		if (change.timePreferences() != null) {
+			user.setTimePreferences(change.timePreferences());
+			update.set("timePreferences", user.getTimePreferences());
 		}
 		if (change.tint() != null) {
-			// A targeted $set, not a save of the whole document: a slider writes
-			// this often, and a full save would carry whatever this request loaded
-			// a moment ago over a time zone, a locale or an administrator's change
-			// that landed in between.
 			TintPreferences tint = change.tint().sanitized();
-			mongo.updateFirst(Query.query(Criteria.where("_id").is(user.getId())),
-					new Update().set("tint", tint), User.class);
 			user.setTint(tint);
+			update.set("tint", tint);
 		}
+		if (update.getUpdateObject().isEmpty()) {
+			return user;
+		}
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(user.getId())), update, User.class);
 		return user;
 	}
 

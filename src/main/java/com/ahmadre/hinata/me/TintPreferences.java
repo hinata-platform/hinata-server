@@ -54,6 +54,11 @@ public class TintPreferences {
 		return new TintPreferences();
 	}
 
+	/** What a stored value reads as: the defaults for a document without one, sanitized otherwise. */
+	public static TintPreferences resolve(TintPreferences stored) {
+		return (stored == null ? defaults() : stored).sanitized();
+	}
+
 	@JsonGetter("style")
 	public TintStyle getStyle() {
 		if (style == null) {

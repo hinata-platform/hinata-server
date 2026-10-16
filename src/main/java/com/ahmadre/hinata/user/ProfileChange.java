@@ -45,10 +45,4 @@ public record ProfileChange(String displayName, String title, String pronouns, S
 	public ProfileChange tint(TintPreferences value) {
 		return new ProfileChange(displayName, title, pronouns, locale, timezone, timePreferences, value);
 	}
-
-	/** Whether anything but the tint is asked for; the tint has a write path of its own. */
-	boolean touchesProfile() {
-		return displayName != null || title != null || pronouns != null || locale != null
-				|| timezone != null || timePreferences != null;
-	}
 }
