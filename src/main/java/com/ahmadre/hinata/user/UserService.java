@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import com.ahmadre.hinata.me.TintPreferences;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -33,22 +34,34 @@ public class UserService {
 	 * self-service lives, because {@code me} already depends on this package and
 	 * the reverse arrow would make neither readable on its own.
 	 *
-	 * <p>Every field absent from the request is left alone. The zone is
+	 * <p>Every field absent from the change is left alone. The zone is
 	 * normalized before anything is written: it is the only value that can be
 	 * refused, and refusing it after four other fields had already been set on
 	 * the caller's live user would leave that object half-changed for the rest
 	 * of the request.
 	 */
-	public User updateProfile(User user, String displayName, String title, String pronouns,
-			String locale, String timezone, TimePreferences timePreferences) {
-		String zone = timezone == null ? null : UserZones.normalize(timezone);
-		if (displayName != null) user.setDisplayName(displayName.trim());
-		if (title != null) user.setTitle(title.trim());
-		if (pronouns != null) user.setPronouns(Pronouns.sanitize(pronouns));
-		if (locale != null) user.setLocale(locale);
-		if (timezone != null) user.setTimezone(zone);
-		if (timePreferences != null) user.setTimePreferences(timePreferences);
-		return users.save(user);
+	public User updateProfile(User user, ProfileChange change) {
+		String zone = change.timezone() == null ? null : UserZones.normalize(change.timezone());
+		if (change.displayName() != null) user.setDisplayName(change.displayName().trim());
+		if (change.title() != null) user.setTitle(change.title().trim());
+		if (change.pronouns() != null) user.setPronouns(Pronouns.sanitize(change.pronouns()));
+		if (change.locale() != null) user.setLocale(change.locale());
+		if (change.timezone() != null) user.setTimezone(zone);
+		if (change.timePreferences() != null) user.setTimePreferences(change.timePreferences());
+		if (change.touchesProfile()) {
+			user = users.save(user);
+		}
+		if (change.tint() != null) {
+			// A targeted $set, not a save of the whole document: a slider writes
+			// this often, and a full save would carry whatever this request loaded
+			// a moment ago over a time zone, a locale or an administrator's change
+			// that landed in between.
+			TintPreferences tint = change.tint().sanitized();
+			mongo.updateFirst(Query.query(Criteria.where("_id").is(user.getId())),
+					new Update().set("tint", tint), User.class);
+			user.setTint(tint);
+		}
+		return user;
 	}
 
 	/**

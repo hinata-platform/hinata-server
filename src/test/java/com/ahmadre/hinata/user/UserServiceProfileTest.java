@@ -31,14 +31,16 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 class UserServiceProfileTest {
 
 	private UserRepository users;
+	private MongoTemplate mongo;
 	private UserService userService;
 
 	@BeforeEach
 	void setUp() {
 		users = mock(UserRepository.class);
 		when(users.save(any())).thenAnswer(inv -> inv.getArgument(0));
+		mongo = mock(MongoTemplate.class);
 		userService = new UserService(users, mock(PasswordEncoder.class),
-				mock(MongoTemplate.class),
+				mongo,
 				mock(org.springframework.context.ApplicationEventPublisher.class),
 				mock(AuditService.class),
 				mock(NotificationService.class), mock(SecurityPolicy.class),
@@ -49,7 +51,7 @@ class UserServiceProfileTest {
 	void updateProfile_trimsAndSavesPronouns() {
 		User user = User.builder().id("u-1").build();
 
-		User saved = userService.updateProfile(user, null, null, "  she/her  ", null, null, null);
+		User saved = userService.updateProfile(user, ProfileChange.of().pronouns("  she/her  "));
 
 		assertThat(saved.getPronouns()).isEqualTo("she/her");
 	}
@@ -58,7 +60,7 @@ class UserServiceProfileTest {
 	void updateProfile_storesAKnownTimezone() {
 		User user = User.builder().id("u-1").build();
 
-		User saved = userService.updateProfile(user, null, null, null, null, " Europe/Berlin ", null);
+		User saved = userService.updateProfile(user, ProfileChange.of().timezone(" Europe/Berlin "));
 
 		assertThat(saved.getTimezone()).isEqualTo("Europe/Berlin");
 	}
@@ -67,7 +69,7 @@ class UserServiceProfileTest {
 	void updateProfile_rejectsAnUnknownTimezoneBeforeSavingAnything() {
 		User user = User.builder().id("u-1").timezone("Europe/Berlin").build();
 
-		assertThatThrownBy(() -> userService.updateProfile(user, "New Name", null, null, null, "Mars/Olympus", null))
+		assertThatThrownBy(() -> userService.updateProfile(user, ProfileChange.of().displayName("New Name").timezone("Mars/Olympus")))
 				.isInstanceOf(ApiException.class)
 				.satisfies(thrown -> {
 					assertThat(((ApiException) thrown).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -81,17 +83,50 @@ class UserServiceProfileTest {
 	void updateProfile_blankClearsTheTimezoneAndAbsentKeepsIt() {
 		User user = User.builder().id("u-1").timezone("Europe/Berlin").build();
 
-		assertThat(userService.updateProfile(user, null, null, null, null, null, null).getTimezone())
+		assertThat(userService.updateProfile(user, ProfileChange.of()).getTimezone())
 				.isEqualTo("Europe/Berlin");
-		assertThat(userService.updateProfile(user, null, null, null, null, "  ", null).getTimezone()).isNull();
+		assertThat(userService.updateProfile(user, ProfileChange.of().timezone("  ")).getTimezone()).isNull();
 	}
 
 	@Test
 	void updateProfile_leavesPronounsUntouchedWhenOmitted() {
 		User user = User.builder().id("u-1").pronouns("they/them").build();
 
-		User saved = userService.updateProfile(user, "New Name", null, null, null, null, null);
+		User saved = userService.updateProfile(user, ProfileChange.of().displayName("New Name"));
 
 		assertThat(saved.getPronouns()).isEqualTo("they/them");
+	}
+
+	@Test
+	void updateProfile_tintOnlyPatchNeverSavesTheWholeDocument() {
+		User user = User.builder().id("u-1").displayName("Old").build();
+		com.ahmadre.hinata.me.TintPreferences tint = new com.ahmadre.hinata.me.TintPreferences();
+		tint.setStyle(com.ahmadre.hinata.me.TintPreferences.TintStyle.TINTED);
+		tint.setHue(120);
+		tint.setLevel(40);
+
+		User saved = userService.updateProfile(user, ProfileChange.of().tint(tint));
+
+		verify(users, never()).save(any());
+		org.mockito.ArgumentCaptor<org.springframework.data.mongodb.core.query.Update> update =
+				org.mockito.ArgumentCaptor.forClass(org.springframework.data.mongodb.core.query.Update.class);
+		verify(mongo).updateFirst(any(org.springframework.data.mongodb.core.query.Query.class),
+				update.capture(), org.mockito.ArgumentMatchers.eq(User.class));
+		assertThat(update.getValue().getUpdateObject().get("$set", org.bson.Document.class).keySet())
+				.containsExactly("tint");
+		assertThat(saved.getTint().getHue()).isEqualTo(120);
+		assertThat(saved.getTint().getLevel()).isEqualTo(40);
+	}
+
+	@Test
+	void updateProfile_profileFieldsStillSaveWithoutTouchingTint() {
+		User user = User.builder().id("u-1").build();
+
+		userService.updateProfile(user, ProfileChange.of().displayName("New Name"));
+
+		verify(users).save(any());
+		verify(mongo, never()).updateFirst(any(org.springframework.data.mongodb.core.query.Query.class),
+				any(org.springframework.data.mongodb.core.query.Update.class),
+				org.mockito.ArgumentMatchers.eq(User.class));
 	}
 }
