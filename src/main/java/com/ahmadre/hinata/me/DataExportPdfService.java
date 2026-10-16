@@ -192,8 +192,7 @@ public class DataExportPdfService {
 
 	/** The tint (HIN-150), in words: a hue number alone is no answer to an Art. 15 request. */
 	private void appearanceSection(List<ExportBlock> blocks, User user, Locale locale) {
-		TintPreferences stored = user.getTint();
-		TintPreferences tint = (stored == null ? TintPreferences.defaults() : stored).sanitized();
+		TintPreferences tint = TintPreferences.resolve(user.getTint());
 		blocks.add(new ExportBlock.Section(t(locale, "export.pdf.appearance")));
 		List<ExportBlock.KeyValue> rows = new ArrayList<>();
 		rows.add(kv(t(locale, "export.pdf.appearanceStyle"),

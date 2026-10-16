@@ -2,10 +2,12 @@ package com.ahmadre.hinata.me;
 
 /**
  * The message key naming a tint hue in words, for the Art. 15 report: a reader
- * is owed "Honey (79°)", not a number alone (Art. 12 Abs. 1 DSGVO). Same
- * families and anchors as the app's {@code hueLabel}, so the report and the
- * settings screen agree on what to call a colour; the circle is cut into bands,
- * one per family, so every degree has a name.
+ * is owed "Honey (79°)", not a number alone (Art. 12 Abs. 1 DSGVO). The circle
+ * is cut into bands, one per family, so every degree has a name — the same
+ * bands as the app's {@code hueFamilyKey}, so the report and the settings screen
+ * agree on what to call a colour. {@code TintHueNamesTest} and the app's
+ * {@code hue_labels_test.dart} assert one shared table of band ends, so the
+ * two copies cannot drift.
  */
 public final class TintHueNames {
 

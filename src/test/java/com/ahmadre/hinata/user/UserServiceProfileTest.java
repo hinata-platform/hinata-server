@@ -3,6 +3,7 @@ package com.ahmadre.hinata.user;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,12 +13,19 @@ import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.UserWordsFixture;
+import com.ahmadre.hinata.me.TintPreferences;
 import com.ahmadre.hinata.notification.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.bson.Document;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
+
+import java.util.Set;
 
 /**
  * Patching a profile: the one implementation behind both {@code /api/v1/me} and
@@ -76,6 +84,7 @@ class UserServiceProfileTest {
 					assertThat(((ApiException) thrown).getMessageKey()).isEqualTo("error.user.invalidTimezone");
 				});
 		verify(users, never()).save(any());
+		verify(mongo, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
 		assertThat(user.getTimezone()).isEqualTo("Europe/Berlin");
 	}
 
@@ -98,35 +107,47 @@ class UserServiceProfileTest {
 	}
 
 	@Test
-	void updateProfile_tintOnlyPatchNeverSavesTheWholeDocument() {
+	void updateProfile_tintOnlyPatchSetsOnlyTheTint() {
 		User user = User.builder().id("u-1").displayName("Old").build();
-		com.ahmadre.hinata.me.TintPreferences tint = new com.ahmadre.hinata.me.TintPreferences();
-		tint.setStyle(com.ahmadre.hinata.me.TintPreferences.TintStyle.TINTED);
+		TintPreferences tint = new TintPreferences();
+		tint.setStyle(TintPreferences.TintStyle.TINTED);
 		tint.setHue(120);
 		tint.setLevel(40);
 
 		User saved = userService.updateProfile(user, ProfileChange.of().tint(tint));
 
 		verify(users, never()).save(any());
-		org.mockito.ArgumentCaptor<org.springframework.data.mongodb.core.query.Update> update =
-				org.mockito.ArgumentCaptor.forClass(org.springframework.data.mongodb.core.query.Update.class);
-		verify(mongo).updateFirst(any(org.springframework.data.mongodb.core.query.Query.class),
-				update.capture(), org.mockito.ArgumentMatchers.eq(User.class));
-		assertThat(update.getValue().getUpdateObject().get("$set", org.bson.Document.class).keySet())
-				.containsExactly("tint");
+		assertThat(setKeys()).containsExactly("tint");
 		assertThat(saved.getTint().getHue()).isEqualTo(120);
 		assertThat(saved.getTint().getLevel()).isEqualTo(40);
 	}
 
 	@Test
-	void updateProfile_profileFieldsStillSaveWithoutTouchingTint() {
+	void updateProfile_profileFieldsAreTargetedSetsThatLeaveTheTintAlone() {
 		User user = User.builder().id("u-1").build();
 
-		userService.updateProfile(user, ProfileChange.of().displayName("New Name"));
+		User saved = userService.updateProfile(user,
+				ProfileChange.of().displayName("  New Name ").timezone("Europe/Berlin"));
 
-		verify(users).save(any());
-		verify(mongo, never()).updateFirst(any(org.springframework.data.mongodb.core.query.Query.class),
-				any(org.springframework.data.mongodb.core.query.Update.class),
-				org.mockito.ArgumentMatchers.eq(User.class));
+		verify(users, never()).save(any());
+		assertThat(setKeys()).containsExactlyInAnyOrder("displayName", "timezone");
+		assertThat(saved.getDisplayName()).isEqualTo("New Name");
+	}
+
+	@Test
+	void updateProfile_withNothingToChangeWritesNothing() {
+		User user = User.builder().id("u-1").build();
+
+		userService.updateProfile(user, ProfileChange.of());
+
+		verify(users, never()).save(any());
+		verify(mongo, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+	}
+
+	/** The keys of the one {@code $set} the service sent. */
+	private Set<String> setKeys() {
+		ArgumentCaptor<Update> update = ArgumentCaptor.forClass(Update.class);
+		verify(mongo).updateFirst(any(Query.class), update.capture(), eq(User.class));
+		return update.getValue().getUpdateObject().get("$set", Document.class).keySet();
 	}
 }

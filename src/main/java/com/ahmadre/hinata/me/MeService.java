@@ -9,6 +9,7 @@ import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.team.TeamRepository;
 import com.ahmadre.hinata.user.Role;
+import com.ahmadre.hinata.user.ProfileChange;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
@@ -71,7 +72,7 @@ public class MeService {
 	 * Patching a profile lives in {@code user}, where the user does — this is
 	 * the account-self-service door to it.
 	 */
-	public User updateProfile(User user, com.ahmadre.hinata.user.ProfileChange change) {
+	public User updateProfile(User user, ProfileChange change) {
 		return userService.updateProfile(user, change);
 	}
 
@@ -321,8 +322,7 @@ public class MeService {
 		profile.put("createdAt", user.getCreatedAt());
 		out.put("profile", profile);
 		out.put("notificationPreferences", notificationPreferences(user));
-		TintPreferences tint = user.getTint();
-		out.put("tint", (tint == null ? TintPreferences.defaults() : tint).sanitized());
+		out.put("tint", TintPreferences.resolve(user.getTint()));
 		out.put("sessions", sessions.list(user.getId()).stream().map(s -> Map.of(
 				"kind", s.getKind().name(), "os", String.valueOf(s.getOs()),
 				"client", String.valueOf(s.getClient()), "location", String.valueOf(s.getLocation()),
