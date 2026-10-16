@@ -13,6 +13,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.me.TimePreferences;
+import com.ahmadre.hinata.me.TintPreferences;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -184,6 +185,16 @@ public class User {
 	 */
 	@Builder.Default
 	private TimePreferences timePreferences = TimePreferences.defaults();
+
+	// --- Tint (HIN-150) -------------------------------------------------------
+
+	/**
+	 * The colour this person gives the app. Null on accounts created before the
+	 * field existed; {@code MeResponse.from} resolves that to the defaults, as it
+	 * does for {@link #timePreferences}.
+	 */
+	@Builder.Default
+	private TintPreferences tint = TintPreferences.defaults();
 
 	/**
 	 * When this person first confirmed they had read the time-tracking privacy
