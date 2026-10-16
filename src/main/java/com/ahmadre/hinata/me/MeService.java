@@ -315,11 +315,14 @@ public class MeService {
 		profile.put("title", user.getTitle());
 		profile.put("pronouns", user.getPronouns());
 		profile.put("locale", user.getLocale());
+		profile.put("timezone", user.getTimezone());
 		profile.put("origin", user.getOrigin().name());
 		profile.put("roles", user.getRoles().stream().map(Enum::name).sorted().toList());
 		profile.put("createdAt", user.getCreatedAt());
 		out.put("profile", profile);
 		out.put("notificationPreferences", notificationPreferences(user));
+		TintPreferences tint = user.getTint();
+		out.put("tint", (tint == null ? TintPreferences.defaults() : tint).sanitized());
 		out.put("sessions", sessions.list(user.getId()).stream().map(s -> Map.of(
 				"kind", s.getKind().name(), "os", String.valueOf(s.getOs()),
 				"client", String.valueOf(s.getClient()), "location", String.valueOf(s.getLocation()),
