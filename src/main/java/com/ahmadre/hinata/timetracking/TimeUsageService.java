@@ -80,8 +80,7 @@ public class TimeUsageService {
 			TimeUsageCache.Sums of = sums.get(id);
 			// Modes resolved, so a client never has to know the default (HIN-153).
 			return new ProjectUsage(id, budgetOf(own), of.usedMinutes(), of.estimatedMinutes(), nearPercentOf(own),
-					own == null ? ProjectTimeSettings.LimitMode.of(null) : own.budgetMode(),
-					own == null ? ProjectTimeSettings.LimitMode.of(null) : own.estimateMode(),
+					ProjectTimeSettings.budgetModeOf(own), ProjectTimeSettings.estimateModeOf(own),
 					// Money is added per reader; see withMoney.
 					null, null, null, null);
 		}).toList();
@@ -89,16 +88,41 @@ public class TimeUsageService {
 
 	/**
 	 * Every project with a time budget, or those of [among] that have one. One read of the settings
-	 * collection, ids only; who may see them is the caller's question.
+	 * collection, ids only; who may see the projects is the caller's question.
 	 */
-	public List<String> projectsWithBudget(Collection<String> among) {
-		// A time budget or a money budget (HIN-155); who may see the money is withMoney's question.
-		Criteria criteria = new Criteria().orOperator(Criteria.where("budgetMinutes").gt(0),
-				Criteria.where("budgetCents").gt(0));
+	public List<String> projectsWithTimeBudget(Collection<String> among) {
+		Criteria criteria = Criteria.where("budgetMinutes").gt(0);
 		if (among != null && !among.isEmpty()) {
 			criteria = criteria.and("projectId").in(among);
 		}
 		return mongo.findDistinct(Query.query(criteria), "projectId", ProjectTimeSettings.class, String.class);
+	}
+
+	/**
+	 * Every project with a time budget, and with a money budget [viewer] may see (HIN-155), or
+	 * those of [among]. A project whose only budget is money [viewer] may not see is not listed: its
+	 * row would say that it has one. Who may see the projects is the caller's question.
+	 */
+	public List<String> projectsWithBudgetFor(com.ahmadre.hinata.user.User viewer, Collection<String> among) {
+		java.util.Set<String> ids = new java.util.LinkedHashSet<>(projectsWithTimeBudget(among));
+		MoneyBudgets money = moneyBudgets.getIfAvailable();
+		if (money == null || !money.enabled()) {
+			return List.copyOf(ids);
+		}
+		Criteria criteria = Criteria.where("budgetCents").gt(0).and("budgetMinutes").not().gt(0);
+		if (among != null && !among.isEmpty()) {
+			criteria = criteria.and("projectId").in(among);
+		}
+		Query query = Query.query(criteria);
+		query.fields().include("projectId", "budgetCents", "budgetRateKind");
+		List<ProjectTimeSettings> onlyMoney = mongo.find(query, ProjectTimeSettings.class);
+		boolean admin = viewer.isOrgAdmin();
+		java.util.Set<String> led = admin || onlyMoney.isEmpty() ? java.util.Set.of()
+				: ledAmong(viewer, onlyMoney.stream().map(ProjectTimeSettings::getProjectId).toList());
+		onlyMoney.stream()
+				.filter(own -> ProjectTimeSettings.moneyReadable(admin, led.contains(own.getProjectId()), own.rateKind()))
+				.forEach(own -> ids.add(own.getProjectId()));
+		return List.copyOf(ids);
 	}
 
 	/**
@@ -120,15 +144,18 @@ public class TimeUsageService {
 		}
 		boolean admin = viewer.isOrgAdmin();
 		java.util.Set<String> led = admin ? java.util.Set.of() : ledAmong(viewer, settings.keySet());
-		return rows.stream().map(row -> {
-			ProjectTimeSettings own = settings.get(row.projectId());
-			if (own == null) {
-				return row;
+		Map<String, ProjectTimeSettings.RateKind> readable = new HashMap<>();
+		settings.forEach((projectId, own) -> {
+			if (ProjectTimeSettings.moneyReadable(admin, led.contains(projectId), own.rateKind())) {
+				readable.put(projectId, own.rateKind());
 			}
-			ProjectTimeSettings.RateKind kind = own.rateKind();
-			boolean may = admin || (kind == ProjectTimeSettings.RateKind.BILLABLE && led.contains(row.projectId()));
-			return may ? row.withMoney(own.getBudgetCents(), money.usedCents(row.projectId(), kind),
-					money.currency(), kind) : row;
+		});
+		// Every readable project valued in one go.
+		Map<String, Long> used = readable.isEmpty() ? Map.of() : money.usedCents(readable);
+		return rows.stream().map(row -> {
+			ProjectTimeSettings.RateKind kind = readable.get(row.projectId());
+			return kind == null ? row : row.withMoney(settings.get(row.projectId()).getBudgetCents(),
+					used.getOrDefault(row.projectId(), 0L), money.currency(), kind);
 		}).toList();
 	}
 
@@ -150,7 +177,7 @@ public class TimeUsageService {
 				? issue.getEstimateMinutes() : null;
 		ProjectTimeSettings own = settingsOf(List.of(issue.getProjectId())).get(issue.getProjectId());
 		return new IssueUsage(issue.getId(), issue.getProjectId(), estimate, issue.getSpentMinutes(),
-				nearPercentOf(own), own == null ? ProjectTimeSettings.LimitMode.of(null) : own.estimateMode());
+				nearPercentOf(own), ProjectTimeSettings.estimateModeOf(own));
 	}
 
 	private Map<String, TimeUsageCache.Sums> load(Collection<String> projectIds) {

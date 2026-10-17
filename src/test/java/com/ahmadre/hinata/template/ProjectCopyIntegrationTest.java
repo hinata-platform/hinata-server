@@ -315,6 +315,25 @@ class ProjectCopyIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a member's copy carries no money budget the member could not see")
+	void aMembersCopyCarriesNoMoneyBudget() {
+		mongo.insert(ProjectTimeSettings.builder().id("t1").projectId(source.getId()).budgetMinutes(4800)
+				.budgetCents(500_000L).budgetRateKind(ProjectTimeSettings.RateKind.COST).build());
+
+		Project byMember = copies.copy(source.getId(), new ProjectCopyService.Options(
+				"Member copy", "MEM", EVENT, true, false, true, false, false), member).project();
+		assertThat(timeSettingsOf(byMember)).satisfies(settings -> {
+			assertThat(settings.getBudgetMinutes()).isEqualTo(4800);
+			assertThat(settings.getBudgetCents()).isNull();
+			assertThat(settings.getBudgetRateKind()).isNull();
+		});
+		// A lead sees a revenue budget, never a cost one, so the lead's copy has none either.
+		Project byLead = copies.copy(source.getId(), new ProjectCopyService.Options(
+				"Lead copy", "LED", EVENT, true, false, true, false, false), lead).project();
+		assertThat(timeSettingsOf(byLead).getBudgetCents()).isNull();
+	}
+
+	@Test
 	@DisplayName("a board shared with another project is left alone")
 	void aSharedBoardIsNotTouched() {
 		Project other = projects.save(Project.builder().key("OTHER").name("Somewhere else")

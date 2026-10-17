@@ -38,7 +38,9 @@ import java.util.List;
 // user's rows and Mongo walks the range straight off the index.
 @CompoundIndex(name = "user_date", def = "{'userId': 1, 'date': 1}")
 // Reports and the project-scoped timesheet ask the same question per project.
-@CompoundIndex(name = "project_date", def = "{'projectId': 1, 'date': 1}")
+// With the minutes, so a project's days (the budget's history and forecast, HIN-156) are summed
+// from the index alone.
+@CompoundIndex(name = WorkItem.PROJECT_DATE_MINUTES_INDEX, def = "{'projectId': 1, 'date': 1, 'durationMinutes': 1}")
 // The per-issue list, newest first, is what every issue open pays for. Equality
 // on issueId, then the sort keys in the order the list sorts by (date, then _id
 // as the tiebreaker) so the capped list and every page come back as one bounded
@@ -115,6 +117,7 @@ public class WorkItem {
 	public static final String PROJECT_DURATION_INDEX = "project_duration";
 
 	public static final String DATE_USER_PROJECT_MINUTES_INDEX = "date_user_project_minutes";
+	public static final String PROJECT_DATE_MINUTES_INDEX = "project_date_minutes";
 
 	/**
 	 * Where an entry came from. Absent on documents written before 2.0 — read as

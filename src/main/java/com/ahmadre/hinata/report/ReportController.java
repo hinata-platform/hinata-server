@@ -59,8 +59,8 @@ public class ReportController {
 			Map<String, Long> byAssignee, List<ReportService.TrendPoint> trend, Map<String, Integer> timePerActivity) {
 	}
 
-	/** The longest trend the overview draws. */
-	static final int OVERVIEW_MAX_DAYS = 366;
+	/** The longest span the overview covers: the longest trend there is, for the time per activity too. */
+	static final int OVERVIEW_MAX_DAYS = ReportService.MAX_TREND_DAYS;
 
 	@GetMapping("/overview")
 	public Overview overview(@RequestParam String projectId, @RequestParam(defaultValue = "30") int days) {
@@ -68,9 +68,9 @@ public class ReportController {
 		int span = Math.clamp(days, 1, OVERVIEW_MAX_DAYS);
 		LocalDate to = LocalDate.now(clock.withZone(java.time.ZoneOffset.UTC));
 		LocalDate from = to.minusDays(span - 1L);
-		return new Overview(projectId, span, reports.issuesByState(projectId, user),
-				reports.issuesByPriority(projectId, user), reports.issuesByAssignee(projectId, user),
-				reports.createdVsResolved(projectId, span, user), reports.timePerActivity(projectId, from, to, user));
+		ReportService.OverviewParts parts = reports.overview(projectId, span, from, to, user);
+		return new Overview(projectId, span, parts.byState(), parts.byPriority(), parts.byAssignee(), parts.trend(),
+				parts.timePerActivity());
 	}
 
 	@GetMapping("/time-per-project")

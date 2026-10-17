@@ -18,8 +18,11 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -66,14 +69,18 @@ class TimeBudgetLiveAlerts {
 		measure(touched);
 	}
 
-	/** The measuring itself, on the caller's thread. */
+	/**
+	 * The measuring itself, on the caller's thread. An import touches thousands of issues at once,
+	 * so the issues and their projects' settings are read once for all of them, and each sprint
+	 * among them is measured once, not once per issue.
+	 */
 	void measure(TimeEntryWrites.Touched touched) {
 		if (!policy.advancedEnabled() || !policy.alertsEnabled()) {
 			return;
 		}
 		try {
 			touched.projectIds().forEach(this::measureProject);
-			touched.issueIds().forEach(this::measureIssue);
+			measureIssues(touched.issueIds());
 		}
 		catch (RuntimeException ex) {
 			// An alert is a side effect of a save that already succeeded; it must not
@@ -82,13 +89,39 @@ class TimeBudgetLiveAlerts {
 		}
 	}
 
+	private void measureIssues(Set<String> issueIds) {
+		if (issueIds.isEmpty()) {
+			return;
+		}
+		Query byIds = Query.query(Criteria.where("_id").in(issueIds).and("archived").is(false));
+		byIds.fields().include("readableId", "projectId", "estimateMinutes", "spentMinutes", "assigneeIds", "sprintId")
+				.include(Issue.PROJECTION_REQUIRED);
+		List<Issue> issues = mongo.find(byIds, Issue.class).stream().filter(issue -> issue.getProjectId() != null)
+				.toList();
+		Map<String, ProjectTimeSettings> settings = new HashMap<>();
+		mongo.find(Query.query(Criteria.where("projectId").in(issues.stream().map(Issue::getProjectId).distinct()
+				.toList())), ProjectTimeSettings.class).forEach(own -> settings.put(own.getProjectId(), own));
+		Map<String, Issue> sprints = new LinkedHashMap<>();
+		for (Issue issue : issues) {
+			ProjectTimeSettings own = settings.get(issue.getProjectId());
+			// The sprint follows the project's budget mode, and is measured with or without an estimate.
+			if (issue.getSprintId() != null
+					&& ProjectTimeSettings.budgetModeOf(own) == ProjectTimeSettings.LimitMode.WARN) {
+				sprints.putIfAbsent(issue.getSprintId(), issue);
+			}
+			measureIssue(issue, own);
+		}
+		sprints.values().forEach(this::measureSprint);
+	}
+
 	static String key(String kind, String subjectId, int percent) {
 		return "live:" + kind + ':' + subjectId + ':' + percent;
 	}
 
 	private void measureProject(String projectId) {
 		ProjectTimeSettings settings = settingsOf(projectId);
-		if (settings == null || settings.budgetMode() != ProjectTimeSettings.LimitMode.WARN) {
+		// No settings is the default, WARN, for the estimates too; the hourly scan skips it.
+		if (ProjectTimeSettings.budgetModeOf(settings) != ProjectTimeSettings.LimitMode.WARN) {
 			return;
 		}
 		TimeUsageService.ProjectUsage figures = usage.ofProjects(List.of(projectId)).getFirst();
@@ -101,7 +134,7 @@ class TimeBudgetLiveAlerts {
 		// A revenue budget, while billing is on (HIN-155). A cost budget alerts nobody: its figure is
 		// an administrator's alone.
 		MoneyBudgets money = moneyBudgets.getIfAvailable();
-		boolean revenue = money != null && money.enabled() && settings.getBudgetCents() != null
+		boolean revenue = money != null && money.enabled() && settings != null && settings.getBudgetCents() != null
 				&& settings.getBudgetCents() > 0 && settings.rateKind() == ProjectTimeSettings.RateKind.BILLABLE;
 		long usedCents = revenue ? money.usedCents(projectId, ProjectTimeSettings.RateKind.BILLABLE) : 0;
 		Integer reachedMoney = revenue
@@ -113,7 +146,7 @@ class TimeBudgetLiveAlerts {
 		if (project == null) {
 			return;
 		}
-		Set<String> leads = leadsOf(project);
+		Set<String> leads = leadsAndTeamAdminsOf(project);
 		if (reachedBudget != null) {
 			notifications.notifyTimeBudgetAlert(leads, projectId, project.getName(), TimeLimit.BUDGET,
 					reachedBudget, figures.usedMinutes(), figures.budgetMinutes());
@@ -128,23 +161,12 @@ class TimeBudgetLiveAlerts {
 		}
 	}
 
-	private void measureIssue(String issueId) {
-		Query byId = Query.query(Criteria.where("_id").is(issueId).and("archived").is(false));
-		byId.fields().include("readableId", "projectId", "estimateMinutes", "assigneeIds")
-				.include(Issue.PROJECTION_REQUIRED);
-		Issue issue = mongo.findOne(byId, Issue.class);
-		if (issue == null || issue.getProjectId() == null) {
-			return;
-		}
-		ProjectTimeSettings settings = settingsOf(issue.getProjectId());
-		// The sprint follows the project's budget mode, and is measured with or without an estimate.
-		if (settings == null || settings.budgetMode() == ProjectTimeSettings.LimitMode.WARN) {
-			measureSprint(issue);
-		}
+	private void measureIssue(Issue issue, ProjectTimeSettings settings) {
+		String issueId = issue.getId();
 		if (issue.getEstimateMinutes() == null || issue.getEstimateMinutes() <= 0) {
 			return;
 		}
-		if (settings != null && settings.estimateMode() != ProjectTimeSettings.LimitMode.WARN) {
+		if (ProjectTimeSettings.estimateModeOf(settings) != ProjectTimeSettings.LimitMode.WARN) {
 			return;
 		}
 		Integer own = settings == null || settings.getAlertThresholds() == null ? null
@@ -167,27 +189,35 @@ class TimeBudgetLiveAlerts {
 			told.addAll(reach.whoCanSee(project.getId(), issue.getAssigneeIds()));
 		}
 		if (reached >= 100) {
-			told.addAll(leadsOf(project));
+			told.addAll(leadsAndTeamAdminsOf(project));
 		}
 		notifications.notifyTimeEstimateReached(told, issue.getReadableId(), project.getId(), reached,
 				issue.getSpentMinutes(), issue.getEstimateMinutes());
 	}
 
-	/** The issue's sprint against its budget (HIN-156): the project's leads hear the stages. */
+	/**
+	 * The issue's sprint against its budget (HIN-156): the project's leads hear the stages. The sum
+	 * spans the board's projects, so it goes only to those leads who may see every one of them.
+	 */
 	private void measureSprint(Issue issue) {
-		history.sprintOfIssue(issue.getId()).ifPresent(figures -> {
+		history.sprintFigures(issue.getSprintId(), projectId -> true).ifPresent(figures -> {
 			Set<Integer> thresholds = new TreeSet<>(OVERRUN);
-			thresholds.add(TimeAlerts.DEFAULT_BUDGET_PERCENT);
+			thresholds.add(TimeHistoryService.SPRINT_NEAR_PERCENT);
 			Integer reached = settle("SPRINT", figures.sprint().getId(), figures.usedMinutes(),
 					figures.budgetMinutes(), thresholds);
 			if (reached == null) {
 				return;
 			}
 			Project project = activeProject(issue.getProjectId());
-			if (project != null) {
-				notifications.notifyTimeBudgetAlert(leadsOf(project), project.getId(), figures.sprint().getName(),
-						TimeLimit.BUDGET, reached, figures.usedMinutes(), figures.budgetMinutes());
+			if (project == null) {
+				return;
 			}
+			Set<String> told = leadsAndTeamAdminsOf(project);
+			for (String boardProject : figures.boardProjectIds()) {
+				told = reach.whoCanSee(boardProject, told);
+			}
+			notifications.notifyTimeSprintAlert(told, project.getId(), figures.sprint().getBoardId(), figures.sprint().getName(),
+					reached, figures.usedMinutes(), figures.budgetMinutes());
 		});
 	}
 
@@ -204,8 +234,11 @@ class TimeBudgetLiveAlerts {
 		for (int percent : thresholds) {
 			(used * 100 >= limit * percent ? reached : under).add(key(kind, subjectId, percent));
 		}
-		marks.release(under);
-		Set<String> existing = marks.existing(reached);
+		// One read for every stage; a write only where a stage changes hands, not on every entry.
+		List<String> all = new ArrayList<>(under);
+		all.addAll(reached);
+		Set<String> existing = marks.existing(all);
+		marks.release(under.stream().filter(existing::contains).toList());
 		Set<String> taken = marks.claimAll(reached.stream().filter(k -> !existing.contains(k)).toList());
 		Integer highest = null;
 		for (int percent : thresholds) {
@@ -239,7 +272,7 @@ class TimeBudgetLiveAlerts {
 	}
 
 	/** The project's leads and the administrators of every team it belongs to. */
-	private Set<String> leadsOf(Project project) {
+	private Set<String> leadsAndTeamAdminsOf(Project project) {
 		Set<String> leads = projectLeadsOf(project);
 		for (Team team : teams.findByProjectIdsContains(project.getId())) {
 			if (team.getMembers() == null) continue;

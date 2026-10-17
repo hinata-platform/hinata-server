@@ -79,7 +79,8 @@ public class TimeUsageController {
 	 * The fullest budgets first, for the dashboard, with the projects' names so the cells can be
 	 * labelled without a second read; {@code total} counts every budget the caller sees.
 	 */
-	public record TopBudgets(List<TimeUsageService.ProjectUsage> items, Map<String, String> names, int total) {
+	public record TopBudgets(List<TimeUsageService.ProjectUsage> items, Map<String, String> names, int total,
+			Map<String, TimeHistoryService.Forecast> forecasts) {
 	}
 
 	/**
@@ -91,20 +92,40 @@ public class TimeUsageController {
 			@RequestParam(required = false) List<String> projectIds) {
 		User user = currentUser.require();
 		int capped = Math.clamp(limit, 1, TimeUsageService.TOP_MAX);
-		List<String> budgeted = usage.projectsWithBudget(projectIds);
+		Ranked ranked = ranked(user, usage.projectsWithTimeBudget(projectIds));
+		List<TimeUsageService.ProjectUsage> shown = usage.withMoney(ranked.slice(0, capped), user);
+		return new TopBudgets(shown, ranked.namesOf(shown), ranked.rows().size(), history.forecasts(shown));
+	}
+
+	/** Budgeted projects the reader sees, active ones only, fullest time budget first, with their names. */
+	private record Ranked(List<TimeUsageService.ProjectUsage> rows, Map<String, String> names) {
+
+		List<TimeUsageService.ProjectUsage> slice(int from, int count) {
+			int start = Math.min(rows.size(), from);
+			return rows.subList(start, Math.min(rows.size(), start + count));
+		}
+
+		Map<String, String> namesOf(List<TimeUsageService.ProjectUsage> shown) {
+			Map<String, String> of = new HashMap<>();
+			shown.forEach(row -> of.put(row.projectId(), names.get(row.projectId())));
+			return of;
+		}
+	}
+
+	/**
+	 * [budgeted] narrowed to what [user] sees and ranked. Money is added only to the rows shown,
+	 * afterwards: it costs a valuation per project, and the ranking is by time alone.
+	 */
+	private Ranked ranked(User user, List<String> budgeted) {
 		Map<String, String> names = new HashMap<>();
 		projects.visibleAmong(user, budgeted).stream()
 				.filter(project -> !project.isArchived())
 				.forEach(project -> names.put(project.getId(), project.getName()));
-		List<TimeUsageService.ProjectUsage> ranked = usage.ofProjects(List.copyOf(names.keySet())).stream()
+		List<TimeUsageService.ProjectUsage> rows = usage.ofProjects(List.copyOf(names.keySet())).stream()
 				.sorted(Comparator.comparingDouble(TimeUsageService.ProjectUsage::budgetFraction).reversed()
 						.thenComparing(TimeUsageService.ProjectUsage::projectId))
 				.toList();
-		List<TimeUsageService.ProjectUsage> shown = usage.withMoney(
-				ranked.subList(0, Math.min(capped, ranked.size())), user);
-		Map<String, String> shownNames = new HashMap<>();
-		shown.forEach(row -> shownNames.put(row.projectId(), names.get(row.projectId())));
-		return new TopBudgets(shown, shownNames, ranked.size());
+		return new Ranked(rows, names);
 	}
 
 	/**
@@ -126,7 +147,7 @@ public class TimeUsageController {
 
 	/** One page of the budget report and, on the first, the sprints with a budget (HIN-157). */
 	public record BudgetReport(List<TimeUsageService.ProjectUsage> items, Map<String, String> names, int total,
-			int page, int size, List<SprintRow> sprints) {
+			int page, int size, List<SprintRow> sprints, Map<String, TimeHistoryService.Forecast> forecasts) {
 	}
 
 	/** A sprint with a budget, on a board the reader sees, not archived. */
@@ -151,21 +172,10 @@ public class TimeUsageController {
 		User user = currentUser.require();
 		int pageSize = Math.clamp(size, 1, REPORT_PAGE_MAX);
 		int index = Math.max(0, page);
-		Map<String, String> names = new HashMap<>();
-		projects.visibleAmong(user, usage.projectsWithBudget(projectIds)).stream()
-				.filter(project -> !project.isArchived())
-				.forEach(project -> names.put(project.getId(), project.getName()));
-		List<TimeUsageService.ProjectUsage> ranked = usage.withMoney(usage.ofProjects(List.copyOf(names.keySet())), user)
-				.stream()
-				.sorted(Comparator.comparingDouble(TimeUsageService.ProjectUsage::budgetFraction).reversed()
-						.thenComparing(TimeUsageService.ProjectUsage::projectId))
-				.toList();
-		int from = Math.min(ranked.size(), index * pageSize);
-		List<TimeUsageService.ProjectUsage> shown = ranked.subList(from, Math.min(ranked.size(), from + pageSize));
-		Map<String, String> shownNames = new HashMap<>();
-		shown.forEach(row -> shownNames.put(row.projectId(), names.get(row.projectId())));
-		return new BudgetReport(shown, shownNames, ranked.size(), index, pageSize,
-				index == 0 ? sprintRows(user) : List.of());
+		Ranked ranked = ranked(user, usage.projectsWithBudgetFor(user, projectIds));
+		List<TimeUsageService.ProjectUsage> shown = usage.withMoney(ranked.slice(index * pageSize, pageSize), user);
+		return new BudgetReport(shown, ranked.namesOf(shown), ranked.rows().size(), index, pageSize,
+				index == 0 ? sprintRows(user) : List.of(), history.forecasts(shown));
 	}
 
 	private List<SprintRow> sprintRows(User user) {

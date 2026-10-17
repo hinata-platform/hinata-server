@@ -53,6 +53,25 @@ public class ReportService {
 	public record TrendPoint(LocalDate date, long created, long resolved) {
 	}
 
+	/**
+	 * The overview's figures of one project (HIN-157), asked of the access check once rather than
+	 * once per figure: the distributions, the trend of the last [days] days and the time per activity
+	 * from [from] to [to].
+	 */
+	public record OverviewParts(Map<String, Long> byState, Map<String, Long> byPriority,
+			Map<String, Long> byAssignee, List<TrendPoint> trend, Map<String, Integer> timePerActivity) {
+	}
+
+	public OverviewParts overview(String projectId, int days, LocalDate from, LocalDate to, User user) {
+		requireMember(projectId, user);
+		requireRange(from, to);
+		return new OverviewParts(countBy(projectId, "state", null), countBy(projectId, "priority", null),
+				countBy(projectId, "assigneeId", UNASSIGNED), trend(projectId, days), activityMinutes(projectId, from, to));
+	}
+
+	/** The key an issue without an assignee is counted under. */
+	public static final String UNASSIGNED = "unassigned";
+
 	public Map<String, Long> issuesByState(String projectId, User user) {
 		requireMember(projectId, user);
 		return countBy(projectId, "state", null);
@@ -60,7 +79,7 @@ public class ReportService {
 
 	public Map<String, Long> issuesByAssignee(String projectId, User user) {
 		requireMember(projectId, user);
-		return countBy(projectId, "assigneeId", "unassigned");
+		return countBy(projectId, "assigneeId", UNASSIGNED);
 	}
 
 	public Map<String, Long> issuesByPriority(String projectId, User user) {
@@ -80,6 +99,10 @@ public class ReportService {
 	 */
 	public List<TrendPoint> createdVsResolved(String projectId, int days, User user) {
 		requireMember(projectId, user);
+		return trend(projectId, days);
+	}
+
+	private List<TrendPoint> trend(String projectId, int days) {
 		int range = Math.clamp(days, 1, MAX_TREND_DAYS);
 		LocalDate today = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC);
 		LocalDate first = today.minusDays(range - 1);
@@ -89,7 +112,10 @@ public class ReportService {
 		// carries its whole rich-text description, none of which a count needs,
 		// and a partial issue cannot be mapped back onto the entity anyway (its
 		// constructor takes primitives, which a missing field has no value for).
-		Query query = Query.query(Criteria.where("projectId").is(projectId));
+		// Only issues that moved inside the window count; the rest are not read at all.
+		java.util.Date since = Date.from(first.atStartOfDay(ZoneOffset.UTC).toInstant());
+		Query query = Query.query(Criteria.where("projectId").is(projectId).orOperator(
+				Criteria.where("createdAt").gte(since), Criteria.where("resolvedAt").gte(since)));
 		query.fields().include("createdAt").include("resolvedAt");
 		for (Document issue : mongo.find(query, Document.class, "issues")) {
 			bump(perDay, issue.get("createdAt", Date.class), 0);
@@ -152,6 +178,10 @@ public class ReportService {
 			User user) {
 		requireMember(projectId, user);
 		requireRange(from, to);
+		return activityMinutes(projectId, from, to);
+	}
+
+	private Map<String, Integer> activityMinutes(String projectId, LocalDate from, LocalDate to) {
 		Aggregation aggregation = Aggregation.newAggregation(
 				Aggregation.match(Criteria.where("projectId").is(projectId)
 						.and("date").gte(from).lte(to)),

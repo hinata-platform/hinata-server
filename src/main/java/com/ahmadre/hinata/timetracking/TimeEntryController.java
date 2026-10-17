@@ -322,6 +322,6 @@ public class TimeEntryController {
 
 	private TimeEntryResponse respond(WorkItem item, User actor) {
 		return new TimeEntryResponse(TimeTrackingController.WorkItemResponse.from(item),
-				timeTracking.overlapsOf(item, actor), budgets.warningsAfter(item));
+				timeTracking.overlapsOf(item, actor), budgets.warningsAfter(item, actor));
 	}
 }

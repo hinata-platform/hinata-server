@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.issue.Issue;
 import lombok.RequiredArgsConstructor;
@@ -16,7 +17,11 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -93,44 +98,77 @@ public class TimeHistoryService {
 	}
 
 	public Forecast forecast(String projectId) {
-		TimeUsageService.ProjectUsage figures = usage.ofProjects(List.of(projectId)).getFirst();
+		return forecasts(usage.ofProjects(List.of(projectId))).get(projectId);
+	}
+
+	/**
+	 * {@link #forecast} for every row of [figures] at once: one aggregation for all their recent
+	 * days and the holidays once, so a page of budgets costs two reads, not two per card.
+	 */
+	public Map<String, Forecast> forecasts(List<TimeUsageService.ProjectUsage> figures) {
+		if (figures.isEmpty()) {
+			return Map.of();
+		}
 		LocalDate today = LocalDate.now(clock.withZone(ZoneOffset.UTC));
 		LocalDate since = today.minusDays(PACE_DAYS - 1L);
-		List<Document> rows = mongo.aggregate(Aggregation.newAggregation(
-						Aggregation.match(Criteria.where("projectId").is(projectId).and("date").gte(since).lte(today)),
-						Aggregation.group("date").sum("durationMinutes").as("minutes")),
-				WorkItem.class, Document.class).getMappedResults();
-		long recorded = rows.stream().mapToLong(row -> ((Number) row.get("minutes")).longValue()).sum();
+		Map<String, Long> recorded = new HashMap<>();
+		Map<String, Integer> dataDays = new HashMap<>();
+		mongo.aggregate(Aggregation.newAggregation(
+						Aggregation.match(Criteria.where("projectId").in(figures.stream()
+								.map(TimeUsageService.ProjectUsage::projectId).toList()).and("date").gte(since).lte(today)),
+						Aggregation.group("projectId", "date").sum("durationMinutes").as("minutes")),
+				WorkItem.class, Document.class).getMappedResults().forEach(row -> {
+					String projectId = row.get("_id", Document.class).getString("projectId");
+					recorded.merge(projectId, ((Number) row.get("minutes")).longValue(), Long::sum);
+					dataDays.merge(projectId, 1, Integer::sum);
+				});
 		Set<LocalDate> holidays = forecastHolidays.between(since, today.plusDays(FORECAST_HORIZON_DAYS));
 		int workdays = 0;
 		for (LocalDate day = since; !day.isAfter(today); day = day.plusDays(1)) {
 			if (workday(day, holidays)) workdays++;
 		}
-		long daily = workdays == 0 ? 0 : Math.round((double) recorded / workdays);
-		Confidence confidence = rows.size() < PACE_MIN_DATA_DAYS ? Confidence.LOW : Confidence.OK;
-		Long left = figures.budgetMinutes() == null ? null
-				: Math.max(0, figures.budgetMinutes() - figures.usedMinutes());
-		LocalDate exhausted = null;
-		if (left != null && left > 0 && daily > 0 && confidence == Confidence.OK) {
-			long remaining = left;
-			LocalDate day = today;
-			for (int i = 0; i < FORECAST_HORIZON_DAYS && remaining > 0; i++) {
-				day = day.plusDays(1);
-				if (workday(day, holidays)) remaining -= daily;
+		Map<String, Forecast> forecasts = new HashMap<>();
+		for (TimeUsageService.ProjectUsage row : figures) {
+			long sum = recorded.getOrDefault(row.projectId(), 0L);
+			int days = dataDays.getOrDefault(row.projectId(), 0);
+			long daily = workdays == 0 ? 0 : Math.round((double) sum / workdays);
+			Confidence confidence = days < PACE_MIN_DATA_DAYS ? Confidence.LOW : Confidence.OK;
+			Long left = row.budgetMinutes() == null ? null : Math.max(0, row.budgetMinutes() - row.usedMinutes());
+			LocalDate exhausted = null;
+			if (left != null && left > 0 && daily > 0 && confidence == Confidence.OK) {
+				long remaining = left;
+				LocalDate day = today;
+				for (int i = 0; i < FORECAST_HORIZON_DAYS && remaining > 0; i++) {
+					day = day.plusDays(1);
+					if (workday(day, holidays)) remaining -= daily;
+				}
+				exhausted = remaining <= 0 ? day : null;
 			}
-			exhausted = remaining <= 0 ? day : null;
+			forecasts.put(row.projectId(), new Forecast(row.projectId(), daily, days, left, exhausted, confidence));
 		}
-		return new Forecast(projectId, daily, rows.size(), left, exhausted, confidence);
+		return forecasts;
 	}
 
-	/** What a sprint has used: entries on its issues, within its dates. */
-	public SprintUsage sprintUsage(Sprint sprint, List<String> boardProjectIds) {
+	/**
+	 * A sprint has no threshold of its own: it warns at the instance's default share, wherever it is
+	 * shown or heard (the entry's note, the board's capsule, the leads' alert).
+	 */
+	public static final int SPRINT_NEAR_PERCENT = TimeAlerts.DEFAULT_BUDGET_PERCENT;
+
+	/**
+	 * What a sprint has used: entries on its issues within its dates, counting only the issues of
+	 * [countedProjectIds]. A board spans projects, and a reader of one of them must not learn from
+	 * the sum what was booked in another they cannot see; the caller passes the board's projects the
+	 * reader sees.
+	 */
+	public SprintUsage sprintUsage(Sprint sprint, Collection<String> countedProjectIds) {
 		SprintTimeSettings own = mongo.findOne(Query.query(Criteria.where("sprintId").is(sprint.getId())),
 				SprintTimeSettings.class);
 		Integer budget = own == null || own.getBudgetMinutes() == null || own.getBudgetMinutes() <= 0
 				? null : own.getBudgetMinutes();
-		return new SprintUsage(sprint.getId(), budget, sprintMinutes(sprint, boardProjectIds),
-				TimeAlerts.DEFAULT_BUDGET_PERCENT, false);
+		long used = sprintMinutes(Map.of(sprint.getId(), sprint), Map.of(sprint.getId(), Set.copyOf(countedProjectIds)))
+				.getOrDefault(sprint.getId(), 0L);
+		return new SprintUsage(sprint.getId(), budget, used, SPRINT_NEAR_PERCENT, false);
 	}
 
 	/** A budgeted sprint for the report, with its board's name and its figures. */
@@ -138,85 +176,143 @@ public class TimeHistoryService {
 	}
 
 	/**
-	 * Active sprints with a budget on boards touching [visibleProjectIds], newest change first, at
-	 * most [limit]. Reads the settings, then the sprints and boards in one query each.
+	 * Running sprints with a budget on boards touching [visibleProjectIds], newest change first, at
+	 * most [limit], each summed over the board's projects the reader sees. From the reader's
+	 * boards down, so a reader whose sprints are older than everybody else's still finds them, and
+	 * in a fixed number of reads however many sprints there are.
 	 */
 	public List<BudgetedSprint> budgetedSprintsAmong(Set<String> visibleProjectIds, int limit) {
-		List<SprintTimeSettings> budgeted = mongo.find(Query.query(Criteria.where("budgetMinutes").gt(0))
-				.with(org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC,
-						"updatedAt"))
-				.limit(limit * 4), SprintTimeSettings.class);
-		if (budgeted.isEmpty() || visibleProjectIds.isEmpty()) {
+		if (visibleProjectIds.isEmpty()) {
 			return List.of();
 		}
-		java.util.Map<String, Sprint> sprints = new java.util.HashMap<>();
-		mongo.find(Query.query(Criteria.where("_id").in(budgeted.stream().map(SprintTimeSettings::getSprintId).toList())
-				.and("archived").ne(true)), Sprint.class).forEach(sprint -> sprints.put(sprint.getId(), sprint));
-		java.util.Map<String, com.ahmadre.hinata.board.AgileBoard> boards = new java.util.HashMap<>();
-		mongo.find(Query.query(Criteria.where("_id").in(sprints.values().stream().map(Sprint::getBoardId).distinct()
-				.toList())), com.ahmadre.hinata.board.AgileBoard.class).forEach(board -> boards.put(board.getId(), board));
+		Query boardQuery = Query.query(Criteria.where("projectIds").in(visibleProjectIds));
+		boardQuery.fields().include("_id", "name", "projectIds");
+		Map<String, AgileBoard> boards = new HashMap<>();
+		mongo.find(boardQuery, AgileBoard.class).forEach(board -> boards.put(board.getId(), board));
+		if (boards.isEmpty()) {
+			return List.of();
+		}
+		Map<String, Sprint> sprints = new HashMap<>();
+		mongo.find(Query.query(Criteria.where("boardId").in(boards.keySet()).and("archived").ne(true)
+				.and("startDate").ne(null)), Sprint.class).forEach(sprint -> sprints.put(sprint.getId(), sprint));
+		if (sprints.isEmpty()) {
+			return List.of();
+		}
+		List<SprintTimeSettings> budgeted = mongo.find(Query.query(Criteria.where("sprintId").in(sprints.keySet())
+				.and("budgetMinutes").gt(0))
+				.with(org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC,
+						"updatedAt"))
+				.limit(limit), SprintTimeSettings.class);
+		Map<String, Sprint> shown = new LinkedHashMap<>();
+		Map<String, Set<String>> counted = new HashMap<>();
+		for (SprintTimeSettings own : budgeted) {
+			Sprint sprint = sprints.get(own.getSprintId());
+			shown.put(sprint.getId(), sprint);
+			counted.put(sprint.getId(), visibleOf(boards.get(sprint.getBoardId()), visibleProjectIds));
+		}
+		Map<String, Long> minutes = sprintMinutes(shown, counted);
 		List<BudgetedSprint> rows = new ArrayList<>();
 		for (SprintTimeSettings own : budgeted) {
-			if (rows.size() >= limit) break;
-			Sprint sprint = sprints.get(own.getSprintId());
-			com.ahmadre.hinata.board.AgileBoard board = sprint == null ? null : boards.get(sprint.getBoardId());
-			if (board == null || board.getProjectIds().stream().noneMatch(visibleProjectIds::contains)) {
-				continue;
-			}
-			rows.add(new BudgetedSprint(sprint, board.getName(),
-					new SprintUsage(sprint.getId(), own.getBudgetMinutes(), sprintMinutes(sprint, board.getProjectIds()),
-							TimeAlerts.DEFAULT_BUDGET_PERCENT, false)));
+			Sprint sprint = shown.get(own.getSprintId());
+			rows.add(new BudgetedSprint(sprint, boards.get(sprint.getBoardId()).getName(),
+					new SprintUsage(sprint.getId(), own.getBudgetMinutes(), minutes.getOrDefault(sprint.getId(), 0L),
+							SPRINT_NEAR_PERCENT, false)));
 		}
 		return rows;
 	}
 
-	/** An issue's sprint with a budget, and what it has used. */
-	public record SprintFigures(Sprint sprint, long budgetMinutes, long usedMinutes) {
+	private static Set<String> visibleOf(AgileBoard board, Set<String> visibleProjectIds) {
+		Set<String> counted = new java.util.HashSet<>(board.getProjectIds());
+		counted.retainAll(visibleProjectIds);
+		return counted;
 	}
 
 	/**
-	 * The budgeted sprint [issueId] belongs to, measured; empty when the issue is in no sprint or
-	 * its sprint has no budget. Three small reads, and only the first for an issue in no sprint.
+	 * An issue's sprint with a budget, and what it has used. [boardProjectIds] are all the board's
+	 * projects, for a caller that has to know who may hear the figure.
 	 */
-	public java.util.Optional<SprintFigures> sprintOfIssue(String issueId) {
-		Query byId = Query.query(Criteria.where("_id").is(issueId));
-		byId.fields().include("sprintId").include(Issue.PROJECTION_REQUIRED);
-		Issue issue = mongo.findOne(byId, Issue.class);
-		if (issue == null || issue.getSprintId() == null) {
-			return java.util.Optional.empty();
-		}
-		SprintTimeSettings own = mongo.findOne(Query.query(Criteria.where("sprintId").is(issue.getSprintId())),
+	public record SprintFigures(Sprint sprint, List<String> boardProjectIds, long budgetMinutes, long usedMinutes) {
+	}
+
+	/**
+	 * The sprint [sprintId] measured against its budget over the board's projects [counts]
+	 * accepts; empty without a budget, or when the sprint is archived or gone.
+	 */
+	public java.util.Optional<SprintFigures> sprintFigures(String sprintId, java.util.function.Predicate<String> counts) {
+		SprintTimeSettings own = mongo.findOne(Query.query(Criteria.where("sprintId").is(sprintId)),
 				SprintTimeSettings.class);
 		if (own == null || own.getBudgetMinutes() == null || own.getBudgetMinutes() <= 0) {
 			return java.util.Optional.empty();
 		}
-		Sprint sprint = mongo.findById(issue.getSprintId(), Sprint.class);
+		return sprintFigures(own, counts);
+	}
+
+	private java.util.Optional<SprintFigures> sprintFigures(SprintTimeSettings own,
+			java.util.function.Predicate<String> counts) {
+		Sprint sprint = mongo.findById(own.getSprintId(), Sprint.class);
 		if (sprint == null || sprint.isArchived()) {
 			return java.util.Optional.empty();
 		}
-		com.ahmadre.hinata.board.AgileBoard board = mongo.findById(sprint.getBoardId(),
-				com.ahmadre.hinata.board.AgileBoard.class);
+		AgileBoard board = mongo.findById(sprint.getBoardId(), AgileBoard.class);
 		if (board == null) {
 			return java.util.Optional.empty();
 		}
-		return java.util.Optional.of(new SprintFigures(sprint, own.getBudgetMinutes(),
-				sprintMinutes(sprint, board.getProjectIds())));
+		Set<String> counted = board.getProjectIds().stream().filter(counts).collect(java.util.stream.Collectors.toSet());
+		long used = sprintMinutes(Map.of(sprint.getId(), sprint), Map.of(sprint.getId(), counted))
+				.getOrDefault(sprint.getId(), 0L);
+		return java.util.Optional.of(new SprintFigures(sprint, board.getProjectIds(), own.getBudgetMinutes(), used));
 	}
 
-	long sprintMinutes(Sprint sprint, List<String> boardProjectIds) {
-		Query issues = Query.query(Criteria.where("projectId").in(boardProjectIds).and("sprintId").is(sprint.getId()));
-		issues.fields().include("_id").include(Issue.PROJECTION_REQUIRED);
-		List<String> ids = mongo.find(issues, Issue.class).stream().map(Issue::getId).toList();
-		if (ids.isEmpty()) {
-			return 0;
+	/**
+	 * Minutes per sprint of [sprints]: entries on the sprint's issues of the projects [counted] names
+	 * for it, within the sprint's dates. Two reads for any number of sprints: their issues, then the
+	 * entries grouped by issue and day, split per sprint here.
+	 */
+	Map<String, Long> sprintMinutes(Map<String, Sprint> sprints, Map<String, Set<String>> counted) {
+		Set<String> projectIds = new java.util.HashSet<>();
+		counted.values().forEach(projectIds::addAll);
+		if (sprints.isEmpty() || projectIds.isEmpty()) {
+			return Map.of();
 		}
-		Criteria entries = Criteria.where("issueId").in(ids);
-		if (sprint.getStartDate() != null) {
-			LocalDate end = sprint.getEndDate() != null ? sprint.getEndDate()
-					: LocalDate.now(clock.withZone(ZoneOffset.UTC));
-			entries = entries.and("date").gte(sprint.getStartDate()).lte(end);
+		Query issues = Query.query(Criteria.where("sprintId").in(sprints.keySet()).and("projectId").in(projectIds));
+		issues.fields().include("_id", "sprintId", "projectId").include(Issue.PROJECTION_REQUIRED);
+		Map<String, String> sprintOfIssue = new HashMap<>();
+		mongo.find(issues, Issue.class).forEach(issue -> {
+			if (counted.getOrDefault(issue.getSprintId(), Set.of()).contains(issue.getProjectId())) {
+				sprintOfIssue.put(issue.getId(), issue.getSprintId());
+			}
+		});
+		if (sprintOfIssue.isEmpty()) {
+			return Map.of();
 		}
-		return sum(entries);
+		LocalDate today = LocalDate.now(clock.withZone(ZoneOffset.UTC));
+		Criteria entries = Criteria.where("issueId").in(sprintOfIssue.keySet());
+		LocalDate earliest = sprints.values().stream().map(Sprint::getStartDate)
+				.filter(java.util.Objects::nonNull).min(LocalDate::compareTo).orElse(null);
+		boolean unbounded = sprints.values().stream().anyMatch(sprint -> sprint.getStartDate() == null);
+		if (earliest != null && !unbounded) {
+			entries = entries.and("date").gte(earliest);
+		}
+		Map<String, Long> minutes = new HashMap<>();
+		mongo.aggregate(Aggregation.newAggregation(Aggregation.match(entries),
+				Aggregation.group("issueId", "date").sum("durationMinutes").as("minutes")),
+				WorkItem.class, Document.class).getMappedResults().forEach(row -> {
+					Document id = row.get("_id", Document.class);
+					Sprint sprint = sprints.get(sprintOfIssue.get(id.getString("issueId")));
+					if (sprint == null || !within(sprint, dayOf(id.get("date")), today)) {
+						return;
+					}
+					minutes.merge(sprint.getId(), ((Number) row.get("minutes")).longValue(), Long::sum);
+				});
+		return minutes;
+	}
+
+	private static boolean within(Sprint sprint, LocalDate day, LocalDate today) {
+		if (sprint.getStartDate() == null) {
+			return true;
+		}
+		LocalDate end = sprint.getEndDate() != null ? sprint.getEndDate() : today;
+		return !day.isBefore(sprint.getStartDate()) && !day.isAfter(end);
 	}
 
 	private long sum(Criteria criteria) {

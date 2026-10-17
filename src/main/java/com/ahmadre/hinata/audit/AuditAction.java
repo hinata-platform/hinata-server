@@ -152,6 +152,8 @@ public enum AuditAction {
 	TIME_TAG_UPDATED(CONFIGURATION, NOTICE, true),
 	TIME_TAG_DELETED(CONFIGURATION, NOTICE, true),
 	TIME_PROJECT_SETTINGS_CHANGED(CONFIGURATION, NOTICE, true),
+	// A sprint's time budget set, changed or removed (HIN-156).
+	TIME_SPRINT_SETTINGS_CHANGED(CONFIGURATION, NOTICE, true),
 	// Reopening a span inside the freeze, and closing it again. WARNING like the
 	// lock date itself: an exception is the one way an archived month becomes
 	// editable, so it is the record somebody looks for when a closed period has
