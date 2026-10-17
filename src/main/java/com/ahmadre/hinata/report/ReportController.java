@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.report;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -26,6 +27,7 @@ public class ReportController {
 
 	private final ReportService reports;
 	private final CurrentUser currentUser;
+	private final java.time.Clock clock;
 
 	@GetMapping("/issues-by-state")
 	public Map<String, Long> issuesByState(@RequestParam String projectId) {
@@ -46,6 +48,29 @@ public class ReportController {
 	public List<ReportService.TrendPoint> createdVsResolved(@RequestParam String projectId,
 			@RequestParam(defaultValue = "30") int days) {
 		return reports.createdVsResolved(projectId, days, currentUser.require());
+	}
+
+	/**
+	 * Everything the report page's overview draws for one project, in one answer (HIN-157): the
+	 * three distributions, the trend of the last [days] days and the time per activity over the same
+	 * span. One request where the page made five, each asking the same access question again.
+	 */
+	public record Overview(String projectId, int days, Map<String, Long> byState, Map<String, Long> byPriority,
+			Map<String, Long> byAssignee, List<ReportService.TrendPoint> trend, Map<String, Integer> timePerActivity) {
+	}
+
+	/** The longest trend the overview draws. */
+	static final int OVERVIEW_MAX_DAYS = 366;
+
+	@GetMapping("/overview")
+	public Overview overview(@RequestParam String projectId, @RequestParam(defaultValue = "30") int days) {
+		User user = currentUser.require();
+		int span = Math.clamp(days, 1, OVERVIEW_MAX_DAYS);
+		LocalDate to = LocalDate.now(clock.withZone(java.time.ZoneOffset.UTC));
+		LocalDate from = to.minusDays(span - 1L);
+		return new Overview(projectId, span, reports.issuesByState(projectId, user),
+				reports.issuesByPriority(projectId, user), reports.issuesByAssignee(projectId, user),
+				reports.createdVsResolved(projectId, span, user), reports.timePerActivity(projectId, from, to, user));
 	}
 
 	@GetMapping("/time-per-project")

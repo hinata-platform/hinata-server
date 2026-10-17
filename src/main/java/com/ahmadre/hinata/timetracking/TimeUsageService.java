@@ -92,7 +92,9 @@ public class TimeUsageService {
 	 * collection, ids only; who may see them is the caller's question.
 	 */
 	public List<String> projectsWithBudget(Collection<String> among) {
-		Criteria criteria = Criteria.where("budgetMinutes").gt(0);
+		// A time budget or a money budget (HIN-155); who may see the money is withMoney's question.
+		Criteria criteria = new Criteria().orOperator(Criteria.where("budgetMinutes").gt(0),
+				Criteria.where("budgetCents").gt(0));
 		if (among != null && !among.isEmpty()) {
 			criteria = criteria.and("projectId").in(among);
 		}
