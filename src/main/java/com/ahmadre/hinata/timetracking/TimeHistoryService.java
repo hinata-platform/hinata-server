@@ -65,7 +65,12 @@ public class TimeHistoryService {
 	}
 
 	/** A sprint's figures. */
-	public record SprintUsage(String sprintId, Integer budgetMinutes, long usedMinutes, int nearPercent) {
+	public record SprintUsage(String sprintId, Integer budgetMinutes, long usedMinutes, int nearPercent,
+			boolean canEdit) {
+
+		SprintUsage editable(boolean may) {
+			return new SprintUsage(sprintId, budgetMinutes, usedMinutes, nearPercent, may);
+		}
 	}
 
 	public History history(String projectId, LocalDate from, LocalDate to) {
@@ -125,7 +130,7 @@ public class TimeHistoryService {
 		Integer budget = own == null || own.getBudgetMinutes() == null || own.getBudgetMinutes() <= 0
 				? null : own.getBudgetMinutes();
 		return new SprintUsage(sprint.getId(), budget, sprintMinutes(sprint, boardProjectIds),
-				TimeAlerts.DEFAULT_BUDGET_PERCENT);
+				TimeAlerts.DEFAULT_BUDGET_PERCENT, false);
 	}
 
 	/** An issue's sprint with a budget, and what it has used. */
