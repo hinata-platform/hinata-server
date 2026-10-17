@@ -49,7 +49,7 @@ public class TimeUsageController {
 		if (!reach.canSee(project, user)) {
 			throw ApiException.forbidden("error.project.notMember");
 		}
-		return usage.ofProjects(List.of(project.getId())).getFirst();
+		return usage.withMoney(usage.ofProjects(List.of(project.getId())), user).getFirst();
 	}
 
 	/**
@@ -69,7 +69,7 @@ public class TimeUsageController {
 				.map(Project::getId)
 				.collect(Collectors.toSet());
 		// In the order asked, so a list can lay the answers next to its rows.
-		return usage.ofProjects(asked.stream().filter(visible::contains).toList());
+		return usage.withMoney(usage.ofProjects(asked.stream().filter(visible::contains).toList()), user);
 	}
 
 	/**
@@ -97,7 +97,8 @@ public class TimeUsageController {
 				.sorted(Comparator.comparingDouble(TimeUsageService.ProjectUsage::budgetFraction).reversed()
 						.thenComparing(TimeUsageService.ProjectUsage::projectId))
 				.toList();
-		List<TimeUsageService.ProjectUsage> shown = ranked.subList(0, Math.min(capped, ranked.size()));
+		List<TimeUsageService.ProjectUsage> shown = usage.withMoney(
+				ranked.subList(0, Math.min(capped, ranked.size())), user);
 		Map<String, String> shownNames = new HashMap<>();
 		shown.forEach(row -> shownNames.put(row.projectId(), names.get(row.projectId())));
 		return new TopBudgets(shown, shownNames, ranked.size());

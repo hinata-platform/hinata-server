@@ -57,6 +57,7 @@ class TimeBudgetLiveAlerts {
 	private final ProjectReach reach;
 	private final TeamRepository teams;
 	private final MongoTemplate mongo;
+	private final org.springframework.beans.factory.ObjectProvider<MoneyBudgets> moneyBudgets;
 
 	@Async
 	@EventListener
@@ -96,7 +97,15 @@ class TimeBudgetLiveAlerts {
 				figures.budgetMinutes() == null ? 0 : figures.budgetMinutes(), thresholds);
 		Integer reachedEstimates = settle("ESTIMATES", projectId, figures.usedMinutes(),
 				figures.estimatedMinutes(), thresholds);
-		if (reachedBudget == null && reachedEstimates == null) {
+		// A revenue budget, while billing is on (HIN-155). A cost budget alerts nobody: its figure is
+		// an administrator's alone.
+		MoneyBudgets money = moneyBudgets.getIfAvailable();
+		boolean revenue = money != null && money.enabled() && settings.getBudgetCents() != null
+				&& settings.getBudgetCents() > 0 && settings.rateKind() == ProjectTimeSettings.RateKind.BILLABLE;
+		long usedCents = revenue ? money.usedCents(projectId, ProjectTimeSettings.RateKind.BILLABLE) : 0;
+		Integer reachedMoney = revenue
+				? settle("MONEY", projectId, usedCents, settings.getBudgetCents(), thresholds) : null;
+		if (reachedBudget == null && reachedEstimates == null && reachedMoney == null) {
 			return;
 		}
 		Project project = activeProject(projectId);
@@ -111,6 +120,10 @@ class TimeBudgetLiveAlerts {
 		if (reachedEstimates != null) {
 			notifications.notifyTimeBudgetAlert(leads, projectId, project.getName(), TimeLimit.ESTIMATES,
 					reachedEstimates, figures.usedMinutes(), figures.estimatedMinutes());
+		}
+		if (reachedMoney != null) {
+			notifications.notifyTimeMoneyAlert(projectLeadsOf(project), projectId, project.getName(), reachedMoney,
+					usedCents, settings.getBudgetCents(), money.currency());
 		}
 	}
 
@@ -188,8 +201,8 @@ class TimeBudgetLiveAlerts {
 		return mongo.findOne(query, Project.class);
 	}
 
-	/** The project's leads and the administrators of every team it belongs to. */
-	private Set<String> leadsOf(Project project) {
+	/** The project's own leads. */
+	private static Set<String> projectLeadsOf(Project project) {
 		Set<String> leads = new LinkedHashSet<>();
 		if (project.getLeadIds() != null) {
 			leads.addAll(project.getLeadIds());
@@ -197,6 +210,12 @@ class TimeBudgetLiveAlerts {
 		if (project.getLeadId() != null) {
 			leads.add(project.getLeadId());
 		}
+		return leads;
+	}
+
+	/** The project's leads and the administrators of every team it belongs to. */
+	private Set<String> leadsOf(Project project) {
+		Set<String> leads = projectLeadsOf(project);
 		for (Team team : teams.findByProjectIdsContains(project.getId())) {
 			if (team.getMembers() == null) continue;
 			team.getMembers().stream().filter(TeamMembership::isAdmin).map(TeamMembership::getUserId)

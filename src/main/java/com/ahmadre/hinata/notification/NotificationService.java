@@ -864,6 +864,34 @@ public class NotificationService {
 				"/issues/" + readableId, LinkScope.project(projectId), Routing.of(Notification.Type.TIME_ESTIMATE_REACHED));
 	}
 
+	/**
+	 * Tells a project's leads that its revenue reached a threshold of its money budget (HIN-155).
+	 * Leads only: who may see a project's revenue is billing's rule, and team administrators are not
+	 * in it. Names the project and the sums, never a person.
+	 */
+	public void notifyTimeMoneyAlert(Set<String> leadIds, String projectId, String projectName, int percent,
+			long usedCents, long budgetCents, String currency) {
+		if (leadIds == null || leadIds.isEmpty()) return;
+		deliver(leadIds, Notification.Type.TIME_BUDGET_ALERT,
+				locale -> words.in(locale, "notify.timeBudget.title"),
+				locale -> words.in(locale, "notify.timeBudget.money",
+						projectName, percent, money(locale, usedCents, currency), money(locale, budgetCents, currency)),
+				locale -> words.in(locale, "notify.timeBudget.push"),
+				projectLink(projectId), LinkScope.project(projectId), Routing.of(Notification.Type.TIME_BUDGET_ALERT));
+	}
+
+	/** Cents as an amount in the reader's language, "4.800,00 €". */
+	private static String money(Locale locale, long cents, String currency) {
+		java.text.NumberFormat format = java.text.NumberFormat.getCurrencyInstance(locale);
+		try {
+			format.setCurrency(java.util.Currency.getInstance(currency));
+		}
+		catch (IllegalArgumentException | NullPointerException unknown) {
+			// An unknown code keeps the locale's own currency sign rather than failing a notice.
+		}
+		return format.format(java.math.BigDecimal.valueOf(cents, 2));
+	}
+
 	/** Minutes as hours with one decimal in the reader's language, "6,5 h". */
 	private String hours(Locale locale, long minutes) {
 		return words.in(locale, "notify.time.hours", minutes / 60.0);
