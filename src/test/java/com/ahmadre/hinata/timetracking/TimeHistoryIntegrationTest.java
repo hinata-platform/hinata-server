@@ -82,6 +82,8 @@ class TimeHistoryIntegrationTest {
 	private com.ahmadre.hinata.report.ReportController reportRoutes;
 	@Autowired
 	private TimeTrackingErasure erasure;
+	@Autowired
+	private com.ahmadre.hinata.deletion.DeletionService deletion;
 
 	private User lead;
 	private User member;
@@ -229,6 +231,18 @@ class TimeHistoryIntegrationTest {
 				.satisfies(row -> assertThat(row.usedMinutes()).isEqualTo(60));
 		// A member of the board's project uses the board but does not run it.
 		assertThat(sprintRoutes.usage(sprint.getId()).canEdit()).isFalse();
+	}
+
+	@Test
+	void deletingABoardTakesItsSprintsBudgetsWithIt() {
+		AgileBoard board = mongo.insert(AgileBoard.builder().name("Gone")
+				.projectIds(new ArrayList<>(List.of(project.getId()))).build());
+		Sprint sprint = mongo.insert(Sprint.builder().boardId(board.getId()).name("Sprint 1").build());
+		mongo.insert(SprintTimeSettings.builder().sprintId(sprint.getId()).budgetMinutes(60).build());
+
+		deletion.deleteBoardNow(board);
+
+		assertThat(mongo.findAll(SprintTimeSettings.class)).isEmpty();
 	}
 
 	@Test
