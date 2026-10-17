@@ -203,9 +203,16 @@ public class SprintService {
 
 		List<IssueActivity> log = new ArrayList<>();
 		Map<Issue, String> reHomed = new LinkedHashMap<>();
+		// What the sprint held at its close, before the unfinished work leaves it (velocity).
+		Map<String, int[]> closing = new LinkedHashMap<>();
 		for (Issue issue : issues.findBySprintId(sprint.getId())) {
 			Project project = projects.get(issue.getProjectId());
 			boolean resolved = project.getResolvedStates().contains(issue.getState());
+			if (!issue.isArchived()) {
+				int[] cell = closing.computeIfAbsent(issue.getProjectId(), k -> new int[2]);
+				cell[0] += points(issue);
+				if (resolved) cell[1] += points(issue);
+			}
 			if (resolved) {
 				continue; // finished work stays attributed to the completed sprint
 			}
@@ -224,6 +231,9 @@ public class SprintService {
 		if (!log.isEmpty()) activities.saveAll(log);
 		notifyReHomed(reHomed, target, user);
 
+		Map<String, Sprint.ClosingPoints> snapshot = new LinkedHashMap<>();
+		closing.forEach((projectId, cell) -> snapshot.put(projectId, new Sprint.ClosingPoints(cell[0], cell[1])));
+		sprint.setClosingPoints(snapshot);
 		sprint.setArchived(true);
 		sprints.save(sprint);
 		if (sprint.getId().equals(board.getActiveSprintId())) {
@@ -299,7 +309,7 @@ public class SprintService {
 		int completed = doneIssues.stream().mapToInt(SprintService::points).sum();
 		int remaining = committed - completed;
 
-		List<VelocityPoint> velocity = velocity(sprint.getBoardId());
+		List<VelocityPoint> velocity = velocity(sprint.getBoardId(), visible);
 		int avg = velocity.isEmpty() ? 0
 				: (int) Math.round(velocity.stream().mapToInt(VelocityPoint::completed).average().orElse(0));
 
@@ -310,20 +320,63 @@ public class SprintService {
 				velocity, scopeChanges(sprint, inSprint), breakdown(inSprint, resolvedCache));
 	}
 
-	/** Committed/completed points per completed sprint, oldest → newest. */
-	public List<VelocityPoint> velocity(String boardId) {
-		List<Sprint> done = sprints.findByBoardIdAndArchivedTrueOrderByEndDateDesc(boardId);
+	/**
+	 * Committed and completed points of the board's last completed sprints, oldest first, over the
+	 * projects [visible] holds. From what each sprint held when it closed; for a sprint closed before
+	 * that was kept, its done issues plus the unfinished ones its completion moved out, read from the
+	 * activity log. Never from the issues alone: those left at completion, so "committed" would equal
+	 * "done" for every past sprint.
+	 */
+	public List<VelocityPoint> velocity(String boardId, Set<String> visible) {
+		List<Sprint> done = sprints.findByBoardIdAndArchivedTrueOrderByEndDateDesc(boardId).stream()
+				.limit(VELOCITY_COUNT).toList();
 		Map<String, Set<String>> resolvedCache = new HashMap<>();
 		List<VelocityPoint> out = new ArrayList<>();
-		for (Sprint s : done.stream().limit(VELOCITY_COUNT).toList()) {
-			List<Issue> list = issues.findBySprintId(s.getId());
-			int committed = list.stream().mapToInt(SprintService::points).sum();
-			int completed = list.stream().filter(i -> resolvedIn(i, resolvedCache))
-					.mapToInt(SprintService::points).sum();
+		for (Sprint s : done) {
+			int committed;
+			int completed;
+			if (s.getClosingPoints() != null) {
+				committed = s.getClosingPoints().entrySet().stream().filter(e -> visible.contains(e.getKey()))
+						.mapToInt(e -> e.getValue().committedOrZero()).sum();
+				completed = s.getClosingPoints().entrySet().stream().filter(e -> visible.contains(e.getKey()))
+						.mapToInt(e -> e.getValue().completedOrZero()).sum();
+			}
+			else {
+				List<Issue> stayed = issues.findBySprintId(s.getId()).stream()
+						.filter(i -> !i.isArchived() && visible.contains(i.getProjectId())).toList();
+				completed = stayed.stream().filter(i -> resolvedIn(i, resolvedCache))
+						.mapToInt(SprintService::points).sum();
+				committed = stayed.stream().mapToInt(SprintService::points).sum() + carriedOut(s, visible);
+			}
 			out.add(new VelocityPoint(s.getId(), s.getName(), committed, completed));
 		}
 		java.util.Collections.reverse(out);
 		return out;
+	}
+
+	/**
+	 * Points of the unfinished issues an old sprint's completion moved out: SPRINT moves away from it
+	 * on or after its last day, when a completion makes them. Moves during the sprint are scope it
+	 * gave back, not work it carried.
+	 */
+	private int carriedOut(Sprint sprint, Set<String> visible) {
+		if (sprint.getEndDate() == null) {
+			return 0;
+		}
+		Instant from = sprint.getEndDate().atStartOfDay().toInstant(ZoneOffset.UTC);
+		Set<String> moved = mongo.find(Query.query(Criteria.where("field").is(IssueActivity.Field.SPRINT.name())
+				.and("fromValue").is(sprint.getId()).and("createdAt").gte(from)), IssueActivity.class).stream()
+				.map(IssueActivity::getIssueId).collect(Collectors.toSet());
+		if (moved.isEmpty()) {
+			return 0;
+		}
+		int sum = 0;
+		for (Issue issue : issues.findAllById(moved)) {
+			if (!issue.isArchived() && visible.contains(issue.getProjectId())) {
+				sum += points(issue);
+			}
+		}
+		return sum;
 	}
 
 	/** Story points still open at the end of each elapsed sprint day vs. the ideal line. */
