@@ -40,4 +40,24 @@ public class Sprint {
 
 	@CreatedDate
 	private Instant createdAt;
+
+	/**
+	 * What the sprint held when it was completed, per project: the points committed and the points
+	 * done. Completing a sprint moves its unfinished issues out, so afterwards its issues alone say
+	 * only what was done; velocity needs both. Per project, so a reader sums only the projects they
+	 * see. Null for a running sprint and for one completed before this was kept.
+	 */
+	private java.util.Map<String, ClosingPoints> closingPoints;
+
+	/** Points committed and done in one project when the sprint closed. Boxed, as stored documents may lack them. */
+	public record ClosingPoints(Integer committed, Integer completed) {
+
+		public int committedOrZero() {
+			return committed == null ? 0 : committed;
+		}
+
+		public int completedOrZero() {
+			return completed == null ? 0 : completed;
+		}
+	}
 }
