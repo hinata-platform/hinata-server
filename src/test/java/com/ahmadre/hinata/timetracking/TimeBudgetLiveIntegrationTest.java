@@ -78,7 +78,8 @@ class TimeBudgetLiveIntegrationTest {
 	@BeforeEach
 	void seed() {
 		for (Class<?> type : List.of(User.class, Project.class, Issue.class, WorkItem.class, Notification.class,
-				TimeMark.class, ProjectTimeSettings.class, Team.class)) {
+				TimeMark.class, ProjectTimeSettings.class, Team.class, SprintTimeSettings.class,
+				com.ahmadre.hinata.board.Sprint.class, com.ahmadre.hinata.board.AgileBoard.class)) {
 			mongo.remove(new Query(), type);
 		}
 		cache.forgetAll();
@@ -180,6 +181,37 @@ class TimeBudgetLiveIntegrationTest {
 		mongo.updateFirst(Query.query(Criteria.where("projectId").is(project.getId())),
 				new Update().set("estimateLimitMode", ProjectTimeSettings.LimitMode.OPEN), ProjectTimeSettings.class);
 		assertThat(guard.warningsAfter(saved, lead)).isEmpty();
+	}
+
+	@Test
+	void aSprintIsHeardByTheLeadsWhoSeeEveryProjectOfItsBoard() {
+		budget(600000, null);
+		com.ahmadre.hinata.board.Sprint sprint = sprintOn(List.of(project.getId()));
+		Issue issue = mongo.insert(Issue.builder().projectId(project.getId()).readableId("APO-7").numberInProject(7)
+				.title("s").state("Open").sprintId(sprint.getId()).assigneeIds(new ArrayList<>()).build());
+		record(540, issue.getId());
+		touch(issue.getId());
+		assertThat(bodies(lead)).singleElement().asString().contains("Sprint").contains("80 %");
+
+		// A board that also spans a project the leads cannot see: its sum is not theirs to hear.
+		Project hidden = mongo.insert(Project.builder().key("SEC").name("Secret").leadId("someone")
+				.leadIds(new ArrayList<>(List.of("someone"))).memberIds(new ArrayList<>(List.of("someone"))).build());
+		com.ahmadre.hinata.board.Sprint shared = sprintOn(List.of(project.getId(), hidden.getId()));
+		Issue other = mongo.insert(Issue.builder().projectId(project.getId()).readableId("APO-8").numberInProject(8)
+				.title("t").state("Open").sprintId(shared.getId()).assigneeIds(new ArrayList<>()).build());
+		record(540, other.getId());
+		touch(other.getId());
+		assertThat(bodies(lead)).hasSize(1);
+	}
+
+	private com.ahmadre.hinata.board.Sprint sprintOn(List<String> projectIds) {
+		com.ahmadre.hinata.board.AgileBoard board = mongo.insert(com.ahmadre.hinata.board.AgileBoard.builder()
+				.name("Board").projectIds(new ArrayList<>(projectIds)).build());
+		com.ahmadre.hinata.board.Sprint sprint = mongo.insert(com.ahmadre.hinata.board.Sprint.builder()
+				.boardId(board.getId()).name("Sprint " + board.getId().substring(0, 4))
+				.startDate(LocalDate.of(2026, 9, 1)).endDate(LocalDate.of(2026, 9, 14)).build());
+		mongo.insert(SprintTimeSettings.builder().sprintId(sprint.getId()).budgetMinutes(600).build());
+		return sprint;
 	}
 
 	private User person(String name) {
