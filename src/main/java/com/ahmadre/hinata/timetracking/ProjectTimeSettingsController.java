@@ -206,7 +206,11 @@ public class ProjectTimeSettingsController {
 		}
 		ProjectTimeSettings before = store.findByProjectId(project.getId()).orElse(null);
 		MoneyBudgets money = moneyBudgets.getIfAvailable();
-		if (request.getBudgetCents() != null && (money == null || !money.enabled())) {
+		// Only a new or changed figure needs billing: a block saved back as it was, with billing
+		// switched off since, keeps what was set rather than being refused.
+		boolean moneyChanged = request.getBudgetCents() != null
+				&& !Objects.equals(request.getBudgetCents(), before == null ? null : before.getBudgetCents());
+		if (moneyChanged && (money == null || !money.enabled())) {
 			throw ApiException.badRequest("error.time.moneyBudgetNeedsBilling");
 		}
 		// Switching to a cost budget is an administrator's: cost rates can reveal a salary. Only one
