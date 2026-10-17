@@ -42,7 +42,8 @@ public class GanttController {
 	 */
 	public record GanttTask(String id, String readableId, String title, String state,
 			String type, String assigneeId, LocalDate startDate, LocalDate dueDate, boolean resolved,
-			String parentId, List<String> dependsOnIds, int progressPercent) {
+			String parentId, List<String> dependsOnIds, int progressPercent, Integer estimateMinutes,
+			int spentMinutes) {
 	}
 
 	/** The chart in one round trip: its bars and the connectors between them. */
@@ -74,7 +75,9 @@ public class GanttController {
 		return new GanttTask(issue.getId(), issue.getReadableId(), issue.getTitle(),
 				issue.getState(), issue.getType().name(), issue.getAssigneeId(),
 				issue.getStartDate(), issue.getDueDate(),
-				resolved, issue.getParentId(), issue.getDependsOnIds(), progress);
+				resolved, issue.getParentId(), issue.getDependsOnIds(), progress,
+				// Additive (HIN-152): the bar's honey line draws spent time against the estimate.
+				issue.getEstimateMinutes(), issue.getSpentMinutes());
 	}
 
 	private int progressFromTime(Issue issue) {

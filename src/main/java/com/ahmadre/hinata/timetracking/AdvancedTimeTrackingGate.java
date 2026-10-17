@@ -68,6 +68,7 @@ public class AdvancedTimeTrackingGate implements HandlerInterceptor {
 			"/api/v1/projects/*/time-settings",
 			// Budget usage (HIN-152), on the same core resources for the same reason.
 			"/api/v1/projects/*/time-usage", "/api/v1/projects/time-usage",
+			"/api/v1/projects/time-usage/**",
 			"/api/v1/issues/*/time-usage");
 
 	/** What a client sees for every gated path while the module is off. */
