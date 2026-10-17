@@ -7,7 +7,6 @@ import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintService;
 import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -57,7 +56,15 @@ public class SprintTimeController {
 		User user = currentUser.require();
 		Sprint sprint = sprints.accessibleSprint(sprintId, user);
 		AgileBoard board = sprints.accessibleBoard(sprint.getBoardId(), user);
-		return history.sprintUsage(sprint, board.getProjectIds());
+		// Whether the reader may set it, so a client offers the way only to those who can.
+		return history.sprintUsage(sprint, board.getProjectIds()).editable(runsOne(board, user));
+	}
+
+	/** Whether [user] leads, or administers a team owning, one of the board's projects. */
+	private boolean runsOne(AgileBoard board, User user) {
+		return board.getProjectIds().stream()
+				.map(id -> projects.findOptional(id).orElse(null))
+				.anyMatch(project -> project != null && projects.canManage(project, user));
 	}
 
 	@PutMapping("/api/v1/sprints/{sprintId}/time-settings")
@@ -66,10 +73,7 @@ public class SprintTimeController {
 		User user = currentUser.require();
 		Sprint sprint = sprints.accessibleSprint(sprintId, user);
 		AgileBoard board = sprints.accessibleBoard(sprint.getBoardId(), user);
-		boolean runsOne = board.getProjectIds().stream()
-				.map(id -> projects.findOptional(id).orElse(null))
-				.anyMatch(project -> project != null && projects.canManage(project, user));
-		if (!runsOne) {
+		if (!runsOne(board, user)) {
 			throw ApiException.forbidden("error.project.notLead");
 		}
 		Integer budget = request.budgetMinutes() == null || request.budgetMinutes() == 0 ? null
@@ -83,6 +87,6 @@ public class SprintTimeController {
 				.meta("sprint", sprint.getId())
 				.meta("budgetMinutes", String.valueOf(budget))
 				.log();
-		return history.sprintUsage(sprint, board.getProjectIds());
+		return history.sprintUsage(sprint, board.getProjectIds()).editable(true);
 	}
 }
