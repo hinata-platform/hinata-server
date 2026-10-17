@@ -26,13 +26,16 @@ public class TimeBudgetGuard {
 	private final TimeTrackingSettings policy;
 	private final TimeUsageService usage;
 	private final MongoTemplate mongo;
+	private final TimeHistoryService history;
 
 	/** Which limit a warning speaks about. */
 	public enum Kind {
 		/** The project's time budget. */
 		BUDGET,
 		/** The issue's own estimate. */
-		ESTIMATE
+		ESTIMATE,
+		/** The budget of the sprint the issue is in (HIN-156). */
+		SPRINT
 	}
 
 	/** How far: from the warning share, or from the limit on. */
@@ -68,6 +71,12 @@ public class TimeBudgetGuard {
 				add(warnings, Kind.ESTIMATE, issue.getId(), issue.getSpentMinutes(), issue.getEstimateMinutes(),
 						near);
 			}
+		}
+		// The sprint follows the project's budget mode: it is a budget of the same kind.
+		boolean budgetWarns = settings == null || settings.budgetMode() == ProjectTimeSettings.LimitMode.WARN;
+		if (saved.getIssueId() != null && budgetWarns) {
+			history.sprintOfIssue(saved.getIssueId()).ifPresent(sprint -> add(warnings, Kind.SPRINT,
+					sprint.sprint().getId(), sprint.usedMinutes(), sprint.budgetMinutes(), near));
 		}
 		return warnings;
 	}

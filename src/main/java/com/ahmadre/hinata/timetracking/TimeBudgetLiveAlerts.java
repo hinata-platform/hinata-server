@@ -58,6 +58,7 @@ class TimeBudgetLiveAlerts {
 	private final TeamRepository teams;
 	private final MongoTemplate mongo;
 	private final org.springframework.beans.factory.ObjectProvider<MoneyBudgets> moneyBudgets;
+	private final TimeHistoryService history;
 
 	@Async
 	@EventListener
@@ -132,11 +133,17 @@ class TimeBudgetLiveAlerts {
 		byId.fields().include("readableId", "projectId", "estimateMinutes", "assigneeIds")
 				.include(Issue.PROJECTION_REQUIRED);
 		Issue issue = mongo.findOne(byId, Issue.class);
-		if (issue == null || issue.getProjectId() == null || issue.getEstimateMinutes() == null
-				|| issue.getEstimateMinutes() <= 0) {
+		if (issue == null || issue.getProjectId() == null) {
 			return;
 		}
 		ProjectTimeSettings settings = settingsOf(issue.getProjectId());
+		// The sprint follows the project's budget mode, and is measured with or without an estimate.
+		if (settings == null || settings.budgetMode() == ProjectTimeSettings.LimitMode.WARN) {
+			measureSprint(issue);
+		}
+		if (issue.getEstimateMinutes() == null || issue.getEstimateMinutes() <= 0) {
+			return;
+		}
 		if (settings != null && settings.estimateMode() != ProjectTimeSettings.LimitMode.WARN) {
 			return;
 		}
@@ -164,6 +171,24 @@ class TimeBudgetLiveAlerts {
 		}
 		notifications.notifyTimeEstimateReached(told, issue.getReadableId(), project.getId(), reached,
 				issue.getSpentMinutes(), issue.getEstimateMinutes());
+	}
+
+	/** The issue's sprint against its budget (HIN-156): the project's leads hear the stages. */
+	private void measureSprint(Issue issue) {
+		history.sprintOfIssue(issue.getId()).ifPresent(figures -> {
+			Set<Integer> thresholds = new TreeSet<>(OVERRUN);
+			thresholds.add(TimeAlerts.DEFAULT_BUDGET_PERCENT);
+			Integer reached = settle("SPRINT", figures.sprint().getId(), figures.usedMinutes(),
+					figures.budgetMinutes(), thresholds);
+			if (reached == null) {
+				return;
+			}
+			Project project = activeProject(issue.getProjectId());
+			if (project != null) {
+				notifications.notifyTimeBudgetAlert(leadsOf(project), project.getId(), figures.sprint().getName(),
+						TimeLimit.BUDGET, reached, figures.usedMinutes(), figures.budgetMinutes());
+			}
+		});
 	}
 
 	/**

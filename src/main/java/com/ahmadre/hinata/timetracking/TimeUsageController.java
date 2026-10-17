@@ -41,6 +41,8 @@ public class TimeUsageController {
 	private final ProjectReach reach;
 	private final IssueService issues;
 	private final CurrentUser currentUser;
+	private final TimeHistoryService history;
+	private final java.time.Clock clock;
 
 	@GetMapping("/api/v1/projects/{projectId}/time-usage")
 	public TimeUsageService.ProjectUsage project(@PathVariable String projectId) {
@@ -102,6 +104,38 @@ public class TimeUsageController {
 		Map<String, String> shownNames = new HashMap<>();
 		shown.forEach(row -> shownNames.put(row.projectId(), names.get(row.projectId())));
 		return new TopBudgets(shown, shownNames, ranked.size());
+	}
+
+	/**
+	 * Recorded minutes per day for the burn-down (HIN-156): at most a year, the last 90 days unless
+	 * asked otherwise. Sums of the whole project, never per person.
+	 */
+	@GetMapping("/api/v1/projects/{projectId}/time-usage/history")
+	public TimeHistoryService.History history(@PathVariable String projectId,
+			@RequestParam(required = false) java.time.LocalDate from,
+			@RequestParam(required = false) java.time.LocalDate to) {
+		Project project = visibleProject(projectId);
+		java.time.LocalDate end = to != null ? to : java.time.LocalDate.now(clock.withZone(java.time.ZoneOffset.UTC));
+		java.time.LocalDate start = from != null ? from : end.minusDays(89);
+		if (start.isAfter(end) || TimeHistoryService.span(start, end) > TimeHistoryService.HISTORY_MAX_DAYS) {
+			throw ApiException.badRequest("error.time.historyRange", TimeHistoryService.HISTORY_MAX_DAYS);
+		}
+		return history.history(project.getId(), start, end);
+	}
+
+	/** When the budget runs out at the present pace (HIN-156). */
+	@GetMapping("/api/v1/projects/{projectId}/time-usage/forecast")
+	public TimeHistoryService.Forecast forecast(@PathVariable String projectId) {
+		return history.forecast(visibleProject(projectId).getId());
+	}
+
+	private Project visibleProject(String projectId) {
+		User user = currentUser.require();
+		Project project = projects.get(projectId);
+		if (!reach.canSee(project, user)) {
+			throw ApiException.forbidden("error.project.notMember");
+		}
+		return project;
 	}
 
 	@GetMapping("/api/v1/issues/{issueIdOrKey}/time-usage")
