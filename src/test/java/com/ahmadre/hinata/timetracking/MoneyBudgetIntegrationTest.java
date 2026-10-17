@@ -146,6 +146,18 @@ class MoneyBudgetIntegrationTest {
 	}
 
 	@Test
+	void aBlockSavedBackAsItWasKeepsItsMoneyBudgetAfterBillingWentOff() {
+		save(lead, 100_000L, null);
+		billing(false);
+
+		save(lead, 100_000L, null);
+
+		assertThat(mongo.findOne(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("projectId").is(project.getId())),
+				ProjectTimeSettings.class).getBudgetCents()).isEqualTo(100_000L);
+	}
+
+	@Test
 	void withoutBillingThereIsNoMoneyBudget() {
 		billing(false);
 		assertThatThrownBy(() -> save(lead, 100_000L, null))
