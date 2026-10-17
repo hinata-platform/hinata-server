@@ -33,6 +33,25 @@ class BoardAccess {
 		return ids.stream().map(readable::get).filter(Objects::nonNull).toList();
 	}
 
+	/** The ids of the board's projects [user] may see, archived ones included. */
+	java.util.Set<String> visibleProjectIds(AgileBoard board, User user) {
+		List<String> ids = board.getProjectIds() == null ? List.of() : board.getProjectIds();
+		return projects.visibleAmong(user, ids).stream().map(Project::getId).collect(Collectors.toSet());
+	}
+
+	/**
+	 * Who may manage a board (rename, delete, its sprint budget): its owner, a lead of any project it
+	 * spans, a team administrator of a team owning one. Members use a board but do not reconfigure
+	 * it. The board's projects in one read.
+	 */
+	boolean canManage(AgileBoard board, User user) {
+		if (user.getId().equals(board.getOwnerId())) {
+			return true;
+		}
+		List<String> ids = board.getProjectIds() == null ? List.of() : board.getProjectIds();
+		return projects.visibleAmong(user, ids).stream().anyMatch(project -> projects.canManage(project, user));
+	}
+
 	/**
 	 * The board's projects [user] may see.
 	 *

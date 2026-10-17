@@ -146,6 +146,53 @@ class MoneyBudgetIntegrationTest {
 	}
 
 	@Test
+	void aLeadCannotChangeOrRemoveACostBudgetItDoesNotSee() {
+		save(admin, 100_000L, ProjectTimeSettings.RateKind.COST);
+		when(currentUser.require()).thenReturn(lead);
+		assertThat(controller.get(project.getId()).budgetCents()).isNull();
+
+		save(lead, 1L, ProjectTimeSettings.RateKind.COST);
+		save(lead, null, null);
+
+		assertThat(stored().getBudgetCents()).isEqualTo(100_000L);
+		assertThat(stored().getBudgetRateKind()).isEqualTo(ProjectTimeSettings.RateKind.COST);
+	}
+
+	@Test
+	void aTeamAdministratorWhoIsNoLeadRunsTheProjectButNotItsMoney() {
+		User teamAdmin = user("teamadmin", Role.MEMBER);
+		mongo.insert(com.ahmadre.hinata.team.Team.builder().name("Team").key("TEAM")
+				.projectIds(new ArrayList<>(List.of(project.getId())))
+				.members(new ArrayList<>(List.of(com.ahmadre.hinata.team.TeamMembership.builder()
+						.userId(teamAdmin.getId()).role(com.ahmadre.hinata.team.TeamRole.ADMIN)
+						.access(com.ahmadre.hinata.team.ProjectAccess.all()).build())))
+				.build());
+		assertThatThrownBy(() -> save(teamAdmin, 5_000L, ProjectTimeSettings.RateKind.BILLABLE))
+				.isInstanceOfSatisfying(ApiException.class,
+						refused -> assertThat(refused.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+		save(lead, 5_000L, ProjectTimeSettings.RateKind.BILLABLE);
+		when(currentUser.require()).thenReturn(teamAdmin);
+		assertThat(controller.get(project.getId()).budgetCents()).isNull();
+		// Saving the rest of the block keeps the revenue budget the team administrator does not see.
+		save(teamAdmin, null, null);
+		assertThat(stored().getBudgetCents()).isEqualTo(5_000L);
+	}
+
+	@Test
+	void aMemberDoesNotLearnFromTheReportThatAProjectHasAMoneyBudget() {
+		save(admin, 100_000L, ProjectTimeSettings.RateKind.BILLABLE);
+		assertThat(usage.projectsWithBudgetFor(member, null)).isEmpty();
+		assertThat(usage.projectsWithBudgetFor(lead, null)).containsExactly(project.getId());
+	}
+
+	private ProjectTimeSettings stored() {
+		return mongo.findOne(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("projectId").is(project.getId())),
+				ProjectTimeSettings.class);
+	}
+
+	@Test
 	void aBlockSavedBackAsItWasKeepsItsMoneyBudgetAfterBillingWentOff() {
 		save(lead, 100_000L, null);
 		billing(false);

@@ -9,9 +9,10 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Drops the index {@code work_items.date_user_project} (HIN-93): its keys grew by
- * {@code durationMinutes} under a new name ({@link WorkItem#DATE_USER_PROJECT_MINUTES_INDEX}),
- * and the old one would only cost every write a second copy of the same keys.
+ * Drops the retired indexes of {@code work_items}: {@code date_user_project} (HIN-93) and
+ * {@code project_date} (HIN-156). The keys of each grew by {@code durationMinutes} under a new name
+ * ({@link WorkItem#DATE_USER_PROJECT_MINUTES_INDEX}, {@link WorkItem#PROJECT_DATE_MINUTES_INDEX}),
+ * and an old one would only cost every write a second copy of the same keys.
  *
  * <p>Asks the collection each start rather than keeping a marker: listing the indexes of one
  * collection is as cheap as reading a marker, and it stays right on an instance restored from a
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 public class WorkItemIndexMigration implements ApplicationRunner {
 
 	static final String RETIRED = "date_user_project";
+	static final String RETIRED_PROJECT_DATE = "project_date";
 
 	private final MongoTemplate mongo;
 
@@ -32,13 +34,15 @@ public class WorkItemIndexMigration implements ApplicationRunner {
 	}
 
 	boolean drop() {
+		boolean dropped = false;
 		for (Document index : mongo.getCollection(mongo.getCollectionName(WorkItem.class)).listIndexes()) {
-			if (RETIRED.equals(index.getString("name"))) {
-				mongo.getCollection(mongo.getCollectionName(WorkItem.class)).dropIndex(RETIRED);
-				log.info("[time] dropped the retired index work_items.{}", RETIRED);
-				return true;
+			String name = index.getString("name");
+			if (RETIRED.equals(name) || RETIRED_PROJECT_DATE.equals(name)) {
+				mongo.getCollection(mongo.getCollectionName(WorkItem.class)).dropIndex(name);
+				log.info("[time] dropped the retired index work_items.{}", name);
+				dropped = true;
 			}
 		}
-		return false;
+		return dropped;
 	}
 }

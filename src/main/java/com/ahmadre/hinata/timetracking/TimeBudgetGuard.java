@@ -27,6 +27,7 @@ public class TimeBudgetGuard {
 	private final TimeUsageService usage;
 	private final MongoTemplate mongo;
 	private final TimeHistoryService history;
+	private final com.ahmadre.hinata.project.ProjectReach reach;
 
 	/** Which limit a warning speaks about. */
 	public enum Kind {
@@ -47,8 +48,11 @@ public class TimeBudgetGuard {
 	public record BudgetWarning(Kind kind, Level level, String subjectId, long used, long limit, int percent) {
 	}
 
-	/** The warnings for [saved], fullest first; empty when nothing is near a limit. */
-	public List<BudgetWarning> warningsAfter(WorkItem saved) {
+	/**
+	 * The warnings for [saved], told to [reader], fullest first; empty when nothing is near a limit.
+	 * A sprint is summed over the board's projects [reader] sees.
+	 */
+	public List<BudgetWarning> warningsAfter(WorkItem saved, com.ahmadre.hinata.user.User reader) {
 		List<BudgetWarning> warnings = new ArrayList<>();
 		if (saved == null || saved.getProjectId() == null || !policy.advancedEnabled()) {
 			return warnings;
@@ -61,22 +65,23 @@ public class TimeBudgetGuard {
 			long used = usage.ofProjects(List.of(saved.getProjectId())).getFirst().usedMinutes();
 			add(warnings, Kind.BUDGET, saved.getProjectId(), used, settings.getBudgetMinutes(), near);
 		}
-		ProjectTimeSettings.LimitMode estimateMode = settings == null ? ProjectTimeSettings.LimitMode.WARN
-				: settings.estimateMode();
-		if (saved.getIssueId() != null && estimateMode == ProjectTimeSettings.LimitMode.WARN) {
+		// The issue once, for its estimate and its sprint.
+		Issue issue = null;
+		if (saved.getIssueId() != null) {
 			Query byId = Query.query(Criteria.where("_id").is(saved.getIssueId()));
-			byId.fields().include("estimateMinutes", "spentMinutes").include(Issue.PROJECTION_REQUIRED);
-			Issue issue = mongo.findOne(byId, Issue.class);
-			if (issue != null && issue.getEstimateMinutes() != null && issue.getEstimateMinutes() > 0) {
-				add(warnings, Kind.ESTIMATE, issue.getId(), issue.getSpentMinutes(), issue.getEstimateMinutes(),
-						near);
-			}
+			byId.fields().include("estimateMinutes", "spentMinutes", "sprintId").include(Issue.PROJECTION_REQUIRED);
+			issue = mongo.findOne(byId, Issue.class);
+		}
+		if (issue != null && ProjectTimeSettings.estimateModeOf(settings) == ProjectTimeSettings.LimitMode.WARN
+				&& issue.getEstimateMinutes() != null && issue.getEstimateMinutes() > 0) {
+			add(warnings, Kind.ESTIMATE, issue.getId(), issue.getSpentMinutes(), issue.getEstimateMinutes(), near);
 		}
 		// The sprint follows the project's budget mode: it is a budget of the same kind.
-		boolean budgetWarns = settings == null || settings.budgetMode() == ProjectTimeSettings.LimitMode.WARN;
-		if (saved.getIssueId() != null && budgetWarns) {
-			history.sprintOfIssue(saved.getIssueId()).ifPresent(sprint -> add(warnings, Kind.SPRINT,
-					sprint.sprint().getId(), sprint.usedMinutes(), sprint.budgetMinutes(), near));
+		if (issue != null && issue.getSprintId() != null
+				&& ProjectTimeSettings.budgetModeOf(settings) == ProjectTimeSettings.LimitMode.WARN) {
+			history.sprintFigures(issue.getSprintId(), projectId -> reach.canSee(projectId, reader))
+					.ifPresent(sprint -> add(warnings, Kind.SPRINT, sprint.sprint().getId(), sprint.usedMinutes(),
+							sprint.budgetMinutes(), TimeHistoryService.SPRINT_NEAR_PERCENT));
 		}
 		return warnings;
 	}

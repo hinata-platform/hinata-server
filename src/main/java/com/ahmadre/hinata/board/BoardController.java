@@ -135,26 +135,8 @@ public class BoardController {
 	 * members may use a board but not reconfigure it.
 	 */
 	private void assertBoardManage(AgileBoard board, User user) {
-		if (canManageBoard(board, user)) return;
+		if (access.canManage(board, user)) return;
 		throw ApiException.forbidden("error.board.notManager");
-	}
-
-	private boolean canManageBoard(AgileBoard board, User user) {
-		if (user.getId().equals(board.getOwnerId())) return true;
-		for (String projectId : board.getProjectIds()) {
-			if (projects.findOptional(projectId).map(p -> isProjectLead(p, user)).orElse(false)) {
-				return true;
-			}
-			for (com.ahmadre.hinata.team.Team team : teams.findByProjectIdsContains(projectId)) {
-				if (team.isAdmin(user.getId())) return true;
-			}
-		}
-		return false;
-	}
-
-	private boolean isProjectLead(Project project, User user) {
-		if (user.getId().equals(project.getLeadId())) return true;
-		return project.getLeadIds() != null && project.getLeadIds().contains(user.getId());
 	}
 
 	@PostMapping

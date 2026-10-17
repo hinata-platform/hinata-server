@@ -54,6 +54,7 @@ public class SprintService {
 	private final ProjectService projects;
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
+	private final BoardAccess access;
 
 	// ── access ────────────────────────────────────────────────────────────
 
@@ -69,6 +70,16 @@ public class SprintService {
 		if (board.getProjectIds().stream().noneMatch(visible::contains)) {
 			throw ApiException.forbidden("error.accessDenied");
 		}
+	}
+
+	/** Whether [user] may manage [board], see {@link BoardAccess#canManage}. */
+	public boolean canManage(AgileBoard board, User user) {
+		return access.canManage(board, user);
+	}
+
+	/** The ids of [board]'s projects [user] may see. */
+	public Set<String> visibleProjectIds(AgileBoard board, User user) {
+		return access.visibleProjectIds(board, user);
 	}
 
 	public Sprint accessibleSprint(String sprintId, User user) {

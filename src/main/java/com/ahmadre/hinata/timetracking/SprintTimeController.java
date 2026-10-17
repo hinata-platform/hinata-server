@@ -37,7 +37,6 @@ import java.time.Clock;
 public class SprintTimeController {
 
 	private final SprintService sprints;
-	private final ProjectService projects;
 	private final TimeHistoryService history;
 	private final MongoTemplate mongo;
 	private final CurrentUser currentUser;
@@ -56,15 +55,10 @@ public class SprintTimeController {
 		User user = currentUser.require();
 		Sprint sprint = sprints.accessibleSprint(sprintId, user);
 		AgileBoard board = sprints.accessibleBoard(sprint.getBoardId(), user);
-		// Whether the reader may set it, so a client offers the way only to those who can.
-		return history.sprintUsage(sprint, board.getProjectIds()).editable(runsOne(board, user));
-	}
-
-	/** Whether [user] leads, or administers a team owning, one of the board's projects. */
-	private boolean runsOne(AgileBoard board, User user) {
-		return board.getProjectIds().stream()
-				.map(id -> projects.findOptional(id).orElse(null))
-				.anyMatch(project -> project != null && projects.canManage(project, user));
+		// Summed over the board's projects the reader sees; whether the reader may set it, so a client
+		// offers the way only to those who can.
+		return history.sprintUsage(sprint, sprints.visibleProjectIds(board, user))
+				.editable(sprints.canManage(board, user));
 	}
 
 	@PutMapping("/api/v1/sprints/{sprintId}/time-settings")
@@ -73,20 +67,24 @@ public class SprintTimeController {
 		User user = currentUser.require();
 		Sprint sprint = sprints.accessibleSprint(sprintId, user);
 		AgileBoard board = sprints.accessibleBoard(sprint.getBoardId(), user);
-		if (!runsOne(board, user)) {
-			throw ApiException.forbidden("error.project.notLead");
+		if (!sprints.canManage(board, user)) {
+			throw ApiException.forbidden("error.board.notManager");
 		}
 		Integer budget = request.budgetMinutes() == null || request.budgetMinutes() == 0 ? null
 				: request.budgetMinutes();
+		SprintTimeSettings before = mongo.findOne(Query.query(Criteria.where("sprintId").is(sprint.getId())),
+				SprintTimeSettings.class);
 		mongo.upsert(Query.query(Criteria.where("sprintId").is(sprint.getId())),
 				new Update().set("budgetMinutes", budget).set("updatedAt", clock.instant())
 						.set("updatedBy", user.getId()),
 				SprintTimeSettings.class);
-		audit.event(AuditAction.TIME_PROJECT_SETTINGS_CHANGED).actor(user)
+		audit.event(AuditAction.TIME_SPRINT_SETTINGS_CHANGED).actor(user)
 				.target(sprint.getId(), sprint.getName())
 				.meta("sprint", sprint.getId())
-				.meta("budgetMinutes", String.valueOf(budget))
+				.meta("board", board.getId())
+				.meta("projects", String.join(",", board.getProjectIds()))
+				.meta("budgetMinutes", (before == null ? null : before.getBudgetMinutes()) + " → " + budget)
 				.log();
-		return history.sprintUsage(sprint, board.getProjectIds()).editable(true);
+		return history.sprintUsage(sprint, sprints.visibleProjectIds(board, user)).editable(true);
 	}
 }

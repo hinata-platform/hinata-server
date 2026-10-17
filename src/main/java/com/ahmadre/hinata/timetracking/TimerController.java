@@ -246,7 +246,7 @@ public class TimerController {
 		TimerService.Stopped stopped = timers.stop(body.toRequest(), user);
 		return new TimeEntryController.TimeEntryResponse(
 				TimeTrackingController.WorkItemResponse.from(stopped.entry()),
-				timeTracking.overlapsOf(stopped.entry(), user), budgets.warningsAfter(stopped.entry()));
+				timeTracking.overlapsOf(stopped.entry(), user), budgets.warningsAfter(stopped.entry(), user));
 	}
 
 	/** Throws the timer away; nothing is recorded. */

@@ -178,7 +178,7 @@ class TimeAlerts {
 		// Projects in WARN, the default, are measured the moment an entry is written
 		// (TimeBudgetLiveAlerts); the hourly scan keeps only those that asked for it.
 		List<String> measurable = ids.stream()
-				.filter(id -> modeOf(settings.get(id), true) == ProjectTimeSettings.LimitMode.OPEN)
+				.filter(id -> ProjectTimeSettings.budgetModeOf(settings.get(id)) == ProjectTimeSettings.LimitMode.OPEN)
 				.filter(id -> budgetOf(settings.get(id)) > 0 || estimated.getOrDefault(id, 0L) > 0)
 				.toList();
 		if (measurable.isEmpty()) {
@@ -245,7 +245,7 @@ class TimeAlerts {
 				.map(Issue::getProjectId).distinct().toList());
 		// As for projects: an issue in a WARN project is measured live.
 		issues.values().removeIf(issue ->
-				modeOf(settings.get(issue.getProjectId()), false) != ProjectTimeSettings.LimitMode.OPEN);
+				ProjectTimeSettings.estimateModeOf(settings.get(issue.getProjectId())) != ProjectTimeSettings.LimitMode.OPEN);
 		if (issues.isEmpty()) {
 			return 0;
 		}
@@ -352,14 +352,6 @@ class TimeAlerts {
 			}
 		}
 		return reached;
-	}
-
-	/** A project's budget mode ([budget]) or estimate mode, null settings meaning the default. */
-	private static ProjectTimeSettings.LimitMode modeOf(ProjectTimeSettings settings, boolean budget) {
-		if (settings == null) {
-			return ProjectTimeSettings.LimitMode.of(null);
-		}
-		return budget ? settings.budgetMode() : settings.estimateMode();
 	}
 
 	private static long budgetOf(ProjectTimeSettings settings) {

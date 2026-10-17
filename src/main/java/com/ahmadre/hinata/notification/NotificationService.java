@@ -873,11 +873,27 @@ public class NotificationService {
 			long usedCents, long budgetCents, String currency) {
 		if (leadIds == null || leadIds.isEmpty()) return;
 		deliver(leadIds, Notification.Type.TIME_BUDGET_ALERT,
-				locale -> words.in(locale, "notify.timeBudget.title"),
+				locale -> words.in(locale, "notify.timeMoney.title"),
 				locale -> words.in(locale, "notify.timeBudget.money",
 						projectName, percent, money(locale, usedCents, currency), money(locale, budgetCents, currency)),
-				locale -> words.in(locale, "notify.timeBudget.push"),
+				locale -> words.in(locale, "notify.timeMoney.push"),
 				projectLink(projectId), LinkScope.project(projectId), Routing.of(Notification.Type.TIME_BUDGET_ALERT));
+	}
+
+	/**
+	 * Tells leads that a sprint's time reached a threshold of its budget (HIN-156), linking to its
+	 * board. The caller passes only those who may see every project the board spans, since the sum
+	 * spans them. Names the sprint and the sums, never a person.
+	 */
+	public void notifyTimeSprintAlert(Set<String> leadIds, String projectId, String boardId, String sprintName,
+			int percent, long recordedMinutes, long budgetMinutes) {
+		if (leadIds == null || leadIds.isEmpty()) return;
+		deliver(leadIds, Notification.Type.TIME_BUDGET_ALERT,
+				locale -> words.in(locale, "notify.timeSprint.title"),
+				locale -> words.in(locale, "notify.timeSprint.body",
+						sprintName, percent, hours(locale, recordedMinutes), hours(locale, budgetMinutes)),
+				locale -> words.in(locale, "notify.timeSprint.push"),
+				"/board/" + boardId, LinkScope.project(projectId), Routing.of(Notification.Type.TIME_BUDGET_ALERT));
 	}
 
 	/** Cents as an amount in the reader's language, "4.800,00 €". */

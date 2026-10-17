@@ -89,10 +89,6 @@ public class ProjectTimeSettingsController {
 			ProjectTimeSettings.LimitMode budgetLimitMode, ProjectTimeSettings.LimitMode estimateLimitMode,
 			Long budgetCents, ProjectTimeSettings.RateKind budgetRateKind) {
 
-		static ProjectTimeSettingsResponse of(String projectId, ProjectTimeSettings settings) {
-			return of(projectId, settings, true);
-		}
-
 		/**
 		 * [money] false leaves the money budget out: a member reads the project's time settings, and
 		 * what a project is allowed to cost is a lead's and an administrator's business (HIN-155).
@@ -185,8 +181,8 @@ public class ProjectTimeSettingsController {
 		if (!reach.canSee(project, user)) {
 			throw ApiException.forbidden("error.project.notMember");
 		}
-		return ProjectTimeSettingsResponse.of(project.getId(),
-				store.findByProjectId(project.getId()).orElse(null), projects.canManage(project, user));
+		ProjectTimeSettings stored = store.findByProjectId(project.getId()).orElse(null);
+		return ProjectTimeSettingsResponse.of(project.getId(), stored, showsMoney(project, user, stored));
 	}
 
 	@PutMapping
@@ -205,20 +201,14 @@ public class ProjectTimeSettingsController {
 			throw ApiException.badRequest("error.time.lockDateInFuture");
 		}
 		ProjectTimeSettings before = store.findByProjectId(project.getId()).orElse(null);
-		MoneyBudgets money = moneyBudgets.getIfAvailable();
-		// Only a new or changed figure needs billing: a block saved back as it was, with billing
-		// switched off since, keeps what was set rather than being refused.
-		boolean moneyChanged = request.getBudgetCents() != null
-				&& !Objects.equals(request.getBudgetCents(), before == null ? null : before.getBudgetCents());
-		if (moneyChanged && (money == null || !money.enabled())) {
-			throw ApiException.badRequest("error.time.moneyBudgetNeedsBilling");
-		}
-		// Switching to a cost budget is an administrator's: cost rates can reveal a salary. Only one
-		// who also runs the project gets here (assertCanManage above: the administrator role alone
-		// does not open a project's settings). A lead saving the block back as it was is not a switch.
-		boolean wasCost = before != null && before.getBudgetRateKind() == ProjectTimeSettings.RateKind.COST;
-		if (request.getBudgetRateKind() == ProjectTimeSettings.RateKind.COST && !wasCost && !user.isOrgAdmin()) {
-			throw ApiException.forbidden("error.time.costBudgetAdminOnly");
+		// The money budget the caller was never shown stays as it is: the form sends back what it got,
+		// and for a money budget it may not see that is nothing (ProjectTimeSettings.moneyReadable).
+		boolean keepsMoney = !showsMoney(project, user, before);
+		Long budgetCents = keepsMoney ? before.getBudgetCents() : request.getBudgetCents();
+		ProjectTimeSettings.RateKind budgetRateKind = keepsMoney ? before.getBudgetRateKind()
+				: request.getBudgetRateKind();
+		if (!keepsMoney) {
+			checkMoneyChange(project, user, before, request);
 		}
 		ProjectTimeSettings settings = before != null ? before
 				: ProjectTimeSettings.builder().projectId(project.getId()).build();
@@ -230,8 +220,8 @@ public class ProjectTimeSettingsController {
 		settings.setAlertThresholds(thresholdsOf(request.getAlertThresholds()));
 		settings.setBudgetLimitMode(request.getBudgetLimitMode());
 		settings.setEstimateLimitMode(request.getEstimateLimitMode());
-		settings.setBudgetCents(request.getBudgetCents());
-		settings.setBudgetRateKind(request.getBudgetRateKind());
+		settings.setBudgetCents(budgetCents);
+		settings.setBudgetRateKind(budgetRateKind);
 		settings.setUpdatedAt(clock.instant());
 		settings.setUpdatedBy(user.getId());
 		ProjectTimeSettings saved = store.save(settings);
@@ -264,7 +254,48 @@ public class ProjectTimeSettingsController {
 				.meta("budgetRateKind", change(
 						before == null ? null : before.getBudgetRateKind(), saved.getBudgetRateKind()))
 				.log();
-		return ProjectTimeSettingsResponse.of(project.getId(), saved);
+		return ProjectTimeSettingsResponse.of(project.getId(), saved, showsMoney(project, user, saved));
+	}
+
+	/** Whether [user] sees the money budget of [settings]: with billing on, by ProjectTimeSettings.moneyReadable. */
+	private boolean showsMoney(Project project, User user, ProjectTimeSettings settings) {
+		if (settings == null || settings.getBudgetCents() == null) {
+			return true;
+		}
+		MoneyBudgets money = moneyBudgets.getIfAvailable();
+		return money != null && money.enabled()
+				&& ProjectTimeSettings.moneyReadable(user.isOrgAdmin(), projects.isLead(project, user), settings);
+	}
+
+	/**
+	 * A change to the money budget: it needs billing, a cost budget is set, changed and removed by an
+	 * administrator only (cost rates can reveal a salary), and a revenue budget by a lead or an
+	 * administrator, never by a team administrator alone. Only one who also runs the project gets
+	 * here (assertCanManage: the administrator role alone does not open a project's settings).
+	 * Saving the block back as it was is no change and needs none of this.
+	 */
+	private void checkMoneyChange(Project project, User user, ProjectTimeSettings before,
+			ProjectTimeSettingsRequest request) {
+		Long beforeCents = before == null ? null : before.getBudgetCents();
+		ProjectTimeSettings.RateKind beforeKind = beforeCents == null ? null : before.rateKind();
+		ProjectTimeSettings.RateKind requestKind = request.getBudgetCents() == null ? null
+				: ProjectTimeSettings.RateKind.of(request.getBudgetRateKind());
+		boolean changes = !Objects.equals(request.getBudgetCents(), beforeCents) || requestKind != beforeKind;
+		if (!changes) {
+			return;
+		}
+		MoneyBudgets money = moneyBudgets.getIfAvailable();
+		if (request.getBudgetCents() != null && (money == null || !money.enabled())) {
+			throw ApiException.badRequest("error.time.moneyBudgetNeedsBilling");
+		}
+		boolean cost = beforeKind == ProjectTimeSettings.RateKind.COST
+				|| requestKind == ProjectTimeSettings.RateKind.COST;
+		if (cost && !user.isOrgAdmin()) {
+			throw ApiException.forbidden("error.time.costBudgetAdminOnly");
+		}
+		if (!user.isOrgAdmin() && !projects.isLead(project, user)) {
+			throw ApiException.forbidden("error.project.notLead");
+		}
 	}
 
 	// --- helpers -------------------------------------------------------------------

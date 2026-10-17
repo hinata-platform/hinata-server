@@ -35,6 +35,13 @@ public class TimeUsageCache {
 	private final Clock clock;
 	private final Map<String, Held> held = new ConcurrentHashMap<>();
 
+	/**
+	 * Counts every forget. A read that started before a write and finishes after it carries the sums
+	 * from before; it may still answer with them, but it must not hold them for another
+	 * {@link #TTL}, or the bar drawn right after the save would not show it.
+	 */
+	private final java.util.concurrent.atomic.AtomicLong forgets = new java.util.concurrent.atomic.AtomicLong();
+
 	/** The sums of one project. */
 	record Sums(long usedMinutes, long estimatedMinutes) {
 	}
@@ -60,14 +67,18 @@ public class TimeUsageCache {
 			}
 		}
 		if (!missing.isEmpty()) {
+			long before = forgets.get();
 			Map<String, Sums> loaded = load.apply(missing);
+			boolean current = forgets.get() == before;
 			if (held.size() + missing.size() > MAX_ENTRIES) {
 				held.clear();
 			}
 			Instant until = now.plus(TTL);
 			for (String id : missing) {
 				Sums sums = loaded.getOrDefault(id, new Sums(0, 0));
-				held.put(id, new Held(sums, until));
+				if (current) {
+					held.put(id, new Held(sums, until));
+				}
 				found.put(id, sums);
 			}
 		}
@@ -77,12 +88,14 @@ public class TimeUsageCache {
 	/** Drops what is held for [projectId]; null is ignored, so callers need not ask. */
 	public void forget(String projectId) {
 		if (projectId != null) {
+			forgets.incrementAndGet();
 			held.remove(projectId);
 		}
 	}
 
 	/** Drops everything, for a write whose projects are not known without reading them. */
 	public void forgetAll() {
+		forgets.incrementAndGet();
 		held.clear();
 	}
 }

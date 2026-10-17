@@ -13,10 +13,10 @@ import java.util.Set;
  * What every write path of an entry tells the rest of the module (HIN-152, HIN-153): that a
  * project's and an issue's recorded time moved.
  *
- * <p>Two listeners care. The usage cache forgets the project at once, so a bar drawn right after a
- * save shows the save. And the live budget alerts measure the project and the issue again, after
- * the request, so the leads hear about a threshold the moment it is crossed rather than at the next
- * hourly scan.
+ * <p>The usage cache is told directly and forgets the project at once, so a bar drawn right after a
+ * save shows the save. Two listeners hear the event: the live budget alerts measure the project and
+ * the issue again, after the request, so the leads hear about a threshold the moment it is crossed
+ * rather than at the next hourly scan; and billing forgets the project's money figure (HIN-155).
  */
 @Component
 @RequiredArgsConstructor
@@ -27,6 +27,10 @@ public class TimeEntryWrites {
 
 	/** The projects and issues whose recorded time just moved. */
 	public record Touched(Set<String> projectIds, Set<String> issueIds) {
+	}
+
+	/** Entries went whose projects are not known: everything held about recorded time is stale. */
+	public record TouchedUnknown() {
 	}
 
 	/** One entry was written or removed; either id may be null. */
@@ -53,6 +57,7 @@ public class TimeEntryWrites {
 	 */
 	public void touchedUnknown() {
 		cache.forgetAll();
+		events.publishEvent(new TouchedUnknown());
 	}
 
 	private void publish(Set<String> projects, Set<String> issues) {

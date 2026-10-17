@@ -156,6 +156,33 @@ public class ProjectTimeSettings {
 		return RateKind.of(budgetRateKind);
 	}
 
+	/**
+	 * Whether a reader sees a money budget of [kind] (HIN-155). A revenue budget is valued at the
+	 * billable rates and is the lead's business; a cost budget is valued at the cost rates, which can
+	 * reveal a salary, and is an administrator's alone. A member never sees either, and a team
+	 * administrator who is no lead runs the project's other settings but not its money. Every surface
+	 * that answers or writes a money budget asks here (the settings, the usage, the report, a copy).
+	 */
+	public static boolean moneyReadable(boolean orgAdmin, boolean lead, RateKind kind) {
+		return orgAdmin || (lead && kind == RateKind.BILLABLE);
+	}
+
+	/** {@link #moneyReadable(boolean, boolean, RateKind)} of [settings]; true when it has none to hide. */
+	public static boolean moneyReadable(boolean orgAdmin, boolean lead, ProjectTimeSettings settings) {
+		return settings == null || settings.getBudgetCents() == null
+				|| moneyReadable(orgAdmin, lead, settings.rateKind());
+	}
+
+	/** The budget's mode of [settings], the default when there are none. */
+	public static LimitMode budgetModeOf(ProjectTimeSettings settings) {
+		return settings == null ? LimitMode.of(null) : settings.budgetMode();
+	}
+
+	/** The estimates' mode of [settings], the default when there are none. */
+	public static LimitMode estimateModeOf(ProjectTimeSettings settings) {
+		return settings == null ? LimitMode.of(null) : settings.estimateMode();
+	}
+
 	/** The budget's mode, with null resolved. */
 	public LimitMode budgetMode() {
 		return LimitMode.of(budgetLimitMode);

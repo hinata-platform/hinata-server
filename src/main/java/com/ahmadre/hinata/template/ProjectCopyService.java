@@ -271,7 +271,7 @@ public class ProjectCopyService {
 				copyBoard(source, created, trace);
 			}
 			if (options.includeTimeSettings()) {
-				copyTimeSettings(source.getId(), created.getId(), trace);
+				copyTimeSettings(source, created.getId(), user, trace);
 			}
 			audit.event(AuditAction.PROJECT_COPIED).actor(user)
 					.meta("source", source.getKey())
@@ -689,12 +689,15 @@ public class ProjectCopyService {
 	 * contract of a collection, and reading it here does not make project templates depend on
 	 * whether time tracking is switched on.
 	 */
-	private void copyTimeSettings(String sourceId, String copyId, Trace trace) {
+	private void copyTimeSettings(Project source, String copyId, User user, Trace trace) {
 		ProjectTimeSettings stored = mongo.findOne(
-				Query.query(Criteria.where("projectId").is(sourceId)), ProjectTimeSettings.class);
+				Query.query(Criteria.where("projectId").is(source.getId())), ProjectTimeSettings.class);
 		if (stored == null) {
 			return;
 		}
+		// Any member may copy, and becomes the copy's lead. The money budget travels only to one who
+		// may see it in the original: a copy must not be a way to read what a project may cost.
+		boolean money = ProjectTimeSettings.moneyReadable(user.isOrgAdmin(), projects.isLead(source, user), stored);
 		// Field by field, like everything else here. `toBuilder()` would carry whatever the
 		// document grows next, and the coverage test only watches Project and Issue — so a new
 		// field would travel silently. It would also carry the original's `updatedBy` and its
@@ -709,8 +712,8 @@ public class ProjectCopyService {
 				.alertThresholds(stored.getAlertThresholds())
 				.budgetLimitMode(stored.getBudgetLimitMode())
 				.estimateLimitMode(stored.getEstimateLimitMode())
-				.budgetCents(stored.getBudgetCents())
-				.budgetRateKind(stored.getBudgetRateKind())
+				.budgetCents(money ? stored.getBudgetCents() : null)
+				.budgetRateKind(money ? stored.getBudgetRateKind() : null)
 				.build();
 		mongo.insert(copy);
 		trace.timeSettingsIds.add(copy.getId());

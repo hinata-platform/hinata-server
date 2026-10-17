@@ -80,6 +80,8 @@ class TimeHistoryIntegrationTest {
 	private CurrentUser currentUser;
 	@Autowired
 	private com.ahmadre.hinata.report.ReportController reportRoutes;
+	@Autowired
+	private TimeTrackingErasure erasure;
 
 	private User lead;
 	private User member;
@@ -168,7 +170,7 @@ class TimeHistoryIntegrationTest {
 		assertThat(usage.usedMinutes()).isEqualTo(60);
 		assertThat(usage.budgetMinutes()).isEqualTo(70);
 		WorkItem saved = record(LocalDate.of(2026, 9, 3), 1, inSprint.getId());
-		assertThat(guard.warningsAfter(saved)).extracting(TimeBudgetGuard.BudgetWarning::kind)
+		assertThat(guard.warningsAfter(saved, lead)).extracting(TimeBudgetGuard.BudgetWarning::kind)
 				.contains(TimeBudgetGuard.Kind.SPRINT);
 	}
 
@@ -206,15 +208,54 @@ class TimeHistoryIntegrationTest {
 	}
 
 	@Test
+	void aSprintCountsOnlyTheProjectsItsReaderSees() {
+		Project hidden = mongo.insert(Project.builder().key("SEC").name("Secret").leadId("someone")
+				.leadIds(new ArrayList<>(List.of("someone"))).memberIds(new ArrayList<>(List.of("someone"))).build());
+		AgileBoard board = mongo.insert(AgileBoard.builder().name("Both")
+				.projectIds(new ArrayList<>(List.of(project.getId(), hidden.getId()))).build());
+		Sprint sprint = mongo.insert(Sprint.builder().boardId(board.getId()).name("Sprint 1")
+				.startDate(LocalDate.of(2026, 9, 1)).endDate(LocalDate.of(2026, 9, 14)).build());
+		Issue mine = mongo.insert(Issue.builder().projectId(project.getId()).readableId("APO-1").numberInProject(1)
+				.title("a").state("Open").sprintId(sprint.getId()).assigneeIds(new ArrayList<>()).build());
+		Issue theirs = mongo.insert(Issue.builder().projectId(hidden.getId()).readableId("SEC-1").numberInProject(1)
+				.title("b").state("Open").sprintId(sprint.getId()).assigneeIds(new ArrayList<>()).build());
+		mongo.insert(SprintTimeSettings.builder().sprintId(sprint.getId()).budgetMinutes(600).build());
+		record(LocalDate.of(2026, 9, 2), 60, mine.getId());
+		mongo.insert(WorkItem.builder().userId("someone").projectId(hidden.getId()).issueId(theirs.getId())
+				.date(LocalDate.of(2026, 9, 2)).durationMinutes(500).build());
+
+		assertThat(sprintRoutes.usage(sprint.getId()).usedMinutes()).isEqualTo(60);
+		assertThat(usageRoutes.budgetReport(0, 20, null).sprints()).singleElement()
+				.satisfies(row -> assertThat(row.usedMinutes()).isEqualTo(60));
+		// A member of the board's project uses the board but does not run it.
+		assertThat(sprintRoutes.usage(sprint.getId()).canEdit()).isFalse();
+	}
+
+	@Test
+	void aDeletedAccountLeavesNoNameOnTheBudgetsItChanged() {
+		budget(600);
+		mongo.updateMulti(new Query(), new org.springframework.data.mongodb.core.query.Update()
+				.set("updatedBy", lead.getId()), ProjectTimeSettings.class);
+		mongo.insert(SprintTimeSettings.builder().sprintId("s1").budgetMinutes(60).updatedBy(lead.getId()).build());
+
+		erasure.onUserDeleted(new com.ahmadre.hinata.user.UserService.UserDeletedEvent(lead.getId()));
+
+		assertThat(mongo.findAll(ProjectTimeSettings.class)).allSatisfy(own -> assertThat(own.getUpdatedBy()).isNull());
+		assertThat(mongo.findAll(SprintTimeSettings.class)).allSatisfy(own -> assertThat(own.getUpdatedBy()).isNull());
+	}
+
+	@Test
 	void theOverviewAnswersEverythingInOneCall() {
 		mongo.insert(Issue.builder().projectId(project.getId()).readableId("APO-9").numberInProject(9).title("x")
 				.state("Open").assigneeIds(new ArrayList<>()).build());
 
 		com.ahmadre.hinata.report.ReportController.Overview overview = reportRoutes.overview(project.getId(), 9999);
 
-		assertThat(overview.days()).isEqualTo(366);
+		// Capped at the longest trend there is, and the trend covers every day the answer names.
+		assertThat(overview.days()).isEqualTo(180);
+		assertThat(overview.trend()).hasSize(overview.days());
 		assertThat(overview.byState()).containsEntry("Open", 1L);
-		assertThat(overview.trend()).isNotEmpty();
+		assertThat(overview.byAssignee()).containsEntry(com.ahmadre.hinata.report.ReportService.UNASSIGNED, 1L);
 	}
 
 	private User person(String name) {

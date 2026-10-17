@@ -167,7 +167,7 @@ class TimeBudgetLiveIntegrationTest {
 				.assigneeIds(new ArrayList<>()).build());
 		WorkItem saved = record(540, issue.getId());
 
-		assertThat(guard.warningsAfter(saved))
+		assertThat(guard.warningsAfter(saved, lead))
 				.extracting(TimeBudgetGuard.BudgetWarning::kind, TimeBudgetGuard.BudgetWarning::level,
 						TimeBudgetGuard.BudgetWarning::percent)
 				.containsExactly(
@@ -179,7 +179,7 @@ class TimeBudgetLiveIntegrationTest {
 		budget(600, ProjectTimeSettings.LimitMode.OPEN);
 		mongo.updateFirst(Query.query(Criteria.where("projectId").is(project.getId())),
 				new Update().set("estimateLimitMode", ProjectTimeSettings.LimitMode.OPEN), ProjectTimeSettings.class);
-		assertThat(guard.warningsAfter(saved)).isEmpty();
+		assertThat(guard.warningsAfter(saved, lead)).isEmpty();
 	}
 
 	private User person(String name) {

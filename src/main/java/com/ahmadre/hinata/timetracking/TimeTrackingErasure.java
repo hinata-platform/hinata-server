@@ -96,6 +96,13 @@ public class TimeTrackingErasure {
 		step("entry share(s)", userId, () -> mongo.remove(Query.query(new Criteria().orOperator(
 				Criteria.where("fromUserId").is(userId), Criteria.where("toUserId").is(userId))),
 				TimeEntryShare.class).getDeletedCount());
+		// Who last changed a project's or a sprint's time settings: the setting stays, its author goes.
+		step("project setting author(s)", userId, () -> mongo.updateMulti(
+				Query.query(Criteria.where("updatedBy").is(userId)), new Update().unset("updatedBy"),
+				ProjectTimeSettings.class).getModifiedCount());
+		step("sprint setting author(s)", userId, () -> mongo.updateMulti(
+				Query.query(Criteria.where("updatedBy").is(userId)), new Update().unset("updatedBy"),
+				SprintTimeSettings.class).getModifiedCount());
 		step("pseudonym record", userId, () -> recordDeparture(userId));
 	}
 

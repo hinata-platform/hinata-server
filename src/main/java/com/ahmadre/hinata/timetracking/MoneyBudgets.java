@@ -20,5 +20,10 @@ public interface MoneyBudgets {
 	 * Cents a project has used: billable entries at their revenue rates for {@code BILLABLE}, every
 	 * entry at its cost rate for {@code COST}, each valued on its own day like a billing report.
 	 */
-	long usedCents(String projectId, ProjectTimeSettings.RateKind kind);
+	default long usedCents(String projectId, ProjectTimeSettings.RateKind kind) {
+		return usedCents(java.util.Map.of(projectId, kind)).getOrDefault(projectId, 0L);
+	}
+
+	/** {@link #usedCents(String, ProjectTimeSettings.RateKind)} for several projects at once. */
+	java.util.Map<String, Long> usedCents(java.util.Map<String, ProjectTimeSettings.RateKind> projects);
 }
