@@ -78,6 +78,8 @@ class TimeHistoryIntegrationTest {
 	private TestClock clock;
 	@MockitoBean
 	private CurrentUser currentUser;
+	@Autowired
+	private com.ahmadre.hinata.report.ReportController reportRoutes;
 
 	private User lead;
 	private User member;
@@ -168,6 +170,51 @@ class TimeHistoryIntegrationTest {
 		WorkItem saved = record(LocalDate.of(2026, 9, 3), 1, inSprint.getId());
 		assertThat(guard.warningsAfter(saved)).extracting(TimeBudgetGuard.BudgetWarning::kind)
 				.contains(TimeBudgetGuard.Kind.SPRINT);
+	}
+
+	@Test
+	void theBudgetReportPagesTheFullestFirstAndListsTheSprintsTheReaderSees() {
+		budget(600);
+		record(TODAY, 540, null);
+		Project second = mongo.insert(Project.builder().key("GEM").name("Gemini").leadId(lead.getId())
+				.leadIds(new ArrayList<>(List.of(lead.getId())))
+				.memberIds(new ArrayList<>(List.of(lead.getId(), member.getId()))).build());
+		mongo.insert(ProjectTimeSettings.builder().projectId(second.getId()).budgetMinutes(1000).build());
+		Project hidden = mongo.insert(Project.builder().key("HID").name("Hidden").leadId(lead.getId())
+				.leadIds(new ArrayList<>(List.of(lead.getId())))
+				.memberIds(new ArrayList<>(List.of(lead.getId()))).build());
+		mongo.insert(ProjectTimeSettings.builder().projectId(hidden.getId()).budgetMinutes(10).build());
+		AgileBoard board = mongo.insert(AgileBoard.builder().name("Board")
+				.projectIds(new ArrayList<>(List.of(project.getId()))).build());
+		Sprint sprint = mongo.insert(Sprint.builder().boardId(board.getId()).name("Sprint 1")
+				.startDate(LocalDate.of(2026, 9, 1)).endDate(LocalDate.of(2026, 9, 14)).build());
+		mongo.insert(SprintTimeSettings.builder().sprintId(sprint.getId()).budgetMinutes(120).build());
+		AgileBoard hiddenBoard = mongo.insert(AgileBoard.builder().name("Other")
+				.projectIds(new ArrayList<>(List.of(hidden.getId()))).build());
+		Sprint hiddenSprint = mongo.insert(Sprint.builder().boardId(hiddenBoard.getId()).name("Secret").build());
+		mongo.insert(SprintTimeSettings.builder().sprintId(hiddenSprint.getId()).budgetMinutes(120).build());
+		cache.forgetAll();
+
+		TimeUsageController.BudgetReport first = usageRoutes.budgetReport(0, 1, null);
+		TimeUsageController.BudgetReport next = usageRoutes.budgetReport(1, 1, null);
+
+		assertThat(first.total()).isEqualTo(2);
+		assertThat(first.items()).extracting(TimeUsageService.ProjectUsage::projectId).containsExactly(project.getId());
+		assertThat(next.items()).extracting(TimeUsageService.ProjectUsage::projectId).containsExactly(second.getId());
+		assertThat(first.sprints()).extracting(TimeUsageController.SprintRow::name).containsExactly("Sprint 1");
+		assertThat(next.sprints()).isEmpty();
+	}
+
+	@Test
+	void theOverviewAnswersEverythingInOneCall() {
+		mongo.insert(Issue.builder().projectId(project.getId()).readableId("APO-9").numberInProject(9).title("x")
+				.state("Open").assigneeIds(new ArrayList<>()).build());
+
+		com.ahmadre.hinata.report.ReportController.Overview overview = reportRoutes.overview(project.getId(), 9999);
+
+		assertThat(overview.days()).isEqualTo(366);
+		assertThat(overview.byState()).containsEntry("Open", 1L);
+		assertThat(overview.trend()).isNotEmpty();
 	}
 
 	private User person(String name) {

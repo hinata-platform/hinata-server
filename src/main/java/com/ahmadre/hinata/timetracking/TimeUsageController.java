@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -121,6 +122,60 @@ public class TimeUsageController {
 			throw ApiException.badRequest("error.time.historyRange", TimeHistoryService.HISTORY_MAX_DAYS);
 		}
 		return history.history(project.getId(), start, end);
+	}
+
+	/** One page of the budget report and, on the first, the sprints with a budget (HIN-157). */
+	public record BudgetReport(List<TimeUsageService.ProjectUsage> items, Map<String, String> names, int total,
+			int page, int size, List<SprintRow> sprints) {
+	}
+
+	/** A sprint with a budget, on a board the reader sees, not archived. */
+	public record SprintRow(String sprintId, String name, String boardName, Integer budgetMinutes, long usedMinutes,
+			int nearPercent) {
+	}
+
+	/** How many rows one page of the budget report holds at most. */
+	static final int REPORT_PAGE_MAX = 50;
+
+	/** How many sprints the report lists at most. */
+	static final int REPORT_SPRINTS_MAX = 20;
+
+	/**
+	 * Every budget the reader sees, fullest first, a page at a time (HIN-157): the report page's
+	 * Budgets view. Sums of whole projects and sprints, never per person; money only for those who
+	 * may see it.
+	 */
+	@GetMapping("/api/v1/time/reports/budgets")
+	public BudgetReport budgetReport(@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "20") int size, @RequestParam(required = false) List<String> projectIds) {
+		User user = currentUser.require();
+		int pageSize = Math.clamp(size, 1, REPORT_PAGE_MAX);
+		int index = Math.max(0, page);
+		Map<String, String> names = new HashMap<>();
+		projects.visibleAmong(user, usage.projectsWithBudget(projectIds)).stream()
+				.filter(project -> !project.isArchived())
+				.forEach(project -> names.put(project.getId(), project.getName()));
+		List<TimeUsageService.ProjectUsage> ranked = usage.withMoney(usage.ofProjects(List.copyOf(names.keySet())), user)
+				.stream()
+				.sorted(Comparator.comparingDouble(TimeUsageService.ProjectUsage::budgetFraction).reversed()
+						.thenComparing(TimeUsageService.ProjectUsage::projectId))
+				.toList();
+		int from = Math.min(ranked.size(), index * pageSize);
+		List<TimeUsageService.ProjectUsage> shown = ranked.subList(from, Math.min(ranked.size(), from + pageSize));
+		Map<String, String> shownNames = new HashMap<>();
+		shown.forEach(row -> shownNames.put(row.projectId(), names.get(row.projectId())));
+		return new BudgetReport(shown, shownNames, ranked.size(), index, pageSize,
+				index == 0 ? sprintRows(user) : List.of());
+	}
+
+	private List<SprintRow> sprintRows(User user) {
+		// The reader's projects once, not once per sprint.
+		java.util.Set<String> visible = projects.visibleTo(user).stream().map(Project::getId)
+				.collect(Collectors.toSet());
+		return history.budgetedSprintsAmong(visible, REPORT_SPRINTS_MAX).stream()
+				.map(row -> new SprintRow(row.sprint().getId(), row.sprint().getName(), row.boardName(),
+						row.usage().budgetMinutes(), row.usage().usedMinutes(), row.usage().nearPercent()))
+				.toList();
 	}
 
 	/** When the budget runs out at the present pace (HIN-156). */

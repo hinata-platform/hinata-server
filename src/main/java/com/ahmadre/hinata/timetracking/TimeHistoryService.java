@@ -133,6 +133,43 @@ public class TimeHistoryService {
 				TimeAlerts.DEFAULT_BUDGET_PERCENT, false);
 	}
 
+	/** A budgeted sprint for the report, with its board's name and its figures. */
+	public record BudgetedSprint(Sprint sprint, String boardName, SprintUsage usage) {
+	}
+
+	/**
+	 * Active sprints with a budget on boards touching [visibleProjectIds], newest change first, at
+	 * most [limit]. Reads the settings, then the sprints and boards in one query each.
+	 */
+	public List<BudgetedSprint> budgetedSprintsAmong(Set<String> visibleProjectIds, int limit) {
+		List<SprintTimeSettings> budgeted = mongo.find(Query.query(Criteria.where("budgetMinutes").gt(0))
+				.with(org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC,
+						"updatedAt"))
+				.limit(limit * 4), SprintTimeSettings.class);
+		if (budgeted.isEmpty() || visibleProjectIds.isEmpty()) {
+			return List.of();
+		}
+		java.util.Map<String, Sprint> sprints = new java.util.HashMap<>();
+		mongo.find(Query.query(Criteria.where("_id").in(budgeted.stream().map(SprintTimeSettings::getSprintId).toList())
+				.and("archived").ne(true)), Sprint.class).forEach(sprint -> sprints.put(sprint.getId(), sprint));
+		java.util.Map<String, com.ahmadre.hinata.board.AgileBoard> boards = new java.util.HashMap<>();
+		mongo.find(Query.query(Criteria.where("_id").in(sprints.values().stream().map(Sprint::getBoardId).distinct()
+				.toList())), com.ahmadre.hinata.board.AgileBoard.class).forEach(board -> boards.put(board.getId(), board));
+		List<BudgetedSprint> rows = new ArrayList<>();
+		for (SprintTimeSettings own : budgeted) {
+			if (rows.size() >= limit) break;
+			Sprint sprint = sprints.get(own.getSprintId());
+			com.ahmadre.hinata.board.AgileBoard board = sprint == null ? null : boards.get(sprint.getBoardId());
+			if (board == null || board.getProjectIds().stream().noneMatch(visibleProjectIds::contains)) {
+				continue;
+			}
+			rows.add(new BudgetedSprint(sprint, board.getName(),
+					new SprintUsage(sprint.getId(), own.getBudgetMinutes(), sprintMinutes(sprint, board.getProjectIds()),
+							TimeAlerts.DEFAULT_BUDGET_PERCENT, false)));
+		}
+		return rows;
+	}
+
 	/** An issue's sprint with a budget, and what it has used. */
 	public record SprintFigures(Sprint sprint, long budgetMinutes, long usedMinutes) {
 	}
