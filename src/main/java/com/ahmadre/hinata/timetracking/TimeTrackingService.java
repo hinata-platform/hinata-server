@@ -167,6 +167,7 @@ public class TimeTrackingService {
 	private final TimeTagService tagCatalog;
 	private final TimeLocks locks;
 	private final TimeApprovers approvers;
+	private final TimeUsageCache usageCache;
 	private final Clock clock;
 
 	// --- shapes ------------------------------------------------------------
@@ -311,6 +312,8 @@ public class TimeTrackingService {
 		WorkItem saved = workItems.save(item);
 		shiftSpentTime(saved.getIssueId(),
 				saved.getDurationMinutes() - before.getDurationMinutes());
+		usageCache.forget(before.getProjectId());
+		usageCache.forget(saved.getProjectId());
 		if (!own) {
 			audit(AuditAction.TIME_ENTRY_UPDATED, saved, user);
 		}
@@ -343,6 +346,7 @@ public class TimeTrackingService {
 		assertWritable(item, null, user);
 		workItems.delete(item);
 		shiftSpentTime(item.getIssueId(), -item.getDurationMinutes());
+		usageCache.forget(item.getProjectId());
 		// An invitation to copy an entry that is gone is withdrawn; answered ones stay as they were.
 		mongo.updateMulti(Query.query(Criteria.where("entryId").is(item.getId())
 						.and("status").is(TimeEntryShare.Status.PENDING)),
@@ -841,6 +845,7 @@ public class TimeTrackingService {
 		item.setTags(resolveTags(draft.tags(), user));
 		WorkItem saved = workItems.save(item);
 		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
+		usageCache.forget(saved.getProjectId());
 		auditOwnEntry(AuditAction.TIME_ENTRY_CREATED, saved, user);
 		return saved;
 	}
@@ -908,6 +913,7 @@ public class TimeTrackingService {
 			}
 		});
 		spent.forEach(this::shiftSpentTime);
+		items.forEach(item -> usageCache.forget(item.getProjectId()));
 	}
 
 	/**
@@ -927,6 +933,7 @@ public class TimeTrackingService {
 		}
 		long removed = mongo.remove(marked, WorkItem.class).getDeletedCount();
 		spent.forEach((issueId, minutes) -> shiftSpentTime(issueId, -minutes));
+		usageCache.forgetAll();
 		return removed;
 	}
 
@@ -971,6 +978,7 @@ public class TimeTrackingService {
 		assertWritable(null, item, user);
 		WorkItem saved = workItems.insert(item);
 		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
+		usageCache.forget(saved.getProjectId());
 		return saved;
 	}
 

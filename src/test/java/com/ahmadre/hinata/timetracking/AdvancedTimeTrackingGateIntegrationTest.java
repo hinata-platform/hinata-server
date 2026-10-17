@@ -125,7 +125,9 @@ class AdvancedTimeTrackingGateIntegrationTest {
 			// Billing is gated twice: by this module and by its own switch (BillingGate), which
 			// this test leaves off — BillingIntegrationTest turns it on and off.
 			// The real route since stage 13; the test switches the organisation's import on.
-			new Gated("/api/v1/me/calendar-subscriptions", 200));
+			new Gated("/api/v1/me/calendar-subscriptions", 200),
+			// Budget usage on core resources (HIN-152); asking about no visible project is an empty list.
+			new Gated("/api/v1/projects/time-usage?ids=none", 200));
 
 	private final HttpClient http = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10)).build();
