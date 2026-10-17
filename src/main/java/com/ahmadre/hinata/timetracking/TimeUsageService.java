@@ -46,7 +46,8 @@ public class TimeUsageService {
 	 * threshold or the server's default.
 	 */
 	public record ProjectUsage(String projectId, Integer budgetMinutes, long usedMinutes, long estimatedMinutes,
-			int nearPercent) {
+			int nearPercent, ProjectTimeSettings.LimitMode budgetLimitMode,
+			ProjectTimeSettings.LimitMode estimateLimitMode) {
 
 		/** Used against the budget; zero without one. */
 		public double budgetFraction() {
@@ -56,7 +57,7 @@ public class TimeUsageService {
 
 	/** An issue's usage against its own estimate; {@code estimateMinutes} null means none. */
 	public record IssueUsage(String issueId, String projectId, Integer estimateMinutes, int spentMinutes,
-			int nearPercent) {
+			int nearPercent, ProjectTimeSettings.LimitMode estimateLimitMode) {
 	}
 
 	/** The usage of each project in [projectIds], in their order. The caller has checked reach. */
@@ -69,7 +70,10 @@ public class TimeUsageService {
 		return projectIds.stream().distinct().map(id -> {
 			ProjectTimeSettings own = settings.get(id);
 			TimeUsageCache.Sums of = sums.get(id);
-			return new ProjectUsage(id, budgetOf(own), of.usedMinutes(), of.estimatedMinutes(), nearPercentOf(own));
+			// Modes resolved, so a client never has to know the default (HIN-153).
+			return new ProjectUsage(id, budgetOf(own), of.usedMinutes(), of.estimatedMinutes(), nearPercentOf(own),
+					own == null ? ProjectTimeSettings.LimitMode.of(null) : own.budgetMode(),
+					own == null ? ProjectTimeSettings.LimitMode.of(null) : own.estimateMode());
 		}).toList();
 	}
 
@@ -91,7 +95,7 @@ public class TimeUsageService {
 				? issue.getEstimateMinutes() : null;
 		ProjectTimeSettings own = settingsOf(List.of(issue.getProjectId())).get(issue.getProjectId());
 		return new IssueUsage(issue.getId(), issue.getProjectId(), estimate, issue.getSpentMinutes(),
-				nearPercentOf(own));
+				nearPercentOf(own), own == null ? ProjectTimeSettings.LimitMode.of(null) : own.estimateMode());
 	}
 
 	private Map<String, TimeUsageCache.Sums> load(Collection<String> projectIds) {
