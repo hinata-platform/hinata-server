@@ -78,6 +78,15 @@ public class ProjectTimeSettings {
 	/** When the leads, or an issue's assignees, hear that time is running out (HIN-92). */
 	private AlertThresholds alertThresholds;
 
+	/**
+	 * What the project's budget and the sum of its estimates do once time reaches them (HIN-153);
+	 * null ⇒ {@link LimitMode#WARN}. Neither ever refuses an entry.
+	 */
+	private LimitMode budgetLimitMode;
+
+	/** The same for every issue's own estimate; null ⇒ {@link LimitMode#WARN}. */
+	private LimitMode estimateLimitMode;
+
 	@CreatedDate
 	private Instant createdAt;
 
@@ -100,6 +109,32 @@ public class ProjectTimeSettings {
 		private DayOfWeek weekStartsOn;
 		private LocalDate anchorDate;
 		private Integer days;
+	}
+
+	/**
+	 * What reaching a limit does (HIN-153). Recording time is never refused over a budget
+	 * (§ 16 Abs. 2 ArbZG): both modes let the entry through.
+	 */
+	public enum LimitMode {
+		/** Only the hourly alert of HIN-92, as before. */
+		OPEN,
+		/** A note in the form while recording, and the leads hear at once. */
+		WARN;
+
+		/** The mode a project has, with null meaning the default. */
+		public static LimitMode of(LimitMode stored) {
+			return stored == null ? WARN : stored;
+		}
+	}
+
+	/** The budget's mode, with null resolved. */
+	public LimitMode budgetMode() {
+		return LimitMode.of(budgetLimitMode);
+	}
+
+	/** The estimates' mode, with null resolved. */
+	public LimitMode estimateMode() {
+		return LimitMode.of(estimateLimitMode);
 	}
 
 	/** Percentages at which the alerts of HIN-92 go out ({@code TimeAlerts}). */

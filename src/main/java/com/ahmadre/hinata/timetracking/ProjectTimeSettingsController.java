@@ -83,19 +83,21 @@ public class ProjectTimeSettingsController {
 	public record ProjectTimeSettingsResponse(String projectId, Integer budgetMinutes,
 			Boolean defaultBillable, Boolean approvalRequired, ApprovalPeriodDto approvalPeriod,
 			LocalDate lockBefore, AlertThresholdsDto alertThresholds,
-			java.time.Instant updatedAt, String updatedBy) {
+			java.time.Instant updatedAt, String updatedBy,
+			ProjectTimeSettings.LimitMode budgetLimitMode, ProjectTimeSettings.LimitMode estimateLimitMode) {
 
 		static ProjectTimeSettingsResponse of(String projectId, ProjectTimeSettings settings) {
 			if (settings == null) {
 				return new ProjectTimeSettingsResponse(projectId, null, null, null, null, null,
-						null, null, null);
+						null, null, null, null, null);
 			}
 			return new ProjectTimeSettingsResponse(projectId, settings.getBudgetMinutes(),
 					settings.getDefaultBillable(), settings.getApprovalRequired(),
 					ApprovalPeriodDto.from(settings.getApprovalPeriod()),
 					settings.getLockBefore(),
 					AlertThresholdsDto.from(settings.getAlertThresholds()),
-					settings.getUpdatedAt(), settings.getUpdatedBy());
+					settings.getUpdatedAt(), settings.getUpdatedBy(),
+					settings.getBudgetLimitMode(), settings.getEstimateLimitMode());
 		}
 	}
 
@@ -151,6 +153,9 @@ public class ProjectTimeSettingsController {
 		private LocalDate lockBefore;
 		@Valid
 		private AlertThresholdsRequest alertThresholds;
+		/** Null hands the question back to the default, {@code WARN} (HIN-153). */
+		private ProjectTimeSettings.LimitMode budgetLimitMode;
+		private ProjectTimeSettings.LimitMode estimateLimitMode;
 	}
 
 	// --- routes ------------------------------------------------------------------
@@ -190,6 +195,8 @@ public class ProjectTimeSettingsController {
 		settings.setApprovalPeriod(periodOf(request.getApprovalPeriod()));
 		settings.setLockBefore(request.getLockBefore());
 		settings.setAlertThresholds(thresholdsOf(request.getAlertThresholds()));
+		settings.setBudgetLimitMode(request.getBudgetLimitMode());
+		settings.setEstimateLimitMode(request.getEstimateLimitMode());
 		settings.setUpdatedAt(clock.instant());
 		settings.setUpdatedBy(user.getId());
 		ProjectTimeSettings saved = store.save(settings);
@@ -213,6 +220,10 @@ public class ProjectTimeSettingsController {
 				.meta("alertThresholds", change(
 						before == null ? null : thresholdsOf(before.getAlertThresholds()),
 						thresholdsOf(saved.getAlertThresholds())))
+				.meta("budgetLimitMode", change(
+						before == null ? null : before.getBudgetLimitMode(), saved.getBudgetLimitMode()))
+				.meta("estimateLimitMode", change(
+						before == null ? null : before.getEstimateLimitMode(), saved.getEstimateLimitMode()))
 				.log();
 		return ProjectTimeSettingsResponse.of(project.getId(), saved);
 	}

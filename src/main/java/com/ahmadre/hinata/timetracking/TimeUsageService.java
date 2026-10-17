@@ -130,7 +130,8 @@ public class TimeUsageService {
 				? null : own.getBudgetMinutes();
 	}
 
-	private static int nearPercentOf(ProjectTimeSettings own) {
+	/** The share from which a project's figures warn: its own budget alert threshold or 80 %. */
+	static int nearPercentOf(ProjectTimeSettings own) {
 		Integer percent = own == null || own.getAlertThresholds() == null ? null
 				: own.getAlertThresholds().getBudgetPercent();
 		return percent == null ? TimeAlerts.DEFAULT_BUDGET_PERCENT : percent;

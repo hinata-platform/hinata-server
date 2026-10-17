@@ -43,6 +43,7 @@ public class TimerController {
 	// manual routes give, from the same place.
 	private final TimeTrackingService timeTracking;
 	private final CurrentUser currentUser;
+	private final TimeBudgetGuard budgets;
 
 	// --- DTOs -----------------------------------------------------------------
 
@@ -245,7 +246,7 @@ public class TimerController {
 		TimerService.Stopped stopped = timers.stop(body.toRequest(), user);
 		return new TimeEntryController.TimeEntryResponse(
 				TimeTrackingController.WorkItemResponse.from(stopped.entry()),
-				timeTracking.overlapsOf(stopped.entry(), user));
+				timeTracking.overlapsOf(stopped.entry(), user), budgets.warningsAfter(stopped.entry()));
 	}
 
 	/** Throws the timer away; nothing is recorded. */

@@ -707,6 +707,8 @@ public class ProjectCopyService {
 				.approvalRequired(stored.getApprovalRequired())
 				.approvalPeriod(stored.getApprovalPeriod())
 				.alertThresholds(stored.getAlertThresholds())
+				.budgetLimitMode(stored.getBudgetLimitMode())
+				.estimateLimitMode(stored.getEstimateLimitMode())
 				.build();
 		mongo.insert(copy);
 		trace.timeSettingsIds.add(copy.getId());

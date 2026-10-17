@@ -167,7 +167,7 @@ public class TimeTrackingService {
 	private final TimeTagService tagCatalog;
 	private final TimeLocks locks;
 	private final TimeApprovers approvers;
-	private final TimeUsageCache usageCache;
+	private final TimeEntryWrites writes;
 	private final Clock clock;
 
 	// --- shapes ------------------------------------------------------------
@@ -312,8 +312,12 @@ public class TimeTrackingService {
 		WorkItem saved = workItems.save(item);
 		shiftSpentTime(saved.getIssueId(),
 				saved.getDurationMinutes() - before.getDurationMinutes());
-		usageCache.forget(before.getProjectId());
-		usageCache.forget(saved.getProjectId());
+		writes.touched(saved.getProjectId(), saved.getIssueId());
+		if (!Objects.equals(before.getProjectId(), saved.getProjectId())
+				|| !Objects.equals(before.getIssueId(), saved.getIssueId())) {
+			// Moved: the place it left lost time as well.
+			writes.touched(before.getProjectId(), before.getIssueId());
+		}
 		if (!own) {
 			audit(AuditAction.TIME_ENTRY_UPDATED, saved, user);
 		}
@@ -346,7 +350,7 @@ public class TimeTrackingService {
 		assertWritable(item, null, user);
 		workItems.delete(item);
 		shiftSpentTime(item.getIssueId(), -item.getDurationMinutes());
-		usageCache.forget(item.getProjectId());
+		writes.touched(item.getProjectId(), item.getIssueId());
 		// An invitation to copy an entry that is gone is withdrawn; answered ones stay as they were.
 		mongo.updateMulti(Query.query(Criteria.where("entryId").is(item.getId())
 						.and("status").is(TimeEntryShare.Status.PENDING)),
@@ -845,7 +849,7 @@ public class TimeTrackingService {
 		item.setTags(resolveTags(draft.tags(), user));
 		WorkItem saved = workItems.save(item);
 		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
-		usageCache.forget(saved.getProjectId());
+		writes.touched(saved.getProjectId(), saved.getIssueId());
 		auditOwnEntry(AuditAction.TIME_ENTRY_CREATED, saved, user);
 		return saved;
 	}
@@ -913,7 +917,7 @@ public class TimeTrackingService {
 			}
 		});
 		spent.forEach(this::shiftSpentTime);
-		items.forEach(item -> usageCache.forget(item.getProjectId()));
+		writes.touched(items);
 	}
 
 	/**
@@ -933,7 +937,7 @@ public class TimeTrackingService {
 		}
 		long removed = mongo.remove(marked, WorkItem.class).getDeletedCount();
 		spent.forEach((issueId, minutes) -> shiftSpentTime(issueId, -minutes));
-		usageCache.forgetAll();
+		writes.touchedUnknown();
 		return removed;
 	}
 
@@ -978,7 +982,7 @@ public class TimeTrackingService {
 		assertWritable(null, item, user);
 		WorkItem saved = workItems.insert(item);
 		shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
-		usageCache.forget(saved.getProjectId());
+		writes.touched(saved.getProjectId(), saved.getIssueId());
 		return saved;
 	}
 

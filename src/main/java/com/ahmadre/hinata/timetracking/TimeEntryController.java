@@ -57,6 +57,7 @@ public class TimeEntryController {
 	private final TimeCalendarLayers layers;
 	private final CalendarSubscriptionService calendarSubscriptions;
 	private final CurrentUser currentUser;
+	private final TimeBudgetGuard budgets;
 
 	// --- DTOs -----------------------------------------------------------------
 
@@ -69,9 +70,12 @@ public class TimeEntryController {
 	 * and says what it noticed, and the person decides. A wrapper rather than a
 	 * field on the entry, because it is a property of this save — re-reading the
 	 * list later would answer it differently as the day fills up.
+	 *
+	 * <p>{@code budgetWarnings} (HIN-153) is advice of the same kind: the budget and estimate this
+	 * save brought near or past their limit. The entry is saved either way.
 	 */
 	public record TimeEntryResponse(TimeTrackingController.WorkItemResponse entry,
-			List<String> overlaps) {
+			List<String> overlaps, List<TimeBudgetGuard.BudgetWarning> budgetWarnings) {
 	}
 
 	/**
@@ -318,6 +322,6 @@ public class TimeEntryController {
 
 	private TimeEntryResponse respond(WorkItem item, User actor) {
 		return new TimeEntryResponse(TimeTrackingController.WorkItemResponse.from(item),
-				timeTracking.overlapsOf(item, actor));
+				timeTracking.overlapsOf(item, actor), budgets.warningsAfter(item));
 	}
 }

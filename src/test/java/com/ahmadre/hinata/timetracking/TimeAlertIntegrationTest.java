@@ -92,6 +92,22 @@ class TimeAlertIntegrationTest {
 		project = mongo.insert(Project.builder().key("APO").name("Apollo")
 				.leadId(lead.getId()).leadIds(new ArrayList<>(List.of(lead.getId())))
 				.memberIds(new ArrayList<>(List.of(lead.getId(), member.getId()))).build());
+		// The hourly scan measures only projects that chose it (HIN-153); WARN, the
+		// default, is measured live and has its own test.
+		mongo.upsert(Query.query(Criteria.where("projectId").is(project.getId())),
+				new Update().set("budgetLimitMode", ProjectTimeSettings.LimitMode.OPEN)
+						.set("estimateLimitMode", ProjectTimeSettings.LimitMode.OPEN),
+				ProjectTimeSettings.class);
+	}
+
+	@Test
+	void aProjectInWarnIsLeftToTheLiveAlerts() {
+		mongo.updateFirst(Query.query(Criteria.where("projectId").is(project.getId())),
+				new Update().set("budgetLimitMode", ProjectTimeSettings.LimitMode.WARN), ProjectTimeSettings.class);
+		budget(600);
+		record(600, null);
+
+		assertThat(run()).isZero();
 	}
 
 	@Test

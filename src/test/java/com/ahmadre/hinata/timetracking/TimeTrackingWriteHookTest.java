@@ -93,7 +93,7 @@ class TimeTrackingWriteHookTest {
 		service = spy(new TimeTrackingService(workItems, issues, projects,
 				mock(ProjectReach.class), users, mongo, mock(AuditService.class), settings,
 				policy, tagCatalog, locks, new TimeApprovers(projects, users, mongo),
-				new TimeUsageCache(CLOCK), CLOCK));
+				new TimeEntryWrites(new TimeUsageCache(CLOCK), event -> { }), CLOCK));
 		when(workItems.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 	}
 
