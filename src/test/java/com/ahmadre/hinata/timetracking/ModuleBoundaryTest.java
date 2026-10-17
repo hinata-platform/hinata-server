@@ -38,8 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * storage contract of the {@code work_items} collection — the reports, the
  * dashboard, the weekly summary, issue deletion and issue moves all read or
  * re-point those documents. They may name the shape; they may not reach for the
- * module's behaviour. {@code ProjectTimeSettings} and
- * {@code TimesheetApproval} join them for one reason only: deleting a project
+ * module's behaviour. {@code ProjectTimeSettings}, {@code SprintTimeSettings} and
+ * {@code TimesheetApproval} join them for one reason only: deleting a project or a board
  * has to take their rows with it, and a cascade that left a collection behind
  * because the module was switched off would be a leak with no owner. A
  * timesheet submission has a second reason of its own — it <em>freezes</em> the
@@ -77,7 +77,10 @@ class ModuleBoundaryTest {
 	 */
 	private static final Set<String> STORAGE_CONTRACT =
 			Set.of(TIME + ".WorkItem", TIME + ".WorkItemRepository",
-					TIME + ".ProjectTimeSettings", TIME + ".TimesheetApproval");
+					TIME + ".ProjectTimeSettings", TIME + ".TimesheetApproval",
+					// A sprint's budget (HIN-156), for the same reason as a project's settings:
+					// deleting a board takes its sprints' rows with it.
+					TIME + ".SprintTimeSettings");
 
 	/**
 	 * The classes that are allowed to reach into the module, each for a stated
@@ -257,7 +260,11 @@ class ModuleBoundaryTest {
 			// nothing else, reads no working pattern, no capacity and no absence. A deadline
 			// four working days before an event must not move because somebody booked leave,
 			// which is exactly why this is the only class of the module that may ask.
-			TEMPLATE + ".HolidayCalendars");
+			TEMPLATE + ".HolidayCalendars",
+			// The organisation's whole-day holidays for a budget's forecast (HIN-156). A calendar,
+			// never a person: the default calendar's dates and nothing else, so a forecast never
+			// moves because somebody booked leave.
+			TIME + ".TimeForecastHolidays");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
@@ -266,6 +273,8 @@ class ModuleBoundaryTest {
 	 */
 	private static final Set<String> READERS_AND_THEIR_ROUTES = Set.of(
 			TIME + ".TimeCalendarLayers", TIME + ".TimeHintsService", TIME + ".TimeAvailabilityPolicy",
+			// The forecast's service reads holidays for display only and writes nothing (HIN-156).
+			TIME + ".TimeForecastHolidays", TIME + ".TimeHistoryService",
 			TIME + ".TimeReminders", TIME + ".TimeEntryController", TIME + ".TimeHintsController",
 			TIME + ".TimeReminderJob", TIME + ".TimeWorkloadReport", TIME + ".TimeReportController",
 			TIME_OFF + ".TimeOffWorkWeek", TIME_OFF + ".TimeOffBalanceService",

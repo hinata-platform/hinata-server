@@ -290,6 +290,7 @@ public class DeletionService {
 		progress.progress("deletingSprints", 0, boardSprints.size());
 		if (!boardSprints.isEmpty()) {
 			sprints.deleteAll(boardSprints);
+			forgetSprintBudgets(boardSprints);
 		}
 		progress.progress("deletingSprints", boardSprints.size(), boardSprints.size());
 
@@ -475,6 +476,7 @@ public class DeletionService {
 				List<Sprint> boardSprints = sprints.findByBoardIdOrderByStartDateDesc(board.getId());
 				if (!boardSprints.isEmpty()) {
 					sprints.deleteAll(boardSprints);
+					forgetSprintBudgets(boardSprints);
 				}
 				boards.deleteById(board.getId());
 				deleted++;
@@ -562,5 +564,11 @@ public class DeletionService {
 
 	private static Map<String, Object> summary(Map<String, Object> values) {
 		return new LinkedHashMap<>(values);
+	}
+
+	/** A deleted sprint's time budget goes with it (HIN-156), as a project's time settings do. */
+	private void forgetSprintBudgets(List<Sprint> gone) {
+		mongo.remove(Query.query(Criteria.where("sprintId").in(gone.stream().map(Sprint::getId).toList())),
+				com.ahmadre.hinata.timetracking.SprintTimeSettings.class);
 	}
 }
