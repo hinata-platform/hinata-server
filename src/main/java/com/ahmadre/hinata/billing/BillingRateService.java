@@ -60,6 +60,8 @@ public class BillingRateService {
 	private final MongoTemplate mongo;
 	private final AuditService audit;
 	private final Clock clock;
+	/** Money budgets value entries at these rates (HIN-155); a change makes their figures stale. */
+	private final BillingMoneyBudgets moneyBudgets;
 
 	/** Whether a rate is in force today, starts later, or has ended. */
 	public enum Status {
@@ -185,6 +187,7 @@ public class BillingRateService {
 				.createdBy(viewer.getId()).createdAt(clock.instant())
 				.build();
 		BillingRate saved = rates.save(rate);
+		moneyBudgets.forgetAll();
 		audited(AuditAction.BILLING_RATE_CREATED, viewer, saved, superseded);
 		return views(List.of(saved)).getFirst();
 	}
@@ -225,6 +228,7 @@ public class BillingRateService {
 		hideUnless(reach, rate);
 		authorize(reach, rate.getKind(), rate.getScope(), rate.getProjectId(), true);
 		rates.delete(rate);
+		moneyBudgets.forgetAll();
 		audited(AuditAction.BILLING_RATE_DELETED, viewer, rate, null);
 	}
 
@@ -329,7 +333,9 @@ public class BillingRateService {
 
 	private BillingRate save(BillingRate rate) {
 		try {
-			return rates.save(rate);
+			BillingRate saved = rates.save(rate);
+			moneyBudgets.forgetAll();
+			return saved;
 		}
 		catch (OptimisticLockingFailureException raced) {
 			throw ApiException.conflict("error.billing.rate.changed");

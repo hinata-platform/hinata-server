@@ -39,6 +39,7 @@ public class TimeUsageService {
 
 	private final MongoTemplate mongo;
 	private final TimeUsageCache cache;
+	private final org.springframework.beans.factory.ObjectProvider<MoneyBudgets> moneyBudgets;
 
 	/**
 	 * A project's usage. {@code budgetMinutes} is null when the project has none;
@@ -47,7 +48,14 @@ public class TimeUsageService {
 	 */
 	public record ProjectUsage(String projectId, Integer budgetMinutes, long usedMinutes, long estimatedMinutes,
 			int nearPercent, ProjectTimeSettings.LimitMode budgetLimitMode,
-			ProjectTimeSettings.LimitMode estimateLimitMode) {
+			ProjectTimeSettings.LimitMode estimateLimitMode, Long budgetCents, Long usedCents, String currency,
+			ProjectTimeSettings.RateKind budgetRateKind) {
+
+		/** The same figures with a money budget the reader may see (HIN-155). */
+		ProjectUsage withMoney(long budget, long used, String currencyCode, ProjectTimeSettings.RateKind kind) {
+			return new ProjectUsage(projectId, budgetMinutes, usedMinutes, estimatedMinutes, nearPercent,
+					budgetLimitMode, estimateLimitMode, budget, used, currencyCode, kind);
+		}
 
 		/** Used against the budget; zero without one. */
 		public double budgetFraction() {
@@ -73,7 +81,9 @@ public class TimeUsageService {
 			// Modes resolved, so a client never has to know the default (HIN-153).
 			return new ProjectUsage(id, budgetOf(own), of.usedMinutes(), of.estimatedMinutes(), nearPercentOf(own),
 					own == null ? ProjectTimeSettings.LimitMode.of(null) : own.budgetMode(),
-					own == null ? ProjectTimeSettings.LimitMode.of(null) : own.estimateMode());
+					own == null ? ProjectTimeSettings.LimitMode.of(null) : own.estimateMode(),
+					// Money is added per reader; see withMoney.
+					null, null, null, null);
 		}).toList();
 	}
 
@@ -87,6 +97,49 @@ public class TimeUsageService {
 			criteria = criteria.and("projectId").in(among);
 		}
 		return mongo.findDistinct(Query.query(criteria), "projectId", ProjectTimeSettings.class, String.class);
+	}
+
+	/**
+	 * [rows] with the money budget added where [viewer] may see it (HIN-155): an administrator every
+	 * one, a lead a revenue budget of a project they lead, nobody else any. Nothing while billing is
+	 * off. Cost budgets are an administrator's alone, because cost rates can reveal a salary.
+	 */
+	public List<ProjectUsage> withMoney(List<ProjectUsage> rows, com.ahmadre.hinata.user.User viewer) {
+		MoneyBudgets money = moneyBudgets.getIfAvailable();
+		if (rows.isEmpty() || money == null || !money.enabled()) {
+			return rows;
+		}
+		List<String> ids = rows.stream().map(ProjectUsage::projectId).toList();
+		Map<String, ProjectTimeSettings> settings = new HashMap<>();
+		mongo.find(Query.query(Criteria.where("projectId").in(ids).and("budgetCents").gt(0)),
+				ProjectTimeSettings.class).forEach(own -> settings.put(own.getProjectId(), own));
+		if (settings.isEmpty()) {
+			return rows;
+		}
+		boolean admin = viewer.isOrgAdmin();
+		java.util.Set<String> led = admin ? java.util.Set.of() : ledAmong(viewer, settings.keySet());
+		return rows.stream().map(row -> {
+			ProjectTimeSettings own = settings.get(row.projectId());
+			if (own == null) {
+				return row;
+			}
+			ProjectTimeSettings.RateKind kind = own.rateKind();
+			boolean may = admin || (kind == ProjectTimeSettings.RateKind.BILLABLE && led.contains(row.projectId()));
+			return may ? row.withMoney(own.getBudgetCents(), money.usedCents(row.projectId(), kind),
+					money.currency(), kind) : row;
+		}).toList();
+	}
+
+	/** Which of [projectIds] [viewer] leads: one read, ids only. */
+	private java.util.Set<String> ledAmong(com.ahmadre.hinata.user.User viewer, Collection<String> projectIds) {
+		Query query = Query.query(Criteria.where("_id").in(projectIds).orOperator(
+				Criteria.where("leadIds").is(viewer.getId()), Criteria.where("leadId").is(viewer.getId())));
+		// The primitives a projected Project cannot be built without.
+		query.fields().include("_id", "archived", "issueCounter");
+		java.util.Set<String> led = new java.util.HashSet<>();
+		// Typed, so the ids are converted the way the projects store them.
+		mongo.find(query, com.ahmadre.hinata.project.Project.class).forEach(project -> led.add(project.getId()));
+		return led;
 	}
 
 	/** An issue's usage. The caller has checked the issue can be seen. */

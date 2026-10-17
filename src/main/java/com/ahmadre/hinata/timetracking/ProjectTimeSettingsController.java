@@ -55,6 +55,8 @@ public class ProjectTimeSettingsController {
 	private final CurrentUser currentUser;
 	private final AuditService audit;
 	private final Clock clock;
+	/** Billing's answer about money budgets; absent without billing (HIN-155). */
+	private final org.springframework.beans.factory.ObjectProvider<MoneyBudgets> moneyBudgets;
 
 	// --- DTOs ------------------------------------------------------------------
 
@@ -84,12 +86,21 @@ public class ProjectTimeSettingsController {
 			Boolean defaultBillable, Boolean approvalRequired, ApprovalPeriodDto approvalPeriod,
 			LocalDate lockBefore, AlertThresholdsDto alertThresholds,
 			java.time.Instant updatedAt, String updatedBy,
-			ProjectTimeSettings.LimitMode budgetLimitMode, ProjectTimeSettings.LimitMode estimateLimitMode) {
+			ProjectTimeSettings.LimitMode budgetLimitMode, ProjectTimeSettings.LimitMode estimateLimitMode,
+			Long budgetCents, ProjectTimeSettings.RateKind budgetRateKind) {
 
 		static ProjectTimeSettingsResponse of(String projectId, ProjectTimeSettings settings) {
+			return of(projectId, settings, true);
+		}
+
+		/**
+		 * [money] false leaves the money budget out: a member reads the project's time settings, and
+		 * what a project is allowed to cost is a lead's and an administrator's business (HIN-155).
+		 */
+		static ProjectTimeSettingsResponse of(String projectId, ProjectTimeSettings settings, boolean money) {
 			if (settings == null) {
 				return new ProjectTimeSettingsResponse(projectId, null, null, null, null, null,
-						null, null, null, null, null);
+						null, null, null, null, null, null, null);
 			}
 			return new ProjectTimeSettingsResponse(projectId, settings.getBudgetMinutes(),
 					settings.getDefaultBillable(), settings.getApprovalRequired(),
@@ -97,7 +108,8 @@ public class ProjectTimeSettingsController {
 					settings.getLockBefore(),
 					AlertThresholdsDto.from(settings.getAlertThresholds()),
 					settings.getUpdatedAt(), settings.getUpdatedBy(),
-					settings.getBudgetLimitMode(), settings.getEstimateLimitMode());
+					settings.getBudgetLimitMode(), settings.getEstimateLimitMode(),
+					money ? settings.getBudgetCents() : null, money ? settings.getBudgetRateKind() : null);
 		}
 	}
 
@@ -156,6 +168,12 @@ public class ProjectTimeSettingsController {
 		/** Null hands the question back to the default, {@code WARN} (HIN-153). */
 		private ProjectTimeSettings.LimitMode budgetLimitMode;
 		private ProjectTimeSettings.LimitMode estimateLimitMode;
+		/** A money budget in cents (HIN-155); only while billing is on. */
+		@Min(value = 0, message = "error.time.budgetInvalid")
+		@Max(value = ProjectTimeSettings.MAX_BUDGET_CENTS, message = "error.time.budgetInvalid")
+		private Long budgetCents;
+		/** {@code COST} only an administrator sets. */
+		private ProjectTimeSettings.RateKind budgetRateKind;
 	}
 
 	// --- routes ------------------------------------------------------------------
@@ -168,7 +186,7 @@ public class ProjectTimeSettingsController {
 			throw ApiException.forbidden("error.project.notMember");
 		}
 		return ProjectTimeSettingsResponse.of(project.getId(),
-				store.findByProjectId(project.getId()).orElse(null));
+				store.findByProjectId(project.getId()).orElse(null), projects.canManage(project, user));
 	}
 
 	@PutMapping
@@ -187,6 +205,17 @@ public class ProjectTimeSettingsController {
 			throw ApiException.badRequest("error.time.lockDateInFuture");
 		}
 		ProjectTimeSettings before = store.findByProjectId(project.getId()).orElse(null);
+		MoneyBudgets money = moneyBudgets.getIfAvailable();
+		if (request.getBudgetCents() != null && (money == null || !money.enabled())) {
+			throw ApiException.badRequest("error.time.moneyBudgetNeedsBilling");
+		}
+		// Switching to a cost budget is an administrator's: cost rates can reveal a salary. Only one
+		// who also runs the project gets here (assertCanManage above: the administrator role alone
+		// does not open a project's settings). A lead saving the block back as it was is not a switch.
+		boolean wasCost = before != null && before.getBudgetRateKind() == ProjectTimeSettings.RateKind.COST;
+		if (request.getBudgetRateKind() == ProjectTimeSettings.RateKind.COST && !wasCost && !user.isOrgAdmin()) {
+			throw ApiException.forbidden("error.time.costBudgetAdminOnly");
+		}
 		ProjectTimeSettings settings = before != null ? before
 				: ProjectTimeSettings.builder().projectId(project.getId()).build();
 		settings.setBudgetMinutes(request.getBudgetMinutes());
@@ -197,6 +226,8 @@ public class ProjectTimeSettingsController {
 		settings.setAlertThresholds(thresholdsOf(request.getAlertThresholds()));
 		settings.setBudgetLimitMode(request.getBudgetLimitMode());
 		settings.setEstimateLimitMode(request.getEstimateLimitMode());
+		settings.setBudgetCents(request.getBudgetCents());
+		settings.setBudgetRateKind(request.getBudgetRateKind());
 		settings.setUpdatedAt(clock.instant());
 		settings.setUpdatedBy(user.getId());
 		ProjectTimeSettings saved = store.save(settings);
@@ -224,6 +255,10 @@ public class ProjectTimeSettingsController {
 						before == null ? null : before.getBudgetLimitMode(), saved.getBudgetLimitMode()))
 				.meta("estimateLimitMode", change(
 						before == null ? null : before.getEstimateLimitMode(), saved.getEstimateLimitMode()))
+				.meta("budgetCents", change(
+						before == null ? null : before.getBudgetCents(), saved.getBudgetCents()))
+				.meta("budgetRateKind", change(
+						before == null ? null : before.getBudgetRateKind(), saved.getBudgetRateKind()))
 				.log();
 		return ProjectTimeSettingsResponse.of(project.getId(), saved);
 	}

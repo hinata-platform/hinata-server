@@ -709,6 +709,8 @@ public class ProjectCopyService {
 				.alertThresholds(stored.getAlertThresholds())
 				.budgetLimitMode(stored.getBudgetLimitMode())
 				.estimateLimitMode(stored.getEstimateLimitMode())
+				.budgetCents(stored.getBudgetCents())
+				.budgetRateKind(stored.getBudgetRateKind())
 				.build();
 		mongo.insert(copy);
 		trace.timeSettingsIds.add(copy.getId());

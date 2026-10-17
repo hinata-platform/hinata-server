@@ -39,6 +39,9 @@ public class ProjectTimeSettings {
 	/** A ceiling on a budget: a thousand years of working days, in minutes. */
 	public static final int MAX_BUDGET_MINUTES = 100_000_000;
 
+	/** A ceiling on a money budget: a hundred billion in the instance's currency, in cents. */
+	public static final long MAX_BUDGET_CENTS = 10_000_000_000_000L;
+
 	@Id
 	private String id;
 
@@ -87,6 +90,15 @@ public class ProjectTimeSettings {
 	/** The same for every issue's own estimate; null ⇒ {@link LimitMode#WARN}. */
 	private LimitMode estimateLimitMode;
 
+	/**
+	 * A money budget beside the time budget (HIN-155), in cents of the instance's currency; null for
+	 * none. Exists only while billing is on, and only leads and administrators see it.
+	 */
+	private Long budgetCents;
+
+	/** Which rates value it; null ⇒ {@link RateKind#BILLABLE}. {@code COST} only an administrator sets. */
+	private RateKind budgetRateKind;
+
 	@CreatedDate
 	private Instant createdAt;
 
@@ -125,6 +137,23 @@ public class ProjectTimeSettings {
 		public static LimitMode of(LimitMode stored) {
 			return stored == null ? WARN : stored;
 		}
+	}
+
+	/**
+	 * What a money budget is measured in (HIN-155): revenue of billable entries, or the labour cost
+	 * of all of them. Cost rates can reveal a salary, so a cost budget is an administrator's alone.
+	 */
+	public enum RateKind {
+		BILLABLE, COST;
+
+		public static RateKind of(RateKind stored) {
+			return stored == null ? BILLABLE : stored;
+		}
+	}
+
+	/** The money budget's rate kind, with null resolved. */
+	public RateKind rateKind() {
+		return RateKind.of(budgetRateKind);
 	}
 
 	/** The budget's mode, with null resolved. */
