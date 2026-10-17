@@ -222,6 +222,35 @@ class TimeUsageIntegrationTest {
 						refused -> assertThat(refused.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
 	}
 
+	@Test
+	void theDashboardGetsTheFullestBudgetsItSeesFirst() {
+		Project third = project("MER", "Mercury");
+		budget(project, 600, null);
+		budget(other, 100, null);
+		budget(third, 1000, null);
+		record(project, 300);
+		record(other, 90);
+		record(third, 100);
+		User outsider = users.save(User.builder().username("out").displayName("out")
+				.email("out@example.test").active(true).locale("en").build());
+		Project hidden = mongo.insert(Project.builder().key("HID").name("Hidden")
+				.leadId(outsider.getId()).leadIds(new ArrayList<>(List.of(outsider.getId())))
+				.memberIds(new ArrayList<>(List.of(outsider.getId()))).build());
+		budget(hidden, 10, null);
+		record(hidden, 50);
+		when(currentUser.require()).thenReturn(member);
+
+		TimeUsageController.TopBudgets top = controller.top(2, null);
+
+		assertThat(top.total()).isEqualTo(3);
+		assertThat(top.items()).extracting(TimeUsageService.ProjectUsage::projectId)
+				.containsExactly(other.getId(), project.getId());
+		assertThat(top.names()).containsOnlyKeys(other.getId(), project.getId())
+				.containsEntry(other.getId(), "Gemini");
+		assertThat(controller.top(3, List.of(third.getId())).items())
+				.extracting(TimeUsageService.ProjectUsage::projectId).containsExactly(third.getId());
+	}
+
 	private Project project(String key, String name) {
 		return mongo.insert(Project.builder().key(key).name(name)
 				.leadId(member.getId()).leadIds(new ArrayList<>(List.of(member.getId())))

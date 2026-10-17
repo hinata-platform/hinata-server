@@ -6,7 +6,6 @@ import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectReach;
-import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -16,9 +15,13 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Budget and estimate usage (HIN-152): what a project and an issue have used, for the bars, capsules
@@ -35,7 +38,6 @@ public class TimeUsageController {
 
 	private final TimeUsageService usage;
 	private final ProjectService projects;
-	private final ProjectRepository projectStore;
 	private final ProjectReach reach;
 	private final IssueService issues;
 	private final CurrentUser currentUser;
@@ -62,14 +64,43 @@ public class TimeUsageController {
 		if (asked.size() > TimeUsageService.BATCH_MAX) {
 			throw ApiException.badRequest("error.time.usageBatchTooLarge", TimeUsageService.BATCH_MAX);
 		}
-		Set<String> granted = reach.teamGrantedProjectIds(user);
-		Set<String> visible = projectStore.findAllById(asked).stream()
-				.filter(project -> granted.contains(project.getId())
-						|| (project.getMemberIds() != null && project.getMemberIds().contains(user.getId())))
+		// One query that carries the caller's reach, membership and team grants alike.
+		Set<String> visible = projects.resolveVisible(user, List.copyOf(asked)).stream()
 				.map(Project::getId)
-				.collect(java.util.stream.Collectors.toSet());
+				.collect(Collectors.toSet());
 		// In the order asked, so a list can lay the answers next to its rows.
 		return usage.ofProjects(asked.stream().filter(visible::contains).toList());
+	}
+
+	/**
+	 * The fullest budgets first, for the dashboard, with the projects' names so the cells can be
+	 * labelled without a second read; {@code total} counts every budget the caller sees.
+	 */
+	public record TopBudgets(List<TimeUsageService.ProjectUsage> items, Map<String, String> names, int total) {
+	}
+
+	/**
+	 * The caller's projects with a time budget, fullest first: the dashboard's honeycomb. Only active
+	 * projects the caller sees, optionally narrowed to [projectIds] (the dashboard's own scope).
+	 */
+	@GetMapping("/api/v1/projects/time-usage/top")
+	public TopBudgets top(@RequestParam(defaultValue = "3") int limit,
+			@RequestParam(required = false) List<String> projectIds) {
+		User user = currentUser.require();
+		int capped = Math.clamp(limit, 1, TimeUsageService.TOP_MAX);
+		List<String> budgeted = usage.projectsWithBudget(projectIds);
+		Map<String, String> names = new HashMap<>();
+		projects.visibleAmong(user, budgeted).stream()
+				.filter(project -> !project.isArchived())
+				.forEach(project -> names.put(project.getId(), project.getName()));
+		List<TimeUsageService.ProjectUsage> ranked = usage.ofProjects(List.copyOf(names.keySet())).stream()
+				.sorted(Comparator.comparingDouble(TimeUsageService.ProjectUsage::budgetFraction).reversed()
+						.thenComparing(TimeUsageService.ProjectUsage::projectId))
+				.toList();
+		List<TimeUsageService.ProjectUsage> shown = ranked.subList(0, Math.min(capped, ranked.size()));
+		Map<String, String> shownNames = new HashMap<>();
+		shown.forEach(row -> shownNames.put(row.projectId(), names.get(row.projectId())));
+		return new TopBudgets(shown, shownNames, ranked.size());
 	}
 
 	@GetMapping("/api/v1/issues/{issueIdOrKey}/time-usage")

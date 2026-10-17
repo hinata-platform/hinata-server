@@ -34,6 +34,9 @@ public class TimeUsageService {
 	/** How many projects one batch read answers; the project list pages in steps of this size. */
 	public static final int BATCH_MAX = 100;
 
+	/** How many budgets the dashboard's honeycomb can ask for at once. */
+	public static final int TOP_MAX = 12;
+
 	private final MongoTemplate mongo;
 	private final TimeUsageCache cache;
 
@@ -44,6 +47,11 @@ public class TimeUsageService {
 	 */
 	public record ProjectUsage(String projectId, Integer budgetMinutes, long usedMinutes, long estimatedMinutes,
 			int nearPercent) {
+
+		/** Used against the budget; zero without one. */
+		public double budgetFraction() {
+			return budgetMinutes == null ? 0 : (double) usedMinutes / budgetMinutes;
+		}
 	}
 
 	/** An issue's usage against its own estimate; {@code estimateMinutes} null means none. */
@@ -63,6 +71,18 @@ public class TimeUsageService {
 			TimeUsageCache.Sums of = sums.get(id);
 			return new ProjectUsage(id, budgetOf(own), of.usedMinutes(), of.estimatedMinutes(), nearPercentOf(own));
 		}).toList();
+	}
+
+	/**
+	 * Every project with a time budget, or those of [among] that have one. One read of the settings
+	 * collection, ids only; who may see them is the caller's question.
+	 */
+	public List<String> projectsWithBudget(Collection<String> among) {
+		Criteria criteria = Criteria.where("budgetMinutes").gt(0);
+		if (among != null && !among.isEmpty()) {
+			criteria = criteria.and("projectId").in(among);
+		}
+		return mongo.findDistinct(Query.query(criteria), "projectId", ProjectTimeSettings.class, String.class);
 	}
 
 	/** An issue's usage. The caller has checked the issue can be seen. */
