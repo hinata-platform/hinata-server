@@ -8,6 +8,6 @@ public interface SprintRepository extends MongoRepository<Sprint, String> {
 
 	List<Sprint> findByBoardIdOrderByStartDateDesc(String boardId);
 
-	/** Completed (archived) sprints, most recent first — the velocity history. */
-	List<Sprint> findByBoardIdAndArchivedTrueOrderByEndDateDesc(String boardId);
+	/** The five most recently completed (archived) sprints: the velocity history. */
+	List<Sprint> findTop5ByBoardIdAndArchivedTrueOrderByEndDateDesc(String boardId);
 }

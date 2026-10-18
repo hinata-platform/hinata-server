@@ -50,6 +50,8 @@ class SprintReportIntegrationTest {
 	private SprintService sprints;
 	@Autowired
 	private UserRepository users;
+	@Autowired
+	private tools.jackson.databind.json.JsonMapper json;
 
 	private User lead;
 	private Project project;
@@ -75,7 +77,7 @@ class SprintReportIntegrationTest {
 	}
 
 	@Test
-	void aClosedSprintKeepsWhatItCommittedAfterItsOpenWorkMovedOn() {
+	void aClosedSprintKeepsWhatItCommittedInTheProjectsTheReaderSees() {
 		Sprint done = sprint("Sprint 1");
 		issue(project, done, 5, "Done");
 		issue(project, done, 3, "Open");
@@ -97,15 +99,45 @@ class SprintReportIntegrationTest {
 		Issue carried = issue(project, null, 3, "Open");
 		old.setArchived(true);
 		mongo.save(old);
-		mongo.insert(com.ahmadre.hinata.issue.IssueActivity.builder().issueId(carried.getId())
-				.field(com.ahmadre.hinata.issue.IssueActivity.Field.SPRINT).fromValue(old.getId()).toValue(null)
-				.createdAt(old.getEndDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC).plusSeconds(3600))
-				.build());
+		moved(carried, old, old.getEndDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC).plusSeconds(3600));
+		// Given back during the sprint: scope it gave up, not work it carried.
+		Issue givenBack = issue(project, null, 13, "Open");
+		moved(givenBack, old, old.getStartDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC).plusSeconds(3600));
+		// Carried out of a project the reader does not see.
+		Issue theirs = issue(hidden, null, 21, "Open");
+		moved(theirs, old, old.getEndDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC).plusSeconds(3600));
 		Sprint running = sprint("Sprint 1");
 
 		SprintService.VelocityPoint point = sprints.report(running.getId(), lead).velocity().getFirst();
 		assertThat(point.committed()).isEqualTo(8);
 		assertThat(point.completed()).isEqualTo(5);
+		// Worked out once and kept, the hidden project's share with it.
+		assertThat(mongo.findById(old.getId(), Sprint.class).getClosingPoints()).containsKeys(project.getId(),
+				hidden.getId());
+	}
+
+	@Test
+	void whatASprintHeldPerProjectIsStoredButNeverSent() throws Exception {
+		Sprint done = sprint("Sprint 1");
+		issue(hidden, done, 8, "Done");
+		sprints.complete(done.getId(), "backlog", lead);
+
+		Sprint stored = mongo.findById(done.getId(), Sprint.class);
+		assertThat(stored.getClosingPoints()).containsKey(hidden.getId());
+		// Sprints go out as they are to every reader of the board; the hidden project's id and points
+		// must not travel with them.
+		assertThat(json.writeValueAsString(sprints.list(board.getId(), true, lead)))
+				.doesNotContain("closingPoints").doesNotContain(hidden.getId());
+	}
+
+	/** A SPRINT move of [issue] out of [from] at [at]; dated after the insert, which stamps its own. */
+	private void moved(Issue issue, Sprint from, java.time.Instant at) {
+		com.ahmadre.hinata.issue.IssueActivity activity = mongo.insert(com.ahmadre.hinata.issue.IssueActivity.builder()
+				.issueId(issue.getId()).field(com.ahmadre.hinata.issue.IssueActivity.Field.SPRINT)
+				.fromValue(from.getId()).toValue(null).build());
+		mongo.updateFirst(Query.query(org.springframework.data.mongodb.core.query.Criteria.where("_id")
+				.is(activity.getId())), new org.springframework.data.mongodb.core.query.Update().set("createdAt", at),
+				com.ahmadre.hinata.issue.IssueActivity.class);
 	}
 
 	private Sprint sprint(String name) {

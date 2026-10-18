@@ -21,6 +21,13 @@ import java.time.Instant;
 // The activity feed filters by issueId and sorts by createdAt desc on every
 // issue open; this compound serves filter+sort as an IXSCAN.
 @CompoundIndex(name = "issue_created", def = "{'issueId': 1, 'createdAt': -1}")
+// A completed sprint's carried-over work, read for the velocity of sprints closed before their
+// points were kept (SprintService.carriedOut). Sprint moves only, so the index stays small.
+@CompoundIndex(name = "sprint_moves_from", def = "{'fromValue': 1, 'createdAt': 1}",
+		partialFilter = "{'field': 'SPRINT'}")
+// The other half of a sprint's scope log (SprintService.scopeChanges asks for moves to or from it).
+@CompoundIndex(name = "sprint_moves_to", def = "{'toValue': 1, 'createdAt': 1}",
+		partialFilter = "{'field': 'SPRINT'}")
 public class IssueActivity {
 
 	public enum Field {

@@ -46,7 +46,11 @@ public class Sprint {
 	 * done. Completing a sprint moves its unfinished issues out, so afterwards its issues alone say
 	 * only what was done; velocity needs both. Per project, so a reader sums only the projects they
 	 * see. Null for a running sprint and for one completed before this was kept.
+	 *
+	 * <p>Stored, never sent: a sprint goes out as it is to every reader of its board, and these are
+	 * keyed by project, the hidden ones included. The report sums the visible ones instead.
 	 */
+	@com.fasterxml.jackson.annotation.JsonIgnore
 	private java.util.Map<String, ClosingPoints> closingPoints;
 
 	/** Points committed and done in one project when the sprint closed. Boxed, as stored documents may lack them. */
