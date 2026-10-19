@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.billing;
 
 import com.ahmadre.hinata.timetracking.MoneyBudgets;
+import com.ahmadre.hinata.timetracking.MoneyBudgets.Used;
 import com.ahmadre.hinata.timetracking.ProjectTimeSettings;
 import com.ahmadre.hinata.timetracking.TimeEntryWrites;
 import com.ahmadre.hinata.timetracking.TimeRounding;
@@ -49,7 +50,7 @@ class BillingMoneyBudgets implements MoneyBudgets {
 	private record Key(String projectId, ProjectTimeSettings.RateKind kind) {
 	}
 
-	private record Held(long cents, Instant until) {
+	private record Held(Used used, Instant until) {
 	}
 
 	private final Map<Key, Held> held = new ConcurrentHashMap<>();
@@ -68,14 +69,14 @@ class BillingMoneyBudgets implements MoneyBudgets {
 	private final java.util.concurrent.atomic.AtomicLong forgets = new java.util.concurrent.atomic.AtomicLong();
 
 	@Override
-	public Map<String, Long> usedCents(Map<String, ProjectTimeSettings.RateKind> projects) {
+	public Map<String, Used> used(Map<String, ProjectTimeSettings.RateKind> projects) {
 		Instant now = clock.instant();
-		Map<String, Long> found = new HashMap<>();
+		Map<String, Used> found = new HashMap<>();
 		Map<ProjectTimeSettings.RateKind, List<String>> missing = new EnumMap<>(ProjectTimeSettings.RateKind.class);
 		projects.forEach((projectId, kind) -> {
 			Held cached = held.get(new Key(projectId, kind));
 			if (cached != null && cached.until().isAfter(now)) {
-				found.put(projectId, cached.cents());
+				found.put(projectId, cached.used());
 			}
 			else {
 				missing.computeIfAbsent(kind, k -> new ArrayList<>()).add(projectId);
@@ -87,18 +88,18 @@ class BillingMoneyBudgets implements MoneyBudgets {
 		long before = forgets.get();
 		// The directory once for every project asked, the rates once per kind.
 		Map<String, List<String>> teams = names.teamsByPerson();
-		Map<Key, Long> valued = new HashMap<>();
+		Map<Key, Used> valued = new HashMap<>();
 		missing.forEach((kind, ids) -> value(ids, kind, teams)
-				.forEach((projectId, cents) -> valued.put(new Key(projectId, kind), cents)));
+				.forEach((projectId, used) -> valued.put(new Key(projectId, kind), used)));
 		boolean current = forgets.get() == before;
 		if (held.size() + valued.size() > MAX_HELD) {
 			held.clear();
 		}
-		valued.forEach((key, cents) -> {
+		valued.forEach((key, used) -> {
 			if (current) {
-				held.put(key, new Held(cents, now.plus(TTL)));
+				held.put(key, new Held(used, now.plus(TTL)));
 			}
-			found.put(key.projectId(), cents);
+			found.put(key.projectId(), used);
 		});
 		return found;
 	}
@@ -123,41 +124,68 @@ class BillingMoneyBudgets implements MoneyBudgets {
 	}
 
 	/**
-	 * The cents of [projectIds] at the rates of [kind]. One aggregation for all of them, grouped by
+	 * What [projectIds] used at the rates of [kind]. One aggregation for all of them, grouped by
 	 * project, person, issue, day and duration: a rate depends on the first four, and rounding
 	 * applies to each entry's own duration, so entries alike in all five are valued once and
 	 * counted. Far fewer rows than entries, and none of an entry's other fields.
+	 *
+	 * <p>A revenue budget reads the entries it does not value as well, because the minutes it
+	 * leaves out are part of the answer (HIN-158). They need no rate, so they fold into one row per
+	 * project rather than one per person and day. Both kinds of left-out minutes are recorded
+	 * minutes, before rounding: what the person logged, not what an invoice would bill.
 	 */
-	private Map<String, Long> value(List<String> projectIds, ProjectTimeSettings.RateKind kind,
+	private Map<String, Used> value(List<String> projectIds, ProjectTimeSettings.RateKind kind,
 			Map<String, List<String>> teams) {
 		boolean revenue = kind == ProjectTimeSettings.RateKind.BILLABLE;
 		RateResolver resolver = RateResolver.of(mongo.find(Query.query(Criteria.where("kind")
 				.is(revenue ? BillingRate.Kind.BILLABLE : BillingRate.Kind.COST)), BillingRate.class));
-		Criteria criteria = Criteria.where("projectId").in(projectIds);
-		if (revenue) {
-			criteria = criteria.and("billable").is(true);
-		}
-		Map<String, Long> centMinutes = new HashMap<>();
-		projectIds.forEach(id -> centMinutes.put(id, 0L));
-		mongo.aggregate(Aggregation.newAggregation(Aggregation.match(criteria),
-						Aggregation.group("projectId", "userId", "issueId", "date", "durationMinutes").count().as("entries"))
+		Document valued = new Document("projectId", "$projectId").append("userId", "$userId")
+				.append("issueId", "$issueId").append("date", "$date").append("durationMinutes", "$durationMinutes");
+		Object key = revenue ? new Document("$cond", List.of(new Document("$eq", List.of("$billable", true)),
+				valued, new Document("projectId", "$projectId").append("unbilled", true))) : valued;
+		Map<String, Sums> sums = new HashMap<>();
+		projectIds.forEach(id -> sums.put(id, new Sums()));
+		mongo.aggregate(Aggregation.newAggregation(Aggregation.match(Criteria.where("projectId").in(projectIds)),
+						Aggregation.stage(new Document("$group", new Document("_id", key)
+								.append("entries", new Document("$sum", 1))
+								.append("minutes", new Document("$sum", "$durationMinutes")))))
 						.withOptions(AggregationOptions.builder().allowDiskUse(true).build()),
 				WorkItem.class, Document.class).forEach(row -> {
 					Document id = row.get("_id", Document.class);
 					String projectId = id.getString("projectId");
+					Sums sum = sums.get(projectId);
+					long recordedMinutes = row.get("minutes") instanceof Number number ? number.longValue() : 0;
+					if (Boolean.TRUE.equals(id.getBoolean("unbilled"))) {
+						sum.unbilledMinutes += recordedMinutes;
+						return;
+					}
 					String userId = id.getString("userId");
-					LocalDate day = BillingReportService.day(id.get("date"));
+					BillingRate rate = resolver.resolve(new RateResolver.Facts(userId, projectId, id.getString("issueId"),
+							BillingReportService.day(id.get("date")),
+							userId == null ? List.of() : teams.getOrDefault(userId, List.of())));
+					if (rate == null) {
+						sum.unratedMinutes += recordedMinutes;
+						return;
+					}
+					long entries = ((Number) row.get("entries")).longValue();
 					int minutes = TimeRounding.round(id.get("durationMinutes") instanceof Number number
 							? number.intValue() : 0, settings.rounding());
-					BillingRate rate = resolver.resolve(new RateResolver.Facts(userId, projectId, id.getString("issueId"),
-							day, userId == null ? List.of() : teams.getOrDefault(userId, List.of())));
-					if (rate != null) {
-						long entries = ((Number) row.get("entries")).longValue();
-						centMinutes.merge(projectId, Money.centMinutes(rate.getAmountCents(), minutes) * entries, Long::sum);
-					}
+					sum.centMinutes += Money.centMinutes(rate.getAmountCents(), minutes) * entries;
 				});
-		Map<String, Long> cents = new HashMap<>();
-		centMinutes.forEach((projectId, total) -> cents.put(projectId, Money.cents(total)));
-		return cents;
+		Map<String, Used> used = new HashMap<>();
+		sums.forEach((projectId, sum) -> used.put(projectId, sum.used()));
+		return used;
+	}
+
+	/** One project's running sums in {@link #value}. */
+	private static final class Sums {
+
+		long centMinutes;
+		long unbilledMinutes;
+		long unratedMinutes;
+
+		Used used() {
+			return new Used(Money.cents(centMinutes), unbilledMinutes, unratedMinutes);
+		}
 	}
 }
