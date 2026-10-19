@@ -142,7 +142,7 @@ class ResponseDtoParityTest {
 		RunningTimer entity = RunningTimer.builder()
 				.id("t1").userId("u1").startedAt(Instant.parse("2026-09-07T08:00:00Z"))
 				.projectId("p1").issueId("i1").description("Pairing").activityType("Development")
-				.tags(new ArrayList<>(List.of("focus"))).billable(true)
+				.tags(new ArrayList<>(List.of("focus"))).billable(true).billableChosen(true)
 				.mode(RunningTimer.Mode.POMODORO).plannedMinutes(null)
 				.pomodoro(RunningTimer.Pomodoro.builder()
 						.work(25).shortBreak(5).longBreak(15).cycles(4).build())
@@ -164,6 +164,8 @@ class ResponseDtoParityTest {
 		assertThat(dtoJson.get("pomodoro").get("work").asInt()).isEqualTo(25);
 		assertThat(dtoJson.get("phase").asText()).isEqualTo("WORK");
 		assertThat(dtoJson.get("cyclesDone").asInt()).isEqualTo(2);
+		// Whether the flag was chosen decides what a stop files (HIN-158).
+		assertThat(dtoJson.get("billableChosen").asBoolean()).isTrue();
 		// The sweep's claim is server bookkeeping; publishing it would tell a
 		// client something about the scheduler and nothing about their timer.
 		assertThat(dtoJson.has("autoStopClaimedAt")).isFalse();
