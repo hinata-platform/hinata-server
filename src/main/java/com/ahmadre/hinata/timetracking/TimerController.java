@@ -65,18 +65,22 @@ public class TimerController {
 	 * A running timer on the wire. It carries no elapsed time: the client counts
 	 * from {@code startedAt} against its own clock, so the number on screen keeps
 	 * moving between requests instead of freezing until the next one.
+	 *
+	 * <p>{@code billableChosen} says whether somebody set {@code billable} or the timer inherited it
+	 * (HIN-158): a stop files an inherited flag at the default of wherever the entry ends up, and the
+	 * stop form has to show what will be stored.
 	 */
 	public record TimerResponse(String id, Instant startedAt, String projectId, String issueId,
 			String description, String activityType, List<String> tags, boolean billable,
 			RunningTimer.Mode mode, Integer plannedMinutes, RunningTimer.Phase phase,
-			Instant phaseStartedAt, RunningTimer.Pomodoro pomodoro, int cyclesDone) {
+			Instant phaseStartedAt, RunningTimer.Pomodoro pomodoro, int cyclesDone, boolean billableChosen) {
 
 		public static TimerResponse from(RunningTimer timer) {
 			return new TimerResponse(timer.getId(), timer.getStartedAt(), timer.getProjectId(),
 					timer.getIssueId(), timer.getDescription(), timer.getActivityType(),
 					timer.getTags(), timer.isBillable(), timer.getMode(), timer.getPlannedMinutes(),
 					timer.getPhase(), timer.getPhaseStartedAt(), timer.getPomodoro(),
-					timer.getCyclesDone());
+					timer.getCyclesDone(), Boolean.TRUE.equals(timer.getBillableChosen()));
 		}
 	}
 

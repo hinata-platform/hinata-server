@@ -189,7 +189,8 @@ public class TimerService {
 				.description(draft.description())
 				.activityType(activityOrNull(draft.activityType()))
 				.tags(tags)
-				.billable(Boolean.TRUE.equals(draft.billable()))
+				.billable(entries.billableOf(placement.projectId(), draft.billable()))
+				.billableChosen(draft.billable() != null)
 				.mode(mode)
 				// Only where it means something. A stopwatch with a target it does
 				// not count towards would read back as a countdown to anything that
@@ -262,7 +263,21 @@ public class TimerService {
 		timer.setDescription(draft.description());
 		timer.setActivityType(activityOrNull(draft.activityType()));
 		timer.setTags(tags);
-		timer.setBillable(Boolean.TRUE.equals(draft.billable()));
+		// The body is the whole editable state, so the app resends the flag it was given on every
+		// patch. Resent unchanged it is no choice, and an inherited value follows a timer that has
+		// just been filed in another project; changed, it is one, and it stays. Absent clears the
+		// choice like every other field, back to the default.
+		Boolean billable = draft.billable();
+		boolean wasChosen = Boolean.TRUE.equals(timer.getBillableChosen());
+		boolean chosen = billable != null && (billable != timer.isBillable() || wasChosen);
+		if (chosen) {
+			timer.setBillable(billable);
+		}
+		else if (wasChosen || !placement.equals(unchanged)) {
+			// Inherited and still where it was, the flag already is that project's default.
+			timer.setBillable(entries.billableOf(placement.projectId(), null));
+		}
+		timer.setBillableChosen(chosen);
 		// A conditional update, not a save. `save` on an entity that carries an id
 		// is an upsert, so a patch that races a stop would write the timer back
 		// into existence after the stop deleted it — and the next stop would then
@@ -290,7 +305,8 @@ public class TimerService {
 	private static Update updateOf(RunningTimer timer) {
 		Update update = new Update()
 				.set("tags", timer.getTags())
-				.set("billable", timer.isBillable());
+				.set("billable", timer.isBillable())
+				.set("billableChosen", timer.getBillableChosen());
 		// Null is a value here — see the contract above — and it is written as an
 		// absent field rather than an explicit null, which reads back as null
 		// either way and keeps the document free of keys that say nothing.
@@ -533,7 +549,7 @@ public class TimerService {
 				// would be the one kind with no creation date — while every entry
 				// written through save() has one.
 				.createdAt(TimeTrackingService.stored(clock.instant()))
-				.billable(request.billable() != null ? request.billable() : timer.isBillable())
+				.billable(billableAtStop(request.billable(), timer, placement))
 				// Tidied, not yet resolved: the catalogue is touched below, once
 				// this stop is going to succeed.
 				.tags(TimeTrackingService.normalizeTags(
@@ -621,6 +637,27 @@ public class TimerService {
 			return entries.resolvePlacement(request.projectId(), request.issueId(), user);
 		}
 		return new TimeTrackingService.Placement(timer.getProjectId(), timer.getIssueId());
+	}
+
+	/**
+	 * Whether a stopped timer's entry is billable: an answer in the stop request wins, a value
+	 * somebody chose on the timer stays, and an inherited one is the default of the project the
+	 * entry is filed in, which the stop may just have changed (HIN-158).
+	 *
+	 * <p>Any answer, not only a different one, unlike {@link #patch}: a stop names the flag only when
+	 * somebody set it — the app sends it once its switch was touched, the published app never — so
+	 * a "no" that happens to equal the inherited value is still a "no" for the project it is filed
+	 * in now.
+	 */
+	private boolean billableAtStop(Boolean asked, RunningTimer timer,
+			TimeTrackingService.Placement placement) {
+		if (asked != null) {
+			return asked;
+		}
+		if (Boolean.TRUE.equals(timer.getBillableChosen())) {
+			return timer.isBillable();
+		}
+		return entries.billableOf(placement.projectId(), null);
 	}
 
 	/** Throws the running timer away without recording anything. */
@@ -747,6 +784,7 @@ public class TimerService {
 				.activityType(timer.getActivityType())
 				.tags(timer.getTags())
 				.billable(timer.isBillable())
+				.billableChosen(timer.getBillableChosen())
 				.mode(RunningTimer.Mode.POMODORO)
 				.pomodoro(config)
 				.phase(wasBreak ? RunningTimer.Phase.WORK : config.phaseAfter(done))
