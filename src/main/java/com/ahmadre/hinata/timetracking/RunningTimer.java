@@ -92,6 +92,13 @@ public class RunningTimer {
 	@Builder.Default
 	private boolean billable = false;
 
+	/**
+	 * Whether somebody chose {@link #billable} rather than inheriting it from the project or the
+	 * instance (HIN-158). An inherited value follows the timer when it is filed elsewhere; a chosen
+	 * one stays. Null on timers started before this existed, which reads as inherited.
+	 */
+	private Boolean billableChosen;
+
 	@Builder.Default
 	private Mode mode = Mode.STOPWATCH;
 

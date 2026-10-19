@@ -240,6 +240,7 @@ public class TimeImportService {
 		}
 		Map<String, User> owners = new HashMap<>();
 		Map<String, TimeTrackingService.Placement> placements = new HashMap<>();
+		Map<String, Boolean> billableDefaults = new HashMap<>();
 		int written = 0;
 		try {
 			List<TimeImport.Row> rows = claimed.getRows();
@@ -250,7 +251,7 @@ public class TimeImportService {
 							id -> users.findById(id).orElseThrow(() -> ApiException.notFound("user")));
 					try {
 						// Checked again: a lock date or an approval may have moved since the preview.
-						part.add(entries.checkImported(draftOf(row), owner, actor, placements));
+						part.add(entries.checkImported(draftOf(row), owner, actor, placements, billableDefaults));
 					}
 					catch (ApiException changed) {
 						throw ApiException.conflict("error.time.import.rowChanged", row.getLine());
@@ -371,6 +372,7 @@ public class TimeImportService {
 		private final Map<String, Map<String, String>> projectsByOwner = new HashMap<>();
 		private final Map<String, String> projectLabels = new HashMap<>();
 		private final Map<String, TimeTrackingService.Placement> placements = new HashMap<>();
+		private final Map<String, Boolean> billableDefaults = new HashMap<>();
 
 		Rows(User actor, User target, Map<Column, Integer> columns) {
 			this.actor = actor;
@@ -404,7 +406,7 @@ public class TimeImportService {
 					blankToNull(value(record, columns.get(Column.ACTIVITY))),
 					blankToNull(value(record, columns.get(Column.DESCRIPTION))), start, end,
 					tags(value(record, columns.get(Column.TAGS))), billable(value(record, columns.get(Column.BILLABLE))));
-			WorkItem item = entries.checkImported(draft, owner, actor, placements);
+			WorkItem item = entries.checkImported(draft, owner, actor, placements, billableDefaults);
 			return TimeImport.Row.builder().line(line).userId(owner.getId()).projectId(item.getProjectId())
 					.issueId(item.getIssueId()).date(item.getDate()).minutes(item.getDurationMinutes())
 					.startedAt(item.getStartedAt()).endedAt(item.getEndedAt()).activityType(item.getActivityType())

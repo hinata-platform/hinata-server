@@ -831,7 +831,7 @@ public class TimeTrackingService {
 				.description(draft.description())
 				.startedAt(start)
 				.endedAt(end)
-				.billable(billableOf(draft.billable()))
+				.billable(billableOf(placement.projectId(), draft.billable()))
 				.tags(normalizeTags(draft.tags()))
 				.source(source == null ? WorkItem.Source.APP : source)
 				.calendarRef(ref)
@@ -867,9 +867,11 @@ public class TimeTrackingService {
 	 * a preview that grew the catalogue would be a write.
 	 *
 	 * <p>[placements] caches the placement per project and issue across the rows of one file: ten
-	 * thousand rows on twenty issues are twenty lookups, not ten thousand.
+	 * thousand rows on twenty issues are twenty lookups, not ten thousand. [billableDefaults] does the
+	 * same for each project's default billability, read only for rows that do not say.
 	 */
-	public WorkItem checkImported(NewEntry draft, User owner, User actor, Map<String, Placement> placements) {
+	public WorkItem checkImported(NewEntry draft, User owner, User actor, Map<String, Placement> placements,
+			Map<String, Boolean> billableDefaults) {
 		Placement placement = placements.computeIfAbsent(draft.projectId() + "|" + draft.issueId(),
 				key -> resolvePlacement(draft.projectId(), draft.issueId(), owner));
 		ZoneId zone = zoneOf(owner);
@@ -889,7 +891,7 @@ public class TimeTrackingService {
 				.description(draft.description())
 				.startedAt(start)
 				.endedAt(end)
-				.billable(billableOf(draft.billable()))
+				.billable(billableOf(placement.projectId(), draft.billable(), billableDefaults))
 				.tags(normalizeTags(draft.tags()))
 				.source(WorkItem.Source.CSV)
 				.build();
@@ -1304,7 +1306,8 @@ public class TimeTrackingService {
 	}
 
 	/**
-	 * What {@code billable} becomes when the request does not say.
+	 * What {@code billable} becomes for an entry of [projectId] when the request does not say: the
+	 * project's own default where it has one, the instance policy otherwise.
 	 *
 	 * <p>Every write path goes through here, because the flag cannot be
 	 * reconstructed afterwards: an entry written while the policy said "billable
@@ -1312,9 +1315,31 @@ public class TimeTrackingService {
 	 * a month later except by what was stored at the time. That includes the 1.x
 	 * routes — the policy ships as {@code false}, so an instance that has never
 	 * touched it sees no change, and an administrator who did touch it meant it.
+	 *
+	 * <p>The project's default is what a money budget over revenue depends on (HIN-158): a timer,
+	 * a quick log or an MCP call never says, so their entries are billable only by default, and a
+	 * lead who set "billable: yes" for the project expects its hours to be valued.
 	 */
-	private boolean billableOf(Boolean given) {
-		return given != null ? given : policy.defaultBillable();
+	public boolean billableOf(String projectId, Boolean given) {
+		if (given != null) {
+			return given;
+		}
+		Boolean own = projectId == null ? null : projectDefaultBillable(projectId);
+		return own != null ? own : policy.defaultBillable();
+	}
+
+	/** {@link #billableOf(String, Boolean)} with each project's answer held in [memo]. */
+	private boolean billableOf(String projectId, Boolean given, Map<String, Boolean> memo) {
+		return given != null ? given
+				: memo.computeIfAbsent(String.valueOf(projectId), key -> billableOf(projectId, null));
+	}
+
+	/** The project's own default billability, or null when it follows the instance. */
+	private Boolean projectDefaultBillable(String projectId) {
+		Query query = Query.query(Criteria.where("projectId").is(projectId));
+		query.fields().include("defaultBillable");
+		ProjectTimeSettings settings = mongo.findOne(query, ProjectTimeSettings.class);
+		return settings == null ? null : settings.getDefaultBillable();
 	}
 
 	// --- the derived counter -------------------------------------------------
