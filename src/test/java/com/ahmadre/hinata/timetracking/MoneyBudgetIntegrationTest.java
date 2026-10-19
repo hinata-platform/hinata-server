@@ -80,6 +80,10 @@ class MoneyBudgetIntegrationTest {
 	private TimeBudgetLiveAlerts live;
 	@Autowired
 	private NotificationRepository notifications;
+	@Autowired
+	private TimerService timers;
+	@Autowired
+	private org.springframework.context.ApplicationEventPublisher events;
 	@MockitoBean
 	private CurrentUser currentUser;
 
@@ -91,7 +95,7 @@ class MoneyBudgetIntegrationTest {
 	@BeforeEach
 	void seed() {
 		for (String collection : List.of("projects", "users", "work_items", "billing_rates", "server_settings",
-				"teams", "project_time_settings", "notifications", "time_marks")) {
+				"teams", "project_time_settings", "notifications", "time_marks", "running_timers")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		cache.forgetAll();
@@ -121,6 +125,92 @@ class MoneyBudgetIntegrationTest {
 
 		save(admin, 100_000L, ProjectTimeSettings.RateKind.COST);
 		assertThat(money(admin).usedCents()).isEqualTo(18_000);
+	}
+
+	@Test
+	void theMoneyBudgetSaysWhichRecordedMinutesItDoesNotCount() {
+		save(admin, 100_000L, ProjectTimeSettings.RateKind.BILLABLE);
+		assertThat(money(lead).unbilledMinutes()).isEqualTo(60);
+		assertThat(money(lead).unratedMinutes()).isZero();
+		// Billable, but on a day before the project rate begins. Written directly: how far back an
+		// entry may be logged is another policy's question.
+		mongo.insert(WorkItem.builder().projectId(project.getId()).userId(member.getId())
+				.date(LocalDate.now().minusDays(60)).durationMinutes(30).billable(true).build());
+		events.publishEvent(new TimeEntryWrites.Touched(Set.of(project.getId()), Set.of()));
+		assertThat(money(lead).unratedMinutes()).isEqualTo(30);
+		assertThat(money(lead).usedCents()).isEqualTo(20_000);
+		// A member sees neither: the figures belong to the money budget.
+		assertThat(money(member).unbilledMinutes()).isNull();
+	}
+
+	@Test
+	void anEntryThatDoesNotSayFollowsTheProjectsDefaultAndCountsAtItsRate() {
+		save(admin, 100_000L, ProjectTimeSettings.RateKind.BILLABLE);
+		defaultBillable(true);
+
+		WorkItem unsaid = timeTracking.create(new TimeTrackingService.NewEntry(project.getId(), null, 60,
+				LocalDate.now().minusDays(1), null, "work", null, null, List.of(), null), WorkItem.Source.APP, member);
+
+		assertThat(unsaid.isBillable()).isTrue();
+		assertThat(money(lead).usedCents()).isEqualTo(30_000);
+
+		defaultBillable(null);
+		WorkItem policy = timeTracking.create(new TimeTrackingService.NewEntry(project.getId(), null, 60,
+				LocalDate.now().minusDays(1), null, "work", null, null, List.of(), null), WorkItem.Source.APP, member);
+		assertThat(policy.isBillable()).isFalse();
+	}
+
+	@Test
+	void aTimerInheritsTheProjectsDefaultAndFollowsItWhenFiledElsewhere() {
+		defaultBillable(true);
+		TimerService.TimerDraft unfiled = new TimerService.TimerDraft(null, null, "work", null, List.of(), null);
+		assertThat(timers.start(TimerService.StartDraft.stopwatch(unfiled), member).isBillable()).isFalse();
+
+		// The app resends the flag it holds; filed in the project, the inherited value follows.
+		RunningTimer filed = timers.patch(new TimerService.TimerDraft(project.getId(), null, "work", null,
+				List.of(), false), member);
+		assertThat(filed.isBillable()).isTrue();
+
+		WorkItem stopped = timers.stop(new TimerService.StopRequest(null, null, null, null, null, null, null, null),
+				member).entry();
+		assertThat(stopped.isBillable()).isTrue();
+	}
+
+	@Test
+	void aBillabilitySomebodyChoseOnATimerStays() {
+		defaultBillable(true);
+		timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(project.getId(), null, "work",
+				null, List.of(), false)), member);
+
+		RunningTimer patched = timers.patch(new TimerService.TimerDraft(project.getId(), null, "work", null,
+				List.of(), false), member);
+		assertThat(patched.isBillable()).isFalse();
+
+		WorkItem stopped = timers.stop(new TimerService.StopRequest(null, null, null, null, null, null, null, null),
+				member).entry();
+		assertThat(stopped.isBillable()).isFalse();
+	}
+
+	@Test
+	void aBillabilityNamedAtTheStopWinsEvenWhereItEqualsTheInheritedOne() {
+		// Started unfiled, so the timer inherits the instance's "no"; filed at the stop in a project
+		// that bills by default, the person's explicit "no" stays a "no".
+		defaultBillable(true);
+		timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(null, null, "work", null,
+				List.of(), null)), member);
+
+		WorkItem stopped = timers.stop(new TimerService.StopRequest(null, null, project.getId(), null, null, null,
+				null, false), member).entry();
+
+		assertThat(stopped.isBillable()).isFalse();
+	}
+
+	@Test
+	void aLeadNeverLearnsWhichMinutesACostBudgetLeavesOut() {
+		save(admin, 100_000L, ProjectTimeSettings.RateKind.COST);
+		assertThat(money(lead).unratedMinutes()).isNull();
+		assertThat(money(lead).unbilledMinutes()).isNull();
+		assertThat(money(admin).unratedMinutes()).isZero();
 	}
 
 	@Test
@@ -237,6 +327,13 @@ class MoneyBudgetIntegrationTest {
 		request.setBudgetCents(cents);
 		request.setBudgetRateKind(kind);
 		controller.put(project.getId(), request);
+	}
+
+	private void defaultBillable(Boolean billable) {
+		mongo.upsert(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("projectId").is(project.getId())),
+				new org.springframework.data.mongodb.core.query.Update().set("defaultBillable", billable),
+				ProjectTimeSettings.class);
 	}
 
 	private List<String> alerts(User person) {

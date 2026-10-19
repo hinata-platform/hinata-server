@@ -44,17 +44,20 @@ public class TimeUsageService {
 	/**
 	 * A project's usage. {@code budgetMinutes} is null when the project has none;
 	 * {@code nearPercent} is the share from which surfaces warn, the project's own budget alert
-	 * threshold or the server's default.
+	 * threshold or the server's default. {@code unbilledMinutes} and {@code unratedMinutes} come with
+	 * the money budget and say which recorded minutes it does not count (HIN-158).
 	 */
 	public record ProjectUsage(String projectId, Integer budgetMinutes, long usedMinutes, long estimatedMinutes,
 			int nearPercent, ProjectTimeSettings.LimitMode budgetLimitMode,
 			ProjectTimeSettings.LimitMode estimateLimitMode, Long budgetCents, Long usedCents, String currency,
-			ProjectTimeSettings.RateKind budgetRateKind) {
+			ProjectTimeSettings.RateKind budgetRateKind, Long unbilledMinutes, Long unratedMinutes) {
 
 		/** The same figures with a money budget the reader may see (HIN-155). */
-		ProjectUsage withMoney(long budget, long used, String currencyCode, ProjectTimeSettings.RateKind kind) {
+		ProjectUsage withMoney(long budget, MoneyBudgets.Used used, String currencyCode,
+				ProjectTimeSettings.RateKind kind) {
 			return new ProjectUsage(projectId, budgetMinutes, usedMinutes, estimatedMinutes, nearPercent,
-					budgetLimitMode, estimateLimitMode, budget, used, currencyCode, kind);
+					budgetLimitMode, estimateLimitMode, budget, used.cents(), currencyCode, kind,
+					used.unbilledMinutes(), used.unratedMinutes());
 		}
 
 		/** Used against the budget; zero without one. */
@@ -82,7 +85,7 @@ public class TimeUsageService {
 			return new ProjectUsage(id, budgetOf(own), of.usedMinutes(), of.estimatedMinutes(), nearPercentOf(own),
 					ProjectTimeSettings.budgetModeOf(own), ProjectTimeSettings.estimateModeOf(own),
 					// Money is added per reader; see withMoney.
-					null, null, null, null);
+					null, null, null, null, null, null);
 		}).toList();
 	}
 
@@ -151,11 +154,11 @@ public class TimeUsageService {
 			}
 		});
 		// Every readable project valued in one go.
-		Map<String, Long> used = readable.isEmpty() ? Map.of() : money.usedCents(readable);
+		Map<String, MoneyBudgets.Used> used = readable.isEmpty() ? Map.of() : money.used(readable);
 		return rows.stream().map(row -> {
 			ProjectTimeSettings.RateKind kind = readable.get(row.projectId());
 			return kind == null ? row : row.withMoney(settings.get(row.projectId()).getBudgetCents(),
-					used.getOrDefault(row.projectId(), 0L), money.currency(), kind);
+					used.getOrDefault(row.projectId(), MoneyBudgets.Used.NONE), money.currency(), kind);
 		}).toList();
 	}
 
