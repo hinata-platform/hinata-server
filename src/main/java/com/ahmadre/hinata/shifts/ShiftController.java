@@ -33,6 +33,11 @@ import java.util.List;
  * <p>The assignment routes (assign, sign up, confirm, decline, give up) and the planner role come
  * with HIN-45. Both ways onto a shift run through {@link ShiftAssignments#assign}; there is no
  * {@code DELETE} on an assignment, a freed place keeps its document until the retention run.
+ *
+ * <p>HIN-161: every write to an occurrence of a series (change, cancel, delete the event; add,
+ * change, delete a shift) takes {@code ?scope=this|future} and answers 400
+ * {@code error.shifts.seriesScopeRequired} without it. The series routes are in
+ * {@link ShiftSeriesController}.
  */
 @Tag(name = "Shift planning")
 @RestController
@@ -80,22 +85,23 @@ public class ShiftController {
 	}
 
 	@PatchMapping("/api/v1/shifts/events/{id}")
-	public ShiftReads.EventChange updateEvent(@PathVariable String id, @RequestBody ShiftService.EventPatch patch) {
+	public ShiftReads.EventChange updateEvent(@PathVariable String id, @RequestBody ShiftService.EventPatch patch,
+			@RequestParam(required = false) String scope) {
 		User caller = currentUser.require();
-		ShiftService.Change<ShiftEvent> change = shifts.updateEvent(caller, id, patch);
+		ShiftService.Change<ShiftEvent> change = shifts.updateEvent(caller, id, patch, scope);
 		return new ShiftReads.EventChange(detail(caller, id), change.warnings());
 	}
 
 	@PostMapping("/api/v1/shifts/events/{id}/cancel")
-	public ShiftReads.EventResponse cancelEvent(@PathVariable String id) {
+	public ShiftReads.EventResponse cancelEvent(@PathVariable String id, @RequestParam(required = false) String scope) {
 		User caller = currentUser.require();
-		shifts.cancelEvent(caller, id);
+		shifts.cancelEvent(caller, id, scope);
 		return detail(caller, id);
 	}
 
 	@DeleteMapping("/api/v1/shifts/events/{id}")
-	public ResponseEntity<Void> deleteEvent(@PathVariable String id) {
-		shifts.deleteEvent(currentUser.require(), id);
+	public ResponseEntity<Void> deleteEvent(@PathVariable String id, @RequestParam(required = false) String scope) {
+		shifts.deleteEvent(currentUser.require(), id, scope);
 		return ResponseEntity.noContent().build();
 	}
 
@@ -103,9 +109,10 @@ public class ShiftController {
 
 	@PostMapping("/api/v1/shifts/events/{id}/shifts")
 	@ResponseStatus(HttpStatus.CREATED)
-	public ShiftReads.ShiftResponse createShift(@PathVariable String id, @RequestBody ShiftService.ShiftDraft draft) {
+	public ShiftReads.ShiftResponse createShift(@PathVariable String id, @RequestBody ShiftService.ShiftDraft draft,
+			@RequestParam(required = false) String scope) {
 		User caller = currentUser.require();
-		Shift shift = shifts.createShift(caller, id, draft);
+		Shift shift = shifts.createShift(caller, id, draft, scope);
 		return reads.shiftDetail(caller, shift, project(caller, shift)).shift();
 	}
 
@@ -113,9 +120,9 @@ public class ShiftController {
 	@PostMapping("/api/v1/shifts/events/{id}/shifts:batch")
 	@ResponseStatus(HttpStatus.CREATED)
 	public List<ShiftReads.ShiftResponse> createShifts(@PathVariable String id,
-			@RequestBody ShiftService.BatchDraft batch) {
+			@RequestBody ShiftService.BatchDraft batch, @RequestParam(required = false) String scope) {
 		User caller = currentUser.require();
-		List<Shift> created = shifts.createShifts(caller, id, batch);
+		List<Shift> created = shifts.createShifts(caller, id, batch, scope);
 		ShiftReads.EventResponse event = detail(caller, id);
 		List<String> ids = created.stream().map(Shift::getId).toList();
 		return event.shifts().stream().filter(shift -> ids.contains(shift.id())).toList();
@@ -127,17 +134,18 @@ public class ShiftController {
 	}
 
 	@PatchMapping("/api/v1/shifts/shifts/{id}")
-	public ShiftReads.ShiftChange updateShift(@PathVariable String id, @RequestBody ShiftService.ShiftPatch patch) {
+	public ShiftReads.ShiftChange updateShift(@PathVariable String id, @RequestBody ShiftService.ShiftPatch patch,
+			@RequestParam(required = false) String scope) {
 		User caller = currentUser.require();
-		ShiftService.Change<Shift> change = shifts.updateShift(caller, id, patch);
+		ShiftService.Change<Shift> change = shifts.updateShift(caller, id, patch, scope);
 		Shift shift = change.item();
 		return new ShiftReads.ShiftChange(reads.shiftDetail(caller, shift, project(caller, shift)).shift(),
 				change.warnings());
 	}
 
 	@DeleteMapping("/api/v1/shifts/shifts/{id}")
-	public ResponseEntity<Void> deleteShift(@PathVariable String id) {
-		shifts.deleteShift(currentUser.require(), id);
+	public ResponseEntity<Void> deleteShift(@PathVariable String id, @RequestParam(required = false) String scope) {
+		shifts.deleteShift(currentUser.require(), id, scope);
 		return ResponseEntity.noContent().build();
 	}
 
@@ -179,7 +187,8 @@ public class ShiftController {
 	/** The person confirms a planner's assignment. */
 	@PostMapping("/api/v1/shifts/assignments/{id}/confirm")
 	public ShiftReads.MyShiftResponse confirm(@PathVariable String id) {
-		return reads.myShift(assignments.confirm(currentUser.require(), id));
+		User caller = currentUser.require();
+		return reads.myShift(caller, assignments.confirm(caller, id));
 	}
 
 	/** The person declines a planner's assignment; the place is free again. */

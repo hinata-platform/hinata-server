@@ -881,7 +881,8 @@ class ShiftPlanningIntegrationTest {
 		JsonNode detail = json(get("/api/v1/shifts/events/" + event.getId(), annToken));
 		assertThat(fields(detail)).containsExactly("id", "projectId", "title", "description", "location", "startsAt",
 				"endsAt", "startsLocal", "endsLocal", "timezone", "cancelled", "selfAssignable", "placesRequired",
-				"placesTaken", "shiftsUnderstaffed", "mineCount", "canPlan", "shifts", "users");
+				"placesTaken", "shiftsUnderstaffed", "mineCount", "canPlan", "seriesId", "recurrenceLabel", "detached",
+				"shifts", "users");
 		assertThat(fields(detail.path("shifts").get(0))).containsExactly("id", "eventId", "projectId", "title",
 				"startsAt", "endsAt", "startsLocal", "endsLocal", "requiredHelpers", "maxHelpers", "assignedCount",
 				"understaffed", "full", "mine", "myAssignment", "cancelled", "assigneeIds");
@@ -896,7 +897,7 @@ class ShiftPlanningIntegrationTest {
 		JsonNode calendar = json(get("/api/v1/shifts/calendar" + window, annToken));
 		assertThat(fields(calendar)).containsExactly("shifts", "events", "truncated", "plannableProjectIds");
 		assertThat(fields(calendar.path("events").path(event.getId()))).containsExactly("id", "title", "location",
-				"timezone", "selfAssignable", "cancelled");
+				"timezone", "selfAssignable", "cancelled", "seriesId", "recurrenceLabel", "detached");
 		JsonNode mine = json(get("/api/v1/me/shifts" + window, annToken));
 		assertThat(fields(mine.path("content").get(0))).containsExactly("assignmentId", "status", "assignedBy",
 				"shift", "event");

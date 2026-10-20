@@ -25,7 +25,7 @@ import java.util.stream.Collectors;
  * Shift planning's part of a person's data export (Art. 15 and 20 DSGVO): every assignment held
  * about them (which shift of which event, when, in what status and who put them there), the
  * projects they plan shifts in (HIN-45) and whether they subscribe to their shifts as a calendar
- * feed (HIN-47, never the token itself).
+ * feed (HIN-47, never the token itself), and the series they created (HIN-161).
  *
  * <p>Exported whether or not the module is switched on today: Art. 15 is about the data held, not
  * about the current configuration. The planner and feed collections are read by name, so the
@@ -57,6 +57,7 @@ public class ShiftPersonalData implements PersonalDataExport {
 		out.put("assignmentsTruncated", held.size() > CAP);
 		out.put("plannerRoles", plannerRoles(user));
 		out.put("feedSubscription", feed(user));
+		out.put("createdSeries", createdSeries(user));
 		return out;
 	}
 
@@ -119,6 +120,24 @@ public class ShiftPersonalData implements PersonalDataExport {
 			row.put("projectId", role.getString("projectId"));
 			row.put("grantedBy", role.getString("grantedBy"));
 			row.put("since", role.get("createdAt"));
+			out.add(row);
+		}
+		return out;
+	}
+
+	/** HIN-161: the series the person created, the way they were planned, without the shifts' people. */
+	private List<Map<String, Object>> createdSeries(User user) {
+		Query query = Query.query(Criteria.where("createdBy").is(user.getId())).with(Sort.by("createdAt")).limit(CAP);
+		List<Map<String, Object>> out = new ArrayList<>();
+		for (ShiftSeries series : mongo.find(query, ShiftSeries.class)) {
+			Map<String, Object> row = new LinkedHashMap<>();
+			row.put("seriesId", series.getId());
+			row.put("projectId", series.getProjectId());
+			row.put("title", series.getTitle());
+			row.put("rrule", series.getRrule());
+			row.put("timezone", series.getTimezone());
+			row.put("firstStart", series.getFirstStart() == null ? null : series.getFirstStart().toString());
+			row.put("createdAt", series.getCreatedAt());
 			out.add(row);
 		}
 		return out;

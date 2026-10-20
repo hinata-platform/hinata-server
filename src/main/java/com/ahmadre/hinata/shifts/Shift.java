@@ -74,6 +74,12 @@ public class Shift {
 	@Builder.Default
 	private Boolean deleted = Boolean.FALSE;
 
+	/**
+	 * HIN-161: the template of the series this shift was made from. Series changes find the shift
+	 * by it, never by its title; null for a shift added to one occurrence only.
+	 */
+	private String templateKey;
+
 	/** HIN-46: when the last "somebody gave this shift up" notice went out, to throttle it. */
 	private Instant lastShortNoticeAt;
 

@@ -60,6 +60,7 @@ public class ShiftReads {
 	private final ShiftAccess access;
 	private final ShiftSettings settings;
 	private final Clock clock;
+	private final ShiftSeriesLabels labels;
 
 	// --- wire shapes ----------------------------------------------------------
 
@@ -97,14 +98,23 @@ public class ShiftReads {
 		}
 	}
 
-	/** What a row that points at an event needs to show it. */
+	/**
+	 * What a row that points at an event needs to show it. HIN-161: {@code seriesId} and
+	 * {@code recurrenceLabel} (the series' rule in the reader's words) for an occurrence of a series,
+	 * {@code detached} when it was changed on its own; null, null and false otherwise.
+	 */
 	public record EventHead(String id, String title, String location, String timezone, boolean selfAssignable,
-			boolean cancelled) {
+			boolean cancelled, String seriesId, String recurrenceLabel, boolean detached) {
 
-		static EventHead from(ShiftEvent event) {
+		static EventHead from(ShiftEvent event, Map<String, String> labels) {
 			return new EventHead(event.getId(), event.getTitle(), event.getLocation(), event.getTimezone(),
-					event.isSelfAssignable(), event.isCancelled());
+					event.isSelfAssignable(), event.isCancelled(), event.getSeriesId(),
+					labelOf(event, labels), event.isDetached());
 		}
+	}
+
+	private static String labelOf(ShiftEvent event, Map<String, String> labels) {
+		return event.getSeriesId() == null ? null : labels.get(event.getSeriesId());
 	}
 
 	/**
@@ -116,15 +126,16 @@ public class ShiftReads {
 	public record EventSummary(String id, String projectId, String title, String description, String location,
 			Instant startsAt, Instant endsAt, String startsLocal, String endsLocal, String timezone,
 			boolean cancelled, boolean selfAssignable, int placesRequired, int placesTaken,
-			int shiftsUnderstaffed, int mineCount, boolean canPlan) {
+			int shiftsUnderstaffed, int mineCount, boolean canPlan, String seriesId, String recurrenceLabel,
+			boolean detached) {
 	}
 
 	/** An event with its shifts, and the people on them named once in {@code users}. */
 	public record EventResponse(String id, String projectId, String title, String description, String location,
 			Instant startsAt, Instant endsAt, String startsLocal, String endsLocal, String timezone,
 			boolean cancelled, boolean selfAssignable, int placesRequired, int placesTaken,
-			int shiftsUnderstaffed, int mineCount, boolean canPlan,
-			List<ShiftResponse> shifts, Map<String, UserCard> users) {
+			int shiftsUnderstaffed, int mineCount, boolean canPlan, String seriesId, String recurrenceLabel,
+			boolean detached, List<ShiftResponse> shifts, Map<String, UserCard> users) {
 	}
 
 	/** One shift with its event and the people on it. */
@@ -225,7 +236,8 @@ public class ShiftReads {
 				ShiftRules.local(event.getStartsAt(), event.getTimezone()),
 				ShiftRules.local(event.getEndsAt(), event.getTimezone()), event.getTimezone(), event.isCancelled(),
 				event.isSelfAssignable(), totals.required(), totals.taken(), totals.understaffed(), mine.size(),
-				access.canPlan(project, caller), rows, users(people));
+				access.canPlan(project, caller), event.getSeriesId(),
+				labelOf(event, labels.of(caller, List.of(event))), event.isDetached(), rows, users(people));
 	}
 
 	// --- shifts ---------------------------------------------------------------
@@ -247,7 +259,8 @@ public class ShiftReads {
 		MyAssignment mine = MyAssignment.of(active.stream()
 				.filter(assignment -> assignment.getUserId().equals(caller.getId())).findFirst().orElse(null));
 		List<String> ids = active.stream().map(ShiftAssignment::getUserId).limit(ASSIGNEES_MAX).toList();
-		return new ShiftDetail(ShiftResponse.from(shift, event.getTimezone(), mine, ids), EventHead.from(event),
+		return new ShiftDetail(ShiftResponse.from(shift, event.getTimezone(), mine, ids),
+				EventHead.from(event, labels.of(caller, List.of(event))),
 				users(ids), access.canPlan(project, caller));
 	}
 
@@ -293,7 +306,8 @@ public class ShiftReads {
 						mine.get(shift.getId()), List.of()))
 				.toList();
 		Map<String, EventHead> heads = new LinkedHashMap<>();
-		events.values().forEach(event -> heads.put(event.getId(), EventHead.from(event)));
+		Map<String, String> seriesLabels = labels.of(caller, events.values());
+		events.values().forEach(event -> heads.put(event.getId(), EventHead.from(event, seriesLabels)));
 		return new CalendarResponse(rows, heads, truncated, plannable);
 	}
 
@@ -319,7 +333,7 @@ public class ShiftReads {
 				.and("status").in(ShiftAssignment.Status.ACTIVE)
 				.and("projectId").in(projects);
 		List<ShiftAssignment> rows = mongo.find(Query.query(criteria).with(pageable), ShiftAssignment.class);
-		List<MyShiftResponse> content = own(rows);
+		List<MyShiftResponse> content = own(caller, rows);
 		return PageableExecutionUtils.getPage(content, pageable,
 				() -> mongo.count(Query.query(criteria), ShiftAssignment.class));
 	}
@@ -340,12 +354,12 @@ public class ShiftReads {
 				.and("projectId").in(projects);
 		ShiftAssignment first = mongo.findOne(Query.query(criteria).with(Sort.by("startsAt", "_id")),
 				ShiftAssignment.class);
-		return first == null ? Optional.empty() : own(List.of(first)).stream().findFirst();
+		return first == null ? Optional.empty() : own(caller, List.of(first)).stream().findFirst();
 	}
 
 	/** One of the caller's own places as "my shifts" shows it, after a confirmation. */
-	MyShiftResponse myShift(ShiftAssignment assignment) {
-		return own(List.of(assignment)).stream().findFirst()
+	MyShiftResponse myShift(User caller, ShiftAssignment assignment) {
+		return own(caller, List.of(assignment)).stream().findFirst()
 				.orElseThrow(() -> ApiException.notFound("shiftAssignment"));
 	}
 
@@ -356,7 +370,7 @@ public class ShiftReads {
 				AssignmentResponse.from(assignment), warnings == null ? List.of() : warnings);
 	}
 
-	private List<MyShiftResponse> own(List<ShiftAssignment> rows) {
+	private List<MyShiftResponse> own(User caller, List<ShiftAssignment> rows) {
 		if (rows.isEmpty()) {
 			return List.of();
 		}
@@ -364,6 +378,7 @@ public class ShiftReads {
 				Shift.class, Shift::getId);
 		Map<String, ShiftEvent> events = eventsById(rows.stream().map(ShiftAssignment::getEventId)
 				.collect(Collectors.toSet()));
+		Map<String, String> seriesLabels = labels.of(caller, events.values());
 		List<MyShiftResponse> out = new ArrayList<>();
 		for (ShiftAssignment row : rows) {
 			Shift shift = shifts.get(row.getShiftId());
@@ -372,7 +387,8 @@ public class ShiftReads {
 				continue;
 			}
 			out.add(new MyShiftResponse(row.getId(), row.getStatus(), row.getAssignedBy(),
-					ShiftResponse.from(shift, event.getTimezone(), MyAssignment.of(row), List.of()), EventHead.from(event)));
+					ShiftResponse.from(shift, event.getTimezone(), MyAssignment.of(row), List.of()),
+					EventHead.from(event, seriesLabels)));
 		}
 		return out;
 	}
@@ -420,6 +436,7 @@ public class ShiftReads {
 		Map<String, Integer> mine = mineByEvent(caller, events);
 		Set<String> plannable = access.plannableProjectIds(caller,
 				events.stream().map(ShiftEvent::getProjectId).collect(Collectors.toSet()));
+		Map<String, String> seriesLabels = labels.of(caller, events);
 		return events.stream().map(event -> {
 			Totals total = totals.getOrDefault(event.getId(), Totals.NONE);
 			return new EventSummary(event.getId(), event.getProjectId(), event.getTitle(), event.getDescription(),
@@ -428,7 +445,8 @@ public class ShiftReads {
 					ShiftRules.local(event.getEndsAt(), event.getTimezone()), event.getTimezone(),
 					event.isCancelled(), event.isSelfAssignable(), total.required(), total.taken(),
 					total.understaffed(), mine.getOrDefault(event.getId(), 0),
-					plannable.contains(event.getProjectId()));
+					plannable.contains(event.getProjectId()), event.getSeriesId(), labelOf(event, seriesLabels),
+					event.isDetached());
 		}).toList();
 	}
 
