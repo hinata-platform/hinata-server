@@ -7,6 +7,7 @@ import com.ahmadre.hinata.auth.sso.SsoLoginSuccessHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.security.config.Customizer;
@@ -358,6 +359,10 @@ public class SecurityConfig {
 						"/oauth/register", "/oauth/authorize", "/oauth/token",
 						"/login/**", "/oauth2/**", "/saml2/**", "/error")
 				.permitAll()
+				// A calendar app subscribing to somebody's shifts sends no login; the secret in the
+				// address is the key (HIN-47). GET only, one segment ending in .ics, no wildcard
+				// below it: every other method and every longer path still needs a bearer token.
+				.requestMatchers(HttpMethod.GET, "/api/v1/shifts/feed/*.ics").permitAll()
 				.requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 				.requestMatchers("/actuator/**").hasRole("ADMIN")
 				.anyRequest().authenticated())

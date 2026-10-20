@@ -1,7 +1,8 @@
 /**
  * External calendars (iCalendar, RFC 5545), shared by every feature that reads one:
- * holiday imports, calendar subscriptions and, later, a writer for shift plans
- * beside the parser. Nothing here knows about time tracking.
+ * holiday imports, calendar subscriptions and the calendar feed of shift plans,
+ * which the writer beside the parser produces. Nothing here knows about time
+ * tracking or shifts.
  *
  * <ul>
  * <li>{@link com.ahmadre.hinata.ics.IcsFetcher} fetches a calendar from an address
@@ -11,6 +12,8 @@
  * reads each calendar on a thread of its own.</li>
  * <li>{@link com.ahmadre.hinata.ics.IcsUrlCipher} encrypts the addresses that are
  * stored.</li>
+ * <li>{@link com.ahmadre.hinata.ics.IcsWriter} writes a calendar for subscribers
+ * (HIN-47), with VTIMEZONE blocks made from java.time.</li>
  * </ul>
  *
  * <p><b>What ical4j is used for, and what not.</b> Only its recurrence engine,
@@ -31,8 +34,7 @@
  * OutOfMemoryError escape the builder.</li>
  * </ul>
  *
- * <p>A writer only formats, so none of this stands in its way. It should still build
- * its VTIMEZONE blocks from java.time and never register one with ical4j's time zone
- * registry.
+ * <p>A writer only formats, so none of this stands in its way. {@code IcsWriter}
+ * still builds its VTIMEZONE blocks from java.time and uses nothing of ical4j.
  */
 package com.ahmadre.hinata.ics;

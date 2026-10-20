@@ -318,7 +318,13 @@ public enum AuditAction {
 	// The planner role given or taken: a right below the lead, so always with actor and target.
 	// NOTICE like other changes of who may do what in a project.
 	SHIFT_PLANNER_GRANTED(DATA, NOTICE, true),
-	SHIFT_PLANNER_REVOKED(DATA, NOTICE, true);
+	SHIFT_PLANNER_REVOKED(DATA, NOTICE, true),
+	// --- Shift planning: the calendar feed (HIN-47) -----------------------------------
+	// A person made or ended the secret address their calendar app reads their shifts from. Actor
+	// only: the token is never recorded, not even in part. NOTICE: whoever holds the address reads
+	// the person's shifts without signing in.
+	SHIFT_FEED_TOKEN_CREATED(DATA, NOTICE, true),
+	SHIFT_FEED_TOKEN_REVOKED(DATA, NOTICE, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of a privileged act that

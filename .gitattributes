@@ -1,3 +1,5 @@
 /gradlew text eol=lf
 *.bat text eol=crlf
 *.cmd text eol=crlf
+# Golden file of the calendar writer: iCalendar lines end in CRLF, byte for byte.
+src/test/resources/ics/shift-feed-golden.ics -text
