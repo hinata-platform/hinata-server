@@ -330,6 +330,9 @@ hinata:
     # Months an assignment is kept after its shift ended; the nightly run
     # deletes older ones (who worked when is personal data).
     retention-months: ${HINATA_SHIFTS_RETENTION_MONTHS:12}
+    # Minutes before a shift's start after which nobody moves up from its
+    # waiting list any more; the planners fill the place themselves.
+    waitlist-cutoff-minutes: ${HINATA_SHIFTS_WAITLIST_CUTOFF_MINUTES:120}
 
 springdoc:
   api-docs:

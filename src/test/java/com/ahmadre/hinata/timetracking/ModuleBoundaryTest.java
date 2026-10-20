@@ -319,8 +319,10 @@ class ModuleBoundaryTest {
 			// "absent" hint to a place it has already taken and never refuses one for it; and the
 			// collision report, which uses the door's static overlap arithmetic to tell the planner
 			// who collides after a move (HIN-161 moved it out of the write service so series changes
-			// share it). None of the three holds an availability type.
-			SHIFTS + ".ShiftConflicts", SHIFTS + ".ShiftAssignments", SHIFTS + ".ShiftWarnings");
+			// share it). HIN-162: the waiting list, which checks a candidate for an overlap with the
+			// same arithmetic before moving them up. None of the four holds an availability type.
+			SHIFTS + ".ShiftConflicts", SHIFTS + ".ShiftAssignments", SHIFTS + ".ShiftWarnings",
+			SHIFTS + ".ShiftWaitlist");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {

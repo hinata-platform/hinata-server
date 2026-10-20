@@ -750,6 +750,7 @@ public class ShiftSeriesService {
 		boolean shiftWrites = false;
 		boolean assignmentWrites = false;
 		List<String> gone = new ArrayList<>();
+		List<String> opened = new ArrayList<>();
 		Instant now = clock.instant();
 		Instant remindAgainAfter = now.plus(ShiftRules.SHIFT_MAX);
 		for (Shift shift : shifts) {
@@ -768,6 +769,9 @@ public class ShiftSeriesService {
 			setOrUnset(update, "maxHelpers", template.getMaxHelpers());
 			shiftBulk.updateOne(Query.query(Criteria.where("_id").is(shift.getId())), update);
 			shiftWrites = true;
+			if (ShiftService.raises(shift.getMaxHelpers(), template.getMaxHelpers())) {
+				opened.add(shift.getId());
+			}
 			if (!times.startsAt().equals(shift.getStartsAt()) || !times.endsAt().equals(shift.getEndsAt())) {
 				Update follow = new Update().set("startsAt", times.startsAt()).set("endsAt", times.endsAt());
 				if (times.startsAt().isAfter(remindAgainAfter)) {
@@ -781,6 +785,10 @@ public class ShiftSeriesService {
 		}
 		if (shiftWrites) {
 			shiftBulk.execute();
+		}
+		if (!opened.isEmpty()) {
+			// HIN-162: a higher upper limit; whoever waits moves up after the commit.
+			events.publishEvent(ShiftDomainEvents.SeatsOpened.of(opened));
 		}
 		if (assignmentWrites) {
 			assignmentBulk.execute();
@@ -828,6 +836,14 @@ public class ShiftSeriesService {
 			mongo.remove(Query.query(Criteria.where("_id").in(gone)), ShiftEvent.class);
 		}
 		if (!keep.isEmpty()) {
+			// HIN-162: the waiting lists of a cancelled occurrence end; their people hear it with the others.
+			Query waitingOnKept = Query.query(Criteria.where("eventId").in(keep).and("status").is(ShiftAssignment.Status.WAITING));
+			waitingOnKept.fields().include("userId");
+			for (ShiftAssignment waiting : mongo.find(waitingOnKept, ShiftAssignment.class)) {
+				counts.merge(waiting.getUserId(), 1, Integer::sum);
+			}
+			mongo.updateMulti(Query.query(Criteria.where("eventId").in(keep).and("status").is(ShiftAssignment.Status.WAITING)),
+					new Update().set("status", ShiftAssignment.Status.RELEASED), ShiftAssignment.class);
 			Query ofKept = Query.query(Criteria.where("eventId").in(keep));
 			mongo.updateMulti(Query.query(Criteria.where("_id").in(keep)),
 					new Update().set("cancelled", true).set("updatedAt", clock.instant()), ShiftEvent.class);

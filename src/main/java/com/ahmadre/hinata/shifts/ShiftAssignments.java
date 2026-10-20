@@ -37,6 +37,10 @@ import java.util.Optional;
  * <li>claim a place with a conditional increment that only matches below the upper limit;</li>
  * <li>turn the person's old document for this shift back on, or insert one.</li>
  * </ol>
+ * HIN-162: a sign-up asks for capacity before step 4. On a full shift, or one somebody waits for,
+ * it becomes a {@code WAITING} entry at the end of the list instead, without an overlap check;
+ * {@link ShiftWaitlist} runs that check when the person moves up.
+ *
  * Anything failing after the claim rolls the whole transaction back, so the counter never moves
  * without an assignment. Freeing a place flips the status with a conditional update and gives the
  * place back only when that update matched, in the same transaction.
@@ -77,7 +81,7 @@ public class ShiftAssignments {
 		if (person == null || !person.isActive() || !access.canSee(scoped.project(), person)) {
 			throw ShiftRules.refusal(HttpStatus.BAD_REQUEST, "error.shifts.assigneeNotMember");
 		}
-		ensureGuard(target);
+		ShiftUserGuard.ensure(mongo, target);
 		ShiftEvent event = mongo.findById(scoped.item().getEventId(), ShiftEvent.class);
 		if (event == null) {
 			throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.shiftUnavailable");
@@ -91,8 +95,7 @@ public class ShiftAssignments {
 	private Assigned assignInTransaction(User caller, String shiftId, User person, boolean self, ShiftEvent event) {
 		String target = person.getId();
 		// 1. Serialise this person's sign-ups.
-		mongo.findAndModify(Query.query(Criteria.where("_id").is(target)), new Update().inc("seq", 1L),
-				ShiftUserGuard.class);
+		ShiftUserGuard.lock(mongo, target);
 		// 3. The shift as this transaction sees it.
 		Shift shift = mongo.findById(shiftId, Shift.class);
 		if (shift == null || shift.isDeleted() || shift.isCancelled()) {
@@ -100,6 +103,20 @@ public class ShiftAssignments {
 		}
 		if (self && !event.isSelfAssignable()) {
 			throw ShiftRules.refusal(HttpStatus.FORBIDDEN, "error.shifts.selfAssignDisabled");
+		}
+		// HIN-162: a sign-up asks for capacity before the overlap. A full shift, or one somebody is
+		// already waiting for, puts the person at the end of its waiting list: nobody overtakes it,
+		// and the overlap is checked when they move up.
+		if (self) {
+			ShiftAssignment own = mongo.findOne(Query.query(Criteria.where("userId").is(target).and("shiftId").is(shiftId)),
+					ShiftAssignment.class);
+			if (own != null && (own.active() || own.waiting())) {
+				throw ShiftRules.refusal(HttpStatus.CONFLICT,
+						own.waiting() ? "error.shifts.alreadyWaiting" : "error.shifts.alreadyAssigned");
+			}
+			if (shift.full() || someoneWaits(shiftId)) {
+				return joinWaitlist(caller, shift);
+			}
 		}
 		// 4. The person's other places around this one.
 		List<ShiftAssignment> around = mongo.find(Query.query(around(target, shift.getStartsAt(), shift.getEndsAt())),
@@ -122,18 +139,21 @@ public class ShiftAssignments {
 				new Update().inc("assignedCount", 1).set("updatedAt", now),
 				FindAndModifyOptions.options().returnNew(true), Shift.class);
 		if (claimed == null) {
+			if (self) {
+				// Filled up since the shift was read: the end of the list, like any later sign-up.
+				return joinWaitlist(caller, shift);
+			}
 			throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.shiftFull");
 		}
-		// 6. The person's document for this shift, turned back on or new.
+		// 6. The person's document for this shift, turned back on or new. A waiting entry is turned
+		// on as well (HIN-162: a planner's "assign now"), so it never runs into the unique index.
 		ShiftAssignment.Status status = self ? ShiftAssignment.Status.CONFIRMED : ShiftAssignment.Status.ASSIGNED;
 		String assignedBy = self ? null : caller.getId();
 		ShiftAssignment assignment = mongo.findAndModify(
 				Query.query(Criteria.where("userId").is(target).and("shiftId").is(shiftId)
-						.and("status").in(ShiftAssignment.Status.DECLINED, ShiftAssignment.Status.RELEASED)),
-				new Update().set("status", status).set("assignedBy", assignedBy).set("createdAt", now)
-						.set("startsAt", claimed.getStartsAt()).set("endsAt", claimed.getEndsAt())
-						.set("cancelled", claimed.isCancelled()).set("eventId", claimed.getEventId())
-						.set("projectId", claimed.getProjectId()).unset("reminderSentAt"),
+						.and("status").in(ShiftAssignment.Status.DECLINED, ShiftAssignment.Status.RELEASED,
+								ShiftAssignment.Status.WAITING)),
+				turnedOn(new Update().set("status", status).set("assignedBy", assignedBy), claimed, now),
 				FindAndModifyOptions.options().returnNew(true), ShiftAssignment.class);
 		if (assignment == null) {
 			try {
@@ -166,7 +186,7 @@ public class ShiftAssignments {
 		ShiftAssignment confirmed = tx.run(() -> {
 			ShiftAssignment changed = mongo.findAndModify(
 					Query.query(Criteria.where("_id").is(existing.getId()).and("status").is(ShiftAssignment.Status.ASSIGNED)),
-					new Update().set("status", ShiftAssignment.Status.CONFIRMED),
+					new Update().set("status", ShiftAssignment.Status.CONFIRMED).unset("confirmBy"),
 					FindAndModifyOptions.options().returnNew(true), ShiftAssignment.class);
 			if (changed != null) {
 				audited(AuditAction.SHIFT_ASSIGNMENT_CONFIRMED, caller, changed, Map.of());
@@ -206,7 +226,8 @@ public class ShiftAssignments {
 	 * Frees a place: the person gives the shift up or a planner takes them off it
 	 * ({@code RELEASED}, "Abgeben"). The person themselves or a planner of the project; anybody
 	 * else gets the 404 of an assignment that is not there. Freeing what is not active changes
-	 * nothing and returns the document as it is.
+	 * nothing and returns the document as it is. HIN-162: on a waiting entry this is leaving the
+	 * waiting list, which frees no place.
 	 */
 	public ShiftAssignment release(User caller, String assignmentId) {
 		settings.requireEnabled();
@@ -224,7 +245,8 @@ public class ShiftAssignments {
 			}
 			access.requirePlanner(scoped.project(), caller);
 		}
-		return freeAs(caller, existing, ShiftAssignment.Status.RELEASED, ShiftAssignment.Status.ACTIVE, null);
+		return freeAs(caller, existing, ShiftAssignment.Status.RELEASED, ShiftAssignment.Status.ACTIVE_OR_WAITING,
+				null);
 	}
 
 	/**
@@ -233,31 +255,40 @@ public class ShiftAssignments {
 	 * membership or the account ended. [reason] goes into the audit record.
 	 */
 	public ShiftAssignment releaseBySystem(ShiftAssignment assignment, String reason) {
-		return freeAs(null, assignment, ShiftAssignment.Status.RELEASED, ShiftAssignment.Status.ACTIVE, reason);
+		return freeAs(null, assignment, ShiftAssignment.Status.RELEASED, ShiftAssignment.Status.ACTIVE_OR_WAITING,
+				reason);
 	}
 
 	/**
 	 * One transaction: the status flips from one of [from] to [to] with a conditional update, and
-	 * the place is given back only when that update matched, so running it twice frees the place
-	 * once. Returns the document as it is afterwards, changed or not.
+	 * the place is given back only when that update matched and the document held one, so running
+	 * it twice frees the place once. A freed place lets the waiting list move up after the commit
+	 * (HIN-162); a waiting entry leaving frees nothing and tells nobody. Returns the document as it
+	 * is afterwards, changed or not.
 	 */
 	private ShiftAssignment freeAs(User actor, ShiftAssignment assignment, ShiftAssignment.Status to,
 			List<ShiftAssignment.Status> from, String reason) {
 		return tx.run(() -> {
-			ShiftAssignment released = mongo.findAndModify(
+			ShiftAssignment before = mongo.findAndModify(
 					Query.query(Criteria.where("_id").is(assignment.getId()).and("status").in(from)),
-					new Update().set("status", to), FindAndModifyOptions.options().returnNew(true),
-					ShiftAssignment.class);
-			if (released == null) {
+					new Update().set("status", to).unset("confirmBy"), ShiftAssignment.class);
+			if (before == null) {
 				return mongo.findById(assignment.getId(), ShiftAssignment.class);
 			}
-			mongo.updateFirst(Query.query(Criteria.where("_id").is(released.getShiftId())),
-					new Update().inc("assignedCount", -1).set("updatedAt", clock.instant()), Shift.class);
+			ShiftAssignment released = mongo.findById(before.getId(), ShiftAssignment.class);
 			String actorId = actor == null ? null : actor.getId();
-			events.publishEvent(new ShiftDomainEvents.Released(released.getId(), released.getShiftId(),
-					released.getEventId(), released.getProjectId(), released.getUserId(), actorId, to));
+			if (before.active()) {
+				mongo.updateFirst(Query.query(Criteria.where("_id").is(released.getShiftId())),
+						new Update().inc("assignedCount", -1).set("updatedAt", clock.instant()), Shift.class);
+				events.publishEvent(new ShiftDomainEvents.Released(released.getId(), released.getShiftId(),
+						released.getEventId(), released.getProjectId(), released.getUserId(), actorId, to));
+				events.publishEvent(ShiftDomainEvents.SeatsOpened.of(released.getShiftId()));
+			}
 			Map<String, String> meta = new LinkedHashMap<>();
 			meta.put("self", String.valueOf(released.getUserId().equals(actorId)));
+			if (before.waiting()) {
+				meta.put("waiting", "true");
+			}
 			if (reason != null) {
 				meta.put("reason", reason);
 			}
@@ -303,13 +334,60 @@ public class ShiftAssignments {
 	}
 
 	/**
-	 * The guard document exists before the transaction that writes it, so two first sign-ups of a
-	 * person conflict on an update rather than racing an insert that would end the transaction with
-	 * a duplicate key.
+	 * HIN-162: the caller goes to the end of the shift's waiting list, at most
+	 * {@link ShiftWaitlist#WAITING_MAX} people, counted under the caller's own guard. The entry is
+	 * the person's one document for the shift, turned to {@code WAITING} or new; its
+	 * {@code createdAt} is its place in the order.
 	 */
-	private void ensureGuard(String userId) {
-		mongo.upsert(Query.query(Criteria.where("_id").is(userId)), new Update().setOnInsert("seq", 0L),
-				ShiftUserGuard.class);
+	private Assigned joinWaitlist(User caller, Shift shift) {
+		long waiting = mongo.count(Query.query(Criteria.where("shiftId").is(shift.getId())
+				.and("status").is(ShiftAssignment.Status.WAITING)), ShiftAssignment.class);
+		if (waiting >= ShiftWaitlist.WAITING_MAX) {
+			throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.waitlistFull");
+		}
+		Instant now = clock.instant();
+		ShiftAssignment entry = mongo.findAndModify(
+				Query.query(Criteria.where("userId").is(caller.getId()).and("shiftId").is(shift.getId())
+						.and("status").in(ShiftAssignment.Status.INACTIVE)),
+				turnedOn(new Update().set("status", ShiftAssignment.Status.WAITING).unset("assignedBy")
+						.set("waitlistedAt", now), shift, now),
+				FindAndModifyOptions.options().returnNew(true), ShiftAssignment.class);
+		if (entry == null) {
+			try {
+				entry = mongo.insert(ShiftAssignment.builder().shiftId(shift.getId()).eventId(shift.getEventId())
+						.projectId(shift.getProjectId()).userId(caller.getId()).startsAt(shift.getStartsAt())
+						.endsAt(shift.getEndsAt()).cancelled(shift.isCancelled()).status(ShiftAssignment.Status.WAITING)
+						.createdAt(now).waitlistedAt(now).build());
+			}
+			catch (DuplicateKeyException twice) {
+				throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.alreadyWaiting");
+			}
+		}
+		audited(AuditAction.SHIFT_ASSIGNMENT_CREATED, caller, entry, Map.of("self", "true", "waiting", "true"));
+		return new Assigned(entry, shift, null);
+	}
+
+	/** Whether anybody waits for the shift, over the waitlist_order index. */
+	private boolean someoneWaits(String shiftId) {
+		return mongo.exists(Query.query(Criteria.where("shiftId").is(shiftId)
+				.and("status").is(ShiftAssignment.Status.WAITING)), ShiftAssignment.class);
+	}
+
+	/**
+	 * What turning a person's document for a shift back on writes besides the status: the copies
+	 * of the shift, a fresh {@code createdAt} (the order of a list, the time of a place) and none of
+	 * what an earlier life of the document left behind.
+	 */
+	private static Update turnedOn(Update update, Shift shift, Instant now) {
+		update.set("createdAt", now)
+				.set("startsAt", shift.getStartsAt()).set("endsAt", shift.getEndsAt())
+				.set("cancelled", shift.isCancelled()).set("eventId", shift.getEventId())
+				.set("projectId", shift.getProjectId())
+				.unset("reminderSentAt").unset("promotedAt").unset("confirmBy");
+		if (!update.modifies("waitlistedAt")) {
+			update.unset("waitlistedAt");
+		}
+		return update;
 	}
 
 	/**

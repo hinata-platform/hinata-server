@@ -110,6 +110,9 @@ public class ShiftPersonalData implements PersonalDataExport {
 		row.put("cancelled", assignment.isCancelled());
 		row.put("assignedBy", assignment.getAssignedBy());
 		row.put("assignedAt", assignment.getCreatedAt());
+		row.put("waitlistedAt", assignment.getWaitlistedAt());
+		row.put("promotedAt", assignment.getPromotedAt());
+		row.put("confirmBy", assignment.getConfirmBy());
 		return row;
 	}
 

@@ -299,7 +299,8 @@ class ShiftPlannerIntegrationTest {
 				.isEqualTo(404);
 		HttpResponse<String> confirmed = post("/api/v1/shifts/assignments/" + annAssignment + "/confirm", token(ann));
 		assertThat(confirmed.statusCode()).isEqualTo(200);
-		assertThat(fields(json(confirmed))).containsExactly("assignmentId", "status", "assignedBy", "shift", "event");
+		assertThat(fields(json(confirmed))).containsExactly("assignmentId", "status", "assignedBy", "shift", "event",
+				"confirmBy", "confirmByLocal");
 		assertThat(json(confirmed).path("status").asText()).isEqualTo("CONFIRMED");
 		assertThat(post("/api/v1/shifts/assignments/" + annAssignment + "/confirm", token(ann)).statusCode())
 				.isEqualTo(200);
@@ -371,7 +372,7 @@ class ShiftPlannerIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("three on a shift needing three, a fourth below the limit, 409 at the limit on both paths")
+	@DisplayName("three on a shift needing three, a fourth below the limit; at the limit a planner gets 409, a sign-up waits")
 	void capacityOnBothPaths() throws Exception {
 		grantPlanner();
 		User carl = user("carl");
@@ -391,8 +392,11 @@ class ShiftPlannerIntegrationTest {
 		// Need met; over it and under the limit is still taken.
 		assertThat(post("/api/v1/shifts/shifts/" + shift.getId() + "/assignments",
 				"{\"userId\":\"" + dora.getId() + "\"}", pia).statusCode()).isEqualTo(201);
+		// HIN-162: a sign-up at the limit goes on the waiting list instead of failing.
 		HttpResponse<String> full = post("/api/v1/shifts/shifts/" + shift.getId() + "/self-assign", token(emil));
-		assertThat(full.statusCode()).isEqualTo(409);
+		assertThat(full.statusCode()).isEqualTo(201);
+		assertThat(json(full).path("assignment").path("status").asText()).isEqualTo("WAITING");
+		assertThat(json(full).path("shift").path("waitingCount").asInt()).isEqualTo(1);
 		HttpResponse<String> fullToo = post("/api/v1/shifts/shifts/" + shift.getId() + "/assignments",
 				"{\"userId\":\"" + emil.getId() + "\"}", pia);
 		assertThat(fullToo.statusCode()).isEqualTo(409);
@@ -402,7 +406,7 @@ class ShiftPlannerIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("a planner and ten sign-ups race for the last place: exactly one wins")
+	@DisplayName("a planner and ten sign-ups race for the last place: exactly one wins, the losing sign-ups wait")
 	void mixedRaceForTheLastPlace() throws Exception {
 		grantPlanner();
 		Shift shift = shift(event(base, hours(10), true), base, hours(2), 2, 2);
@@ -419,8 +423,15 @@ class ShiftPlannerIntegrationTest {
 
 		List<Integer> codes = race(calls);
 
-		assertThat(codes.stream().filter(code -> code == 201).count()).isEqualTo(1);
-		assertThat(codes).allMatch(code -> code == 201 || code == 409);
+		// HIN-162: sign-ups never fail on a full shift, they queue; only the planner's call can be a 409.
+		assertThat(codes.subList(1, codes.size())).containsOnly(201);
+		assertThat(codes.getFirst()).isIn(201, 409);
+		long active = mongo.count(Query.query(Criteria.where("shiftId").is(shift.getId())
+				.and("status").in(ShiftAssignment.Status.ACTIVE)), ShiftAssignment.class);
+		long waiting = mongo.count(Query.query(Criteria.where("shiftId").is(shift.getId())
+				.and("status").is(ShiftAssignment.Status.WAITING)), ShiftAssignment.class);
+		assertThat(active).isEqualTo(2);
+		assertThat(waiting).isEqualTo(codes.getFirst() == 201 ? 10 : 9);
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isEqualTo(2);
 		assertCountersAgree();
 	}

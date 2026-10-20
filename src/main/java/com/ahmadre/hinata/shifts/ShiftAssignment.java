@@ -41,6 +41,14 @@ import java.util.List;
 // The retention run deletes assignments that ended before the cutoff: startsAt bounds the walk
 // (an assignment ends at most a day after it starts), endsAt decides.
 @CompoundIndex(name = "start_end", def = "{'startsAt': 1, 'endsAt': 1}")
+// HIN-162: the waiting list of a shift in its order. shiftId is the equality ($in for a list of
+// shifts), createdAt and _id the order; only waiting entries are in it, so it stays small.
+@CompoundIndex(name = "waitlist_order", def = "{'shiftId': 1, 'createdAt': 1, '_id': 1}",
+		partialFilter = "{'status': 'WAITING'}")
+// HIN-162: places taken from the waiting list that still wait for a yes; the hourly job reads the
+// ones whose deadline passed.
+@CompoundIndex(name = "confirm_due", def = "{'confirmBy': 1}",
+		partialFilter = "{'status': 'ASSIGNED', 'confirmBy': {$exists: true}}")
 public class ShiftAssignment {
 
 	public enum Status {
@@ -51,10 +59,22 @@ public class ShiftAssignment {
 		/** The person said no to a planner's assignment. */
 		DECLINED,
 		/** Given up by the person or taken off by a planner. */
-		RELEASED;
+		RELEASED,
+		/**
+		 * HIN-162: on the waiting list of a full shift. Holds no place: not in
+		 * {@code assignedCount}, not in the overlap check, never reminded, never named to anybody
+		 * but planners.
+		 */
+		WAITING;
 
 		/** The statuses that hold a place and count in {@code Shift.assignedCount}. */
 		public static final List<Status> ACTIVE = List.of(ASSIGNED, CONFIRMED);
+
+		/** HIN-162: the statuses a person can still give up: a place, or a spot on the waiting list. */
+		public static final List<Status> ACTIVE_OR_WAITING = List.of(ASSIGNED, CONFIRMED, WAITING);
+
+		/** The statuses a document can be turned back on from. */
+		public static final List<Status> INACTIVE = List.of(DECLINED, RELEASED);
 
 		public boolean active() {
 			return this == ASSIGNED || this == CONFIRMED;
@@ -88,6 +108,23 @@ public class ShiftAssignment {
 	/** HIN-46. */
 	private Instant reminderSentAt;
 
+	/** HIN-162: when the person moved up from the waiting list; null for every other place. */
+	private Instant promotedAt;
+
+	/**
+	 * HIN-162: until when a person who moved up has to confirm. Set only while the place waits for
+	 * that answer ({@code ASSIGNED}); confirming removes it, and when it passes the place goes to
+	 * the next person.
+	 */
+	private Instant confirmBy;
+
+	/**
+	 * HIN-162: when the person joined the waiting list, and so the entry is one. A waiting entry
+	 * that never became a place is no record of work and goes a day after the shift ends; a place
+	 * taken the usual way clears it.
+	 */
+	private Instant waitlistedAt;
+
 	@CreatedDate
 	private Instant createdAt;
 
@@ -97,5 +134,9 @@ public class ShiftAssignment {
 
 	public boolean active() {
 		return status != null && status.active();
+	}
+
+	public boolean waiting() {
+		return status == Status.WAITING;
 	}
 }
