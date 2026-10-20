@@ -23,6 +23,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.invocation.Invocation;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -94,6 +96,9 @@ class ShiftNotificationIntegrationTest {
 	private ShiftPlanners planners;
 	@Autowired
 	private ShiftReminderJob job;
+	@Autowired
+	@Qualifier(ShiftFollowUps.EXECUTOR)
+	private ThreadPoolTaskExecutor followUps;
 
 	private User lead;
 	private User pia;
@@ -145,7 +150,9 @@ class ShiftNotificationIntegrationTest {
 		String anns = assignments.assign(ann, shift.getId(), ann.getId(), true).assignment().getId();
 
 		assignments.release(lead, bobs);
+		settle();
 		assignments.release(ann, anns);
+		settle();
 
 		assertThat(count(bob, Notification.Type.SHIFT_RELEASED)).isEqualTo(1);
 		assertThat(one(bob, Notification.Type.SHIFT_RELEASED).getLink()).isEqualTo("/shifts");
@@ -162,10 +169,13 @@ class ShiftNotificationIntegrationTest {
 		String bobs = assignments.assign(bob, shift.getId(), bob.getId(), true).assignment().getId();
 
 		assignments.release(ann, anns);
+		settle();
 		assignments.release(bob, bobs);
+		settle();
 		assignments.assign(ann, shift.getId(), ann.getId(), true);
 		String again = mongo.findOne(Query.query(Criteria.where("userId").is(ann.getId())), ShiftAssignment.class).getId();
 		assignments.release(ann, again);
+		settle();
 
 		assertThat(count(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isEqualTo(1);
 		assertThat(count(pia, Notification.Type.SHIFT_HELPER_DECLINED)).isEqualTo(1);
@@ -179,6 +189,7 @@ class ShiftNotificationIntegrationTest {
 						Instant.now().minus(Duration.ofMinutes(61))), Shift.class);
 		assignments.assign(ann, shift.getId(), ann.getId(), true);
 		assignments.release(ann, again);
+		settle();
 		assertThat(count(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isEqualTo(2);
 	}
 
@@ -189,6 +200,7 @@ class ShiftNotificationIntegrationTest {
 		String anns = assignments.assign(ann, shift.getId(), ann.getId(), true).assignment().getId();
 		assignments.assign(bob, shift.getId(), bob.getId(), true);
 		assignments.release(ann, anns);
+		settle();
 		assertThat(count(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isZero();
 	}
 
@@ -200,6 +212,7 @@ class ShiftNotificationIntegrationTest {
 		String anns = assignments.assign(ann, shift.getId(), ann.getId(), true).assignment().getId();
 		service.cancelEvent(lead, event.getId(), null);
 		assignments.release(ann, anns);
+		settle();
 		assertThat(count(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isZero();
 	}
 
@@ -440,5 +453,10 @@ class ShiftNotificationIntegrationTest {
 				.displayName(Character.toUpperCase(name.charAt(0)) + name.substring(1)).locale("de")
 				.notificationPreferences(prefs())
 				.roles(new HashSet<>(Set.of(Role.MEMBER))).active(true).build());
+	}
+
+	/** Lets moving up and the short notice finish on the follow-up thread. */
+	private void settle() {
+		ShiftFollowUpsSettled.settle(followUps);
 	}
 }

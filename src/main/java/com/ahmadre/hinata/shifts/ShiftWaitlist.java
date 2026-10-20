@@ -16,6 +16,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -33,8 +34,9 @@ import java.util.Optional;
  *
  * <p>The order is the waiting entries' {@code (createdAt, _id)}, read over the partial index
  * {@code waitlist_order}; nothing on the shift counts the list. Moving up runs after the commit of
- * whatever opened the place ({@link ShiftDomainEvents.SeatsOpened}), one transaction per
- * candidate, each starting with the candidate's own {@link ShiftUserGuard}, so a sign-up of the same
+ * whatever opened the place ({@link ShiftDomainEvents.SeatsOpened}), on the module's follow-up
+ * thread ({@link ShiftFollowUps}) so the request that freed the place does not wait for it, one
+ * transaction per candidate, each starting with the candidate's own {@link ShiftUserGuard}, so a sign-up of the same
  * person running at that moment is serialised against it:
  * <ol>
  * <li>the candidate still waits, is active and still sees the project; otherwise the entry is
@@ -97,13 +99,15 @@ public class ShiftWaitlist {
 	}
 
 	/**
-	 * Places opened; move people up. Ahead of the other after-commit listeners, so a place filled
-	 * from the list is no longer reported as short.
+	 * Places opened; move people up, on the follow-up thread. Handed over ahead of the other
+	 * after-commit listeners, so a place filled from the list is no longer reported as short. Only
+	 * the shifts somebody waits for are tried, found in one read.
 	 */
+	@Async(ShiftFollowUps.EXECUTOR)
 	@Order(Ordered.HIGHEST_PRECEDENCE)
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-	void onSeatsOpened(ShiftDomainEvents.SeatsOpened event) {
-		for (String shiftId : event.shiftIds()) {
+	public void onSeatsOpened(ShiftDomainEvents.SeatsOpened event) {
+		for (String shiftId : waitedFor(event.shiftIds())) {
 			try {
 				promote(shiftId);
 			}
@@ -116,33 +120,41 @@ public class ShiftWaitlist {
 
 	/**
 	 * Moves people up on [shiftId] while it has free places and people waiting. Returns how many
-	 * moved up.
+	 * moved up. The shift, its event and its project are read once per run; the list is read in
+	 * order, a batch at a time, and every candidate's own transaction decides again whether there
+	 * is a place, so a place that fills meanwhile ends the run.
 	 */
 	public int promote(String shiftId) {
 		if (!settings.enabled()) {
 			return 0;
 		}
+		Shift shift = mongo.findById(shiftId, Shift.class);
+		if (shift == null || shift.isDeleted() || shift.isCancelled() || shift.full()) {
+			return 0;
+		}
+		ShiftEvent event = mongo.findById(shift.getEventId(), ShiftEvent.class);
+		if (event == null || event.isCancelled() || !event.isSelfAssignable() || !beforeCutoff(shift)) {
+			return 0;
+		}
+		Optional<Project> project = access.project(shift.getProjectId());
 		int promoted = 0;
-		// Every round ends one entry's wait or stops, so the list's limit bounds the loop.
-		for (int round = 0; round <= WAITING_MAX; round++) {
-			Shift shift = mongo.findById(shiftId, Shift.class);
-			if (shift == null || shift.isDeleted() || shift.isCancelled() || shift.full()) {
+		// Every candidate tried leaves the list or ends the run, so a batch read again holds only
+		// people who joined meanwhile; twice the list's limit bounds the whole run.
+		int tried = 0;
+		while (tried < 2 * WAITING_MAX) {
+			List<ShiftAssignment> batch = waiting(shiftId);
+			if (batch.isEmpty()) {
 				return promoted;
 			}
-			ShiftEvent event = mongo.findById(shift.getEventId(), ShiftEvent.class);
-			if (event == null || event.isCancelled() || !event.isSelfAssignable() || !beforeCutoff(shift)) {
-				return promoted;
-			}
-			ShiftAssignment candidate = first(shiftId);
-			if (candidate == null) {
-				return promoted;
-			}
-			Outcome outcome = promoteOne(candidate, shift.getProjectId());
-			if (outcome == Outcome.PROMOTED) {
-				promoted++;
-			}
-			else if (outcome == Outcome.NO_PLACE) {
-				return promoted;
+			for (ShiftAssignment candidate : batch) {
+				tried++;
+				Outcome outcome = promoteOne(candidate, project);
+				if (outcome == Outcome.PROMOTED) {
+					promoted++;
+				}
+				else if (outcome == Outcome.NO_PLACE) {
+					return promoted;
+				}
 			}
 		}
 		return promoted;
@@ -195,16 +207,26 @@ public class ShiftWaitlist {
 		return Duration.ofMinutes(Math.max(0, properties.getShifts().getWaitlistCutoffMinutes()));
 	}
 
-	/** The first person waiting for [shiftId], over the waitlist_order index. */
-	private ShiftAssignment first(String shiftId) {
-		return mongo.findOne(Query.query(Criteria.where("shiftId").is(shiftId)
+	/** The people waiting for [shiftId] in order, ids and user only, over the waitlist_order index. */
+	private List<ShiftAssignment> waiting(String shiftId) {
+		Query query = Query.query(Criteria.where("shiftId").is(shiftId)
 				.and("status").is(ShiftAssignment.Status.WAITING))
-				.with(Sort.by("createdAt", "_id")), ShiftAssignment.class);
+				.with(Sort.by("createdAt", "_id")).limit(WAITING_MAX);
+		query.fields().include("_id", "userId");
+		return mongo.find(query, ShiftAssignment.class);
 	}
 
-	private Outcome promoteOne(ShiftAssignment candidate, String projectId) {
+	/** Which of [shiftIds] anybody waits for, in one read over the waitlist_order index. */
+	private List<String> waitedFor(List<String> shiftIds) {
+		if (shiftIds.isEmpty()) {
+			return List.of();
+		}
+		return mongo.findDistinct(Query.query(Criteria.where("shiftId").in(shiftIds)
+				.and("status").is(ShiftAssignment.Status.WAITING)), "shiftId", ShiftAssignment.class, String.class);
+	}
+
+	private Outcome promoteOne(ShiftAssignment candidate, Optional<Project> project) {
 		String userId = candidate.getUserId();
-		Optional<Project> project = access.project(projectId);
 		ShiftUserGuard.ensure(mongo, userId);
 		try {
 			return tx.runAlone(() -> {
