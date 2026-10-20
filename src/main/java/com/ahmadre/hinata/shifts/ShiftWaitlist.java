@@ -69,7 +69,7 @@ public class ShiftWaitlist {
 	static final Duration CONFIRM_BEFORE_START = Duration.ofHours(2);
 
 	static final String REASON_SKIPPED = "waitlistSkipped";
-	static final String REASON_GONE = "waitlistIneligible";
+	static final String REASON_INELIGIBLE = "waitlistIneligible";
 	static final String REASON_EXPIRED = "confirmExpired";
 
 	private final MongoTemplate mongo;
@@ -84,7 +84,16 @@ public class ShiftWaitlist {
 
 	/** What one candidate came to. */
 	enum Outcome {
-		PROMOTED, SKIPPED, GONE, NO_PLACE
+		/** Moved up onto the place. */
+		PROMOTED,
+		/** Passed over and told why: they hold another shift at that time. */
+		SKIPPED_OVERLAP,
+		/** Passed over without a word: no longer active or no longer seeing the project. */
+		SKIPPED_INELIGIBLE,
+		/** Had left the list already, or left it while the place was being claimed. */
+		LEFT,
+		/** No place left, or the shift is gone: the round ends. */
+		NO_PLACE
 	}
 
 	/**
@@ -202,12 +211,12 @@ public class ShiftWaitlist {
 				ShiftUserGuard.lock(mongo, userId);
 				ShiftAssignment current = mongo.findById(candidate.getId(), ShiftAssignment.class);
 				if (current == null || !current.waiting()) {
-					return Outcome.GONE;
+					return Outcome.LEFT;
 				}
 				// The person as a sign-up checks them: an active account that still sees the project.
 				User person = users.findById(userId).orElse(null);
 				if (person == null || !person.isActive() || project.isEmpty() || !access.canSee(project.get(), person)) {
-					return leave(current, REASON_GONE) ? Outcome.SKIPPED : Outcome.GONE;
+					return leave(current, REASON_INELIGIBLE) ? Outcome.SKIPPED_INELIGIBLE : Outcome.LEFT;
 				}
 				Shift shift = mongo.findById(current.getShiftId(), Shift.class);
 				if (shift == null || shift.isDeleted() || shift.isCancelled()) {
@@ -218,11 +227,11 @@ public class ShiftWaitlist {
 				if (ShiftConflicts.firstOverlap(shift.getStartsAt(), shift.getEndsAt(), shift.getId(), around)
 						.isPresent()) {
 					if (!leave(current, REASON_SKIPPED)) {
-						return Outcome.GONE;
+						return Outcome.LEFT;
 					}
 					events.publishEvent(new ShiftDomainEvents.WaitlistSkipped(shift.getId(), shift.getEventId(),
 							shift.getProjectId(), userId));
-					return Outcome.SKIPPED;
+					return Outcome.SKIPPED_OVERLAP;
 				}
 				Instant now = clock.instant();
 				Shift claimed = mongo.findAndModify(Query.query(ShiftAssignments.claimable(shift.getId())),
@@ -249,7 +258,7 @@ public class ShiftWaitlist {
 			});
 		}
 		catch (LeftMeanwhile gone) {
-			return Outcome.GONE;
+			return Outcome.LEFT;
 		}
 	}
 
