@@ -69,7 +69,7 @@ class TimeOffSearch implements SearchSource {
 						Criteria.where("systemKey").in(labelled)));
 		Query types = Query.query(new Criteria().andOperator(Criteria.where("active").ne(false), named))
 				.with(TimeOffTypeRepository.BY_NAME).limit(TYPE_MATCH_MAX);
-		List<TimeOffType> matching = mongo.find(types, TimeOffType.class);
+		List<TimeOffType> matching = mongo.find(context.bounded(types), TimeOffType.class);
 		Set<String> typeIds = new LinkedHashSet<>();
 		matching.forEach(type -> typeIds.add(type.getId()));
 
@@ -93,16 +93,17 @@ class TimeOffSearch implements SearchSource {
 	/** The caller's requests and the types on offer, each up to [limit]. */
 	@Override
 	public long count(SearchContext context, int limit) {
-		return mongo.count(Query.query(Criteria.where("userId").is(context.userId())).limit(limit),
+		return mongo.count(context.bounded(Query.query(Criteria.where("userId").is(context.userId())).limit(limit)),
 				TimeOffRequest.class)
-				+ mongo.count(Query.query(Criteria.where("active").ne(false)).limit(limit), TimeOffType.class);
+				+ mongo.count(context.bounded(Query.query(Criteria.where("active").ne(false)).limit(limit)),
+				TimeOffType.class);
 	}
 
 	private List<SearchHit> requests(Criteria mine, Criteria text, SearchContext context, int limit) {
 		Query query = Query.query(text == null ? mine : new Criteria().andOperator(mine, text))
 				.with(Sort.by(Sort.Direction.DESC, "from", "_id")).limit(limit);
-		List<TimeOffRequest> found = mongo.find(query, TimeOffRequest.class);
-		Map<String, TimeOffType> types = types(found);
+		List<TimeOffRequest> found = mongo.find(context.bounded(query), TimeOffRequest.class);
+		Map<String, TimeOffType> types = types(found, context);
 		return found.stream().map(request -> {
 			TimeOffType type = types.get(request.getTypeId());
 			return SearchHit.builder()
@@ -122,13 +123,13 @@ class TimeOffSearch implements SearchSource {
 		}).toList();
 	}
 
-	private Map<String, TimeOffType> types(List<TimeOffRequest> requests) {
+	private Map<String, TimeOffType> types(List<TimeOffRequest> requests, SearchContext context) {
 		Set<String> ids = new LinkedHashSet<>();
 		requests.forEach(request -> {
 			if (request.getTypeId() != null) ids.add(request.getTypeId());
 		});
 		if (ids.isEmpty()) return Map.of();
-		Query query = Query.query(Criteria.where("_id").in(ids));
+		Query query = context.bounded(Query.query(Criteria.where("_id").in(ids)));
 		query.fields().include("name", "systemKey", "icon", "hue");
 		Map<String, TimeOffType> byId = new HashMap<>();
 		mongo.find(query, TimeOffType.class).forEach(type -> byId.put(type.getId(), type));
