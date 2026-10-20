@@ -14,8 +14,6 @@ import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mongodb.event.CommandListener;
-import com.mongodb.event.CommandStartedEvent;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,13 +57,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -95,25 +91,14 @@ class ShiftSeriesIntegrationTest {
 
 	private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
 	private static final ZoneId BERLIN = ZoneId.of("Europe/Berlin");
-	private static final Set<String> READS = Set.of("find", "aggregate", "count", "getMore", "distinct");
 
-	static final AtomicBoolean counting = new AtomicBoolean();
-	static final List<String> commands = new CopyOnWriteArrayList<>();
 
 	@TestConfiguration
 	static class Probes {
 
 		@Bean
 		MongoClientSettingsBuilderCustomizer countSeriesReads() {
-			CommandListener listener = new CommandListener() {
-				@Override
-				public void commandStarted(CommandStartedEvent event) {
-					if (counting.get() && READS.contains(event.getCommandName())) {
-						commands.add(event.getCommandName() + " " + event.getCommand().get(event.getCommandName()));
-					}
-				}
-			};
-			return builder -> builder.addCommandListener(listener);
+			return builder -> builder.addCommandListener(ShiftReadCounter.listener());
 		}
 	}
 
@@ -172,8 +157,7 @@ class ShiftSeriesIntegrationTest {
 
 	@AfterEach
 	void stopCounting() {
-		counting.set(false);
-		commands.clear();
+		ShiftReadCounter.reset();
 	}
 
 	// --- creating -----------------------------------------------------------------------
@@ -733,12 +717,11 @@ class ShiftSeriesIntegrationTest {
 				.containsOnly("täglich", "alle 2 Wochen " + today.plusDays(1).getDayOfWeek()
 						.getDisplayName(java.time.format.TextStyle.SHORT_STANDALONE, java.util.Locale.GERMAN));
 
-		commands.clear();
-		counting.set(true);
-		List<ShiftReads.EventSummary> page = reads.events(ann, from, to, null, 0, 100).getContent();
-		counting.set(false);
+		List<List<ShiftReads.EventSummary>> pages = new ArrayList<>();
+		ShiftReadCounter.reads(() -> pages.add(reads.events(ann, from, to, null, 0, 100).getContent()));
+		List<ShiftReads.EventSummary> page = pages.get(0);
 		assertThat(page).hasSizeGreaterThan(20).allSatisfy(row -> assertThat(row.recurrenceLabel()).isNotBlank());
-		assertThat(commands.stream().filter(command -> command.contains("shift_series"))).hasSize(1);
+		assertThat(ShiftReadCounter.commands.stream().filter(command -> command.contains("shift_series"))).hasSize(1);
 
 		// The person's data export names the series they created.
 		@SuppressWarnings("unchecked")
