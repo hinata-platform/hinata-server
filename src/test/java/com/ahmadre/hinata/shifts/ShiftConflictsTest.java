@@ -48,6 +48,23 @@ class ShiftConflictsTest {
 	}
 
 	@Test
+	void collisionsLookOnlyAtThePersonsOwnPlacesAndNameTheEarliest() {
+		ShiftAssignment moved = held("moved", TEN, TWO);
+		ShiftAssignment later = held("later", NOON, TWO.plusSeconds(3600));
+		ShiftAssignment earlier = held("earlier", TEN.minusSeconds(3600), TEN.plusSeconds(60));
+		ShiftAssignment dayBefore = held("dayBefore", TEN.minus(ShiftRules.SHIFT_MAX), TEN);
+		ShiftAssignment bobs = held("bobs", TEN, TWO);
+		bobs.setUserId("bob");
+		ShiftAssignment bobMoved = held("bobMoved", TWO, TWO.plusSeconds(7200));
+		bobMoved.setUserId("bob");
+
+		List<ShiftConflicts.Collision> found = ShiftConflicts.collisions(List.of(moved, bobMoved),
+				List.of(later, bobs, moved, earlier, dayBefore, bobMoved));
+
+		assertThat(found).containsExactly(new ShiftConflicts.Collision("ann", "moved", "earlier", "p"));
+	}
+
+	@Test
 	void theCapacityClaimRendersAsTheDatabaseShouldSeeIt() {
 		Document claim = Query.query(ShiftAssignments.claimable("s1")).getQueryObject();
 		assertThat(claim.get("_id")).isEqualTo("s1");
