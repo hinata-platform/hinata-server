@@ -8,6 +8,7 @@ import com.ahmadre.hinata.issue.export.ExportDocument;
 import com.ahmadre.hinata.issue.export.ExportDocumentRenderer;
 import com.ahmadre.hinata.issue.export.ExportFormat;
 import com.ahmadre.hinata.issue.export.ExportRateLimiter;
+import com.ahmadre.hinata.issue.export.ExportSlots;
 import com.ahmadre.hinata.issue.export.ExportText;
 import com.ahmadre.hinata.issue.export.ExportWords;
 import com.ahmadre.hinata.setup.BrandLogoService;
@@ -16,7 +17,6 @@ import com.ahmadre.hinata.user.User;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedWriter;
@@ -40,8 +40,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
@@ -57,8 +55,8 @@ import java.util.stream.Stream;
  * a workbook past fifty thousand opens slowly anywhere.
  *
  * <p>The order of the checks is the export's defence: the request's values first (a caller's
- * mistake costs nothing), then a slot among {@link #MAX_RUNNING} exports at once (a busy instance
- * is nobody's fault), then the caller's budget ({@link ExportRateLimiter}), and only then the
+ * mistake costs nothing), then a slot among the instance's {@link ExportSlots} (a busy instance
+ * is nobody's fault, and the slots are shared with the shift plan), then the caller's budget ({@link ExportRateLimiter}), and only then the
  * reader's scope — metered before anything is read, the way the issue export is.
  *
  * <p>Every file is audited ({@link AuditAction#TIME_REPORT_EXPORTED}) with its format, a hash of
@@ -78,9 +76,6 @@ public class TimeReportExport {
 	/** Entries read, named and written per round trip. */
 	static final int CHUNK = 500;
 
-	/** Exports rendered at once across the instance. */
-	static final int MAX_RUNNING = 4;
-
 	/** Groups a PDF or workbook summarises; the rest is one line saying how many. */
 	static final int SUMMARY_GROUPS = TimeReportService.PAGE_MAX;
 
@@ -94,11 +89,11 @@ public class TimeReportExport {
 	private final BrandLogoService brandLogo;
 	private final Clock clock;
 	private final Map<ExportFormat, ExportDocumentRenderer> renderers;
-	private final Semaphore running = new Semaphore(MAX_RUNNING);
+	private final ExportSlots slots;
 
 	public TimeReportExport(TimeReportService reports, MongoTemplate mongo, ExportRateLimiter limiter,
 			AuditService audit, SettingsService settings, BrandLogoService brandLogo, Clock clock,
-			List<ExportDocumentRenderer> renderers) {
+			List<ExportDocumentRenderer> renderers, ExportSlots slots) {
 		this.reports = reports;
 		this.mongo = mongo;
 		this.limiter = limiter;
@@ -109,11 +104,12 @@ public class TimeReportExport {
 		Map<ExportFormat, ExportDocumentRenderer> byFormat = new EnumMap<>(ExportFormat.class);
 		renderers.forEach(renderer -> byFormat.put(renderer.format(), renderer));
 		this.renderers = Map.copyOf(byFormat);
+		this.slots = slots;
 	}
 
 	/**
 	 * A file about to be written: what it reads, whether it will be cut short, its name. Holds one
-	 * of the {@link #MAX_RUNNING} slots until it is closed.
+	 * of the instance's {@link ExportSlots} until it is closed.
 	 */
 	public record Plan(User viewer, TimeReportScope.Reach reach, TimeReportFilter filter,
 			TimeReportService.GroupBy groupBy, Query query, int maxRows, boolean truncated, String fileName,
@@ -131,15 +127,8 @@ public class TimeReportExport {
 	 * @throws ApiException 429 when the instance is busy or the caller over budget
 	 */
 	public Plan plan(User viewer, TimeReportFilter filter, TimeReportService.GroupBy groupBy, ExportFormat format) {
-		if (!running.tryAcquire()) {
-			throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "error.rateLimited");
-		}
-		AtomicBoolean released = new AtomicBoolean();
-		Runnable release = () -> {
-			if (released.compareAndSet(false, true)) {
-				running.release();
-			}
-		};
+		ExportSlots.Slot slot = slots.tryAcquire();
+		Runnable release = slot::close;
 		try {
 			limiter.require(viewer.getId());
 			int max = format == null ? MAX_CSV_ROWS : MAX_ROWS.get(format);
