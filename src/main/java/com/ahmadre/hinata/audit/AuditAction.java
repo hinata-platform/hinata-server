@@ -324,7 +324,13 @@ public enum AuditAction {
 	// only: the token is never recorded, not even in part. NOTICE: whoever holds the address reads
 	// the person's shifts without signing in.
 	SHIFT_FEED_TOKEN_CREATED(DATA, NOTICE, true),
-	SHIFT_FEED_TOKEN_REVOKED(DATA, NOTICE, true);
+	SHIFT_FEED_TOKEN_REVOKED(DATA, NOTICE, true),
+	// --- Shift planning: series (HIN-161) ----------------------------------------------
+	// A series created, changed from an occurrence on (split, or all future occurrences cancelled)
+	// or deleted from an occurrence on. Meta: project, series ids and how many occurrences, no title.
+	SHIFT_SERIES_CREATED(DATA, INFO, true),
+	SHIFT_SERIES_UPDATED(DATA, INFO, true),
+	SHIFT_SERIES_DELETED(DATA, INFO, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of a privileged act that

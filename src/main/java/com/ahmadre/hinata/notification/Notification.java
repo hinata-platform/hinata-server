@@ -41,7 +41,9 @@ public class Notification {
 		TEAM_ADDED, TEAM_ROLE_CHANGED, TEAM_REMOVED, PROJECT_ADDED,
 		// Shift planning (HIN-46). The names are the wire contract; the module itself stays out of here.
 		SHIFT_ASSIGNED, SHIFT_RELEASED, SHIFT_REMINDER, SHIFT_EVENT_CHANGED, SHIFT_CHANGED,
-		SHIFT_HELPER_DECLINED
+		SHIFT_HELPER_DECLINED,
+		// HIN-161: a series changed or ended from an occurrence on; one notice per person.
+		SHIFT_SERIES_CHANGED
 	}
 
 	@Id

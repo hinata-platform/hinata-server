@@ -137,6 +137,17 @@ public class ShiftDelivery {
 		});
 	}
 
+	/** HIN-161: a series changed or ended; each person hears once how many of their places it touched. */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	void onSeriesChanged(ShiftDomainEvents.SeriesChanged event) {
+		safely("series", () -> {
+			Map<String, Integer> counts = new LinkedHashMap<>(event.counts());
+			counts.remove(event.actorId());
+			notifications.notifyEach(Notification.Type.SHIFT_SERIES_CHANGED, event.projectId(), counts.keySet(),
+					MY_SHIFTS, reader -> notices.seriesChanged(reader, counts.getOrDefault(reader.getId(), 1)));
+		});
+	}
+
 	/**
 	 * Reminds the people of [due], assignments the reminder job has already marked as sent. One
 	 * read for their shifts and one for their events, then one fan-out per shift. A shift or event

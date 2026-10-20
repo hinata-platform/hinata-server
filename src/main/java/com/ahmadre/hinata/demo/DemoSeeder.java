@@ -133,7 +133,7 @@ public class DemoSeeder {
 			"working_schedules", "time_off", "time_off_requests", "time_off_entitlements",
 			"time_off_ledger", "time_off_notices", "time_off_employment", "time_off_proposals",
 			"billing_rates", "invoices", "invoice_sequences", "notifications",
-			"shift_events", "shifts", "shift_assignments", "shift_user_guards");
+			"shift_events", "shifts", "shift_assignments", "shift_user_guards", "shift_series");
 
 	@EventListener(ApplicationReadyEvent.class)
 	public void seed() {

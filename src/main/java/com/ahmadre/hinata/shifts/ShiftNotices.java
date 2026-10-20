@@ -73,6 +73,20 @@ public class ShiftNotices {
 	}
 
 	/**
+	 * HIN-161: [count] of the reader's places changed with a series. Neither the series nor a time
+	 * is named, in the bell either: the places may lie on many days, and the app lists them.
+	 */
+	public PersonalNotice seriesChanged(User reader, int count) {
+		Locale locale = words.localeOf(reader);
+		return new PersonalNotice(
+				words.in(locale, "notify.shiftSeriesChanged.title"),
+				words.in(locale, "notify.shiftSeriesChanged.body", count),
+				words.in(locale, "notify.shift.pushTitle"),
+				words.in(locale, "notify.shiftSeriesChanged.push"),
+				words.in(locale, "notify.cta.openShifts"));
+	}
+
+	/**
 	 * The span in the event's zone, and in the reader's as well when their clock reads differently
 	 * at either end. Two places in the same offset (Berlin and Paris) are one clock.
 	 */
