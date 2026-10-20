@@ -307,7 +307,18 @@ public enum AuditAction {
 	SHIFT_EVENT_DELETED(DATA, INFO, true),
 	SHIFT_CREATED(DATA, INFO, true),
 	SHIFT_UPDATED(DATA, INFO, true),
-	SHIFT_DELETED(DATA, INFO, true);
+	SHIFT_DELETED(DATA, INFO, true),
+	// --- Shift planning: who is on a shift, and who plans (HIN-45) -------------------
+	// A place taken (by a planner or the person, meta "self"), confirmed, declined or given up.
+	// Freed by the system when the membership or the account ended: no actor, meta "reason".
+	SHIFT_ASSIGNMENT_CREATED(DATA, INFO, true),
+	SHIFT_ASSIGNMENT_CONFIRMED(DATA, INFO, true),
+	SHIFT_ASSIGNMENT_DECLINED(DATA, INFO, true),
+	SHIFT_ASSIGNMENT_RELEASED(DATA, INFO, true),
+	// The planner role given or taken: a right below the lead, so always with actor and target.
+	// NOTICE like other changes of who may do what in a project.
+	SHIFT_PLANNER_GRANTED(DATA, NOTICE, true),
+	SHIFT_PLANNER_REVOKED(DATA, NOTICE, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of a privileged act that

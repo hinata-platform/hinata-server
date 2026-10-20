@@ -2,7 +2,6 @@ package com.ahmadre.hinata.shifts;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
-import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.auth.TokenService;
 import com.ahmadre.hinata.availability.TimeOff;
 import com.ahmadre.hinata.common.ApiException;
@@ -48,12 +47,8 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RestController;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -90,8 +85,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * path under real parallel requests, delivery after the commit, the read models and what they
  * cost, the rights per route, and the data a person is owed or loses after the retention period.
  *
- * <p>The assignment routes come with HIN-45; until then a probe controller under the gated prefix
- * puts the same service method behind real HTTP, so the races run as parallel requests.
+ * <p>The races run as parallel requests against the sign-up route of HIN-45.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
 		"hinata.mongodb.tls.enabled=false",
@@ -138,27 +132,6 @@ class ShiftPlanningIntegrationTest {
 			return new AssignedCounter();
 		}
 
-		/** The assignment path over HTTP until HIN-45 gives it routes. */
-		@RestController
-		static class AssignProbe {
-
-			@Autowired
-			private ShiftAssignments assignments;
-			@Autowired
-			private CurrentUser currentUser;
-
-			@PostMapping("/api/v1/shifts/__probe/shifts/{id}/self")
-			ResponseEntity<Map<String, Object>> self(@PathVariable String id) {
-				ShiftAssignments.Assigned done = assignments.assign(currentUser.require(), id, null, true);
-				return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("id", done.assignment().getId()));
-			}
-
-			@PostMapping("/api/v1/shifts/__probe/shifts/{id}/assign/{userId}")
-			ResponseEntity<Map<String, Object>> assign(@PathVariable String id, @PathVariable String userId) {
-				ShiftAssignments.Assigned done = assignments.assign(currentUser.require(), id, userId, false);
-				return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("id", done.assignment().getId()));
-			}
-		}
 	}
 
 	/** Counts the assignment events that reached an after-commit listener. */
@@ -478,7 +451,7 @@ class ShiftPlanningIntegrationTest {
 			for (User person : crowd) {
 				done.add(pool.submit(() -> {
 					go.await();
-					return post("/api/v1/shifts/__probe/shifts/" + shift.getId() + "/self", token(person)).statusCode();
+					return post("/api/v1/shifts/shifts/" + shift.getId() + "/self-assign", token(person)).statusCode();
 				}));
 			}
 			done.add(pool.submit(() -> {
@@ -594,14 +567,14 @@ class ShiftPlanningIntegrationTest {
 		ShiftEvent event = event(project, lead, base, hours(10));
 		Shift shift = shift(event, base, hours(2), 1, 1);
 		ShiftAssignment first = assignments.assign(lead, shift.getId(), ann.getId(), false).assignment();
-		assignments.release(ann, first.getId(), ShiftAssignment.Status.DECLINED);
+		assignments.decline(ann, first.getId());
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isZero();
 		ShiftAssignment again = assignments.assign(ann, shift.getId(), ann.getId(), true).assignment();
 		assertThat(again.getId()).isEqualTo(first.getId());
 		assertThat(again.getStatus()).isEqualTo(ShiftAssignment.Status.CONFIRMED);
-		assignments.release(ann, first.getId(), ShiftAssignment.Status.RELEASED);
+		assignments.release(ann, first.getId());
 		// Releasing twice gives the place back once.
-		assignments.release(ann, first.getId(), ShiftAssignment.Status.RELEASED);
+		assignments.release(ann, first.getId());
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isZero();
 		assignments.assign(lead, shift.getId(), ann.getId(), false);
 
@@ -698,7 +671,7 @@ class ShiftPlanningIntegrationTest {
 		List<User> crowd = crowd(20);
 
 		List<Integer> codes = race(crowd.stream().map(person ->
-				(Supplier<Integer>) () -> post("/api/v1/shifts/__probe/shifts/" + shift.getId() + "/self", token(person))
+				(Supplier<Integer>) () -> post("/api/v1/shifts/shifts/" + shift.getId() + "/self-assign", token(person))
 						.statusCode()).toList());
 
 		assertThat(codes.stream().filter(code -> code == 201).count()).isEqualTo(1);
@@ -718,7 +691,7 @@ class ShiftPlanningIntegrationTest {
 		String annToken = token(ann);
 
 		List<Integer> codes = race(overlapping.stream().map(shift ->
-				(Supplier<Integer>) () -> post("/api/v1/shifts/__probe/shifts/" + shift.getId() + "/self", annToken)
+				(Supplier<Integer>) () -> post("/api/v1/shifts/shifts/" + shift.getId() + "/self-assign", annToken)
 						.statusCode()).toList());
 
 		assertThat(codes.stream().filter(code -> code == 201).count()).isEqualTo(1);
@@ -733,7 +706,7 @@ class ShiftPlanningIntegrationTest {
 		ShiftEvent event = event(project, lead, base, hours(10));
 		Shift shift = shift(event, base, hours(2), 5, null);
 		String annToken = token(ann);
-		Supplier<Integer> signUp = () -> post("/api/v1/shifts/__probe/shifts/" + shift.getId() + "/self", annToken).statusCode();
+		Supplier<Integer> signUp = () -> post("/api/v1/shifts/shifts/" + shift.getId() + "/self-assign", annToken).statusCode();
 
 		List<Integer> codes = race(List.of(signUp, signUp));
 
@@ -905,7 +878,7 @@ class ShiftPlanningIntegrationTest {
 		assertThat(list.path("content").get(0).has("shifts")).isFalse();
 		assertThat(list.path("totalElements").asInt()).isEqualTo(1);
 		JsonNode calendar = json(get("/api/v1/shifts/calendar" + window, annToken));
-		assertThat(fields(calendar)).containsExactly("shifts", "events", "truncated");
+		assertThat(fields(calendar)).containsExactly("shifts", "events", "truncated", "plannableProjectIds");
 		assertThat(fields(calendar.path("events").path(event.getId()))).containsExactly("id", "title", "location",
 				"timezone", "selfAssignable", "cancelled");
 		JsonNode mine = json(get("/api/v1/me/shifts" + window, annToken));

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.shifts;
 
+import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -17,13 +18,14 @@ import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 /**
  * The one way onto a shift and the one way off it, for a planner's assignment and a member's own
- * sign-up alike (HIN-43; the routes come with HIN-45).
+ * sign-up alike (HIN-43), and the answers a person gives to an assignment (HIN-45).
  *
  * <p>Taking a place runs in one transaction ({@link ShiftTx}, retried on a write conflict):
  * <ol>
@@ -38,6 +40,10 @@ import java.util.Optional;
  * Anything failing after the claim rolls the whole transaction back, so the counter never moves
  * without an assignment. Freeing a place flips the status with a conditional update and gives the
  * place back only when that update matched, in the same transaction.
+ *
+ * <p>Every change publishes its audit record as {@link ShiftDomainEvents.Audited} from inside the
+ * transaction; {@link ShiftDelivery} writes it after the commit. The metadata holds ids and the
+ * {@code self} flag, never a title.
  */
 @Service
 @RequiredArgsConstructor
@@ -142,19 +148,68 @@ public class ShiftAssignments {
 		}
 		events.publishEvent(new ShiftDomainEvents.Assigned(assignment.getId(), shiftId, claimed.getEventId(),
 				claimed.getProjectId(), target, caller.getId(), self));
+		audited(AuditAction.SHIFT_ASSIGNMENT_CREATED, caller, assignment, Map.of("self", String.valueOf(self)));
 		return new Assigned(assignment, claimed, null);
 	}
 
 	/**
-	 * Frees a place: the person declines a planner's assignment ({@code DECLINED}), gives the shift
-	 * up or is taken off it ({@code RELEASED}). The person themselves or a planner of the project.
-	 * Freeing what is not active changes nothing and returns the document as it is.
+	 * The person says yes to a planner's assignment: {@code ASSIGNED} becomes {@code CONFIRMED}.
+	 * Only their own; confirming twice changes nothing; an assignment that was declined or given up
+	 * meanwhile is a 409.
 	 */
-	public ShiftAssignment release(User caller, String assignmentId, ShiftAssignment.Status to) {
+	public ShiftAssignment confirm(User caller, String assignmentId) {
 		settings.requireEnabled();
-		if (to != ShiftAssignment.Status.DECLINED && to != ShiftAssignment.Status.RELEASED) {
-			throw new IllegalArgumentException("not a release status: " + to);
+		ShiftAssignment existing = own(caller, assignmentId);
+		if (existing.getStatus() == ShiftAssignment.Status.CONFIRMED) {
+			return existing;
 		}
+		ShiftAssignment confirmed = tx.run(() -> {
+			ShiftAssignment changed = mongo.findAndModify(
+					Query.query(Criteria.where("_id").is(existing.getId()).and("status").is(ShiftAssignment.Status.ASSIGNED)),
+					new Update().set("status", ShiftAssignment.Status.CONFIRMED),
+					FindAndModifyOptions.options().returnNew(true), ShiftAssignment.class);
+			if (changed != null) {
+				audited(AuditAction.SHIFT_ASSIGNMENT_CONFIRMED, caller, changed, Map.of());
+			}
+			return changed;
+		});
+		if (confirmed != null) {
+			return confirmed;
+		}
+		ShiftAssignment now = mongo.findById(existing.getId(), ShiftAssignment.class);
+		if (now != null && now.getStatus() == ShiftAssignment.Status.CONFIRMED) {
+			return now;
+		}
+		throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.assignmentNotPending");
+	}
+
+	/**
+	 * The person says no to a planner's assignment: {@code ASSIGNED} becomes {@code DECLINED} and the
+	 * place is free again. Only their own and only while it waits for an answer; a place they
+	 * confirmed or signed up for is given up with {@link #release} instead.
+	 */
+	public ShiftAssignment decline(User caller, String assignmentId) {
+		settings.requireEnabled();
+		ShiftAssignment existing = own(caller, assignmentId);
+		if (existing.getStatus() == ShiftAssignment.Status.DECLINED) {
+			return existing;
+		}
+		ShiftAssignment declined = freeAs(caller, existing, ShiftAssignment.Status.DECLINED,
+				List.of(ShiftAssignment.Status.ASSIGNED), null);
+		if (declined.getStatus() != ShiftAssignment.Status.DECLINED) {
+			throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.assignmentNotPending");
+		}
+		return declined;
+	}
+
+	/**
+	 * Frees a place: the person gives the shift up or a planner takes them off it
+	 * ({@code RELEASED}, "Abgeben"). The person themselves or a planner of the project; anybody
+	 * else gets the 404 of an assignment that is not there. Freeing what is not active changes
+	 * nothing and returns the document as it is.
+	 */
+	public ShiftAssignment release(User caller, String assignmentId) {
+		settings.requireEnabled();
 		ShiftAssignment existing = assignmentId == null ? null : mongo.findById(assignmentId, ShiftAssignment.class);
 		if (existing == null) {
 			throw ApiException.notFound("shiftAssignment");
@@ -169,18 +224,28 @@ public class ShiftAssignments {
 			}
 			access.requirePlanner(scoped.project(), caller);
 		}
-		return releaseAs(caller.getId(), existing, to);
+		return freeAs(caller, existing, ShiftAssignment.Status.RELEASED, ShiftAssignment.Status.ACTIVE, null);
 	}
 
 	/**
 	 * Frees one assignment without a permission check, for callers that decided already: account
-	 * erasure and a member leaving the project (HIN-45). One transaction, the counter given back only
-	 * when the status actually changed, so running it twice frees the place once.
+	 * erasure and a member leaving the project (HIN-45). No actor: nobody took the person off, the
+	 * membership or the account ended. [reason] goes into the audit record.
 	 */
-	public ShiftAssignment releaseAs(String actorId, ShiftAssignment assignment, ShiftAssignment.Status to) {
+	public ShiftAssignment releaseBySystem(ShiftAssignment assignment, String reason) {
+		return freeAs(null, assignment, ShiftAssignment.Status.RELEASED, ShiftAssignment.Status.ACTIVE, reason);
+	}
+
+	/**
+	 * One transaction: the status flips from one of [from] to [to] with a conditional update, and
+	 * the place is given back only when that update matched, so running it twice frees the place
+	 * once. Returns the document as it is afterwards, changed or not.
+	 */
+	private ShiftAssignment freeAs(User actor, ShiftAssignment assignment, ShiftAssignment.Status to,
+			List<ShiftAssignment.Status> from, String reason) {
 		return tx.run(() -> {
 			ShiftAssignment released = mongo.findAndModify(
-					Query.query(Criteria.where("_id").is(assignment.getId()).and("status").in(ShiftAssignment.Status.ACTIVE)),
+					Query.query(Criteria.where("_id").is(assignment.getId()).and("status").in(from)),
 					new Update().set("status", to), FindAndModifyOptions.options().returnNew(true),
 					ShiftAssignment.class);
 			if (released == null) {
@@ -188,10 +253,53 @@ public class ShiftAssignments {
 			}
 			mongo.updateFirst(Query.query(Criteria.where("_id").is(released.getShiftId())),
 					new Update().inc("assignedCount", -1).set("updatedAt", clock.instant()), Shift.class);
+			String actorId = actor == null ? null : actor.getId();
 			events.publishEvent(new ShiftDomainEvents.Released(released.getId(), released.getShiftId(),
 					released.getEventId(), released.getProjectId(), released.getUserId(), actorId, to));
+			Map<String, String> meta = new LinkedHashMap<>();
+			meta.put("self", String.valueOf(released.getUserId().equals(actorId)));
+			if (reason != null) {
+				meta.put("reason", reason);
+			}
+			audited(to == ShiftAssignment.Status.DECLINED ? AuditAction.SHIFT_ASSIGNMENT_DECLINED
+					: AuditAction.SHIFT_ASSIGNMENT_RELEASED, actor, released, meta);
 			return released;
 		});
+	}
+
+	/**
+	 * The caller's own assignment, in a project they still see. Somebody else's answers 404 like a
+	 * missing one: only the person answers an assignment, and a planner learns nothing from the
+	 * difference that the shift view does not already tell them.
+	 */
+	private ShiftAssignment own(User caller, String assignmentId) {
+		ShiftAssignment existing = assignmentId == null ? null : mongo.findById(assignmentId, ShiftAssignment.class);
+		if (existing == null || !existing.getUserId().equals(caller.getId())) {
+			throw ApiException.notFound("shiftAssignment");
+		}
+		try {
+			access.visibleShift(existing.getShiftId(), caller);
+		}
+		catch (ApiException invisible) {
+			throw ApiException.notFound("shiftAssignment");
+		}
+		return existing;
+	}
+
+	/**
+	 * An audit record for a change to [assignment], aimed at the person on it. The metadata holds
+	 * ids only. [actor] is null when the system freed the place.
+	 */
+	private void audited(AuditAction action, User actor, ShiftAssignment assignment, Map<String, String> extra) {
+		Map<String, String> meta = new LinkedHashMap<>();
+		meta.put("assignmentId", assignment.getId());
+		meta.put("shiftId", assignment.getShiftId());
+		meta.put("eventId", assignment.getEventId());
+		meta.put("projectId", assignment.getProjectId());
+		meta.put("userId", assignment.getUserId());
+		meta.putAll(extra);
+		events.publishEvent(new ShiftDomainEvents.Audited(action, actor == null ? null : actor.getId(),
+				ShiftDomainEvents.label(actor), assignment.getUserId(), meta));
 	}
 
 	/**
