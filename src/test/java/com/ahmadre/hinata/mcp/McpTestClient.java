@@ -111,7 +111,7 @@ final class McpTestClient {
 			builder.header("Mcp-Session-Id", session);
 		}
 		try {
-			return HTTP.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+			return sendOnce(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
 		}
 		catch (Exception e) {
 			throw new AssertionError("MCP request failed", e);
@@ -146,7 +146,7 @@ final class McpTestClient {
 			builder.header("Authorization", "Bearer " + bearer);
 		}
 		try {
-			return HTTP.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+			return sendOnce(builder.build(), HttpResponse.BodyHandlers.ofString());
 		}
 		catch (Exception e) {
 			throw new AssertionError("HTTP request failed: " + path, e);
@@ -161,4 +161,26 @@ final class McpTestClient {
 			throw new AssertionError("Response was not valid JSON: " + body, e);
 		}
 	}
+
+	/**
+	 * Sends [request], once more if the pooled connection it went out on had been closed by the
+	 * server meanwhile. A test that spends a while on fixtures (200 shifts on a slow CI runner) can
+	 * outlast the server's keep-alive; the request then fails with an EOF before the server has read
+	 * it, so sending it again is safe.
+	 */
+	private static <T> HttpResponse<T> sendOnce(HttpRequest request, HttpResponse.BodyHandler<T> handler)
+			throws IOException, InterruptedException {
+		try {
+			return HTTP.send(request, handler);
+		}
+		catch (IOException e) {
+			for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+				if (cause instanceof java.io.EOFException) {
+					return HTTP.send(request, handler);
+				}
+			}
+			throw e;
+		}
+	}
+
 }
