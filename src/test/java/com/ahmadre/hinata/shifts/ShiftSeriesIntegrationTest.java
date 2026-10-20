@@ -380,6 +380,18 @@ class ShiftSeriesIntegrationTest {
 				.isEqualTo("alle 2 Monate am " + today.getDayOfMonth() + "., 6 Mal");
 		assertThat(previewJson.get("next")).hasSize(5);
 		assertThat(mongo.count(new Query(), ShiftSeries.class)).isZero();
+
+		// A preview needs no title yet; creating still does.
+		Map<String, Object> untitled = Map.of("timezone", "Europe/Berlin",
+				"firstStart", today.atTime(10, 0).toString(), "durationMinutes", 60, "rrule", "FREQ=WEEKLY");
+		HttpResponse<String> untitledPreview = post("/api/v1/projects/" + project.getId() + "/shifts/series:preview",
+				JSON.writeValueAsString(untitled), lead);
+		assertThat(untitledPreview.statusCode()).as(untitledPreview.body()).isEqualTo(200);
+		assertThat(JSON.readTree(untitledPreview.body()).get("next")).hasSize(5);
+		HttpResponse<String> untitledCreate = post("/api/v1/projects/" + project.getId() + "/shifts/series",
+				JSON.writeValueAsString(untitled), lead);
+		assertThat(untitledCreate.statusCode()).as(untitledCreate.body()).isEqualTo(400);
+		assertThat(mongo.count(new Query(), ShiftSeries.class)).isZero();
 	}
 
 	// --- the nightly run ----------------------------------------------------------------
