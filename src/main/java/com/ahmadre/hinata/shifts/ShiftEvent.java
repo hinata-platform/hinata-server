@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.data.convert.ValueConverter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -69,7 +70,11 @@ public class ShiftEvent {
 	/** HIN-161: the series this event is an occurrence of; null for an event of its own. */
 	private String seriesId;
 
-	/** HIN-161: the occurrence's day in the series' zone; set exactly when {@link #seriesId} is. */
+	/**
+	 * HIN-161: the occurrence's day in the series' zone; set exactly when {@link #seriesId} is. ISO
+	 * text, so the day does not move with the server's zone.
+	 */
+	@ValueConverter(ShiftWallClock.class)
 	private LocalDate occurrenceDate;
 
 	/**

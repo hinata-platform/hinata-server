@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.data.convert.ValueConverter;
 
 import java.time.LocalTime;
 
@@ -25,9 +26,12 @@ public class ShiftTemplate {
 	/** The day within the occurrence, 0 for its first day. */
 	private Integer dayOffset;
 
+	/** ISO text ({@code 18:00}), see {@link ShiftSeries#getFirstStart()}. */
+	@ValueConverter(ShiftWallClock.class)
 	private LocalTime start;
 
-	/** At or before {@link #start} means the next day. */
+	/** At or before {@link #start} means the next day. ISO text. */
+	@ValueConverter(ShiftWallClock.class)
 	private LocalTime end;
 
 	private Integer requiredHelpers;
