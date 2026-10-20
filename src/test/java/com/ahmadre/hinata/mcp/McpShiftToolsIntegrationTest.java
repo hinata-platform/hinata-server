@@ -254,9 +254,13 @@ class McpShiftToolsIntegrationTest {
 		ShiftEvent staffed = event(base.plus(Duration.ofHours(1)), true);
 		Shift full = shift(staffed, base.plus(Duration.ofHours(1)), 1, 1);
 		assignments.assign(ann, full.getId(), null, true);
+		// Cancelled: its shift needs nobody any more, so it is not where people are missing.
+		ShiftEvent called = event(base.plus(Duration.ofHours(2)), true);
+		shift(called, base.plus(Duration.ofHours(2)), 2, null);
+		service.cancelEvent(lead, called.getId(), null);
 
 		JsonNode all = body(ok(client(bob, "shifts:read").call("list_shift_events", "{}")));
-		assertThat(all.path("events")).hasSize(2);
+		assertThat(all.path("events")).hasSize(3);
 		JsonNode onlyShort = body(ok(client(bob, "shifts:read").call("list_shift_events",
 				"{\"understaffedOnly\":true,\"projectKey\":\"fair\"}")));
 		assertThat(onlyShort.path("events")).hasSize(1);
@@ -345,8 +349,21 @@ class McpShiftToolsIntegrationTest {
 		assertThat(McpTestClient.text(notAPlanner)).contains("Nur wer dieses Projekt plant");
 		assertThat(statusOf(anns)).isEqualTo(ShiftAssignment.Status.CONFIRMED);
 
+		// The planner finds the id where the tool description says it is: in get_shift.
+		JsonNode asPlanner = body(ok(client(lead, "shifts:read", "shifts:plan").call("get_shift",
+				"{\"shiftId\":\"" + shift.getId() + "\"}")));
+		JsonNode annOnShift = asPlanner.path("people").get(0);
+		assertThat(annOnShift.path("userId").asText()).isEqualTo(ann.getId());
+		assertThat(annOnShift.path("status").asText()).isEqualTo("CONFIRMED");
+		String fromTool = annOnShift.path("assignmentId").asText();
+		assertThat(fromTool).isEqualTo(anns.getId());
+		JsonNode asMember = body(ok(client(bob, "shifts:read").call("get_shift",
+				"{\"shiftId\":\"" + shift.getId() + "\"}")));
+		assertThat(asMember.path("people").get(0).has("assignmentId")).as("only for planners").isFalse();
+		assertThat(asMember.path("people").get(0).has("status")).isFalse();
+
 		JsonNode removed = body(ok(client(lead, "shifts:plan").call("remove_assignment",
-				"{\"assignmentId\":\"" + anns.getId() + "\"}")));
+				"{\"assignmentId\":\"" + fromTool + "\"}")));
 		assertThat(removed.path("status").asText()).isEqualTo("RELEASED");
 		assertThat(statusOf(anns)).isEqualTo(ShiftAssignment.Status.RELEASED);
 	}
