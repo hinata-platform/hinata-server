@@ -33,6 +33,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.invocation.Invocation;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -138,6 +140,9 @@ class ShiftWaitlistIntegrationTest {
 	private ShiftPersonalData personalData;
 	@Autowired
 	private ShiftFeed feed;
+	@Autowired
+	@Qualifier(ShiftFollowUps.EXECUTOR)
+	private ThreadPoolTaskExecutor followUps;
 
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -244,6 +249,7 @@ class ShiftWaitlistIntegrationTest {
 		assignments.assign(bob, shift.getId(), null, true);
 
 		assignments.release(ann, anns);
+		settle();
 
 		assertThat(statusOf(shift, bob)).isEqualTo(ShiftAssignment.Status.WAITING);
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isZero();
@@ -252,6 +258,7 @@ class ShiftWaitlistIntegrationTest {
 				.isEqualTo(ShiftAssignment.Status.WAITING);
 		assertThat(rank(carl, shift)).isEqualTo(2);
 		assertThat(job.run(Instant.now()).promoted()).isZero();
+		settle();
 		assertThat(notices(null, Notification.Type.SHIFT_PROMOTED)).isZero();
 		assertThat(notices(bob, null)).isZero();
 		assertThat(notices(carl, null)).isZero();
@@ -269,6 +276,7 @@ class ShiftWaitlistIntegrationTest {
 		Instant before = Instant.now();
 
 		ShiftAssignment released = assignments.release(ann, anns);
+		settle();
 
 		assertThat(released.getStatus()).isEqualTo(ShiftAssignment.Status.RELEASED);
 		ShiftAssignment moved = mongo.findById(bobs, ShiftAssignment.class);
@@ -348,6 +356,7 @@ class ShiftWaitlistIntegrationTest {
 		project = projects.save(project);
 
 		assignments.release(ann, anns);
+		settle();
 
 		assertThat(statusOf(shift, erin)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
 		for (User passed : List.of(bob, carl, dana)) {
@@ -370,9 +379,11 @@ class ShiftWaitlistIntegrationTest {
 		String bobs = assignments.assign(bob, shift.getId(), null, true).assignment().getId();
 		assignments.assign(carl, shift.getId(), null, true);
 		assignments.release(ann, anns);
+		settle();
 		overdue(bobs);
 
 		ShiftWaitlistJob.Result first = job.run(Instant.now());
+		settle();
 
 		assertThat(first.expired()).isEqualTo(1);
 		assertThat(mongo.findById(bobs, ShiftAssignment.class).getStatus()).isEqualTo(ShiftAssignment.Status.RELEASED);
@@ -381,6 +392,7 @@ class ShiftWaitlistIntegrationTest {
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
 		assertThat(notices(carl, Notification.Type.SHIFT_PROMOTED)).isEqualTo(1);
 		assertThat(job.run(Instant.now()).expired()).isZero();
+		settle();
 		assertCountersAgree();
 	}
 
@@ -391,10 +403,12 @@ class ShiftWaitlistIntegrationTest {
 		String anns = mongo.findOne(Query.query(Criteria.where("userId").is(ann.getId())), ShiftAssignment.class).getId();
 		String bobs = assignments.assign(bob, shift.getId(), null, true).assignment().getId();
 		assignments.release(ann, anns);
+		settle();
 		assertThat(notices(lead, Notification.Type.SHIFT_HELPER_DECLINED)).as("Bob took the place").isZero();
 		overdue(bobs);
 
 		assertThat(job.run(Instant.now()).expired()).isEqualTo(1);
+		settle();
 
 		assertThat(notices(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isEqualTo(1);
 		assertThat(notices(bob, Notification.Type.SHIFT_HELPER_DECLINED)).isZero();
@@ -410,11 +424,13 @@ class ShiftWaitlistIntegrationTest {
 		String bobs = assignments.assign(bob, shift.getId(), null, true).assignment().getId();
 		assignments.assign(carl, shift.getId(), null, true);
 		assignments.release(ann, anns);
+		settle();
 		overdue(bobs);
 
 		assignments.confirm(bob, bobs);
 
 		assertThat(job.run(Instant.now()).expired()).isZero();
+		settle();
 		assertThat(mongo.findById(bobs, ShiftAssignment.class).getStatus()).isEqualTo(ShiftAssignment.Status.CONFIRMED);
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.WAITING);
 	}
@@ -428,6 +444,7 @@ class ShiftWaitlistIntegrationTest {
 		assignments.assign(carl, shift.getId(), null, true);
 		assignments.assign(dana, shift.getId(), null, true);
 		assignments.release(ann, anns);
+		settle();
 		overdue(bobs);
 		String bobToken = token(bob);
 		Instant t = Instant.now();
@@ -436,6 +453,7 @@ class ShiftWaitlistIntegrationTest {
 				() -> post("/api/v1/shifts/assignments/" + bobs + "/confirm", bobToken).statusCode(),
 				() -> job.run(t).expired(),
 				() -> job.run(t).expired()));
+		settle();
 
 		ShiftAssignment.Status bobNow = mongo.findById(bobs, ShiftAssignment.class).getStatus();
 		int expired = results.get(1) + results.get(2);
@@ -466,6 +484,7 @@ class ShiftWaitlistIntegrationTest {
 		}
 
 		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, null, 3, null), null);
+		settle();
 
 		assertThat(statusOf(shift, bob)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
@@ -473,6 +492,7 @@ class ShiftWaitlistIntegrationTest {
 		assertThat(rank(dana, shift)).isEqualTo(1);
 
 		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, null, null, true), null);
+		settle();
 		assertThat(waitingOn(shift)).isZero();
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isEqualTo(5);
 		assertCountersAgree();
@@ -488,8 +508,10 @@ class ShiftWaitlistIntegrationTest {
 		String bobs = assignments.assign(bob, shift.getId(), null, true).assignment().getId();
 		assignments.assign(carl, shift.getId(), null, true);
 		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, null, null, null, false, null), null);
+		settle();
 
 		assignments.release(ann, anns);
+		settle();
 		assertThat(statusOf(shift, bob)).isEqualTo(ShiftAssignment.Status.WAITING);
 
 		// The planner's "assign now" turns the waiting entry on: the same document, no duplicate key.
@@ -504,8 +526,10 @@ class ShiftWaitlistIntegrationTest {
 
 		String erins = mongo.findOne(Query.query(Criteria.where("userId").is(erin.getId())), ShiftAssignment.class).getId();
 		assignments.release(lead, erins);
+		settle();
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.WAITING);
 		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, null, null, null, true, null), null);
+		settle();
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
 		assertCountersAgree();
 	}
@@ -588,6 +612,7 @@ class ShiftWaitlistIntegrationTest {
 		assertThat(statusOf(shift, bob)).isEqualTo(ShiftAssignment.Status.RELEASED);
 
 		teamService.removeMember(team, lead, dana.getId());
+		settle();
 		assertThat(statusOf(shift, dana)).isEqualTo(ShiftAssignment.Status.RELEASED);
 
 		userService.delete(erin);
@@ -666,6 +691,7 @@ class ShiftWaitlistIntegrationTest {
 			}
 			return assignments.release(ann, anns.getId());
 		});
+		settle();
 
 		assertThat(attempts.get()).isEqualTo(2);
 		assertThat(mongo.findById(bobs, ShiftAssignment.class).getStatus()).isEqualTo(ShiftAssignment.Status.ASSIGNED);
@@ -881,5 +907,10 @@ class ShiftWaitlistIntegrationTest {
 		catch (Exception ex) {
 			throw new IllegalStateException("request failed: " + request.uri(), ex);
 		}
+	}
+
+	/** Lets moving up and the short notice finish on the follow-up thread. */
+	private void settle() {
+		ShiftFollowUpsSettled.settle(followUps);
 	}
 }
