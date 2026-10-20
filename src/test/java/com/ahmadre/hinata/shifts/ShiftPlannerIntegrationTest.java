@@ -341,6 +341,8 @@ class ShiftPlannerIntegrationTest {
 		assertThat(change.path("assignment").path("status").asText()).isEqualTo("CONFIRMED");
 		assertThat(change.path("assignment").path("assignedBy").isNull()).isTrue();
 		assertThat(change.path("shift").path("mine").asBoolean()).isTrue();
+		assertThat(change.path("shift").path("myAssignment").path("id").asText())
+				.isEqualTo(change.path("assignment").path("id").asText());
 
 		HttpResponse<String> assignOther = post("/api/v1/shifts/shifts/" + shift.getId() + "/assignments",
 				"{\"userId\":\"" + bob.getId() + "\"}", annToken);
