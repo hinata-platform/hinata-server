@@ -465,14 +465,14 @@ class ShiftWaitlistIntegrationTest {
 			assignments.assign(person, shift.getId(), null, true);
 		}
 
-		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, null, 3, null));
+		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, null, 3, null), null);
 
 		assertThat(statusOf(shift, bob)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
 		assertThat(statusOf(shift, dana)).isEqualTo(ShiftAssignment.Status.WAITING);
 		assertThat(rank(dana, shift)).isEqualTo(1);
 
-		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, null, null, true));
+		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, null, null, true), null);
 		assertThat(waitingOn(shift)).isZero();
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isEqualTo(5);
 		assertCountersAgree();
@@ -487,7 +487,7 @@ class ShiftWaitlistIntegrationTest {
 		assignments.assign(lead, shift.getId(), erin.getId(), false);
 		String bobs = assignments.assign(bob, shift.getId(), null, true).assignment().getId();
 		assignments.assign(carl, shift.getId(), null, true);
-		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, null, null, null, false));
+		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, null, null, null, false, null), null);
 
 		assignments.release(ann, anns);
 		assertThat(statusOf(shift, bob)).isEqualTo(ShiftAssignment.Status.WAITING);
@@ -505,7 +505,7 @@ class ShiftWaitlistIntegrationTest {
 		String erins = mongo.findOne(Query.query(Criteria.where("userId").is(erin.getId())), ShiftAssignment.class).getId();
 		assignments.release(lead, erins);
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.WAITING);
-		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, null, null, null, true));
+		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, null, null, null, true, null), null);
 		assertThat(statusOf(shift, carl)).isEqualTo(ShiftAssignment.Status.ASSIGNED);
 		assertCountersAgree();
 	}
@@ -603,7 +603,7 @@ class ShiftWaitlistIntegrationTest {
 		assignments.assign(bob, shift.getId(), null, true);
 		ShiftEvent event = mongo.findById(shift.getEventId(), ShiftEvent.class);
 
-		service.cancelEvent(lead, event.getId());
+		service.cancelEvent(lead, event.getId(), null);
 
 		assertThat(statusOf(shift, bob)).isEqualTo(ShiftAssignment.Status.RELEASED);
 		assertThat(statusOf(shift, ann)).isEqualTo(ShiftAssignment.Status.CONFIRMED);
@@ -612,7 +612,7 @@ class ShiftWaitlistIntegrationTest {
 
 		Shift second = fullShift(1);
 		assignments.assign(carl, second.getId(), null, true);
-		service.deleteShift(lead, second.getId());
+		service.deleteShift(lead, second.getId(), null);
 		assertThat(mongo.count(Query.query(Criteria.where("shiftId").is(second.getId())), ShiftAssignment.class)).isZero();
 	}
 
@@ -721,7 +721,7 @@ class ShiftWaitlistIntegrationTest {
 		String title = mongo.count(Query.query(Criteria.where("eventId").is(event.getId())), Shift.class) == 0
 				? "Aufbau" : "Beiseite";
 		return service.createShift(lead, event.getId(), new ShiftService.ShiftDraft(title, start, start.plus(length),
-				required, max));
+				required, max), null);
 	}
 
 	private Integer rank(User person, Shift shift) {

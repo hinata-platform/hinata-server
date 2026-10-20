@@ -431,7 +431,7 @@ class ShiftSeriesIntegrationTest {
 		parallel(() -> series.materialize(id),
 				() -> {
 					series.changeEventFuture(lead, pivot, new ShiftService.EventPatch("Frühdienst", null, null,
-							pivot.getStartsAt().minus(Duration.ofHours(1)), null, null, null));
+							pivot.getStartsAt().minus(Duration.ofHours(1)), null, null, null, null));
 					return 0;
 				});
 		series.nightly();
@@ -456,7 +456,7 @@ class ShiftSeriesIntegrationTest {
 				List.of(template("Dienst", 9, 10, 1, null)));
 		ShiftEvent first = occurrences(weekly.series().getId()).get(0);
 		assertThatThrownBy(() -> service.updateEvent(lead, first.getId(),
-				new ShiftService.EventPatch("Neu", null, null, null, null, null, null)))
+				new ShiftService.EventPatch("Neu", null, null, null, null, null, null, null), null))
 				.hasMessage("error.shifts.seriesScopeRequired");
 		HttpResponse<String> refused = patch("/api/v1/shifts/events/" + first.getId(), "{\"title\":\"Neu\"}", lead);
 		assertThat(refused.statusCode()).isEqualTo(400);
@@ -484,7 +484,7 @@ class ShiftSeriesIntegrationTest {
 		ShiftEvent third = events.get(2);
 
 		service.updateEvent(lead, first.getId(), new ShiftService.EventPatch("Sonderdienst", null, null, null, null,
-				null, null), "this");
+				null, null, null), "this");
 		Shift shiftOfSecond = shiftsOf(second).get(0);
 		service.updateShift(lead, shiftOfSecond.getId(), new ShiftService.ShiftPatch(null,
 				shiftOfSecond.getStartsAt().plus(Duration.ofHours(1)), shiftOfSecond.getEndsAt().plus(Duration.ofHours(1)),
@@ -494,7 +494,7 @@ class ShiftSeriesIntegrationTest {
 
 		// A change of the whole series from the first occurrence on leaves both detached ones alone.
 		ShiftSeriesService.FutureChange change = series.changeEventFuture(lead, third,
-				new ShiftService.EventPatch("Spätdienst", null, null, null, null, null, null));
+				new ShiftService.EventPatch("Spätdienst", null, null, null, null, null, null, null));
 		assertThat(mongo.findById(first.getId(), ShiftEvent.class).getTitle()).isEqualTo("Sonderdienst");
 		assertThat(mongo.findById(second.getId(), ShiftEvent.class).getSeriesId()).isEqualTo(weekly.series().getId());
 		assertThat(shiftsOf(second).get(0).getStartsAt()).isEqualTo(shiftOfSecond.getStartsAt().plus(Duration.ofHours(1)));
@@ -517,7 +517,7 @@ class ShiftSeriesIntegrationTest {
 
 		// A split carries the gaps over; the deleted day is not filled again.
 		ShiftSeriesService.FutureChange change = series.changeEventFuture(lead, events.get(0),
-				new ShiftService.EventPatch("Neu", null, null, null, null, null, null));
+				new ShiftService.EventPatch("Neu", null, null, null, null, null, null, null));
 		assertThat(change.series().getExdates()).contains(events.get(1).getOccurrenceDate(),
 				events.get(2).getOccurrenceDate());
 		assertThat(mongo.count(Query.query(Criteria.where("occurrenceDate").is(events.get(2).getOccurrenceDate())),
@@ -548,7 +548,7 @@ class ShiftSeriesIntegrationTest {
 		assertThat(events).hasSize(10);
 		ShiftEvent detachedOne = events.get(5);
 		service.updateEvent(lead, detachedOne.getId(), new ShiftService.EventPatch("Anders", null, null, null, null,
-				null, null), "this");
+				null, null, null), "this");
 		service.deleteEvent(lead, events.get(6).getId(), "this");
 		Shift annOnFourth = shiftsOf(events.get(3)).get(0);
 		assignments.assign(lead, annOnFourth.getId(), ann.getId(), false);
@@ -558,12 +558,12 @@ class ShiftSeriesIntegrationTest {
 		ShiftEvent own = service.createEvent(lead, project.getId(), new ShiftService.EventDraft("Eigenes", null, null,
 				bobOnFourth.getStartsAt().minus(Duration.ofHours(1)), bobOnFourth.getStartsAt(), "Europe/Berlin", null));
 		Shift ownShift = service.createShift(lead, own.getId(), new ShiftService.ShiftDraft("x",
-				own.getStartsAt(), own.getEndsAt(), 1, null));
+				own.getStartsAt(), own.getEndsAt(), 1, null), null);
 		assignments.assign(lead, ownShift.getId(), bob.getId(), false);
 
 		ShiftEvent pivot = events.get(2);
 		ShiftService.Change<ShiftEvent> change = service.updateEvent(lead, pivot.getId(), new ShiftService.EventPatch(
-				"Spätschicht", null, null, pivot.getStartsAt().minus(Duration.ofHours(1)), null, null, null), "future");
+				"Spätschicht", null, null, pivot.getStartsAt().minus(Duration.ofHours(1)), null, null, null, null), "future");
 
 		ShiftSeries old = mongo.findById(oldId, ShiftSeries.class);
 		assertThat(old.getRrule()).isEqualTo("FREQ=WEEKLY;UNTIL="

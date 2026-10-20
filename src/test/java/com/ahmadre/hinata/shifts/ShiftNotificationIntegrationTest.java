@@ -217,18 +217,18 @@ class ShiftNotificationIntegrationTest {
 		assignments.assign(lead, late.getId(), lead.getId(), true);
 
 		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null,
-				base.plus(Duration.ofDays(1)), null, null, null));
+				base.plus(Duration.ofDays(1)), null, null, null, null), null);
 		assertThat(count(ann, Notification.Type.SHIFT_EVENT_CHANGED)).isEqualTo(1);
 		assertThat(count(bob, Notification.Type.SHIFT_EVENT_CHANGED)).isEqualTo(1);
 		assertThat(count(lead, Notification.Type.SHIFT_EVENT_CHANGED)).isZero();
 
 		// A change that moves nothing tells nobody.
 		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch("Sommerfest 2026", null, null, null,
-				null, null, null));
+				null, null, null, null), null);
 		assertThat(count(ann, Notification.Type.SHIFT_EVENT_CHANGED)).isEqualTo(1);
 
-		service.cancelEvent(lead, event.getId());
-		service.cancelEvent(lead, event.getId());
+		service.cancelEvent(lead, event.getId(), null);
+		service.cancelEvent(lead, event.getId(), null);
 		assertThat(count(ann, Notification.Type.SHIFT_EVENT_CHANGED)).isEqualTo(2);
 		assertThat(count(bob, Notification.Type.SHIFT_EVENT_CHANGED)).isEqualTo(2);
 		assertThat(count(lead, null)).isZero();
@@ -242,11 +242,11 @@ class ShiftNotificationIntegrationTest {
 		assignments.assign(ann, shift.getId(), ann.getId(), true);
 
 		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, base.plus(Duration.ofHours(1)),
-				base.plus(Duration.ofHours(3)), null, null, null));
-		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, 3, null, null));
+				base.plus(Duration.ofHours(3)), null, null, null), null);
+		service.updateShift(lead, shift.getId(), new ShiftService.ShiftPatch(null, null, null, 3, null, null), null);
 		assertThat(count(ann, Notification.Type.SHIFT_CHANGED)).isEqualTo(1);
 
-		service.deleteShift(lead, shift.getId());
+		service.deleteShift(lead, shift.getId(), null);
 		assertThat(count(ann, Notification.Type.SHIFT_CHANGED)).isEqualTo(2);
 		assertThat(count(lead, null)).isZero();
 	}
@@ -270,7 +270,7 @@ class ShiftNotificationIntegrationTest {
 		team.setProjectIds(new ArrayList<>());
 		teams.save(team);
 		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null,
-				base.plus(Duration.ofHours(1)), null, null, null));
+				base.plus(Duration.ofHours(1)), null, null, null, null), null);
 		job.run(base.plus(Duration.ofHours(1)).minus(Duration.ofHours(23)));
 
 		assertThat(count(ann, Notification.Type.SHIFT_EVENT_CHANGED)).isEqualTo(1);
@@ -317,13 +317,13 @@ class ShiftNotificationIntegrationTest {
 		assertThat(job.run(base.minus(Duration.ofHours(23)))).isEqualTo(1);
 
 		Instant later = base.plus(Duration.ofDays(2));
-		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, later, null, null, null));
+		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, later, null, null, null, null), null);
 		assertThat(job.run(later.minus(Duration.ofHours(23)))).isEqualTo(1);
 		assertThat(count(ann, Notification.Type.SHIFT_REMINDER)).isEqualTo(2);
 
 		Instant again = later.plus(Duration.ofDays(2));
-		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, again, null, null, null));
-		service.cancelEvent(lead, event.getId());
+		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, again, null, null, null, null), null);
+		service.cancelEvent(lead, event.getId(), null);
 		assertThat(job.run(again.minus(Duration.ofHours(23)))).isZero();
 		assertThat(count(ann, Notification.Type.SHIFT_REMINDER)).isEqualTo(2);
 	}
@@ -364,8 +364,8 @@ class ShiftNotificationIntegrationTest {
 		assignments.assign(lead, shift.getId(), ann.getId(), false);
 		assignments.assign(lead, shift.getId(), bob.getId(), false);
 		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null,
-				base.plus(Duration.ofDays(1)), null, null, null));
-		service.cancelEvent(lead, event.getId());
+				base.plus(Duration.ofDays(1)), null, null, null, null), null);
+		service.cancelEvent(lead, event.getId(), null);
 
 		List<Invocation> pushes = mockingDetails(push).getInvocations().stream()
 				.filter(call -> call.getMethod().getName().equals("sendToUser")).toList();
@@ -425,7 +425,7 @@ class ShiftNotificationIntegrationTest {
 
 	private Shift shift(ShiftEvent event, Instant start, long hours, int required, Integer max) {
 		return service.createShift(lead, event.getId(), new ShiftService.ShiftDraft("Aufbau", start,
-				start.plus(Duration.ofHours(hours)), required, max));
+				start.plus(Duration.ofHours(hours)), required, max), null);
 	}
 
 	/** Mail and push at any hour, so the test does not depend on the weekday it runs on. */
