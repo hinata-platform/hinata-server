@@ -193,7 +193,7 @@ class McpShiftToolsIntegrationTest {
 		for (int i = 0; i < 200; i++) {
 			Instant start = base.plus(Duration.ofMinutes(5L * i));
 			service.createShift(lead, event.getId(), new ShiftService.ShiftDraft("Stand Halle 3, Schicht " + i, start,
-					start.plus(Duration.ofHours(2)), 3, i % 2 == 0 ? null : 5));
+					start.plus(Duration.ofHours(2)), 3, i % 2 == 0 ? null : 5), null);
 		}
 		Shift some = mongo.findOne(Query.query(Criteria.where("eventId").is(event.getId())), Shift.class);
 		assignments.assign(ann, some.getId(), null, true);
@@ -480,7 +480,7 @@ class McpShiftToolsIntegrationTest {
 
 	private Shift shift(ShiftEvent event, Instant start, int required, Integer max) {
 		return service.createShift(lead, event.getId(), new ShiftService.ShiftDraft("Aufbau", start,
-				start.plus(Duration.ofHours(2)), required, max));
+				start.plus(Duration.ofHours(2)), required, max), null);
 	}
 
 	private ShiftAssignment.Status statusOf(ShiftAssignment assignment) {

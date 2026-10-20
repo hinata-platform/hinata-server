@@ -434,7 +434,7 @@ class ShiftPlannerIntegrationTest {
 
 		ShiftEvent open = event(base.plus(Duration.ofDays(1)), hours(10), true);
 		Shift other = shift(open, base.plus(Duration.ofDays(1)), hours(2), 2, null);
-		service.cancelEvent(lead, open.getId());
+		service.cancelEvent(lead, open.getId(), null);
 		assertThat(post("/api/v1/shifts/shifts/" + other.getId() + "/self-assign", token(bob)).statusCode())
 				.isEqualTo(409);
 		assertThat(post("/api/v1/shifts/shifts/" + other.getId() + "/assignments",
@@ -765,7 +765,7 @@ class ShiftPlannerIntegrationTest {
 
 	private Shift shift(ShiftEvent event, Instant start, Duration length, int required, Integer max) {
 		return service.createShift(lead, event.getId(), new ShiftService.ShiftDraft("S", start, start.plus(length),
-				required, max));
+				required, max), null);
 	}
 
 	private static Duration hours(long hours) {

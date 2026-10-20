@@ -65,15 +65,10 @@ public class ShiftService {
 	/**
 	 * A change to an event; null leaves a field as it is, a blank description or location clears it.
 	 * {@code startsAt} alone moves the event with its duration; with {@code endsAt} it sets both.
+	 * HIN-161: {@code rrule} is a new rule for the series from this occurrence on ({@code scope=future}).
 	 */
 	public record EventPatch(String title, String description, String location, Instant startsAt,
 			Instant endsAt, String timezone, Boolean selfAssignable, String rrule) {
-
-		/** HIN-161 added [rrule]: a new rule for the series from this occurrence on ({@code scope=future}). */
-		public EventPatch(String title, String description, String location, Instant startsAt, Instant endsAt,
-				String timezone, Boolean selfAssignable) {
-			this(title, description, location, startsAt, endsAt, timezone, selfAssignable, null);
-		}
 	}
 
 	/** A new shift. Without a count it needs one person and has no upper limit. */
@@ -130,10 +125,6 @@ public class ShiftService {
 			audited(AuditAction.SHIFT_EVENT_CREATED, caller, saved.getId(), Map.of("projectId", project.getId()));
 			return saved;
 		});
-	}
-
-	public Change<ShiftEvent> updateEvent(User caller, String eventId, EventPatch patch) {
-		return updateEvent(caller, eventId, patch, null);
 	}
 
 	/**
@@ -229,15 +220,9 @@ public class ShiftService {
 	/**
 	 * Rule 10: the event, its shifts and its assignments are marked cancelled together. Assignments
 	 * stay, so the people on them can be told; sign-up closes, and a cancelled place blocks no
-	 * other shift, is never reminded of and is never anybody's next shift.
-	 */
-	public ShiftEvent cancelEvent(User caller, String eventId) {
-		return cancelEvent(caller, eventId, null);
-	}
-
-	/**
-	 * As above. On an occurrence of a series [scope] is required: "this" cancels the occurrence and
-	 * leaves its day out of the series, "future" cancels it and every later one and ends the series.
+	 * other shift, is never reminded of and is never anybody's next shift. On an occurrence of a
+	 * series [scope] is required: "this" cancels the occurrence and leaves its day out of the series,
+	 * "future" cancels it and every later one and ends the series; null for an event of its own.
 	 */
 	public ShiftEvent cancelEvent(User caller, String eventId, String scope) {
 		settings.requireEnabled();
@@ -279,15 +264,9 @@ public class ShiftService {
 	/**
 	 * Rule 12: an event goes only when it is cancelled or nobody holds a place on it. Each shift is
 	 * tombstoned first and its assignments deleted before it, all in one transaction, so a sign-up
-	 * racing the deletion either lands before it and blocks it or finds no place to take.
-	 */
-	public void deleteEvent(User caller, String eventId) {
-		deleteEvent(caller, eventId, null);
-	}
-
-	/**
-	 * As above. On an occurrence of a series [scope] is required: "this" deletes the occurrence and
-	 * leaves its day out of the series, "future" deletes the series from it on (HIN-161).
+	 * racing the deletion either lands before it and blocks it or finds no place to take. On an
+	 * occurrence of a series [scope] is required: "this" deletes the occurrence and leaves its day
+	 * out of the series, "future" deletes the series from it on (HIN-161).
 	 */
 	public void deleteEvent(User caller, String eventId, String scope) {
 		settings.requireEnabled();
@@ -320,10 +299,6 @@ public class ShiftService {
 	}
 
 	// --- shifts ---------------------------------------------------------------
-
-	public Shift createShift(User caller, String eventId, ShiftDraft draft) {
-		return createShift(caller, eventId, draft, null);
-	}
 
 	/**
 	 * A new shift. On an occurrence of a series [scope] is required: "this" adds it to the
@@ -359,15 +334,8 @@ public class ShiftService {
 	/**
 	 * The same shift on several days, all or none. Every day is checked before anything is written;
 	 * a day that fails is named in the refusal's details with the reason ({@code details} maps the
-	 * ISO date to the message key).
-	 */
-	public List<Shift> createShifts(User caller, String eventId, BatchDraft batch) {
-		return createShifts(caller, eventId, batch, null);
-	}
-
-	/**
-	 * As above. On an occurrence of a series only "this" is possible: a batch spans the days of one
-	 * event, a series' days are its occurrences.
+	 * ISO date to the message key). On an occurrence of a series only "this" is possible: a batch
+	 * spans the days of one event, a series' days are its occurrences.
 	 */
 	public List<Shift> createShifts(User caller, String eventId, BatchDraft batch, String scope) {
 		settings.requireEnabled();
@@ -418,10 +386,6 @@ public class ShiftService {
 							"batch", String.valueOf(saved.size()))));
 			return saved;
 		});
-	}
-
-	public Change<Shift> updateShift(User caller, String shiftId, ShiftPatch patch) {
-		return updateShift(caller, shiftId, patch, null);
 	}
 
 	/**
@@ -520,16 +484,10 @@ public class ShiftService {
 
 	/**
 	 * Rule 11: tombstone, then the assignments, then the shift, in one transaction. A sign-up that
-	 * committed first is deleted with the shift; one that comes later finds the tombstone.
-	 */
-	public void deleteShift(User caller, String shiftId) {
-		deleteShift(caller, shiftId, null);
-	}
-
-	/**
-	 * As above. On an occurrence of a series [scope] is required: "this" detaches the occurrence,
-	 * "future" removes the shift's template from this occurrence on (409 while somebody holds one
-	 * of its shifts). A shift that came from no template goes on its own either way.
+	 * committed first is deleted with the shift; one that comes later finds the tombstone. On an
+	 * occurrence of a series [scope] is required: "this" detaches the occurrence, "future" removes
+	 * the shift's template from this occurrence on (409 while somebody holds one of its shifts). A
+	 * shift that came from no template goes on its own either way.
 	 */
 	public void deleteShift(User caller, String shiftId, String scope) {
 		settings.requireEnabled();
