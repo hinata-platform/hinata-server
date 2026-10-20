@@ -21,6 +21,10 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class ShiftWarnings {
 
+	/** What the overlap check reads of a place; nothing else comes off the wire. */
+	private static final String[] FIELDS = {"userId", "shiftId", "projectId", "startsAt", "endsAt", "status",
+			"cancelled"};
+
 	private final MongoTemplate mongo;
 	private final ShiftAccess access;
 
@@ -30,8 +34,10 @@ public class ShiftWarnings {
 	 * other place is named only when the caller may see its project.
 	 */
 	public List<ShiftService.Warning> of(User caller, Criteria moved) {
-		List<ShiftAssignment> mine = mongo.find(Query.query(moved.and("status").in(ShiftAssignment.Status.ACTIVE)
-				.and("cancelled").is(false)), ShiftAssignment.class);
+		Query movedPlaces = Query.query(moved.and("status").in(ShiftAssignment.Status.ACTIVE)
+				.and("cancelled").is(false));
+		movedPlaces.fields().include(FIELDS);
+		List<ShiftAssignment> mine = mongo.find(movedPlaces, ShiftAssignment.class);
 		if (mine.isEmpty()) {
 			return List.of();
 		}
@@ -43,9 +49,11 @@ public class ShiftWarnings {
 			from = from == null || assignment.getStartsAt().isBefore(from) ? assignment.getStartsAt() : from;
 			to = to == null || assignment.getEndsAt().isAfter(to) ? assignment.getEndsAt() : to;
 		}
-		List<ShiftAssignment> held = mongo.find(Query.query(Criteria.where("userId").in(people)
+		Query around = Query.query(Criteria.where("userId").in(people)
 				.and("startsAt").lt(to).gt(from.minus(ShiftRules.SHIFT_MAX))
-				.and("status").in(ShiftAssignment.Status.ACTIVE).and("cancelled").is(false)), ShiftAssignment.class);
+				.and("status").in(ShiftAssignment.Status.ACTIVE).and("cancelled").is(false));
+		around.fields().include(FIELDS);
+		List<ShiftAssignment> held = mongo.find(around, ShiftAssignment.class);
 		List<ShiftConflicts.Collision> collisions = ShiftConflicts.collisions(mine, held);
 		if (collisions.isEmpty()) {
 			return List.of();
