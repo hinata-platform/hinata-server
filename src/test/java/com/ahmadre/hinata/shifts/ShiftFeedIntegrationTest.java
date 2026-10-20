@@ -178,9 +178,9 @@ class ShiftFeedIntegrationTest {
 		assertThat(fetch(url).statusCode()).isEqualTo(200);
 
 		JsonNode status = json(get("/api/v1/me/shifts/feed", bearer));
-		assertThat(fields(status)).containsExactlyInAnyOrder("exists", "createdAt", "lastAccessedAt");
+		assertThat(fields(status)).containsExactlyInAnyOrder("exists", "createdAt", "lastUsedAt");
 		assertThat(status.get("exists").asBoolean()).isTrue();
-		assertThat(status.get("lastAccessedAt").isNull()).isFalse();
+		assertThat(status.get("lastUsedAt").isNull()).isFalse();
 		assertThat(status.toString()).doesNotContain(token);
 
 		Document stored = mongo.getCollection("shift_feed_tokens").find().first();

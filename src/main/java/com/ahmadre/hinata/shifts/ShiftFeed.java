@@ -90,7 +90,7 @@ public class ShiftFeed {
 	private final SecureRandom random = new SecureRandom();
 
 	/** The account section's view: whether there is a feed, never its address. */
-	public record Status(boolean exists, Instant createdAt, Instant lastAccessedAt) {
+	public record Status(boolean exists, Instant createdAt, Instant lastUsedAt) {
 	}
 
 	/** The address, once, right after it was made. {@code webcalUrl} opens a calendar app. */
