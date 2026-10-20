@@ -62,6 +62,11 @@ public class ShiftAccess {
 		return reach.canSee(project, user);
 	}
 
+	/** The project by id, without asking who looks: for work no request started (HIN-162). */
+	public java.util.Optional<Project> project(String projectId) {
+		return projectId == null ? java.util.Optional.empty() : projects.findOptional(projectId);
+	}
+
 	/**
 	 * May the user plan shifts in this project. Visibility first, then the management rule, then a
 	 * planner entry (one indexed lookup, only for somebody who does not manage the project).

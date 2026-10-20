@@ -3,6 +3,8 @@ package com.ahmadre.hinata.shifts;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.user.User;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -46,7 +48,20 @@ public final class ShiftDomainEvents {
 	 * An event was moved or cancelled (HIN-46). The people to tell are read after the commit from
 	 * the event's assignments, which a move and a cancellation both keep.
 	 */
-	public record EventChanged(String eventId, String projectId, String actorId, boolean cancelled) {
+	public record EventChanged(String eventId, String projectId, String actorId, boolean cancelled,
+			List<String> alsoTell) {
+
+		public EventChanged(String eventId, String projectId, String actorId, boolean cancelled) {
+			this(eventId, projectId, actorId, cancelled, List.of());
+		}
+
+		/**
+		 * HIN-162: people to tell besides those still holding a place, read inside the transaction:
+		 * a cancellation takes the waiting list down, so its people no longer show up afterwards.
+		 */
+		public EventChanged {
+			alsoTell = alsoTell == null ? List.of() : List.copyOf(alsoTell);
+		}
 	}
 
 	/**
@@ -63,5 +78,41 @@ public final class ShiftDomainEvents {
 	 * each of them hears once, with that number.
 	 */
 	public record SeriesChanged(String projectId, String actorId, Map<String, Integer> counts) {
+	}
+
+	/**
+	 * HIN-162: places may have opened on [shiftIds]: a place was freed, an upper limit went up or
+	 * sign-up opened again. {@code ShiftWaitlist} moves people up after the commit, one transaction
+	 * per candidate.
+	 */
+	public record SeatsOpened(List<String> shiftIds) {
+
+		public SeatsOpened {
+			shiftIds = List.copyOf(shiftIds);
+		}
+
+		public static SeatsOpened of(String shiftId) {
+			return new SeatsOpened(List.of(shiftId));
+		}
+
+		public static SeatsOpened of(Collection<String> shiftIds) {
+			return new SeatsOpened(List.copyOf(shiftIds));
+		}
+	}
+
+	/** HIN-162: somebody moved up from the waiting list and has until [confirmBy] to confirm. */
+	public record Promoted(String assignmentId, String shiftId, String eventId, String projectId, String userId,
+			Instant confirmBy) {
+	}
+
+	/**
+	 * HIN-162: a place opened, but the first person waiting already holds another shift at that
+	 * time; they left the list and the place went on.
+	 */
+	public record WaitlistSkipped(String shiftId, String eventId, String projectId, String userId) {
+	}
+
+	/** HIN-162: somebody who moved up did not confirm in time; the place went on. */
+	public record WaitlistExpired(String shiftId, String eventId, String projectId, String userId) {
 	}
 }

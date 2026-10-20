@@ -36,7 +36,11 @@ public class ShiftNotices {
 		EVENT_CANCELLED("shiftEventCancelled", "shiftEventChanged"),
 		SHIFT_MOVED("shiftMoved", "shiftChanged"),
 		SHIFT_DELETED("shiftDeleted", "shiftChanged"),
-		SHORT("shiftShort", "shiftShort");
+		SHORT("shiftShort", "shiftShort"),
+		/** HIN-162. The body takes the confirmation deadline as {2}. */
+		PROMOTED("shiftPromoted", "shiftPromoted"),
+		WAITLIST_SKIPPED("shiftWaitlistSkipped", "shiftWaitlistSkipped"),
+		WAITLIST_EXPIRED("shiftWaitlistExpired", "shiftWaitlistExpired");
 
 		final String key;
 		final String pushKey;
@@ -84,6 +88,19 @@ public class ShiftNotices {
 				words.in(locale, "notify.shift.pushTitle"),
 				words.in(locale, "notify.shiftSeriesChanged.push"),
 				words.in(locale, "notify.cta.openShifts"));
+	}
+
+	/**
+	 * HIN-162: the reader moved up from the waiting list and confirms until [confirmBy], named on
+	 * the event's clock like the shift itself.
+	 */
+	public PersonalNotice promoted(User reader, String shiftTitle, String eventTitle, Instant start, Instant end,
+			String eventZone, Instant confirmBy) {
+		Locale locale = words.localeOf(reader);
+		ZonedDateTime due = confirmBy.atZone(ShiftRules.zoneOf(eventZone));
+		String deadline = words.in(locale, "notify.shift.deadline", words.date(locale, due.toLocalDate()),
+				DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).format(due));
+		return of(reader, Kind.PROMOTED, shiftTitle, eventTitle, start, end, eventZone, deadline);
 	}
 
 	/**

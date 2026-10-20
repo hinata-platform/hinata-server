@@ -74,19 +74,57 @@ public class ShiftReads {
 	 * {@code myAssignment} is the caller's own active place on the shift, so the app can confirm,
 	 * decline or give it up without another read; null when the caller holds none, and then
 	 * {@code mine} is false.
+	 *
+	 * <p>HIN-162: {@code waitingCount} is how many wait for the shift, for everybody who sees it;
+	 * {@code myWaitPosition} the caller's own place on that list (1 is next) and
+	 * {@code myWaitAssignmentId} the entry to leave it with, both null when the caller does not
+	 * wait; {@code waitingIds} names the people waiting, in order, only to a planner and only in
+	 * detail views, and is empty everywhere else. Nobody waiting is ever in {@code assigneeIds}.
 	 */
 	public record ShiftResponse(String id, String eventId, String projectId, String title,
 			Instant startsAt, Instant endsAt, String startsLocal, String endsLocal,
 			int requiredHelpers, Integer maxHelpers, int assignedCount,
 			boolean understaffed, boolean full, boolean mine, MyAssignment myAssignment, boolean cancelled,
-			List<String> assigneeIds) {
+			List<String> assigneeIds, int waitingCount, Integer myWaitPosition, String myWaitAssignmentId,
+			List<String> waitingIds) {
 
-		static ShiftResponse from(Shift shift, String zone, MyAssignment mine, List<String> assigneeIds) {
+		static ShiftResponse from(Shift shift, String zone, MyAssignment mine, List<String> assigneeIds,
+				WaitView wait) {
+			WaitView waiting = wait == null ? WaitView.NONE : wait;
 			return new ShiftResponse(shift.getId(), shift.getEventId(), shift.getProjectId(), shift.getTitle(),
 					shift.getStartsAt(), shift.getEndsAt(), ShiftRules.local(shift.getStartsAt(), zone),
 					ShiftRules.local(shift.getEndsAt(), zone), shift.required(), shift.getMaxHelpers(),
 					shift.assigned(), shift.understaffed(), shift.full(), mine != null, mine, shift.isCancelled(),
-					assigneeIds == null ? List.of() : assigneeIds);
+					assigneeIds == null ? List.of() : assigneeIds, waiting.count(), waiting.myPosition(),
+					waiting.myAssignmentId(), waiting.ids());
+		}
+	}
+
+	/** HIN-162: one entry of a waiting list, in order. */
+	record Waiter(String assignmentId, String userId) {
+	}
+
+	/** HIN-162: a waiting list as one caller may see it. */
+	record WaitView(int count, Integer myPosition, String myAssignmentId, List<String> ids) {
+
+		static final WaitView NONE = new WaitView(0, null, null, List.of());
+
+		/** [queue] in order; [named] only for a planner's detail view. */
+		static WaitView of(List<Waiter> queue, String callerId, boolean named) {
+			if (queue == null || queue.isEmpty()) {
+				return NONE;
+			}
+			Integer position = null;
+			String entry = null;
+			for (int i = 0; i < queue.size(); i++) {
+				if (queue.get(i).userId().equals(callerId)) {
+					position = i + 1;
+					entry = queue.get(i).assignmentId();
+					break;
+				}
+			}
+			return new WaitView(queue.size(), position, entry,
+					named ? queue.stream().map(Waiter::userId).toList() : List.of());
 		}
 	}
 
@@ -168,9 +206,14 @@ public class ShiftReads {
 	public record AssignmentChange(ShiftResponse shift, AssignmentResponse assignment, List<String> warnings) {
 	}
 
-	/** One of the caller's own places. */
+	/**
+	 * One of the caller's own places, or (HIN-162, {@code /me/shifts/waiting}) one of their waiting
+	 * entries. {@code confirmBy} is set while a place taken from the waiting list waits for the
+	 * person's yes, with {@code confirmByLocal} the same moment on the event's wall clock; null
+	 * otherwise.
+	 */
 	public record MyShiftResponse(String assignmentId, ShiftAssignment.Status status, String assignedBy,
-			ShiftResponse shift, EventHead event) {
+			ShiftResponse shift, EventHead event, Instant confirmBy, String confirmByLocal) {
 	}
 
 	/** A changed event and who now collides because of it. */
@@ -224,19 +267,23 @@ public class ShiftReads {
 				mine.put(assignment.getShiftId(), MyAssignment.of(assignment));
 			}
 		}
+		boolean canPlan = access.canPlan(project, caller);
+		Map<String, List<Waiter>> waiting = waitlists(shifts.stream().map(Shift::getId).toList());
 		List<ShiftResponse> rows = shifts.stream()
 				.map(shift -> ShiftResponse.from(shift, event.getTimezone(), mine.get(shift.getId()),
-						byShift.getOrDefault(shift.getId(), List.of())))
+						byShift.getOrDefault(shift.getId(), List.of()),
+						WaitView.of(waiting.get(shift.getId()), caller.getId(), canPlan)))
 				.toList();
 		Totals totals = Totals.of(shifts);
 		Set<String> people = byShift.values().stream().flatMap(List::stream)
 				.collect(Collectors.toCollection(LinkedHashSet::new));
+		rows.forEach(row -> people.addAll(row.waitingIds()));
 		return new EventResponse(event.getId(), event.getProjectId(), event.getTitle(), event.getDescription(),
 				event.getLocation(), event.getStartsAt(), event.getEndsAt(),
 				ShiftRules.local(event.getStartsAt(), event.getTimezone()),
 				ShiftRules.local(event.getEndsAt(), event.getTimezone()), event.getTimezone(), event.isCancelled(),
 				event.isSelfAssignable(), totals.required(), totals.taken(), totals.understaffed(), mine.size(),
-				access.canPlan(project, caller), event.getSeriesId(),
+				canPlan, event.getSeriesId(),
 				labelOf(event, labels.of(caller, List.of(event))), event.isDetached(), rows, users(people));
 	}
 
@@ -259,9 +306,13 @@ public class ShiftReads {
 		MyAssignment mine = MyAssignment.of(active.stream()
 				.filter(assignment -> assignment.getUserId().equals(caller.getId())).findFirst().orElse(null));
 		List<String> ids = active.stream().map(ShiftAssignment::getUserId).limit(ASSIGNEES_MAX).toList();
-		return new ShiftDetail(ShiftResponse.from(shift, event.getTimezone(), mine, ids),
+		boolean canPlan = access.canPlan(project, caller);
+		WaitView wait = WaitView.of(waitlists(List.of(shift.getId())).get(shift.getId()), caller.getId(), canPlan);
+		Set<String> people = new LinkedHashSet<>(ids);
+		people.addAll(wait.ids());
+		return new ShiftDetail(ShiftResponse.from(shift, event.getTimezone(), mine, ids, wait),
 				EventHead.from(event, labels.of(caller, List.of(event))),
-				users(ids), access.canPlan(project, caller));
+				users(people), canPlan);
 	}
 
 	/**
@@ -300,10 +351,11 @@ public class ShiftReads {
 		List<Shift> shifts = truncated ? found.subList(0, cap) : found;
 		Map<String, ShiftEvent> events = eventsById(shifts.stream().map(Shift::getEventId).collect(Collectors.toSet()));
 		Map<String, MyAssignment> mine = myAssignments(caller, from, to);
+		Map<String, List<Waiter>> waiting = waitlists(shifts.stream().map(Shift::getId).toList());
 		List<ShiftResponse> rows = shifts.stream()
 				.filter(shift -> events.containsKey(shift.getEventId()))
 				.map(shift -> ShiftResponse.from(shift, events.get(shift.getEventId()).getTimezone(),
-						mine.get(shift.getId()), List.of()))
+						mine.get(shift.getId()), List.of(), WaitView.of(waiting.get(shift.getId()), caller.getId(), false)))
 				.toList();
 		Map<String, EventHead> heads = new LinkedHashMap<>();
 		Map<String, String> seriesLabels = labels.of(caller, events.values());
@@ -357,6 +409,28 @@ public class ShiftReads {
 		return first == null ? Optional.empty() : own(caller, List.of(first)).stream().findFirst();
 	}
 
+	/**
+	 * HIN-162: the caller's own waiting entries for shifts that have not ended, in projects they
+	 * still see, soonest first, at most {@link ShiftWaitlist#WAITING_MAX}. Each carries its place
+	 * on the list in {@code shift.myWaitPosition}.
+	 */
+	public List<MyShiftResponse> waiting(User caller) {
+		settings.requireEnabled();
+		Instant now = clock.instant();
+		Set<String> projects = access.visibleProjectIds(caller);
+		if (projects.isEmpty()) {
+			return List.of();
+		}
+		Criteria criteria = Criteria.where("userId").is(caller.getId())
+				.and("startsAt").gt(now.minus(ShiftRules.SHIFT_MAX))
+				.and("endsAt").gt(now)
+				.and("status").is(ShiftAssignment.Status.WAITING)
+				.and("projectId").in(projects);
+		List<ShiftAssignment> rows = mongo.find(Query.query(criteria).with(Sort.by("startsAt", "_id"))
+				.limit(ShiftWaitlist.WAITING_MAX), ShiftAssignment.class);
+		return own(caller, rows);
+	}
+
 	/** One of the caller's own places as "my shifts" shows it, after a confirmation. */
 	MyShiftResponse myShift(User caller, ShiftAssignment assignment) {
 		return own(caller, List.of(assignment)).stream().findFirst()
@@ -379,6 +453,7 @@ public class ShiftReads {
 		Map<String, ShiftEvent> events = eventsById(rows.stream().map(ShiftAssignment::getEventId)
 				.collect(Collectors.toSet()));
 		Map<String, String> seriesLabels = labels.of(caller, events.values());
+		Map<String, List<Waiter>> waiting = waitlists(shifts.keySet());
 		List<MyShiftResponse> out = new ArrayList<>();
 		for (ShiftAssignment row : rows) {
 			Shift shift = shifts.get(row.getShiftId());
@@ -386,9 +461,12 @@ public class ShiftReads {
 			if (shift == null || event == null || shift.isDeleted()) {
 				continue;
 			}
+			MyAssignment own = row.active() ? MyAssignment.of(row) : null;
 			out.add(new MyShiftResponse(row.getId(), row.getStatus(), row.getAssignedBy(),
-					ShiftResponse.from(shift, event.getTimezone(), MyAssignment.of(row), List.of()),
-					EventHead.from(event, seriesLabels)));
+					ShiftResponse.from(shift, event.getTimezone(), own, List.of(),
+							WaitView.of(waiting.get(shift.getId()), caller.getId(), false)),
+					EventHead.from(event, seriesLabels), row.getConfirmBy(),
+					row.getConfirmBy() == null ? null : ShiftRules.local(row.getConfirmBy(), event.getTimezone())));
 		}
 		return out;
 	}
@@ -515,6 +593,35 @@ public class ShiftReads {
 		}
 		Map<String, T> out = new LinkedHashMap<>();
 		mongo.find(Query.query(Criteria.where("_id").in(ids)), type).forEach(row -> out.put(id.apply(row), row));
+		return out;
+	}
+
+	/**
+	 * HIN-162: the waiting lists of [shiftIds] in order, in one aggregation over the
+	 * {@code waitlist_order} index; shifts nobody waits for are absent.
+	 */
+	Map<String, List<Waiter>> waitlists(Collection<String> shiftIds) {
+		if (shiftIds.isEmpty()) {
+			return Map.of();
+		}
+		AggregationOperation order = context -> new Document("$sort",
+				new Document("shiftId", 1).append("createdAt", 1).append("_id", 1));
+		AggregationOperation group = context -> new Document("$group", new Document("_id", "$shiftId")
+				.append("queue", new Document("$push", new Document("a", "$_id").append("u", "$userId"))));
+		Aggregation aggregation = Aggregation.newAggregation(
+				Aggregation.match(Criteria.where("shiftId").in(shiftIds)
+						.and("status").is(ShiftAssignment.Status.WAITING.name())),
+				order, group);
+		Map<String, List<Waiter>> out = new HashMap<>();
+		for (Document row : mongo.aggregate(aggregation, mongo.getCollectionName(ShiftAssignment.class),
+				Document.class)) {
+			List<Waiter> queue = new ArrayList<>();
+			for (Object raw : row.getList("queue", Object.class)) {
+				Document entry = (Document) raw;
+				queue.add(new Waiter(String.valueOf(entry.get("a")), entry.getString("u")));
+			}
+			out.put(String.valueOf(row.get("_id")), queue);
+		}
 		return out;
 	}
 

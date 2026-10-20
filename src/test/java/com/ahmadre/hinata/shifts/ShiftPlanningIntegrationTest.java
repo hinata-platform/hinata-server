@@ -662,7 +662,7 @@ class ShiftPlanningIntegrationTest {
 	// --- concurrency over HTTP -----------------------------------------------------------
 
 	@Test
-	@DisplayName("twenty people race for the last place: exactly one gets it")
+	@DisplayName("twenty people race for the last place: exactly one gets it, the others wait (HIN-162)")
 	void twentyForTheLastPlace() throws Exception {
 		ShiftEvent event = event(project, lead, base, hours(10));
 		Shift shift = shift(event, base, hours(2), 3, 3);
@@ -674,8 +674,11 @@ class ShiftPlanningIntegrationTest {
 				(Supplier<Integer>) () -> post("/api/v1/shifts/shifts/" + shift.getId() + "/self-assign", token(person))
 						.statusCode()).toList());
 
-		assertThat(codes.stream().filter(code -> code == 201).count()).isEqualTo(1);
-		assertThat(codes).allMatch(code -> code == 201 || code == 409);
+		assertThat(codes).containsOnly(201);
+		assertThat(mongo.count(Query.query(Criteria.where("shiftId").is(shift.getId())
+				.and("status").is(ShiftAssignment.Status.CONFIRMED)), ShiftAssignment.class)).isEqualTo(1);
+		assertThat(mongo.count(Query.query(Criteria.where("shiftId").is(shift.getId())
+				.and("status").is(ShiftAssignment.Status.WAITING)), ShiftAssignment.class)).isEqualTo(19);
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isEqualTo(3);
 		assertCountersAgree();
 	}
@@ -885,7 +888,8 @@ class ShiftPlanningIntegrationTest {
 				"shifts", "users");
 		assertThat(fields(detail.path("shifts").get(0))).containsExactly("id", "eventId", "projectId", "title",
 				"startsAt", "endsAt", "startsLocal", "endsLocal", "requiredHelpers", "maxHelpers", "assignedCount",
-				"understaffed", "full", "mine", "myAssignment", "cancelled", "assigneeIds");
+				"understaffed", "full", "mine", "myAssignment", "cancelled", "assigneeIds", "waitingCount",
+				"myWaitPosition", "myWaitAssignmentId", "waitingIds");
 		assertThat(fields(detail.path("shifts").get(0).path("myAssignment"))).containsExactly("id", "status");
 		assertThat(detail.path("shifts").get(0).path("myAssignment").path("status").asText()).isEqualTo("CONFIRMED");
 		assertThat(json(get("/api/v1/shifts/events/" + event.getId(), token(bob))).path("shifts").get(0)
@@ -900,7 +904,7 @@ class ShiftPlanningIntegrationTest {
 				"timezone", "selfAssignable", "cancelled", "seriesId", "recurrenceLabel", "detached");
 		JsonNode mine = json(get("/api/v1/me/shifts" + window, annToken));
 		assertThat(fields(mine.path("content").get(0))).containsExactly("assignmentId", "status", "assignedBy",
-				"shift", "event");
+				"shift", "event", "confirmBy", "confirmByLocal");
 		assertThat(get("/api/v1/me/shifts/next", annToken).statusCode()).isEqualTo(200);
 		assertThat(get("/api/v1/me/shifts/next", token(carl)).statusCode()).isEqualTo(204);
 		JsonNode one = json(get("/api/v1/shifts/shifts/" + shift.getId(), annToken));
