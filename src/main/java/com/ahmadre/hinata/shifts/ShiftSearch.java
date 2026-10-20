@@ -54,14 +54,14 @@ class ShiftSearch implements SearchSource {
 						new Criteria().orOperator(context.contains("title"), context.contains("location"))))
 				.with(Sort.by(Sort.Direction.DESC, "startsAt", "_id")).limit(cap);
 		List<SearchHit> hits = new ArrayList<>();
-		mongo.find(events, ShiftEvent.class).forEach(event -> hits.add(event(event, context)));
+		mongo.find(context.bounded(events), ShiftEvent.class).forEach(event -> hits.add(event(event, context)));
 
 		// Asked even when the events filled the cap, so the reads do not depend on the data.
 		Query shifts = Query.query(new Criteria().andOperator(inReach(context),
 						Criteria.where("deleted").ne(true), context.contains("title")))
 				.with(Sort.by(Sort.Direction.DESC, "startsAt", "_id")).limit(cap);
-		List<Shift> found = mongo.find(shifts, Shift.class);
-		Map<String, ShiftEvent> owners = events(found);
+		List<Shift> found = mongo.find(context.bounded(shifts), Shift.class);
+		Map<String, ShiftEvent> owners = events(found, context);
 		for (Shift shift : found) {
 			ShiftEvent owner = owners.get(shift.getEventId());
 			if (owner != null) hits.add(shift(shift, owner, context));
@@ -76,27 +76,27 @@ class ShiftSearch implements SearchSource {
 		Query next = Query.query(new Criteria().andOperator(inReach(context),
 						Criteria.where("endsAt").gte(clock.instant())))
 				.with(Sort.by(Sort.Direction.ASC, "startsAt", "_id")).limit(limit);
-		return mongo.find(next, ShiftEvent.class).stream().map(event -> event(event, context)).toList();
+		return mongo.find(context.bounded(next), ShiftEvent.class).stream().map(event -> event(event, context)).toList();
 	}
 
 	/** Events and live shifts of the caller's projects, each counted up to [limit]. */
 	@Override
 	public long count(SearchContext context, int limit) {
 		if (context.projectIds().isEmpty()) return 0;
-		return mongo.count(Query.query(inReach(context)).limit(limit), ShiftEvent.class)
-				+ mongo.count(Query.query(new Criteria().andOperator(inReach(context),
-						Criteria.where("deleted").ne(true))).limit(limit), Shift.class);
+		return mongo.count(context.bounded(Query.query(inReach(context)).limit(limit)), ShiftEvent.class)
+				+ mongo.count(context.bounded(Query.query(new Criteria().andOperator(inReach(context),
+						Criteria.where("deleted").ne(true))).limit(limit)), Shift.class);
 	}
 
 	private static Criteria inReach(SearchContext context) {
 		return Criteria.where("projectId").in(context.projectIds());
 	}
 
-	private Map<String, ShiftEvent> events(List<Shift> shifts) {
+	private Map<String, ShiftEvent> events(List<Shift> shifts, SearchContext context) {
 		Set<String> ids = new LinkedHashSet<>();
 		shifts.forEach(shift -> ids.add(shift.getEventId()));
 		if (ids.isEmpty()) return Map.of();
-		Query query = Query.query(Criteria.where("_id").in(ids));
+		Query query = context.bounded(Query.query(Criteria.where("_id").in(ids)));
 		query.fields().include("title", "location", "projectId", "timezone");
 		Map<String, ShiftEvent> byId = new HashMap<>();
 		mongo.find(query, ShiftEvent.class).forEach(event -> byId.put(event.getId(), event));
@@ -109,7 +109,7 @@ class ShiftSearch implements SearchSource {
 				.category(SearchCategory.SHIFTS.name())
 				.kind("EVENT")
 				.id(event.getId())
-				.route("/shifts/events/" + event.getId())
+				.route(ShiftLinks.event(event.getId()))
 				.title(event.getTitle())
 				.location(event.getLocation())
 				.startsAt(event.getStartsAt())
@@ -127,8 +127,7 @@ class ShiftSearch implements SearchSource {
 				.category(SearchCategory.SHIFTS.name())
 				.kind("SHIFT")
 				.id(shift.getId())
-				// The event's sheet, opened on this shift.
-				.route("/shifts/events/" + owner.getId() + "?shift=" + shift.getId())
+				.route(ShiftLinks.shift(owner.getId(), shift.getId()))
 				.title(title)
 				.subtitle(owner.getTitle())
 				.location(owner.getLocation())

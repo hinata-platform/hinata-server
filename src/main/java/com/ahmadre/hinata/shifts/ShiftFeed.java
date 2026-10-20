@@ -226,7 +226,7 @@ public class ShiftFeed {
 			if (shift == null || event == null || Boolean.TRUE.equals(shift.get("deleted"))) {
 				continue;
 			}
-			String link = app + "/shifts/events/" + row.getString("eventId");
+			String link = app + ShiftLinks.event(row.getString("eventId"));
 			out.add(new IcsWriter.Event(row.get("_id") + "@" + host,
 					row.getDate("startsAt").toInstant(), row.getDate("endsAt").toInstant(),
 					zone(event.getString("timezone")),
