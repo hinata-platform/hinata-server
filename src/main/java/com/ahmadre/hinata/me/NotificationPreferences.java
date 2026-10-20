@@ -46,10 +46,16 @@ public class NotificationPreferences {
 	 */
 	public static final String WATCHING = "watching";
 
+	/**
+	 * Shift planning (HIN-46): being put on or taken off a shift, its reminder, a change to it or
+	 * its event, and for planners a shift that somebody left short. One switch for all of them.
+	 */
+	public static final String SHIFTS = "shifts";
+
 	/** Stable event ids — mirror the reference {@code account_data.js → NOTIF_EVENTS}. */
 	public static final String[] EVENTS = {
 			"mentions", "assigned", "comments", "status", WATCHING, "ingest", "sprint", "invites",
-			"digest", "time", "security"
+			"digest", "time", SHIFTS, "security"
 	};
 
 	/** Events that can never be turned off (transactional / security mail). */
@@ -145,6 +151,9 @@ public class NotificationPreferences {
 		// approval that was decided. Push on, e-mail off: it is worth a glance,
 		// not an inbox entry.
 		events.put("time", new Channel(false, true));
+		// Shifts are appointments with other people: both channels on, so a changed or cancelled
+		// shift is not first noticed at the door.
+		events.put(SHIFTS, new Channel(true, true));
 		events.put("security", new Channel(true, true)); // locked on
 		return new NotificationPreferences(true, true, events);
 	}
