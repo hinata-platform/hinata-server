@@ -306,9 +306,13 @@ public class ShiftReads {
 	EventResponse detail(User caller, ShiftEvent event, Project project) {
 		List<Shift> shifts = mongo.find(Query.query(Criteria.where("eventId").is(event.getId()).and("deleted").is(false))
 				.with(Sort.by("startsAt", "_id")), Shift.class);
-		List<ShiftAssignment> active = mongo.find(Query.query(Criteria.where("eventId").is(event.getId())
+		// Over event_status, and only what the rows show: whose place on which shift, and the
+		// caller's own place with its deadline.
+		Query places = Query.query(Criteria.where("eventId").is(event.getId())
 				.and("status").in(ShiftAssignment.Status.ACTIVE))
-				.with(Sort.by("createdAt", "_id")).limit(DETAIL_ASSIGNMENTS_MAX), ShiftAssignment.class);
+				.with(Sort.by("createdAt", "_id")).limit(DETAIL_ASSIGNMENTS_MAX);
+		places.fields().include("shiftId", "userId", "status", "createdAt", "confirmBy");
+		List<ShiftAssignment> active = mongo.find(places, ShiftAssignment.class);
 		Map<String, List<String>> byShift = new HashMap<>();
 		Map<String, MyAssignment> mine = new HashMap<>();
 		for (ShiftAssignment assignment : active) {

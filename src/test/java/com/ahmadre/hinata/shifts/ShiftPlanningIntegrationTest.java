@@ -39,6 +39,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -161,6 +162,8 @@ class ShiftPlanningIntegrationTest {
 	private ShiftPersonalData personalData;
 	@Autowired
 	private AssignedCounter assignedCounter;
+	@Autowired
+	private ShiftIndexMigration indexMigration;
 
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -1028,13 +1031,69 @@ class ShiftPlanningIntegrationTest {
 	void theIndexesTheReadsRelyOnExist() {
 		List<String> assignments = new ArrayList<>();
 		mongo.getCollection("shift_assignments").listIndexes().forEach(index -> assignments.add(index.getString("name")));
-		assertThat(assignments).contains("user_shift", "user_start", "shift_status", "event", "reminder_due", "start_end");
+		assertThat(assignments).contains("user_shift", "user_start", "shift_status", "event_status", "reminder_due",
+				"start_end").doesNotContain("event");
 		List<String> shifts = new ArrayList<>();
 		mongo.getCollection("shifts").listIndexes().forEach(index -> shifts.add(index.getString("name")));
-		assertThat(shifts).contains("event_start", "project_start", "live_start");
+		assertThat(shifts).contains("event_start", "project_start", "live_start_id").doesNotContain("live_start");
 		List<String> events = new ArrayList<>();
 		mongo.getCollection("shift_events").listIndexes().forEach(index -> events.add(index.getString("name")));
-		assertThat(events).contains("project_start");
+		assertThat(events).contains("project_start", "series_day");
+	}
+
+	@Test
+	@DisplayName("the retired indexes go at start-up and stay gone")
+	void retiredIndexesAreDropped() {
+		mongo.getCollection("shifts").createIndex(new Document("deleted", 1).append("startsAt", 1),
+				new com.mongodb.client.model.IndexOptions().name("live_start"));
+		mongo.getCollection("shift_assignments").createIndex(new Document("eventId", 1),
+				new com.mongodb.client.model.IndexOptions().name("event"));
+		assertThat(indexMigration.drop()).isEqualTo(2);
+		assertThat(indexMigration.drop()).isZero();
+	}
+
+	@Test
+	@DisplayName("the planner takes the index each read was built for: no collection scan, no sort in memory")
+	void readsUseTheirIndexes() {
+		String detail = plan("shift_assignments", Query.query(Criteria.where("eventId").is("e-1")
+				.and("status").in(ShiftAssignment.Status.ACTIVE)), ShiftAssignment.class);
+		assertThat(detail).contains("\"indexName\": \"event_status\"").doesNotContain("COLLSCAN");
+
+		String reconcile = plan("shifts", ShiftCounterReconcile.page(base, new ObjectId().toHexString()), Shift.class);
+		assertThat(reconcile).contains("\"indexName\": \"live_start_id\"").doesNotContain("\"SORT\"")
+				.doesNotContain("COLLSCAN");
+
+		// The series' own reads: equality on seriesId must be read as inside the partial index.
+		String series = plan("shift_events", Query.query(ShiftSeriesService.ofSeries("s-1")
+				.and("occurrenceDate").gte("2026-11-01")).with(Sort.by("occurrenceDate")), ShiftEvent.class);
+		assertThat(series).contains("\"indexName\": \"series_day\"").doesNotContain("COLLSCAN")
+				.doesNotContain("\"SORT\"");
+		String days = plan("shift_events", Query.query(ShiftSeriesService.ofSeries("s-1")
+				.and("occurrenceDate").in("2026-11-01", "2026-11-08")), ShiftEvent.class);
+		// Without the type the same read scans the collection: the reason ofSeries exists.
+		assertThat(plan("shift_events", Query.query(Criteria.where("seriesId").is("s-1")), ShiftEvent.class))
+				.contains("COLLSCAN");
+		assertThat(days).contains("\"indexName\": \"series_day\"").doesNotContain("COLLSCAN");
+	}
+
+	/** The winning plan of [query] on [collection], mapped as MongoTemplate maps it. */
+	private String plan(String collection, Query query, Class<?> type) {
+		org.springframework.data.mongodb.core.convert.QueryMapper mapper =
+				new org.springframework.data.mongodb.core.convert.QueryMapper(mongo.getConverter());
+		var entity = mongo.getConverter().getMappingContext().getPersistentEntity(type);
+		Document find = new Document("find", collection)
+				.append("filter", mapper.getMappedObject(query.getQueryObject(), entity));
+		if (!query.getSortObject().isEmpty()) {
+			find.append("sort", mapper.getMappedSort(query.getSortObject(), entity));
+		}
+		if (query.getLimit() > 0) {
+			find.append("limit", query.getLimit());
+		}
+		if (query.getHint() != null) {
+			find.append("hint", query.getHint());
+		}
+		Document explained = mongo.getDb().runCommand(new Document("explain", find).append("verbosity", "queryPlanner"));
+		return explained.get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
 	}
 
 	// --- personal data, retention, reconciliation ----------------------------------------
