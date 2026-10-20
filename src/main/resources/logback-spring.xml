@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Spring Boot default layout, with one change: the message converter masks secrets that travel in
+  URL paths (the personal shift feed token) before any appender writes them. See LogSecretMasking.
+-->
+<configuration>
+	<conversionRule conversionWord="m" class="com.ahmadre.hinata.config.LogSecretMasking"/>
+	<conversionRule conversionWord="msg" class="com.ahmadre.hinata.config.LogSecretMasking"/>
+	<conversionRule conversionWord="message" class="com.ahmadre.hinata.config.LogSecretMasking"/>
+	<include resource="org/springframework/boot/logging/logback/base.xml"/>
+</configuration>
