@@ -218,7 +218,15 @@ public final class ShiftSeriesPlan {
 	 * get one; a repeated key is refused.
 	 */
 	public static void validate(ShiftSeries series, LocalDate today) {
-		series.setTitle(ShiftRules.title(series.getTitle(), true));
+		validate(series, today, true);
+	}
+
+	/**
+	 * As {@link #validate(ShiftSeries, LocalDate)}; without [titleRequired] a missing title passes,
+	 * for a preview, which shows days and a label while the planner has not named the series yet.
+	 */
+	public static void validate(ShiftSeries series, LocalDate today, boolean titleRequired) {
+		series.setTitle(ShiftRules.title(series.getTitle(), titleRequired));
 		series.setDescription(ShiftRules.description(series.getDescription()));
 		series.setLocation(ShiftRules.location(series.getLocation()));
 		LocalDateTime first = series.getFirstStart();
