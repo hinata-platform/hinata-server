@@ -298,6 +298,7 @@ class ShiftSeriesIntegrationTest {
 
 		List<ShiftEvent> events = occurrences(seriesId);
 		assertThat(events).hasSize(occurrences);
+		assertThat(json.get("firstEventId").asText()).as("the first occurrence, to open").isEqualTo(events.get(0).getId());
 		assertThat(events).allSatisfy(event -> {
 			assertThat(event.getOccurrenceDate().getDayOfWeek()).isIn(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY);
 			assertThat(ShiftRules.local(event.getStartsAt(), "Europe/Berlin")).endsWith("T18:00:00");
@@ -315,6 +316,12 @@ class ShiftSeriesIntegrationTest {
 		HttpResponse<String> read = get("/api/v1/shifts/series/" + seriesId, ann);
 		assertThat(read.statusCode()).isEqualTo(200);
 		assertThat(JSON.readTree(read.body()).get("canPlan").asBoolean()).isFalse();
+		assertThat(JSON.readTree(read.body()).get("firstEventId").asText()).isEqualTo(events.get(0).getId());
+
+		// A cancelled first occurrence is passed over: the next one is the event to open.
+		service.cancelEvent(lead, events.get(0).getId(), "this");
+		assertThat(JSON.readTree(get("/api/v1/shifts/series/" + seriesId, ann).body()).get("firstEventId").asText())
+				.isEqualTo(events.get(1).getId());
 		assertThat(get("/api/v1/shifts/series/" + seriesId, outsider).statusCode()).isEqualTo(404);
 	}
 
