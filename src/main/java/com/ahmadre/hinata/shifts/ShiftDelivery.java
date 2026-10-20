@@ -10,6 +10,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -88,18 +89,28 @@ public class ShiftDelivery {
 	}
 
 	/**
-	 * A place was freed. Taken off by a planner: the person hears it. Given up or declined by the
-	 * person: the planners hear it when the shift is now short. Freed by the system (membership or
-	 * account ended): nobody.
+	 * A place was freed. Taken off by a planner: the person hears it. Given up, declined or let lapse
+	 * by the person: see {@link #onGivenUp}. Freed by the system (membership or account ended):
+	 * nobody.
 	 */
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	void onReleased(ShiftDomainEvents.Released event) {
-		if (event.actorId() == null) {
+		if (event.actorId() == null || event.actorId().equals(event.userId())) {
 			return;
 		}
-		if (!event.actorId().equals(event.userId())) {
-			safely("released", () -> aboutShift(Notification.Type.SHIFT_RELEASED, ShiftNotices.Kind.RELEASED,
-					event.shiftId(), List.of(event.userId()), MY_SHIFTS));
+		safely("released", () -> aboutShift(Notification.Type.SHIFT_RELEASED, ShiftNotices.Kind.RELEASED,
+				event.shiftId(), List.of(event.userId()), MY_SHIFTS));
+	}
+
+	/**
+	 * The person gave their place up, declined it or let the deadline pass: the planners hear it
+	 * when the shift is still short. On the follow-up thread ({@link ShiftFollowUps}), queued behind
+	 * the waiting list moving up, so a place the list filled is not reported.
+	 */
+	@Async(ShiftFollowUps.EXECUTOR)
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	public void onGivenUp(ShiftDomainEvents.Released event) {
+		if (event.actorId() == null || !event.actorId().equals(event.userId())) {
 			return;
 		}
 		safely("short", () -> shortOfPeople(event));
