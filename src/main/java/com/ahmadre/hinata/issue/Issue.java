@@ -104,7 +104,17 @@ import java.util.List;
 // so it holds only issues that carry an estimate; the query asks for one, which lets it be used.
 @CompoundIndex(name = Issue.PROJECT_ESTIMATES_INDEX, def = "{'projectId': 1, 'archived': 1, 'estimateMinutes': 1}",
 		partialFilter = "{'estimateMinutes': {'$gt': 0}}")
+// The issues of a project that hold a file (HIN-165), for the attachment search and its count.
+// Partial, so it holds only those; the queries ask for a first file, which lets it be used.
+@CompoundIndex(name = Issue.WITH_FILES_INDEX, def = "{'projectId': 1, '_id': -1}",
+		partialFilter = "{'attachments.0': {'$exists': true}}")
 public class Issue {
+
+	/**
+	 * The issues of a project that hold a file, newest first (HIN-165): the attachment search and
+	 * its count read these and no other issue. Named once for the annotation and the hint.
+	 */
+	public static final String WITH_FILES_INDEX = "proj_with_files";
 
 	/** The index the budget alerts sum estimates from; named once for the annotation and the hint. */
 	public static final String PROJECT_ESTIMATES_INDEX = "project_estimates";
