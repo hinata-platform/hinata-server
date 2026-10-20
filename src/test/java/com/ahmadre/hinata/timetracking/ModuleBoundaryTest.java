@@ -277,7 +277,11 @@ class ModuleBoundaryTest {
 			// absence, shown as a hint and only to whoever may see that absence anyway. Named
 			// before the class exists, so it is the only class of the module that ever may; its
 			// callers join READERS_AND_THEIR_ROUTES when HIN-43 writes them.
-			SHIFTS + ".ShiftConflicts");
+			SHIFTS + ".ShiftConflicts",
+			// Today's absence on a person's profile (HIN-165): one person, through
+			// AvailabilityAccess.of, coarsened by sight before it leaves. It implements the
+			// interface the profile declares, so the core never names availability.
+			TIME + ".TimeProfileAbsence");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
@@ -322,7 +326,9 @@ class ModuleBoundaryTest {
 			// share it). HIN-162: the waiting list, which checks a candidate for an overlap with the
 			// same arithmetic before moving them up. None of the four holds an availability type.
 			SHIFTS + ".ShiftConflicts", SHIFTS + ".ShiftAssignments", SHIFTS + ".ShiftWarnings",
-			SHIFTS + ".ShiftWaitlist");
+			SHIFTS + ".ShiftWaitlist",
+			// The profile's reader of today's absence (HIN-165), reached only through the interface.
+			TIME + ".TimeProfileAbsence");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {
@@ -450,7 +456,11 @@ class ModuleBoundaryTest {
 			ROOT + ".issue.export.ExportRateLimiter", ROOT + ".issue.export.ExportText",
 			ROOT + ".issue.export.ExportSlots", ROOT + ".issue.export.ExportWords",
 			ROOT + ".issue.export.ExportFonts",
-			ROOT + ".mcp.ScopeGuard", ROOT + ".mcp.McpErrors", ROOT + ".pat.Scopes");
+			ROOT + ".mcp.ScopeGuard", ROOT + ".mcp.McpErrors", ROOT + ".pat.Scopes",
+			// HIN-165: the global search's contract, which ShiftSearch implements. The interface
+			// and what it hands over and back, never the search's own services.
+			ROOT + ".search.SearchSource", ROOT + ".search.SearchContext", ROOT + ".search.SearchHit",
+			ROOT + ".search.SearchCategory");
 
 	/** The two services whose calls deliver something: a notification or an audit record. */
 	private static final Set<String> DELIVERY_SERVICES = Set.of(

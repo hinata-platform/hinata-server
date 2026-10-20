@@ -19,19 +19,23 @@ public class SearchController {
 	private final CurrentUser currentUser;
 
 	/**
-	 * Unified search across issues, projects, people, boards and knowledge.
+	 * Unified search across every category of {@link SearchCategory} the caller may see.
 	 *
 	 * @param q        free-text query; blank returns just the category counts
 	 * @param scope    {@code all} (default) or a single category name
 	 * @param archived search archived (soft-deleted) issues and archived
 	 *                 projects instead of active ones — triggered by the
 	 *                 palette's locale-aware "archived"/"archiviert" keyword
+	 * @param v        the client's revision of the hit contract: 2 links people to their
+	 *                 profile ({@code /people/{id}}); without it they link to the user
+	 *                 administration, which is what a published app before HIN-165 can open
 	 */
 	@GetMapping
 	public SearchResponse search(
 			@RequestParam(required = false) String q,
 			@RequestParam(required = false) String scope,
-			@RequestParam(defaultValue = "false") boolean archived) {
-		return searchService.search(currentUser.require(), q, scope, archived);
+			@RequestParam(defaultValue = "false") boolean archived,
+			@RequestParam(defaultValue = "1") int v) {
+		return searchService.search(currentUser.require(), q, scope, archived, v);
 	}
 }

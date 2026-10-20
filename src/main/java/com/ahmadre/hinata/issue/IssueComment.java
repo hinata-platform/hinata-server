@@ -20,6 +20,9 @@ import java.util.List;
 // createdAt on every issue open; this compound satisfies filter+sort as an
 // IXSCAN instead of an in-memory sort.
 @CompoundIndex(name = "issue_reply_created", def = "{'issueId': 1, 'replyToId': 1, 'createdAt': -1}")
+// The global search (HIN-165) walks comments newest first and stops once enough of them sit on
+// issues the caller may open; without this it sorted every matching comment in memory first.
+@CompoundIndex(name = "created_id", def = "{'createdAt': -1, '_id': -1}")
 public class IssueComment {
 
 	/**

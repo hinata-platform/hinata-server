@@ -14,6 +14,7 @@ import com.ahmadre.hinata.search.SearchResponse.SearchGroup;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -22,6 +23,7 @@ import org.springframework.data.mongodb.core.query.TextCriteria;
 import org.springframework.data.mongodb.core.query.TextQuery;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -31,7 +33,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -58,7 +65,13 @@ import java.util.stream.Collectors;
  * {@link ArticleAccess} opens to them. The counts are counted the same way. People
  * are the directory every picker shows, active accounts only, counted the same way. Before this, the
  * palette answered every account with everybody's issues, projects and pages.
+ *
+ * <p><b>Every other category</b> (HIN-165) comes from a {@link SearchSource}: comments,
+ * teams, spaces and attachments from this package, shift planning, time, absences and
+ * billing from their modules, each asked only while its module is on. All categories run
+ * side by side on the {@link SearchExecutor}, each capped on its own.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SearchService {
@@ -72,6 +85,12 @@ public class SearchService {
 	/** How many recent entities to suggest for an empty scoped query. */
 	private static final int SUGGEST_LIMIT = 10;
 
+	/**
+	 * How long a search waits for its categories. Each runs on its own thread from the start, so
+	 * this is the slowest one's limit, not a sum (HIN-165).
+	 */
+	static final Duration PART_TIMEOUT = Duration.ofSeconds(3);
+
 	private static final String F_TITLE = "title";
 	private static final String F_NAME = "name";
 	private static final String F_TAGS = "tags";
@@ -84,40 +103,23 @@ public class SearchService {
 	private final IssueRepository issues;
 	private final ArticleAccess articleAccess;
 
-	/** What one caller may find, worked out once per search. */
-	private record Reach(Set<String> activeProjects, Set<String> archivedProjects,
-			Criteria pages, String userId) {
-
-		/** The issues of the projects reached, and the issues shared with the caller (HIN-136). */
-		Criteria issues(boolean archived) {
-			// A top-level $or with the archive filter in each branch, so each branch is planned
-			// on its own index (see IssueService#inScope).
-			return new Criteria().orOperator(
-					new Criteria().andOperator(archivedIs(archived), Criteria.where("projectId").in(activeProjects)),
-					new Criteria().andOperator(archivedIs(archived), Criteria.where("participantIds").is(userId)));
-		}
-
-		Criteria projects(boolean archived) {
-			return new Criteria().andOperator(Criteria.where("archived").is(archived),
-					Criteria.where("_id").in(archived ? archivedProjects : activeProjects));
-		}
-
-		Criteria boards() {
-			return Criteria.where("projectIds").in(activeProjects);
-		}
-	}
+	/** The categories that run side by side; see {@link SearchExecutor}. */
+	private final SearchExecutor executor;
+	/** Every category a package other than this one provides, module ones included (HIN-165). */
+	private final List<SearchSource> sources;
 
 	/**
 	 * The caller's reach, worked out once per search: active projects always, the
 	 * archived ones only for an archive search, and the pages from the same project
 	 * set rather than a second lookup of it.
 	 */
-	private Reach reachOf(User user, boolean archivedSearch) {
-		Set<String> active = projectService.visibleTo(user).stream()
-				.map(Project::getId).collect(Collectors.toSet());
+	private SearchContext contextOf(User user, boolean archivedSearch, String query) {
+		Map<String, Project> active = new LinkedHashMap<>();
+		projectService.visibleTo(user).forEach(p -> active.put(p.getId(), p));
 		Set<String> archived = archivedSearch ? projectService.archivedVisibleTo(user).stream()
 				.map(Project::getId).collect(Collectors.toSet()) : Set.of();
-		return new Reach(active, archived, articleAccess.sightOf(user, active).criteria(), user.getId());
+		return new SearchContext(user, active, archived,
+				articleAccess.sightOf(user, active.keySet()).criteria(), query);
 	}
 
 	public SearchResponse search(User user, String rawQuery, String scope) {
@@ -131,8 +133,17 @@ public class SearchService {
 	 *                 empty. An empty query suggests the latest archived items.
 	 */
 	public SearchResponse search(User user, String rawQuery, String scope, boolean archived) {
-		Reach reach = reachOf(user, archived);
+		return search(user, rawQuery, scope, archived, 1);
+	}
+
+	/**
+	 * @param version the client's revision of the hit contract. From 2 on a person links to
+	 *                their profile ({@code /people/{id}}); before it to the user administration,
+	 *                which is all a published app that predates the profile can open.
+	 */
+	public SearchResponse search(User user, String rawQuery, String scope, boolean archived, int version) {
 		String q = rawQuery == null ? "" : rawQuery.trim();
+		SearchContext reach = contextOf(user, archived, q);
 		SearchCategory only = SearchCategory.parse(scope);
 		int cap = only == null ? CAP_ALL : CAP_SCOPED;
 
@@ -142,9 +153,9 @@ public class SearchService {
 		// the latest archived items.
 		final List<SearchGroup> groups;
 		if (!q.isBlank()) {
-			groups = queryGroups(reach, q, only, cap, archived);
+			groups = queryGroups(reach, q, only, cap, archived, version);
 		} else if (only != null || archived) {
-			groups = suggestGroups(reach, only, archived);
+			groups = suggestGroups(reach, only, archived, version);
 		} else {
 			groups = List.of();
 		}
@@ -153,28 +164,93 @@ public class SearchService {
 		return new SearchResponse(groups, q.isBlank() ? counts(reach) : java.util.Map.of());
 	}
 
-	private List<SearchGroup> queryGroups(Reach reach, String q, SearchCategory only, int cap,
-			boolean archived) {
-		List<SearchGroup> groups = new ArrayList<>();
+	private List<SearchGroup> queryGroups(SearchContext reach, String q, SearchCategory only, int cap,
+			boolean archived, int version) {
+		Map<SearchCategory, List<Supplier<List<SearchHit>>>> tasks = new LinkedHashMap<>();
 		for (SearchCategory cat : SearchCategory.values()) {
 			if (only != null && cat != only) continue;
-			List<SearchHit> hits = switch (cat) {
-				case ISSUES -> mapIssues(searchIssues(reach, q, cap, archived), archived);
-				case PROJECTS -> mapProjects(searchProjects(reach, q, cap, archived), archived);
-				// People, boards and docs have no archive — hidden in archive mode.
-				case PEOPLE -> archived ? List.<SearchHit>of() : mapPeople(searchPeople(q, cap));
-				case BOARDS -> archived ? List.<SearchHit>of() : searchBoards(reach, q, cap);
-				case DOCS -> archived ? List.<SearchHit>of() : mapDocs(searchDocs(reach, q, cap));
-			};
-			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
+			List<Supplier<List<SearchHit>>> parts = new ArrayList<>();
+			Supplier<List<SearchHit>> builtIn = builtIn(reach, q, cat, cap, archived, version);
+			if (builtIn != null) parts.add(builtIn);
+			// Nothing but issues and projects has an archive.
+			if (!archived) {
+				for (SearchSource source : sourcesOf(cat)) parts.add(() -> source.search(reach, cap));
+			}
+			if (!parts.isEmpty()) tasks.put(cat, parts);
 		}
+		return run(tasks, cap);
+	}
+
+	/** The five categories this class answers itself, or null for one it leaves to the sources. */
+	private Supplier<List<SearchHit>> builtIn(SearchContext reach, String q, SearchCategory cat, int cap,
+			boolean archived, int version) {
+		return switch (cat) {
+			case ISSUES -> () -> mapIssues(searchIssues(reach, q, cap, archived), archived);
+			case PROJECTS -> () -> mapProjects(searchProjects(reach, q, cap, archived), archived);
+			// People, boards and docs have no archive — hidden in archive mode.
+			case PEOPLE -> archived ? null : () -> mapPeople(searchPeople(q, cap), version);
+			case BOARDS -> archived ? null : () -> searchBoards(reach, q, cap);
+			case DOCS -> archived ? null : () -> mapDocs(searchDocs(reach, q, cap));
+			default -> null;
+		};
+	}
+
+	/** The sources of [cat] whose module is on, asked once per search. */
+	private List<SearchSource> sourcesOf(SearchCategory cat) {
+		return sources.stream().filter(s -> s.category() == cat && s.enabled()).toList();
+	}
+
+	/**
+	 * Runs every part of every category at once and collects them in category order. A part that
+	 * fails or takes longer than {@link #PART_TIMEOUT} answers nothing, and the others answer as
+	 * usual: one slow collection never holds up the palette.
+	 */
+	private List<SearchGroup> run(Map<SearchCategory, List<Supplier<List<SearchHit>>>> tasks, int cap) {
+		Map<SearchCategory, List<CompletableFuture<List<SearchHit>>>> running = new LinkedHashMap<>();
+		tasks.forEach((cat, parts) -> running.put(cat, parts.stream().map(executor::supply).toList()));
+		long deadline = System.nanoTime() + PART_TIMEOUT.toNanos();
+		List<SearchGroup> groups = new ArrayList<>();
+		running.forEach((cat, parts) -> {
+			List<SearchHit> hits = new ArrayList<>();
+			for (CompletableFuture<List<SearchHit>> part : parts) {
+				hits.addAll(await(cat, part, deadline));
+			}
+			if (!hits.isEmpty()) {
+				groups.add(new SearchGroup(cat.name(), hits.size() > cap ? hits.subList(0, cap) : hits));
+			}
+		});
 		return groups;
+	}
+
+	private static List<SearchHit> await(SearchCategory cat, CompletableFuture<List<SearchHit>> part,
+			long deadline) {
+		try {
+			List<SearchHit> hits = part.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+			return hits == null ? List.of() : hits;
+		} catch (TimeoutException e) {
+			part.cancel(true);
+			log.warn("Search category {} took longer than {} and was left out", cat, PART_TIMEOUT);
+			return List.of();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return List.of();
+		} catch (ExecutionException e) {
+			log.warn("Search category {} failed and was left out", cat, e.getCause());
+			return List.of();
+		}
 	}
 
 	/** Empty-query suggestions: latest entities of one scope, or — in archive
 	 * mode — the latest archived issues and projects across both categories. */
-	private List<SearchGroup> suggestGroups(Reach reach, SearchCategory only, boolean archived) {
-		if (!archived) return groupOf(only, suggest(reach, only));
+	private List<SearchGroup> suggestGroups(SearchContext reach, SearchCategory only, boolean archived,
+			int version) {
+		if (!archived) {
+			Supplier<List<SearchHit>> builtIn = suggest(reach, only, version);
+			List<Supplier<List<SearchHit>>> parts = new ArrayList<>();
+			if (builtIn != null) parts.add(builtIn);
+			for (SearchSource source : sourcesOf(only)) parts.add(() -> source.suggest(reach, SUGGEST_LIMIT));
+			return run(Map.of(only, parts), SUGGEST_LIMIT);
+		}
 		List<SearchGroup> groups = new ArrayList<>();
 		for (SearchCategory cat : List.of(SearchCategory.ISSUES, SearchCategory.PROJECTS)) {
 			if (only != null && cat != only) continue;
@@ -190,28 +266,25 @@ public class SearchService {
 		return groups;
 	}
 
-	private static List<SearchGroup> groupOf(SearchCategory cat, List<SearchHit> hits) {
-		return hits.isEmpty() ? List.of() : List.of(new SearchGroup(cat.name(), hits));
-	}
-
-	/** Latest entities of [cat] (most-recent first) for the empty-query state. */
-	private List<SearchHit> suggest(Reach reach, SearchCategory cat) {
+	/** Latest entities of [cat] (most-recent first) for the empty-query state; null for a source's. */
+	private Supplier<List<SearchHit>> suggest(SearchContext reach, SearchCategory cat, int version) {
 		return switch (cat) {
-			case ISSUES -> mapIssues(
+			case ISSUES -> () -> mapIssues(
 					latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, reach.issues(false)), false);
-			case PROJECTS -> mapProjects(
+			case PROJECTS -> () -> mapProjects(
 					latest(Project.class, SUGGEST_LIMIT, F_UPDATED, reach.projects(false)), false);
-			case PEOPLE -> mapPeople(
-					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)));
-			case BOARDS -> suggestBoards(reach);
-			case DOCS -> mapDocs(
+			case PEOPLE -> () -> mapPeople(
+					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)), version);
+			case BOARDS -> () -> suggestBoards(reach);
+			case DOCS -> () -> mapDocs(
 					latest(Article.class, SUGGEST_LIMIT, F_UPDATED, reach.pages()));
+			default -> null;
 		};
 	}
 
 	// ─────────────────────────── per-category ─────────────────────────────
 
-	private List<Issue> searchIssues(Reach reach, String q, int cap, boolean archived) {
+	private List<Issue> searchIssues(SearchContext reach, String q, int cap, boolean archived) {
 		return hybrid(Issue.class, q, cap,
 				List.of(contains(F_TITLE, q), prefix("readableId", q), contains(F_TAGS, q)),
 				reach.issues(archived), F_UPDATED, Issue::getId, Issue::getTitle);
@@ -240,7 +313,7 @@ public class SearchService {
 		}).toList();
 	}
 
-	private List<Project> searchProjects(Reach reach, String q, int cap, boolean archived) {
+	private List<Project> searchProjects(SearchContext reach, String q, int cap, boolean archived) {
 		return hybrid(Project.class, q, cap,
 				List.of(contains(F_NAME, q), prefix("key", q)),
 				reach.projects(archived),
@@ -287,21 +360,22 @@ public class SearchService {
 				Criteria.where("active").is(true), null, User::getId, User::getDisplayName);
 	}
 
-	private List<SearchHit> mapPeople(List<User> hits) {
+	private List<SearchHit> mapPeople(List<User> hits, int version) {
 		return hits.stream()
 				.filter(User::isActive)
 				.map(u -> SearchHit.builder()
 						.category(SearchCategory.PEOPLE.name())
 						.id(u.getId())
-						.route("/admin/users")
+						.route(version >= 2 ? "/people/" + u.getId() : "/admin/users")
 						.title(u.getDisplayName())
 						.subtitle(u.getTitle())
+						.username(u.getUsername())
 						.avatarUrl(u.getAvatarUrl())
 						.build())
 				.toList();
 	}
 
-	private List<SearchHit> searchBoards(Reach reach, String q, int cap) {
+	private List<SearchHit> searchBoards(SearchContext reach, String q, int cap) {
 		List<AgileBoard> boards = hybrid(AgileBoard.class, q, cap,
 				List.of(contains(F_NAME, q)), reach.boards(), null, AgileBoard::getId, AgileBoard::getName);
 		List<Sprint> sprints = hybrid(Sprint.class, q, cap,
@@ -310,7 +384,7 @@ public class SearchService {
 		return combineBoards(boards, sprints, cap);
 	}
 
-	private List<SearchHit> suggestBoards(Reach reach) {
+	private List<SearchHit> suggestBoards(SearchContext reach) {
 		List<AgileBoard> boards = latest(AgileBoard.class, SUGGEST_LIMIT, "createdAt", reach.boards());
 		int remaining = SUGGEST_LIMIT - boards.size();
 		List<Sprint> sprints = remaining > 0
@@ -320,11 +394,11 @@ public class SearchService {
 	}
 
 	/** Sprints of the boards the caller reaches — a sprint has no project of its own. */
-	private Criteria sprintsOf(Reach reach) {
+	private Criteria sprintsOf(SearchContext reach) {
 		return Criteria.where("boardId").in(boardIds(reach));
 	}
 
-	private Set<String> boardIds(Reach reach) {
+	private Set<String> boardIds(SearchContext reach) {
 		Query query = Query.query(reach.boards());
 		query.fields().include("_id");
 		// Raw rows: a projection would hand the entity's constructor nulls for fields it
@@ -345,6 +419,7 @@ public class SearchService {
 		return SearchHit.builder()
 				.category(SearchCategory.BOARDS.name())
 				.id(b.getId())
+				.kind("BOARD")
 				.route(BoardLinks.of(b.getId()))
 				.title(b.getName())
 				.subtitle("Agile board")
@@ -356,13 +431,16 @@ public class SearchService {
 				.category(SearchCategory.BOARDS.name())
 				.id(s.getId())
 				// A sprint has no page of its own; it is planned and run on its board.
-				.route(BoardLinks.of(s.getBoardId()))
+				.kind("SPRINT")
+				// `sprint` names the sprint for a client that opens it; one that does not
+				// reads the board's address and ignores the rest.
+				.route(BoardLinks.of(s.getBoardId()) + "?sprint=" + s.getId())
 				.title(s.getName())
 				.subtitle(s.getGoal() != null && !s.getGoal().isBlank() ? s.getGoal() : "Sprint")
 				.build();
 	}
 
-	private List<Article> searchDocs(Reach reach, String q, int cap) {
+	private List<Article> searchDocs(SearchContext reach, String q, int cap) {
 		return hybrid(Article.class, q, cap,
 				List.of(contains(F_TITLE, q), contains(F_TAGS, q)),
 				reach.pages(), F_UPDATED, Article::getId, Article::getTitle);
@@ -374,6 +452,7 @@ public class SearchService {
 
 		return hits.stream().map(a -> SearchHit.builder()
 				.category(SearchCategory.DOCS.name())
+				.kind("ARTICLE")
 				.id(a.getId())
 				.route("/knowledge/" + a.getId())
 				.title(a.getTitle())
@@ -433,10 +512,10 @@ public class SearchService {
 
 	/** Counts within the caller's reach; a total over everybody's data would say
 	 * how much there is that they cannot see. */
-	private Map<String, Long> counts(Reach reach) {
+	private Map<String, Long> counts(SearchContext reach) {
 		Map<String, Long> counts = new LinkedHashMap<>();
 		counts.put(SearchCategory.ISSUES.name(), mongo.count(Query.query(reach.issues(false)), Issue.class));
-		counts.put(SearchCategory.PROJECTS.name(), (long) reach.activeProjects().size());
+		counts.put(SearchCategory.PROJECTS.name(), (long) reach.projectIds().size());
 		counts.put(SearchCategory.PEOPLE.name(), mongo.count(Query.query(Criteria.where("active").is(true)), User.class));
 		Set<String> boards = boardIds(reach);
 		counts.put(SearchCategory.BOARDS.name(), boards.size()
@@ -455,14 +534,6 @@ public class SearchService {
 	/** Case-insensitive anchored prefix — index-friendly for ids/keys. */
 	private static Criteria prefix(String field, String q) {
 		return Criteria.where(field).regex("^" + Pattern.quote(q), "i");
-	}
-
-	/** Issue archived filter — {@code ne(true)} keeps matching pre-migration
-	 * documents that lack the flag. */
-	private static Criteria archivedIs(boolean archived) {
-		return archived
-				? Criteria.where("archived").is(true)
-				: Criteria.where("archived").ne(true);
 	}
 
 	/** The most-recent [limit] entities by [sortField] (optional [filter]). */
