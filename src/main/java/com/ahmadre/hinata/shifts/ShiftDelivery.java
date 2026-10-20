@@ -63,6 +63,14 @@ public class ShiftDelivery {
 
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	void onAudited(ShiftDomainEvents.Audited event) {
+		audit(event);
+	}
+
+	/**
+	 * Writes an audit record for something that wrote nothing, so no transaction waits to commit:
+	 * a shift plan exported as a file (HIN-163). The writes of the module come through {@link #onAudited}.
+	 */
+	public void audit(ShiftDomainEvents.Audited event) {
 		AuditService.Entry entry = audit.event(event.action())
 				.actor(event.actorId(), event.actorLabel())
 				.target(event.targetId(), null);

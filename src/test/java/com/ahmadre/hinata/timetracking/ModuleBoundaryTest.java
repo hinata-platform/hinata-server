@@ -438,12 +438,18 @@ class ModuleBoundaryTest {
 	private static final List<String> SHIFT_READABLE_PACKAGES = List.of(
 			SHIFTS, ROOT + ".project", ROOT + ".user", ROOT + ".me", ROOT + ".auth",
 			ROOT + ".notification", ROOT + ".availability", ROOT + ".common", ROOT + ".audit",
-			ROOT + ".ics", ROOT + ".setup", ROOT + ".config",
-			// The document export the schedule export renders through (HIN-163).
-			ROOT + ".issue.export");
+			ROOT + ".ics", ROOT + ".setup", ROOT + ".config");
 
-	/** Single classes of other packages, each for its stage: the MCP tools of HIN-164. */
+	/**
+	 * Single classes of other packages, each for its stage: the document export the shift plan
+	 * renders through (HIN-163), never the issue export itself, and the MCP tools of HIN-164.
+	 */
 	private static final Set<String> SHIFT_READABLE_CLASSES = Set.of(
+			ROOT + ".issue.export.ExportDocument", ROOT + ".issue.export.ExportBlock",
+			ROOT + ".issue.export.ExportFormat", ROOT + ".issue.export.ExportDocumentRenderer",
+			ROOT + ".issue.export.ExportRateLimiter", ROOT + ".issue.export.ExportText",
+			ROOT + ".issue.export.ExportSlots", ROOT + ".issue.export.ExportWords",
+			ROOT + ".issue.export.ExportFonts",
 			ROOT + ".mcp.ScopeGuard", ROOT + ".mcp.McpErrors", ROOT + ".pat.Scopes");
 
 	/** The two services whose calls deliver something: a notification or an audit record. */
