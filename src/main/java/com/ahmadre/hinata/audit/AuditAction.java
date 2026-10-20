@@ -294,7 +294,20 @@ public enum AuditAction {
 	PROJECT_INSTANTIATED(DATA, NOTICE, true),
 	// A knowledge-base page moved to another place (project, team, private), with its
 	// subpages (HIN-129). Who reads it changes with it.
-	ARTICLE_MOVED(DATA, NOTICE, true);
+	ARTICLE_MOVED(DATA, NOTICE, true),
+
+	// --- Shift planning (HIN-43) -------------------------------------------------
+	// Events and their shifts created, changed, cancelled or deleted. DATA and INFO: a plan that
+	// people rely on changed, and "who moved the Saturday shift" has to be answerable. The metadata
+	// carries ids and numbers, never a title or a place, because an event's name can say more about
+	// a person than the log should. Written after the commit, never from inside the transaction.
+	SHIFT_EVENT_CREATED(DATA, INFO, true),
+	SHIFT_EVENT_UPDATED(DATA, INFO, true),
+	SHIFT_EVENT_CANCELLED(DATA, INFO, true),
+	SHIFT_EVENT_DELETED(DATA, INFO, true),
+	SHIFT_CREATED(DATA, INFO, true),
+	SHIFT_UPDATED(DATA, INFO, true),
+	SHIFT_DELETED(DATA, INFO, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of a privileged act that
@@ -337,7 +350,10 @@ public enum AuditAction {
 		String name = name();
 		return name.startsWith("TIME_") || name.startsWith("TIMESHEET_")
 				|| name.startsWith("AVAILABILITY_") || name.startsWith("BILLING_") || name.startsWith("INVOICE_")
-				|| name.startsWith("MCP_WORK_") || name.startsWith("MCP_TIMER_");
+				|| name.startsWith("MCP_WORK_") || name.startsWith("MCP_TIMER_")
+				// Shift planning (HIN-43): who covers which shift is the organisation's business,
+				// not the platform's.
+				|| name.startsWith("SHIFT_") || name.startsWith("MCP_SHIFT_");
 	}
 
 	/** Records about absences: requests, sick reports, balances, the absence catalogue. */
@@ -354,6 +370,8 @@ public enum AuditAction {
 		String name = name();
 		return name.startsWith("ISSUE_") || name.startsWith("MCP_ISSUE") || name.startsWith("MCP_COMMENT")
 				|| name.startsWith("MCP_KB") || name.startsWith("MCP_SPRINT") || this == MCP_ATTACHMENT_READ
-				|| this == ARTICLE_MOVED || (name.startsWith("PROJECT_") && category == AuditCategory.DATA);
+				|| this == ARTICLE_MOVED || (name.startsWith("PROJECT_") && category == AuditCategory.DATA)
+				// Shift records name a project's events and shifts by id (HIN-43).
+				|| name.startsWith("SHIFT_") || name.startsWith("MCP_SHIFT_");
 	}
 }
