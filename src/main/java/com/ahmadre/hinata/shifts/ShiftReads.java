@@ -70,19 +70,30 @@ public class ShiftReads {
 	/**
 	 * One shift. {@code assigneeIds} is filled in detail views only (at most
 	 * {@link #ASSIGNEES_MAX}, in order of sign-up) and empty in lists, which carry the count.
+	 * {@code myAssignment} is the caller's own active place on the shift, so the app can confirm,
+	 * decline or give it up without another read; null when the caller holds none, and then
+	 * {@code mine} is false.
 	 */
 	public record ShiftResponse(String id, String eventId, String projectId, String title,
 			Instant startsAt, Instant endsAt, String startsLocal, String endsLocal,
 			int requiredHelpers, Integer maxHelpers, int assignedCount,
-			boolean understaffed, boolean full, boolean mine, boolean cancelled,
+			boolean understaffed, boolean full, boolean mine, MyAssignment myAssignment, boolean cancelled,
 			List<String> assigneeIds) {
 
-		static ShiftResponse from(Shift shift, String zone, boolean mine, List<String> assigneeIds) {
+		static ShiftResponse from(Shift shift, String zone, MyAssignment mine, List<String> assigneeIds) {
 			return new ShiftResponse(shift.getId(), shift.getEventId(), shift.getProjectId(), shift.getTitle(),
 					shift.getStartsAt(), shift.getEndsAt(), ShiftRules.local(shift.getStartsAt(), zone),
 					ShiftRules.local(shift.getEndsAt(), zone), shift.required(), shift.getMaxHelpers(),
-					shift.assigned(), shift.understaffed(), shift.full(), mine, shift.isCancelled(),
+					shift.assigned(), shift.understaffed(), shift.full(), mine != null, mine, shift.isCancelled(),
 					assigneeIds == null ? List.of() : assigneeIds);
+		}
+	}
+
+	/** The caller's own place on a shift: the assignment to act on and where it stands. */
+	public record MyAssignment(String id, ShiftAssignment.Status status) {
+
+		static MyAssignment of(ShiftAssignment assignment) {
+			return assignment == null ? null : new MyAssignment(assignment.getId(), assignment.getStatus());
 		}
 	}
 
@@ -192,18 +203,18 @@ public class ShiftReads {
 				.and("status").in(ShiftAssignment.Status.ACTIVE))
 				.with(Sort.by("createdAt", "_id")).limit(DETAIL_ASSIGNMENTS_MAX), ShiftAssignment.class);
 		Map<String, List<String>> byShift = new HashMap<>();
-		Set<String> mine = new HashSet<>();
+		Map<String, MyAssignment> mine = new HashMap<>();
 		for (ShiftAssignment assignment : active) {
 			List<String> ids = byShift.computeIfAbsent(assignment.getShiftId(), key -> new ArrayList<>());
 			if (ids.size() < ASSIGNEES_MAX) {
 				ids.add(assignment.getUserId());
 			}
 			if (assignment.getUserId().equals(caller.getId())) {
-				mine.add(assignment.getShiftId());
+				mine.put(assignment.getShiftId(), MyAssignment.of(assignment));
 			}
 		}
 		List<ShiftResponse> rows = shifts.stream()
-				.map(shift -> ShiftResponse.from(shift, event.getTimezone(), mine.contains(shift.getId()),
+				.map(shift -> ShiftResponse.from(shift, event.getTimezone(), mine.get(shift.getId()),
 						byShift.getOrDefault(shift.getId(), List.of())))
 				.toList();
 		Totals totals = Totals.of(shifts);
@@ -233,7 +244,8 @@ public class ShiftReads {
 		List<ShiftAssignment> active = mongo.find(Query.query(Criteria.where("shiftId").is(shift.getId())
 				.and("status").in(ShiftAssignment.Status.ACTIVE))
 				.with(Sort.by("createdAt", "_id")).limit(DETAIL_ASSIGNMENTS_MAX), ShiftAssignment.class);
-		boolean mine = active.stream().anyMatch(assignment -> assignment.getUserId().equals(caller.getId()));
+		MyAssignment mine = MyAssignment.of(active.stream()
+				.filter(assignment -> assignment.getUserId().equals(caller.getId())).findFirst().orElse(null));
 		List<String> ids = active.stream().map(ShiftAssignment::getUserId).limit(ASSIGNEES_MAX).toList();
 		return new ShiftDetail(ShiftResponse.from(shift, event.getTimezone(), mine, ids), EventHead.from(event),
 				users(ids), access.canPlan(project, caller));
@@ -274,11 +286,11 @@ public class ShiftReads {
 		boolean truncated = found.size() > cap;
 		List<Shift> shifts = truncated ? found.subList(0, cap) : found;
 		Map<String, ShiftEvent> events = eventsById(shifts.stream().map(Shift::getEventId).collect(Collectors.toSet()));
-		Set<String> mine = myShiftIds(caller, from, to);
+		Map<String, MyAssignment> mine = myAssignments(caller, from, to);
 		List<ShiftResponse> rows = shifts.stream()
 				.filter(shift -> events.containsKey(shift.getEventId()))
 				.map(shift -> ShiftResponse.from(shift, events.get(shift.getEventId()).getTimezone(),
-						mine.contains(shift.getId()), List.of()))
+						mine.get(shift.getId()), List.of()))
 				.toList();
 		Map<String, EventHead> heads = new LinkedHashMap<>();
 		events.values().forEach(event -> heads.put(event.getId(), EventHead.from(event)));
@@ -360,7 +372,7 @@ public class ShiftReads {
 				continue;
 			}
 			out.add(new MyShiftResponse(row.getId(), row.getStatus(), row.getAssignedBy(),
-					ShiftResponse.from(shift, event.getTimezone(), true, List.of()), EventHead.from(event)));
+					ShiftResponse.from(shift, event.getTimezone(), MyAssignment.of(row), List.of()), EventHead.from(event)));
 		}
 		return out;
 	}
@@ -453,13 +465,16 @@ public class ShiftReads {
 		return out;
 	}
 
-	private Set<String> myShiftIds(User caller, Instant from, Instant to) {
+	/** The caller's active places in the window, by shift: one read, id and status along. */
+	private Map<String, MyAssignment> myAssignments(User caller, Instant from, Instant to) {
 		Query query = Query.query(Criteria.where("userId").is(caller.getId())
 				.and("startsAt").gt(from.minus(ShiftRules.SHIFT_MAX)).lt(to)
 				.and("status").in(ShiftAssignment.Status.ACTIVE));
-		query.fields().include("shiftId");
-		return mongo.find(query, ShiftAssignment.class).stream().map(ShiftAssignment::getShiftId)
-				.collect(Collectors.toSet());
+		query.fields().include("shiftId", "status");
+		Map<String, MyAssignment> mine = new HashMap<>();
+		mongo.find(query, ShiftAssignment.class)
+				.forEach(assignment -> mine.put(assignment.getShiftId(), MyAssignment.of(assignment)));
+		return mine;
 	}
 
 	private Set<String> eventIdsBySignUp(Set<String> projects, Instant from, Instant to, boolean open) {
