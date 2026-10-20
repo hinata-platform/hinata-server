@@ -100,6 +100,26 @@ public class ShiftAccess {
 				Query.query(Criteria.where("projectId").is(projectId).and("userId").is(userId)), ShiftPlanner.class);
 	}
 
+	/**
+	 * Everybody who plans the project: who runs it ({@link ProjectService#managerIds}) and who holds
+	 * a planner entry. Says nothing about visibility; a caller that tells them anything filters
+	 * with {@link ProjectReach#whoCanSee} first. Empty for a project that is gone.
+	 */
+	public Set<String> plannerIds(String projectId) {
+		Project project = projectId == null ? null : projects.findOptional(projectId).orElse(null);
+		if (project == null) {
+			return Set.of();
+		}
+		Set<String> ids = new LinkedHashSet<>(projects.managerIds(project));
+		Query entries = Query.query(Criteria.where("projectId").is(projectId));
+		entries.fields().include("userId");
+		for (ShiftPlanner entry : mongo.find(entries, ShiftPlanner.class)) {
+			ids.add(entry.getUserId());
+		}
+		ids.remove(null);
+		return ids;
+	}
+
 	/** The project behind a {@code /projects/{id}/...} route: 404 if missing, 403 if not a member. */
 	public Project memberProject(String projectId, User user) {
 		Project project = projects.get(projectId);

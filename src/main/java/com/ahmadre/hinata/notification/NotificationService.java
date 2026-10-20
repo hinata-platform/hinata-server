@@ -946,6 +946,12 @@ public class NotificationService {
 	/** As above, with a push that says less than the bell in its title as well. */
 	private void deliverGated(User user, Notification.Type type, String title, String body,
 			String pushTitle, String pushBody, String link) {
+		deliverGated(user, type, title, body, pushTitle, pushBody, link, null);
+	}
+
+	/** As above, with a caption of its own on the mail button; null keeps the default. */
+	private void deliverGated(User user, Notification.Type type, String title, String body,
+			String pushTitle, String pushBody, String link, String ctaLabel) {
 		if (user == null || !user.isActive()) return;
 		String eventId = eventId(type);
 		Delivery delivery = delivery(user, eventId);
@@ -953,10 +959,32 @@ public class NotificationService {
 				.userId(user.getId()).type(type).title(title).body(body).link(link)).build());
 		if (delivery.email()) {
 			mail.sendNotification(user.getEmail(), mail.subjectPrefix() + title, title, body, appLink(link),
-					buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
+					ctaLabel != null ? ctaLabel : buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
 		}
 		if (delivery.push()) {
 			push.sendToUser(user.getId(), pushTitle, pushBody, link, Map.of("type", type.name()));
+		}
+	}
+
+	/**
+	 * A notice worded per person, for a module whose sentences depend on the reader (their own
+	 * time zone, their own shift). Everybody in [userIds] who cannot see the project, or whose
+	 * account is off, is dropped before anything is written: one project read and at most one team
+	 * query for the whole set ({@link ProjectReach#whoCanSee}). The rest get the bell, and mail and
+	 * push as their preference for the type's event allows, with [link] (which they can follow,
+	 * since they see the project).
+	 */
+	public void notifyEach(Notification.Type type, String projectId, java.util.Collection<String> userIds,
+			String link, Function<User, PersonalNotice> text) {
+		if (projectId == null || userIds == null || userIds.isEmpty()) return;
+		Set<String> allowed = reach.whoCanSee(projectId, userIds);
+		if (allowed.isEmpty()) return;
+		for (User user : users.findAllById(allowed)) {
+			if (!user.isActive()) continue;
+			PersonalNotice notice = text.apply(user);
+			if (notice == null) continue;
+			deliverGated(user, type, notice.title(), notice.body(), notice.pushTitle(), notice.pushBody(), link,
+					notice.ctaLabel());
 		}
 	}
 
@@ -1656,7 +1684,7 @@ public class NotificationService {
 	 * {@link Routing}. Every type must appear here or fall into {@code default},
 	 * where it becomes locked-on and the user can never switch it off.
 	 */
-	private static String eventId(Notification.Type type) {
+	static String eventId(Notification.Type type) {
 		return switch (type) {
 			case MENTION, COMMENT_REPLY -> "mentions";
 			// Being handed an issue to follow is told like being handed one to do.
@@ -1675,6 +1703,8 @@ public class NotificationService {
 					TIME_OFF_CANCELLED, TIME_OFF_SHORTENED, TIME_OFF_SUBSTITUTE_NAMED,
 					TIME_REPORT_SCHEDULED, TIME_OFF_BALANCE_SUMMARY, TIME_ENTRY_SHARED,
 					TIME_SHARE_ACCEPTED -> "time";
+			case SHIFT_ASSIGNED, SHIFT_RELEASED, SHIFT_REMINDER, SHIFT_EVENT_CHANGED, SHIFT_CHANGED,
+					SHIFT_HELPER_DECLINED -> NotificationPreferences.SHIFTS;
 			// TIME_OFF_EXPIRY_NOTICE is deliberately absent and therefore locked: it is the notice
 			// without which no leave lapses (BAG 19.02.2019 – 9 AZR 541/15), and a preference that
 			// switched it off would switch off the protection it gives the person.

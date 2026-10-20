@@ -183,6 +183,10 @@ public class ShiftService {
 				mongo.updateMulti(Query.query(Criteria.where("eventId").is(eventId)),
 						moveBy(delta, clock.instant().plus(ShiftRules.SHIFT_MAX), false), ShiftAssignment.class);
 			}
+			if (delta != 0 && !saved.isCancelled()) {
+				events.publishEvent(new ShiftDomainEvents.EventChanged(eventId, saved.getProjectId(), caller.getId(),
+						false));
+			}
 			audited(AuditAction.SHIFT_EVENT_UPDATED, caller, eventId, Map.of("projectId", saved.getProjectId(),
 					"changed", String.join(",", changed), "movedByMinutes", String.valueOf(delta / 60_000)));
 			return saved;
@@ -199,7 +203,7 @@ public class ShiftService {
 	 */
 	public ShiftEvent cancelEvent(User caller, String eventId) {
 		settings.requireEnabled();
-		access.plannedEvent(eventId, caller);
+		ShiftEvent event = access.plannedEvent(eventId, caller).item();
 		return tx.run(() -> {
 			ShiftEvent saved = mongo.findAndModify(Query.query(Criteria.where("_id").is(eventId)),
 					new Update().set("cancelled", true).set("updatedAt", clock.instant()),
@@ -211,6 +215,10 @@ public class ShiftService {
 					new Update().set("cancelled", true), Shift.class).getMatchedCount();
 			long assignments = mongo.updateMulti(Query.query(Criteria.where("eventId").is(eventId)),
 					new Update().set("cancelled", true), ShiftAssignment.class).getMatchedCount();
+			if (!event.isCancelled()) {
+				events.publishEvent(new ShiftDomainEvents.EventChanged(eventId, saved.getProjectId(), caller.getId(),
+						true));
+			}
 			audited(AuditAction.SHIFT_EVENT_CANCELLED, caller, eventId, Map.of("projectId", saved.getProjectId(),
 					"shifts", String.valueOf(shifts), "assignments", String.valueOf(assignments)));
 			return saved;
@@ -366,6 +374,10 @@ public class ShiftService {
 					follow.unset("reminderSentAt");
 				}
 				mongo.updateMulti(Query.query(Criteria.where("shiftId").is(shiftId)), follow, ShiftAssignment.class);
+				if (!saved.isCancelled()) {
+					events.publishEvent(new ShiftDomainEvents.ShiftChanged(saved, caller.getId(), false,
+							holders(shiftId)));
+				}
 			}
 			audited(AuditAction.SHIFT_UPDATED, caller, shiftId, Map.of("eventId", saved.getEventId(),
 					"projectId", saved.getProjectId(), "changed", String.join(",", changed)));
@@ -392,6 +404,10 @@ public class ShiftService {
 			Query ofShift = Query.query(Criteria.where("shiftId").is(shiftId));
 			long active = mongo.count(Query.query(Criteria.where("shiftId").is(shiftId)
 					.and("status").in(ShiftAssignment.Status.ACTIVE)), ShiftAssignment.class);
+			if (active > 0 && !tombstoned.isCancelled()) {
+				events.publishEvent(new ShiftDomainEvents.ShiftChanged(tombstoned, caller.getId(), true,
+						holders(shiftId)));
+			}
 			long removed = mongo.remove(ofShift, ShiftAssignment.class).getDeletedCount();
 			mongo.remove(Query.query(Criteria.where("_id").is(shiftId)), Shift.class);
 			audited(AuditAction.SHIFT_DELETED, caller, shiftId, Map.of("eventId", tombstoned.getEventId(),
@@ -426,6 +442,13 @@ public class ShiftService {
 		if (existing + adding > ShiftRules.SHIFTS_PER_EVENT_MAX) {
 			throw ApiException.badRequest("error.shifts.tooManyShifts", ShiftRules.SHIFTS_PER_EVENT_MAX);
 		}
+	}
+
+	/** Who holds a place on the shift right now, over the shift_status index, ids only. */
+	private List<String> holders(String shiftId) {
+		Query query = Query.query(Criteria.where("shiftId").is(shiftId).and("status").in(ShiftAssignment.Status.ACTIVE));
+		query.fields().include("userId");
+		return mongo.find(query, ShiftAssignment.class).stream().map(ShiftAssignment::getUserId).distinct().toList();
 	}
 
 	private List<Shift> liveShifts(String eventId) {
