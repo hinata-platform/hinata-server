@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.bson.types.ObjectId;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -28,7 +29,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -283,8 +283,8 @@ public class ShiftReads {
 		settings.requireEnabled();
 		ShiftRules.window(from, to, ShiftRules.WINDOW_MAX);
 		Set<String> projects = scope(caller, projectId);
-		Set<String> only = understaffedOnly ? understaffedEventIds(projects, from, to) : null;
-		return eventPage(caller, projects, from, to, only, page, size);
+		return understaffedOnly ? shortEventPage(caller, projects, from, to, page, size)
+				: eventPage(caller, projects, from, to, page, size);
 	}
 
 	/** Events of one project; 403 for somebody who is not a member. */
@@ -293,7 +293,7 @@ public class ShiftReads {
 		settings.requireEnabled();
 		ShiftRules.window(from, to, ShiftRules.WINDOW_MAX);
 		Project project = access.memberProject(projectId, caller);
-		return eventPage(caller, Set.of(project.getId()), from, to, null, page, size);
+		return eventPage(caller, Set.of(project.getId()), from, to, page, size);
 	}
 
 	public EventResponse event(User caller, String eventId) {
@@ -597,35 +597,70 @@ public class ShiftReads {
 	 * so "ends after [from]" is read as "starts after [from] minus fourteen days" for the index and
 	 * then checked exactly.
 	 */
-	private Page<EventSummary> eventPage(User caller, Set<String> projects, Instant from, Instant to,
-			Set<String> onlyIds, int page, int size) {
+	private Page<EventSummary> eventPage(User caller, Set<String> projects, Instant from, Instant to, int page,
+			int size) {
 		Pageable pageable = PageRequest.of(Math.max(page, 0), ShiftRules.pageSize(size), Sort.by("startsAt", "_id"));
-		if (projects.isEmpty() || (onlyIds != null && onlyIds.isEmpty())) {
+		if (projects.isEmpty()) {
 			return Page.empty(pageable);
 		}
-		Criteria window = Criteria.where("projectId").in(projects)
-				.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to)
-				.and("endsAt").gt(from);
-		Criteria criteria = onlyIds == null ? window : window.and("_id").in(onlyIds);
+		Criteria criteria = eventWindow(projects, from, to);
 		List<ShiftEvent> events = mongo.find(Query.query(criteria).with(pageable), ShiftEvent.class);
 		List<EventSummary> content = summaries(caller, events);
 		return PageableExecutionUtils.getPage(content, pageable,
 				() -> mongo.count(Query.query(criteria), ShiftEvent.class));
 	}
 
+	private static Criteria eventWindow(Set<String> projects, Instant from, Instant to) {
+		return Criteria.where("projectId").in(projects)
+				.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to)
+				.and("endsAt").gt(from);
+	}
+
 	/**
-	 * The events touching the window that have a live, not cancelled shift below its need, in one
-	 * distinct read over {@code project_start}. A shift lies inside its event, and an event starts
-	 * at most fourteen days before it ends, so the shift range is the event range widened by that.
+	 * One page of the events touching the window that have a live shift short of people
+	 * ({@link ShiftRules#shortOfPeople()}), decided inside the event query: the events of the
+	 * window over {@code project_start}, each asking its shifts over {@code event_start} for one
+	 * that is short ({@code $limit 1}), then the page and the total in one {@code $facet}. The cost
+	 * follows the events in the window, never every shift of every visible project.
 	 */
-	private Set<String> understaffedEventIds(Set<String> projects, Instant from, Instant to) {
+	private Page<EventSummary> shortEventPage(User caller, Set<String> projects, Instant from, Instant to, int page,
+			int size) {
+		Pageable pageable = PageRequest.of(Math.max(page, 0), ShiftRules.pageSize(size), Sort.by("startsAt", "_id"));
 		if (projects.isEmpty()) {
-			return Set.of();
+			return Page.empty(pageable);
 		}
-		Criteria range = Criteria.where("projectId").in(projects)
-				.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to.plus(ShiftRules.EVENT_MAX));
-		Criteria shortOfPeople = new Criteria().andOperator(range, ShiftRules.shortOfPeople());
-		return new HashSet<>(mongo.findDistinct(Query.query(shortOfPeople), "eventId", Shift.class, String.class));
+		Document shortShift = new Document("$lookup", new Document("from", mongo.getCollectionName(Shift.class))
+				.append("let", new Document("event", new Document("$toString", "$_id")))
+				.append("pipeline", List.of(
+						new Document("$match", new Document("$expr", new Document("$eq", List.of("$eventId", "$$event")))
+								.append("deleted", false)),
+						new Document("$match", new Document("$expr", ShiftRules.shortOfPeopleExpression())),
+						new Document("$limit", 1),
+						new Document("$project", new Document("_id", 1))))
+				.append("as", "short"));
+		Document facet = new Document("$facet", new Document("rows", List.of(
+						new Document("$skip", pageable.getOffset()), new Document("$limit", pageable.getPageSize())))
+				.append("total", List.of(new Document("$count", "n"))));
+		Aggregation aggregation = Aggregation.newAggregation(
+				Aggregation.match(eventWindow(projects, from, to)),
+				context -> shortShift,
+				Aggregation.match(Criteria.where("short").ne(List.of())),
+				Aggregation.sort(Sort.by("startsAt", "_id")),
+				context -> facet);
+		Document result = mongo.aggregate(aggregation, mongo.getCollectionName(ShiftEvent.class), Document.class)
+				.getUniqueMappedResult();
+		if (result == null) {
+			return Page.empty(pageable);
+		}
+		List<ShiftEvent> events = new ArrayList<>();
+		for (Object row : result.getList("rows", Object.class)) {
+			Document document = (Document) row;
+			document.remove("short");
+			events.add(mongo.getConverter().read(ShiftEvent.class, document));
+		}
+		List<Object> total = result.getList("total", Object.class);
+		long count = total.isEmpty() ? 0 : ((Number) ((Document) total.getFirst()).get("n")).longValue();
+		return new PageImpl<>(summaries(caller, events), pageable, count);
 	}
 
 	private List<EventSummary> summaries(User caller, List<ShiftEvent> events) {
