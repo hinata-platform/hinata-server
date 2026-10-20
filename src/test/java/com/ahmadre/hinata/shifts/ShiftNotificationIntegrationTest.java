@@ -192,6 +192,17 @@ class ShiftNotificationIntegrationTest {
 		assertThat(count(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isZero();
 	}
 
+	@Test
+	@DisplayName("leaving a shift of a cancelled event tells no planner: it needs nobody any more")
+	void noShortNoticeForACancelledShift() {
+		ShiftEvent event = event();
+		Shift shift = shift(event, base, 2, 2, null);
+		String anns = assignments.assign(ann, shift.getId(), ann.getId(), true).assignment().getId();
+		service.cancelEvent(lead, event.getId(), null);
+		assignments.release(ann, anns);
+		assertThat(count(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isZero();
+	}
+
 	// --- event and shift changes -------------------------------------------------------
 
 	@Test

@@ -105,9 +105,9 @@ public class Shift {
 		return assignedCount == null ? 0 : assignedCount;
 	}
 
-	/** Fewer people than the shift needs. */
+	/** Fewer people than the shift needs, and not cancelled: {@link ShiftRules#shortOfPeople(Shift)}. */
 	public boolean understaffed() {
-		return assigned() < required();
+		return ShiftRules.shortOfPeople(this);
 	}
 
 	/** At its upper limit; never true without one. */

@@ -185,6 +185,14 @@ class ShiftPlanExportIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a cancelled event's shifts miss nobody: the file says how many hold a place, not who is missing")
+	void cancelledShiftsMissNobody() throws Exception {
+		service.cancelEvent(lead, event.getId(), null);
+		String text = text(ExportFormat.XLSX, export(lead, ExportFormat.XLSX, false, Locale.GERMAN));
+		assertThat(text).contains("3 von 6 Plätzen").doesNotContain("fehlt");
+	}
+
+	@Test
 	@DisplayName("without names no person is in the file, read back as text; with names the people holding a place are")
 	void namesOnlyWhenAsked() throws Exception {
 		for (ExportFormat format : ExportFormat.values()) {
