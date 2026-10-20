@@ -963,7 +963,22 @@ class ShiftPlanningIntegrationTest {
 		JsonNode calendar = json(get("/api/v1/shifts/calendar" + window, annToken));
 		assertThat(fields(calendar)).containsExactly("shifts", "events", "truncated", "plannableProjectIds");
 		assertThat(fields(calendar.path("events").path(event.getId()))).containsExactly("id", "title", "location",
-				"timezone", "selfAssignable", "cancelled", "seriesId", "recurrenceLabel", "detached");
+				"timezone", "selfAssignable", "cancelled", "seriesId", "recurrenceLabel", "detached", "projectId",
+				"startsAt", "endsAt", "startsLocal", "endsLocal");
+		// HIN-166: a planner's calendar also carries open events of their projects without a shift in the
+		// window, so a span drawn on the grid finds them; a helper's does not.
+		ShiftEvent empty = event(project, lead, base.plus(hours(2)), hours(4));
+		assertThat(json(get("/api/v1/shifts/calendar" + window, token(lead))).path("events").has(empty.getId()))
+				.isTrue();
+		assertThat(json(get("/api/v1/shifts/calendar" + window, annToken)).path("events").has(empty.getId()))
+				.isFalse();
+		service.cancelEvent(lead, empty.getId(), null);
+		assertThat(json(get("/api/v1/shifts/calendar" + window, token(lead))).path("events").has(empty.getId()))
+				.isFalse();
+		JsonNode marks = json(get("/api/v1/shifts/calendar/marks" + window, token(lead)));
+		assertThat(marks.path("plannableProjectIds").get(0).asText()).isEqualTo(project.getId());
+		assertThat(json(get("/api/v1/shifts/calendar/marks" + window, annToken)).path("plannableProjectIds").size())
+				.isZero();
 		JsonNode mine = json(get("/api/v1/me/shifts" + window, annToken));
 		assertThat(fields(mine.path("content").get(0))).containsExactly("assignmentId", "status", "assignedBy",
 				"shift", "event", "confirmBy", "confirmByLocal");

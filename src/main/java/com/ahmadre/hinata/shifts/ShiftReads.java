@@ -57,6 +57,9 @@ public class ShiftReads {
 	/** Most shifts the calendar returns; beyond it {@code truncated} is set. */
 	public static final int CALENDAR_MAX = 2000;
 
+	/** HIN-166: events of the projects a planner plans that come with the calendar, at most. */
+	static final int PLANNABLE_EVENTS_MAX = 200;
+
 	/** A cap on the assignments one detail view reads, far above any real event. */
 	static final int DETAIL_ASSIGNMENTS_MAX = 20_000;
 
@@ -158,13 +161,21 @@ public class ShiftReads {
 	 * {@code recurrenceLabel} (the series' rule in the reader's words) for an occurrence of a series,
 	 * {@code detached} when it was changed on its own; null, null and false otherwise.
 	 */
+	/**
+	 * An event as a shift row needs it. HIN-166: {@code projectId} and its span (instants and the
+	 * wall clock of its zone), so the calendar can tell which event a span drawn by a planner falls
+	 * into without asking again.
+	 */
 	public record EventHead(String id, String title, String location, String timezone, boolean selfAssignable,
-			boolean cancelled, String seriesId, String recurrenceLabel, boolean detached) {
+			boolean cancelled, String seriesId, String recurrenceLabel, boolean detached, String projectId,
+			Instant startsAt, Instant endsAt, String startsLocal, String endsLocal) {
 
 		static EventHead from(ShiftEvent event, Map<String, String> labels) {
 			return new EventHead(event.getId(), event.getTitle(), event.getLocation(), event.getTimezone(),
 					event.isSelfAssignable(), event.isCancelled(), event.getSeriesId(),
-					labelOf(event, labels), event.isDetached());
+					labelOf(event, labels), event.isDetached(), event.getProjectId(), event.getStartsAt(),
+					event.getEndsAt(), ShiftRules.local(event.getStartsAt(), event.getTimezone()),
+					ShiftRules.local(event.getEndsAt(), event.getTimezone()));
 		}
 	}
 
@@ -227,7 +238,8 @@ public class ShiftReads {
 	}
 
 	/** The days of a window that have anything to mark, in order; days with nothing are left out. */
-	public record CalendarMarks(List<DayMarks> days) {
+	/** HIN-166: {@code plannableProjectIds} as on the calendar, so the month can offer "+" alone. */
+	public record CalendarMarks(List<DayMarks> days, Set<String> plannableProjectIds) {
 	}
 
 	/** One person's place on a shift, as a write answers it. */
@@ -416,9 +428,21 @@ public class ShiftReads {
 				.map(shift -> ShiftResponse.from(shift, events.get(shift.getEventId()).getTimezone(),
 						mine.get(shift.getId()), List.of(), WaitView.of(waiting.get(shift.getId()), caller.getId(), false)))
 				.toList();
+		// HIN-166: a planner may draw a shift into an event that has none yet in this window, so
+		// the events of the projects they plan come along, open ones only. One read over
+		// project_start, bounded below by the longest an event can last.
+		Map<String, ShiftEvent> all = new LinkedHashMap<>(events);
+		if (!plannable.isEmpty()) {
+			Query open = Query.query(Criteria.where("projectId").in(plannable)
+					.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to)
+					.and("endsAt").gt(from)
+					.and("cancelled").ne(true))
+					.with(Sort.by("startsAt", "_id")).limit(PLANNABLE_EVENTS_MAX);
+			mongo.find(open, ShiftEvent.class).forEach(event -> all.putIfAbsent(event.getId(), event));
+		}
 		Map<String, EventHead> heads = new LinkedHashMap<>();
-		Map<String, String> seriesLabels = labels.of(caller, events.values());
-		events.values().forEach(event -> heads.put(event.getId(), EventHead.from(event, seriesLabels)));
+		Map<String, String> seriesLabels = labels.of(caller, all.values());
+		all.values().forEach(event -> heads.put(event.getId(), EventHead.from(event, seriesLabels)));
 		return new CalendarResponse(rows, heads, truncated, plannable);
 	}
 
@@ -434,7 +458,7 @@ public class ShiftReads {
 		ShiftRules.window(from, to, ShiftRules.WINDOW_MAX);
 		Set<String> projects = scope(caller, projectId);
 		if (projects.isEmpty()) {
-			return new CalendarMarks(List.of());
+			return new CalendarMarks(List.of(), Set.of());
 		}
 		ZoneId zone = UserZones.of(caller, serverSettings.get());
 		List<String> mine = new ArrayList<>(myAssignments(caller, from, to).keySet());
@@ -463,7 +487,7 @@ public class ShiftReads {
 			days.add(new DayMarks(row.getString("_id"), number(row, "mine"), number(row, "open"),
 					number(row, "understaffed")));
 		}
-		return new CalendarMarks(days);
+		return new CalendarMarks(days, access.plannableProjectIds(caller, projects));
 	}
 
 	private static Document count(Document condition) {
