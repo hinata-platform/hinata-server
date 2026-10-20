@@ -206,7 +206,8 @@ public class ShiftDelivery {
 
 	/**
 	 * Reminds the people of [due], assignments the reminder job has already marked as sent. One
-	 * read for their shifts and one for their events, then one fan-out per shift. A shift or event
+	 * read for their shifts and one for their events, then one fan-out per project, with a batch
+	 * per shift: who can see a project is asked once per run, not once per shift. A shift or event
 	 * cancelled or deleted in the meantime reminds nobody.
 	 */
 	public void remind(Collection<ShiftAssignment> due) {
@@ -223,17 +224,20 @@ public class ShiftDelivery {
 		Set<String> eventIds = shifts.values().stream().map(Shift::getEventId).collect(Collectors.toSet());
 		Map<String, ShiftEvent> events = byId(mongo.find(Query.query(Criteria.where("_id").in(eventIds)),
 				ShiftEvent.class), ShiftEvent::getId);
+		Map<String, List<NotificationService.NoticeBatch>> byProject = new LinkedHashMap<>();
 		peopleByShift.forEach((shiftId, people) -> {
 			Shift shift = shifts.get(shiftId);
 			ShiftEvent event = shift == null ? null : events.get(shift.getEventId());
 			if (shift == null || shift.isDeleted() || shift.isCancelled() || event == null || event.isCancelled()) {
 				return;
 			}
-			safely("reminder", () -> notifications.notifyEach(Notification.Type.SHIFT_REMINDER, shift.getProjectId(),
-					people, eventLink(event.getId()),
-					reader -> notices.of(reader, ShiftNotices.Kind.REMINDER, shift.getTitle(), event.getTitle(),
-							shift.getStartsAt(), shift.getEndsAt(), event.getTimezone())));
+			byProject.computeIfAbsent(shift.getProjectId(), id -> new java.util.ArrayList<>())
+					.add(new NotificationService.NoticeBatch(people, eventLink(event.getId()),
+							reader -> notices.of(reader, ShiftNotices.Kind.REMINDER, shift.getTitle(), event.getTitle(),
+									shift.getStartsAt(), shift.getEndsAt(), event.getTimezone())));
 		});
+		byProject.forEach((projectId, batches) -> safely("reminder",
+				() -> notifications.notifyEachInProject(Notification.Type.SHIFT_REMINDER, projectId, batches)));
 	}
 
 	/** Where "my shifts" live in the app. */

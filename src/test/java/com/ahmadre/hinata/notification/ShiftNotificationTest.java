@@ -169,6 +169,23 @@ class ShiftNotificationTest {
 	}
 
 	@Test
+	void severalNoticesInOneProjectAskWhoSeesItOnceAndInsertOnce() {
+		shifts(false, false);
+		when(reach.whoCanSee(eq("p-1"), any())).thenReturn(Set.of(ann.getId(), bob.getId()));
+
+		service.notifyEachInProject(Notification.Type.SHIFT_REMINDER, "p-1", List.of(
+				new NotificationService.NoticeBatch(List.of(ann.getId()), "/shifts/events/e-1", reader -> notice()),
+				new NotificationService.NoticeBatch(List.of(ann.getId(), bob.getId()), "/shifts/events/e-2",
+						reader -> notice())));
+
+		verify(reach, org.mockito.Mockito.times(1)).whoCanSee(eq("p-1"), any());
+		assertThat(savedBells(1)).extracting(Notification::getUserId, Notification::getLink).containsExactly(
+				org.assertj.core.api.Assertions.tuple(ann.getId(), "/shifts/events/e-1"),
+				org.assertj.core.api.Assertions.tuple(ann.getId(), "/shifts/events/e-2"),
+				org.assertj.core.api.Assertions.tuple(bob.getId(), "/shifts/events/e-2"));
+	}
+
+	@Test
 	void thePushGetsItsOwnWordsAndTheMailItsOwnButton() {
 		shifts(true, true);
 		when(reach.whoCanSee(eq("p-1"), any())).thenReturn(Set.of(ann.getId()));

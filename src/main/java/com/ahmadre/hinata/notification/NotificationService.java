@@ -982,30 +982,53 @@ public class NotificationService {
 	 */
 	public void notifyEach(Notification.Type type, String projectId, java.util.Collection<String> userIds,
 			String link, Function<User, PersonalNotice> text) {
-		if (projectId == null || userIds == null || userIds.isEmpty()) return;
-		Set<String> allowed = reach.whoCanSee(projectId, userIds);
+		if (userIds == null) return;
+		notifyEachInProject(type, projectId, List.of(new NoticeBatch(userIds, link, text)));
+	}
+
+	/** One set of readers of a {@link #notifyEachInProject} call, with its own link and words. */
+	public record NoticeBatch(java.util.Collection<String> userIds, String link, Function<User, PersonalNotice> text) {
+	}
+
+	/**
+	 * As {@link #notifyEach}, for several notices in one project at once (a reminder run: one batch
+	 * per shift). Who can see the project is asked once for all of them, the readers are read once,
+	 * and every bell goes into one insert; each batch keeps its link and its words.
+	 */
+	public void notifyEachInProject(Notification.Type type, String projectId, List<NoticeBatch> batches) {
+		if (projectId == null || batches == null || batches.isEmpty()) return;
+		Set<String> everybody = new java.util.LinkedHashSet<>();
+		batches.forEach(batch -> everybody.addAll(batch.userIds()));
+		if (everybody.isEmpty()) return;
+		Set<String> allowed = reach.whoCanSee(projectId, everybody);
 		if (allowed.isEmpty()) return;
 		// The readers with only the fields a notice reads; the bells in one insert, then mail and
 		// push per person exactly as deliverGated sends them.
+		Map<String, User> readers = new HashMap<>();
+		for (UserRepository.NoticeReaderView reader : users.findNoticeReadersByIdIn(allowed)) {
+			User user = reader.asUser();
+			if (user.isActive()) readers.put(user.getId(), user);
+		}
 		String eventId = eventId(type);
 		List<Notification> bells = new java.util.ArrayList<>();
 		List<Runnable> outbound = new java.util.ArrayList<>();
-		for (UserRepository.NoticeReaderView reader : users.findNoticeReadersByIdIn(allowed)) {
-			User user = reader.asUser();
-			if (!user.isActive()) continue;
-			PersonalNotice notice = text.apply(user);
-			if (notice == null) continue;
-			Delivery delivery = delivery(user, eventId);
-			bells.add(delivery.mark(Notification.builder()
-					.userId(user.getId()).type(type).title(notice.title()).body(notice.body()).link(link)).build());
-			outbound.add(() -> sendOut(user, type, delivery, notice.title(), notice.body(), notice.pushTitle(),
-					notice.pushBody(), link, notice.ctaLabel()));
+		for (NoticeBatch batch : batches) {
+			for (String userId : new java.util.LinkedHashSet<>(batch.userIds())) {
+				User user = readers.get(userId);
+				if (user == null) continue;
+				PersonalNotice notice = batch.text().apply(user);
+				if (notice == null) continue;
+				Delivery delivery = delivery(user, eventId);
+				bells.add(delivery.mark(Notification.builder().userId(user.getId()).type(type)
+						.title(notice.title()).body(notice.body()).link(batch.link())).build());
+				outbound.add(() -> sendOut(user, type, delivery, notice.title(), notice.body(), notice.pushTitle(),
+						notice.pushBody(), batch.link(), notice.ctaLabel()));
+			}
 		}
 		if (bells.isEmpty()) return;
 		notifications.saveAll(bells);
 		outbound.forEach(Runnable::run);
 	}
-
 	/**
 	 * Notifies every member of the sprint's project(s) that it has started. Gated
 	 * by the recipient's {@code sprint} channel preference; the actor who started
