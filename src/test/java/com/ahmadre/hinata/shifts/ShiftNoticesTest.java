@@ -70,7 +70,7 @@ class ShiftNoticesTest {
 		PersonalNotice notice = notices.of(reader("de", "Europe/Berlin"), ShiftNotices.Kind.SHORT, "Einlass",
 				"Sommerfest", START, END, "Europe/Berlin", 2, 3);
 		assertThat(notice.body()).isEqualTo(
-				"Jemand hat sich aus Einlass bei Sommerfest ausgetragen, 21.10.2026, 14:00 bis 18:00. Besetzt sind jetzt 2 von 3.");
+				"Jemand hat die Schicht Einlass bei Sommerfest abgegeben, 21.10.2026, 14:00 bis 18:00. Besetzt sind jetzt 2 von 3.");
 	}
 
 	@Test

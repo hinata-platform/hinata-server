@@ -40,10 +40,10 @@ public class ShiftFeedController {
 	private final ShiftFeed feed;
 	private final CurrentUser currentUser;
 
-	public record FeedStatus(boolean exists, Instant createdAt, Instant lastAccessedAt) {
+	public record FeedStatus(boolean exists, Instant createdAt, Instant lastUsedAt) {
 
 		static FeedStatus from(ShiftFeed.Status status) {
-			return new FeedStatus(status.exists(), status.createdAt(), status.lastAccessedAt());
+			return new FeedStatus(status.exists(), status.createdAt(), status.lastUsedAt());
 		}
 	}
 
