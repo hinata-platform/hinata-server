@@ -26,7 +26,8 @@ import java.util.Map;
  *
  * <ul>
  * <li><b>Somebody lost a project</b>: their planner entry goes, so the right never comes back on its
- * own when they rejoin, and every place they hold on a shift that has not ended yet is freed, one
+ * own when they rejoin, and every place they hold on a shift that has not ended yet is freed (and
+ * every waiting list they are on left, HIN-162), one
  * transaction per assignment, the counter given back only when the status changed. Places on
  * shifts that are over stay as they are: they are the record of who covered what, and the
  * retention run removes them in time.</li>
@@ -64,7 +65,7 @@ public class ShiftErasure {
 					.and("startsAt").gt(now.minus(ShiftRules.SHIFT_MAX))
 					.and("endsAt").gt(now)
 					.and("projectId").is(event.projectId())
-					.and("status").in(ShiftAssignment.Status.ACTIVE)), ShiftAssignment.class);
+					.and("status").in(ShiftAssignment.Status.ACTIVE_OR_WAITING)), ShiftAssignment.class);
 			free(held, REASON_MEMBERSHIP);
 		}
 		catch (RuntimeException failure) {
@@ -95,7 +96,7 @@ public class ShiftErasure {
 		try {
 			Query byUser = Query.query(Criteria.where("userId").is(userId));
 			free(mongo.find(Query.query(Criteria.where("userId").is(userId)
-					.and("status").in(ShiftAssignment.Status.ACTIVE)), ShiftAssignment.class), REASON_ACCOUNT);
+					.and("status").in(ShiftAssignment.Status.ACTIVE_OR_WAITING)), ShiftAssignment.class), REASON_ACCOUNT);
 			mongo.remove(byUser, ShiftAssignment.class);
 			mongo.remove(byUser, ShiftPlanner.class);
 			mongo.remove(byUser, ShiftPersonalData.FEED_TOKENS);
@@ -119,7 +120,7 @@ public class ShiftErasure {
 		}
 		if (!tx.available()) {
 			mongo.updateMulti(Query.query(Criteria.where("_id").in(held.stream().map(ShiftAssignment::getId).toList())
-					.and("status").in(ShiftAssignment.Status.ACTIVE)),
+					.and("status").in(ShiftAssignment.Status.ACTIVE_OR_WAITING)),
 					new Update().set("status", ShiftAssignment.Status.RELEASED), ShiftAssignment.class);
 			return;
 		}

@@ -1704,7 +1704,8 @@ public class NotificationService {
 					TIME_REPORT_SCHEDULED, TIME_OFF_BALANCE_SUMMARY, TIME_ENTRY_SHARED,
 					TIME_SHARE_ACCEPTED -> "time";
 			case SHIFT_ASSIGNED, SHIFT_RELEASED, SHIFT_REMINDER, SHIFT_EVENT_CHANGED, SHIFT_CHANGED,
-					SHIFT_HELPER_DECLINED, SHIFT_SERIES_CHANGED -> NotificationPreferences.SHIFTS;
+					SHIFT_HELPER_DECLINED, SHIFT_SERIES_CHANGED, SHIFT_PROMOTED, SHIFT_WAITLIST_SKIPPED,
+					SHIFT_WAITLIST_EXPIRED -> NotificationPreferences.SHIFTS;
 			// TIME_OFF_EXPIRY_NOTICE is deliberately absent and therefore locked: it is the notice
 			// without which no leave lapses (BAG 19.02.2019 – 9 AZR 541/15), and a preference that
 			// switched it off would switch off the protection it gives the person.

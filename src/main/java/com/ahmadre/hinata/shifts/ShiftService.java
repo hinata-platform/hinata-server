@@ -212,6 +212,11 @@ public class ShiftService {
 				events.publishEvent(new ShiftDomainEvents.EventChanged(eventId, saved.getProjectId(), caller.getId(),
 						false));
 			}
+			if (Boolean.TRUE.equals(patch.selfAssignable()) && !event.isSelfAssignable()) {
+				// HIN-162: sign-up opened again; whoever waits moves up into the free places.
+				events.publishEvent(ShiftDomainEvents.SeatsOpened.of(
+						liveShifts(eventId).stream().map(Shift::getId).toList()));
+			}
 			audited(AuditAction.SHIFT_EVENT_UPDATED, caller, eventId, Map.of("projectId", saved.getProjectId(),
 					"changed", String.join(",", changed), "movedByMinutes", String.valueOf(delta / 60_000)));
 			return saved;
@@ -254,11 +259,16 @@ public class ShiftService {
 			}
 			long shifts = mongo.updateMulti(Query.query(Criteria.where("eventId").is(eventId)),
 					new Update().set("cancelled", true), Shift.class).getMatchedCount();
+			// HIN-162: the waiting lists go with the event; the people on them hear it like the others.
+			List<String> waited = waitingOn(Criteria.where("eventId").is(eventId));
+			mongo.updateMulti(Query.query(Criteria.where("eventId").is(eventId)
+					.and("status").is(ShiftAssignment.Status.WAITING)),
+					new Update().set("status", ShiftAssignment.Status.RELEASED), ShiftAssignment.class);
 			long assignments = mongo.updateMulti(Query.query(Criteria.where("eventId").is(eventId)),
 					new Update().set("cancelled", true), ShiftAssignment.class).getMatchedCount();
 			if (!event.isCancelled()) {
 				events.publishEvent(new ShiftDomainEvents.EventChanged(eventId, saved.getProjectId(), caller.getId(),
-						true));
+						true, waited));
 			}
 			audited(AuditAction.SHIFT_EVENT_CANCELLED, caller, eventId, Map.of("projectId", saved.getProjectId(),
 					"shifts", String.valueOf(shifts), "assignments", String.valueOf(assignments)));
@@ -485,6 +495,10 @@ public class ShiftService {
 			if (inSeries == ShiftSeriesService.Scope.THIS) {
 				series.detach(event);
 			}
+			if (raises(shift.getMaxHelpers(), max)) {
+				// HIN-162: more places; whoever waits moves up after the commit.
+				events.publishEvent(ShiftDomainEvents.SeatsOpened.of(shiftId));
+			}
 			if (moved) {
 				Update follow = new Update().set("startsAt", start).set("endsAt", end);
 				if (start.isAfter(clock.instant().plus(ShiftRules.SHIFT_MAX))) {
@@ -582,6 +596,21 @@ public class ShiftService {
 	/** Who holds a place on the shift right now, over the shift_status index, ids only. */
 	private List<String> holders(String shiftId) {
 		Query query = Query.query(Criteria.where("shiftId").is(shiftId).and("status").in(ShiftAssignment.Status.ACTIVE));
+		query.fields().include("userId");
+		return mongo.find(query, ShiftAssignment.class).stream().map(ShiftAssignment::getUserId).distinct().toList();
+	}
+
+	/** Whether a new upper limit leaves room the old one did not: higher, or none at all. */
+	static boolean raises(Integer before, Integer after) {
+		if (before == null) {
+			return false;
+		}
+		return after == null || after > before;
+	}
+
+	/** Who waits on the matched shifts (HIN-162), ids only. */
+	private List<String> waitingOn(Criteria shifts) {
+		Query query = Query.query(shifts.and("status").is(ShiftAssignment.Status.WAITING));
 		query.fields().include("userId");
 		return mongo.find(query, ShiftAssignment.class).stream().map(ShiftAssignment::getUserId).distinct().toList();
 	}

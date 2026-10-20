@@ -7,6 +7,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -52,6 +53,20 @@ public class ShiftTx {
 		if (TransactionSynchronizationManager.isActualTransactionActive()) {
 			return work.get();
 		}
+		return attempt(work, TransactionDefinition.PROPAGATION_REQUIRED);
+	}
+
+	/**
+	 * As {@link #run}, but always in a transaction of its own, retried on its own. For work started
+	 * from an after-commit listener (HIN-162: moving people up from a waiting list): the committed
+	 * transaction's resources are still bound there, and joining them would write outside any
+	 * transaction. Whatever the work publishes is delivered after its own commit.
+	 */
+	public <T> T runAlone(Supplier<T> work) {
+		return attempt(work, TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+	}
+
+	private <T> T attempt(Supplier<T> work, int propagation) {
 		PlatformTransactionManager manager = managers.getIfAvailable();
 		if (manager == null) {
 			// Unreachable while the module is on: ShiftSettings keeps it off without transactions.
@@ -59,6 +74,7 @@ public class ShiftTx {
 			throw new IllegalStateException("shift planning needs a transaction manager");
 		}
 		TransactionTemplate template = new TransactionTemplate(manager);
+		template.setPropagationBehavior(propagation);
 		for (int attempt = 1; ; attempt++) {
 			try {
 				return template.execute(status -> work.get());

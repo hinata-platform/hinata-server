@@ -175,7 +175,11 @@ public class ShiftController {
 		return reads.change(caller, done.assignment(), done.warnings());
 	}
 
-	/** A member signs up ({@code CONFIRMED}); 403 {@code selfAssignDisabled} when the event is closed. */
+	/**
+	 * A member signs up ({@code CONFIRMED}); 403 {@code selfAssignDisabled} when the event is closed.
+	 * HIN-162: on a full shift, or one somebody waits for, the answer is a waiting entry
+	 * ({@code WAITING}) instead.
+	 */
 	@PostMapping("/api/v1/shifts/shifts/{id}/self-assign")
 	@ResponseStatus(HttpStatus.CREATED)
 	public ShiftReads.AssignmentChange selfAssign(@PathVariable String id) {
@@ -245,6 +249,12 @@ public class ShiftController {
 	public ResponseEntity<ShiftReads.MyShiftResponse> next() {
 		return reads.next(currentUser.require()).map(ResponseEntity::ok)
 				.orElseGet(() -> ResponseEntity.noContent().build());
+	}
+
+	/** HIN-162: the caller's waiting entries, at most 50, soonest first, without pages. */
+	@GetMapping("/api/v1/me/shifts/waiting")
+	public List<ShiftReads.MyShiftResponse> waiting() {
+		return reads.waiting(currentUser.require());
 	}
 
 	private ShiftReads.EventResponse detail(User caller, String eventId) {

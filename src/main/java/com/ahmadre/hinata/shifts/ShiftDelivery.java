@@ -42,6 +42,9 @@ import java.util.stream.Collectors;
  * project's planners, at most once an hour per shift. {@code NotificationService.notifyEach} drops
  * everybody who cannot see the project before anything is written. The reminder job hands its due
  * assignments to {@link #remind}, outside any transaction.
+ *
+ * <p>HIN-162 adds the waiting list's three: moved up (with the deadline to confirm), passed over
+ * because of another shift at that time, and the deadline missed. Each goes to that one person.
  */
 @Slf4j
 @Component
@@ -108,6 +111,7 @@ public class ShiftDelivery {
 			holders.fields().include("userId");
 			Set<String> people = mongo.find(holders, ShiftAssignment.class).stream()
 					.map(ShiftAssignment::getUserId).collect(Collectors.toCollection(LinkedHashSet::new));
+			people.addAll(event.alsoTell());
 			people.remove(event.actorId());
 			ShiftNotices.Kind kind = event.cancelled() ? ShiftNotices.Kind.EVENT_CANCELLED
 					: ShiftNotices.Kind.EVENT_MOVED;
@@ -146,6 +150,40 @@ public class ShiftDelivery {
 			notifications.notifyEach(Notification.Type.SHIFT_SERIES_CHANGED, event.projectId(), counts.keySet(),
 					MY_SHIFTS, reader -> notices.seriesChanged(reader, counts.getOrDefault(reader.getId(), 1)));
 		});
+	}
+
+	/**
+	 * HIN-162: somebody moved up from the waiting list. Push: a place opened; bell and mail name the
+	 * shift and the deadline to confirm it.
+	 */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	void onPromoted(ShiftDomainEvents.Promoted event) {
+		safely("promoted", () -> {
+			Shift shift = mongo.findById(event.shiftId(), Shift.class);
+			ShiftEvent shiftEvent = shift == null ? null : mongo.findById(shift.getEventId(), ShiftEvent.class);
+			if (shiftEvent == null) {
+				return;
+			}
+			notifications.notifyEach(Notification.Type.SHIFT_PROMOTED, shift.getProjectId(), List.of(event.userId()),
+					eventLink(shiftEvent.getId()),
+					reader -> notices.promoted(reader, shift.getTitle(), shiftEvent.getTitle(), shift.getStartsAt(),
+							shift.getEndsAt(), shiftEvent.getTimezone(), event.confirmBy()));
+		});
+	}
+
+	/** HIN-162: a place opened, but the person already holds another shift at that time. */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	void onWaitlistSkipped(ShiftDomainEvents.WaitlistSkipped event) {
+		safely("waitlistSkipped", () -> aboutShift(Notification.Type.SHIFT_WAITLIST_SKIPPED,
+				ShiftNotices.Kind.WAITLIST_SKIPPED, event.shiftId(), List.of(event.userId()),
+				eventLink(event.eventId())));
+	}
+
+	/** HIN-162: the person did not confirm in time; the place went on. */
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	void onWaitlistExpired(ShiftDomainEvents.WaitlistExpired event) {
+		safely("waitlistExpired", () -> aboutShift(Notification.Type.SHIFT_WAITLIST_EXPIRED,
+				ShiftNotices.Kind.WAITLIST_EXPIRED, event.shiftId(), List.of(event.userId()), MY_SHIFTS));
 	}
 
 	/**

@@ -43,7 +43,9 @@ public class Notification {
 		SHIFT_ASSIGNED, SHIFT_RELEASED, SHIFT_REMINDER, SHIFT_EVENT_CHANGED, SHIFT_CHANGED,
 		SHIFT_HELPER_DECLINED,
 		// HIN-161: a series changed or ended from an occurrence on; one notice per person.
-		SHIFT_SERIES_CHANGED
+		SHIFT_SERIES_CHANGED,
+		// HIN-162: the waiting list. Moved up, passed over because of another shift, deadline missed.
+		SHIFT_PROMOTED, SHIFT_WAITLIST_SKIPPED, SHIFT_WAITLIST_EXPIRED
 	}
 
 	@Id
