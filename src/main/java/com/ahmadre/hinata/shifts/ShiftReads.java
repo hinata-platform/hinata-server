@@ -60,6 +60,10 @@ public class ShiftReads {
 	/** HIN-166: events of the projects a planner plans that come with the calendar, at most. */
 	static final int PLANNABLE_EVENTS_MAX = 200;
 
+	/** What {@link EventHead#from} reads of an event, and so all a read for heads only fetches. */
+	private static final String[] HEAD_FIELDS = { "projectId", "title", "location", "timezone", "selfAssignable",
+			"cancelled", "seriesId", "occurrenceDate", "detached", "startsAt", "endsAt" };
+
 	/** A cap on the assignments one detail view reads, far above any real event. */
 	static final int DETAIL_ASSIGNMENTS_MAX = 20_000;
 
@@ -224,9 +228,11 @@ public class ShiftReads {
 	/**
 	 * Shifts in a window, their events once each, whether the cap cut the list, and which of the
 	 * projects read the caller plans (HIN-45), so the calendar offers planning controls per project.
+	 * HIN-166: {@code eventsTruncated} when the open events of the planned projects that come along
+	 * stopped at {@link #PLANNABLE_EVENTS_MAX}, so the calendar asks for a drawn span's events itself.
 	 */
 	public record CalendarResponse(List<ShiftResponse> shifts, Map<String, EventHead> events, boolean truncated,
-			Set<String> plannableProjectIds) {
+			Set<String> plannableProjectIds, boolean eventsTruncated) {
 	}
 
 	/**
@@ -253,7 +259,7 @@ public class ShiftReads {
 	}
 
 	/**
-	 * What assigning, signing up, declining and giving up answer: the shift as it is now (with its
+	 * What assigning, signing up, declining and withdrawing answer: the shift as it is now (with its
 	 * people), the assignment that changed and hints for whoever asked ({@code absent} only when the
 	 * caller may see absences, never a reason).
 	 */
@@ -399,7 +405,7 @@ public class ShiftReads {
 		int cap = limit == null ? CALENDAR_MAX : Math.max(1, Math.min(limit, CALENDAR_MAX));
 		Set<String> projects = scope(caller, projectId);
 		if (projects.isEmpty()) {
-			return new CalendarResponse(List.of(), Map.of(), false, Set.of());
+			return new CalendarResponse(List.of(), Map.of(), false, Set.of(), false);
 		}
 		Set<String> plannable = access.plannableProjectIds(caller, projects);
 		Criteria criteria = Criteria.where("projectId").in(projects)
@@ -409,7 +415,7 @@ public class ShiftReads {
 		if (selfAssignable != null) {
 			Set<String> eventIds = eventIdsBySignUp(projects, from, to, selfAssignable);
 			if (eventIds.isEmpty()) {
-				return new CalendarResponse(List.of(), Map.of(), false, plannable);
+				return new CalendarResponse(List.of(), Map.of(), false, plannable, false);
 			}
 			criteria = criteria.and("eventId").in(eventIds);
 		}
@@ -429,21 +435,28 @@ public class ShiftReads {
 						mine.get(shift.getId()), List.of(), WaitView.of(waiting.get(shift.getId()), caller.getId(), false)))
 				.toList();
 		// HIN-166: a planner may draw a shift into an event that has none yet in this window, so
-		// the events of the projects they plan come along, open ones only. One read over
-		// project_start, bounded below by the longest an event can last.
+		// the events of the projects they plan come along, open ones only and none the shifts
+		// already brought. One read over project_start, bounded below by the longest an event can
+		// last, of the fields a head shows and never an event's description.
 		Map<String, ShiftEvent> all = new LinkedHashMap<>(events);
+		boolean eventsTruncated = false;
 		if (!plannable.isEmpty()) {
 			Query open = Query.query(Criteria.where("projectId").in(plannable)
 					.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to)
 					.and("endsAt").gt(from)
-					.and("cancelled").ne(true))
-					.with(Sort.by("startsAt", "_id")).limit(PLANNABLE_EVENTS_MAX);
-			mongo.find(open, ShiftEvent.class).forEach(event -> all.putIfAbsent(event.getId(), event));
+					.and("cancelled").ne(true)
+					.and("_id").nin(events.keySet()))
+					.with(Sort.by("startsAt", "_id")).limit(PLANNABLE_EVENTS_MAX + 1);
+			open.fields().include(HEAD_FIELDS);
+			List<ShiftEvent> openEvents = mongo.find(open, ShiftEvent.class);
+			eventsTruncated = openEvents.size() > PLANNABLE_EVENTS_MAX;
+			(eventsTruncated ? openEvents.subList(0, PLANNABLE_EVENTS_MAX) : openEvents)
+					.forEach(event -> all.putIfAbsent(event.getId(), event));
 		}
 		Map<String, EventHead> heads = new LinkedHashMap<>();
 		Map<String, String> seriesLabels = labels.of(caller, all.values());
 		all.values().forEach(event -> heads.put(event.getId(), EventHead.from(event, seriesLabels)));
-		return new CalendarResponse(rows, heads, truncated, plannable);
+		return new CalendarResponse(rows, heads, truncated, plannable, eventsTruncated);
 	}
 
 	/**

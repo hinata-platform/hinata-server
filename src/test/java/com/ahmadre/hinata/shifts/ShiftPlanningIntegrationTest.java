@@ -961,7 +961,8 @@ class ShiftPlanningIntegrationTest {
 		assertThat(list.path("content").get(0).has("shifts")).isFalse();
 		assertThat(list.path("totalElements").asInt()).isEqualTo(1);
 		JsonNode calendar = json(get("/api/v1/shifts/calendar" + window, annToken));
-		assertThat(fields(calendar)).containsExactly("shifts", "events", "truncated", "plannableProjectIds");
+		assertThat(fields(calendar)).containsExactly("shifts", "events", "truncated", "plannableProjectIds",
+				"eventsTruncated");
 		assertThat(fields(calendar.path("events").path(event.getId()))).containsExactly("id", "title", "location",
 				"timezone", "selfAssignable", "cancelled", "seriesId", "recurrenceLabel", "detached", "projectId",
 				"startsAt", "endsAt", "startsLocal", "endsLocal");
@@ -974,6 +975,8 @@ class ShiftPlanningIntegrationTest {
 				.isFalse();
 		service.cancelEvent(lead, empty.getId(), null);
 		assertThat(json(get("/api/v1/shifts/calendar" + window, token(lead))).path("events").has(empty.getId()))
+				.isFalse();
+		assertThat(json(get("/api/v1/shifts/calendar" + window, token(lead))).path("eventsTruncated").asBoolean())
 				.isFalse();
 		JsonNode marks = json(get("/api/v1/shifts/calendar/marks" + window, token(lead)));
 		assertThat(marks.path("plannableProjectIds").get(0).asText()).isEqualTo(project.getId());
@@ -1157,6 +1160,25 @@ class ShiftPlanningIntegrationTest {
 		assertThat(retention.run()).isEqualTo(1);
 		assertThat(mongo.count(new Query(), ShiftAssignment.class)).isEqualTo(1);
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isEqualTo(1);
+	}
+
+	@Test
+	void aPlannersCalendarSaysWhenItsOpenEventsStoppedAtTheCap() {
+		List<ShiftEvent> many = new ArrayList<>();
+		for (int i = 0; i <= ShiftReads.PLANNABLE_EVENTS_MAX; i++) {
+			Instant start = base.plus(Duration.ofMinutes(i));
+			many.add(ShiftEvent.builder().projectId(project.getId()).title("Open " + i).description("Long text")
+					.startsAt(start).endsAt(start.plus(hours(1))).timezone("Europe/Berlin").createdBy(lead.getId())
+					.build());
+		}
+		mongo.insertAll(many);
+
+		ShiftReads.CalendarResponse calendar = reads.calendar(lead, base, base.plus(hours(10)), null, null, null, null);
+		assertThat(calendar.eventsTruncated()).isTrue();
+		assertThat(calendar.events()).hasSize(ShiftReads.PLANNABLE_EVENTS_MAX);
+		assertThat(calendar.events().values().iterator().next().title()).isEqualTo("Open 0");
+		// A helper is handed no open events, so nothing of theirs is cut either.
+		assertThat(reads.calendar(ann, base, base.plus(hours(10)), null, null, null, null).eventsTruncated()).isFalse();
 	}
 
 	@Test
