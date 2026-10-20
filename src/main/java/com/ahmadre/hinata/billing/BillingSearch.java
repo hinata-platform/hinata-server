@@ -10,6 +10,7 @@ import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
+import org.springframework.core.annotation.Order;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -39,6 +40,8 @@ import java.util.Map;
  * every kind of rate is kept.
  */
 @Component
+// After the budgets (BudgetSearch): see there.
+@Order(2)
 @RequiredArgsConstructor
 class BillingSearch implements SearchSource {
 
@@ -88,7 +91,8 @@ class BillingSearch implements SearchSource {
 		if (branches.isEmpty()) return List.of();
 		Criteria rates = new Criteria().orOperator(branches.toArray(Criteria[]::new));
 		if (!reach.costs()) rates = new Criteria().andOperator(rates, Criteria.where("kind").is(BillingRate.Kind.BILLABLE));
-		Query query = Query.query(rates).with(Sort.by(Sort.Direction.DESC, "validFrom", "_id")).limit(cap);
+		Query query = context.bounded(Query.query(rates).with(Sort.by(Sort.Direction.DESC, "validFrom", "_id"))
+				.limit(cap));
 		List<SearchHit> hits = new ArrayList<>();
 		for (BillingRate rate : mongo.find(query, BillingRate.class)) {
 			hits.add(hit(rate, context, people, teams));
@@ -110,7 +114,7 @@ class BillingSearch implements SearchSource {
 		Criteria rates = reach.costs()
 				? new Criteria().orOperator(projects, Criteria.where("scope").in(ORGANISATION_SCOPES))
 				: new Criteria().andOperator(projects, Criteria.where("kind").is(BillingRate.Kind.BILLABLE));
-		return mongo.count(Query.query(rates).limit(limit), BillingRate.class);
+		return mongo.count(context.bounded(Query.query(rates).limit(limit)), BillingRate.class);
 	}
 
 	private SearchHit hit(BillingRate rate, SearchContext context, Map<String, String> people,
@@ -120,8 +124,8 @@ class BillingSearch implements SearchSource {
 				.kind("RATE")
 				.id(rate.getId())
 				.route("/time/rates?rate=" + rate.getId())
-				.type(rate.getScope() == null ? null : rate.getScope().name())
-				.status(rate.getKind() == null ? null : rate.getKind().name())
+				.rateLevel(rate.getScope() == null ? null : rate.getScope().name())
+				.rateKind(rate.getKind() == null ? null : rate.getKind().name())
 				.amountCents(rate.getAmountCents())
 				.currency(rate.getCurrency())
 				.from(rate.getValidFrom())
@@ -143,9 +147,9 @@ class BillingSearch implements SearchSource {
 
 	/** Active people by name or account name, id to name. */
 	private Map<String, String> people(SearchContext context) {
-		Query query = Query.query(new Criteria().andOperator(Criteria.where("active").is(true),
+		Query query = context.bounded(Query.query(new Criteria().andOperator(Criteria.where("active").is(true),
 				new Criteria().orOperator(context.contains("displayName"), context.contains("username"))))
-				.limit(NAME_MATCH_MAX);
+				.limit(NAME_MATCH_MAX));
 		query.fields().include("displayName", "username");
 		Map<String, String> byId = new LinkedHashMap<>();
 		for (Document user : mongo.find(query, Document.class, mongo.getCollectionName(User.class))) {
@@ -157,8 +161,8 @@ class BillingSearch implements SearchSource {
 
 	/** Teams by name or key prefix, whatever the administrator's membership: they price every team. */
 	private Map<String, Team> teams(SearchContext context) {
-		Query query = Query.query(new Criteria().orOperator(context.contains("name"), context.prefix("key")))
-				.limit(NAME_MATCH_MAX);
+		Query query = context.bounded(Query.query(new Criteria().orOperator(context.contains("name"),
+				context.prefix("key"))).limit(NAME_MATCH_MAX));
 		// colorHue: a primitive the entity's constructor cannot be handed null for.
 		query.fields().include("name", "key", "colorHue");
 		Map<String, Team> byId = new LinkedHashMap<>();
