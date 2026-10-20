@@ -95,7 +95,13 @@ public class ShiftErasure {
 		String userId = event.userId();
 		try {
 			Query byUser = Query.query(Criteria.where("userId").is(userId));
+			// Only places not over yet are given back one by one, so whoever waits moves up. A past
+			// place frees nothing anybody could take; it goes with the bulk delete below and its
+			// shift keeps the count it had, as the retention run leaves past counters.
+			Instant now = clock.instant();
 			free(mongo.find(Query.query(Criteria.where("userId").is(userId)
+					.and("startsAt").gt(now.minus(ShiftRules.SHIFT_MAX))
+					.and("endsAt").gt(now)
 					.and("status").in(ShiftAssignment.Status.ACTIVE_OR_WAITING)), ShiftAssignment.class), REASON_ACCOUNT);
 			mongo.remove(byUser, ShiftAssignment.class);
 			mongo.remove(byUser, ShiftPlanner.class);

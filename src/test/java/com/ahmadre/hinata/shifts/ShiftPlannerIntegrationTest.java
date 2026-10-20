@@ -614,6 +614,13 @@ class ShiftPlannerIntegrationTest {
 		assignments.assign(lead, shift.getId(), ann.getId(), false);
 		mongo.getCollection("shift_feed_tokens").insertOne(new Document("userId", planner.getId())
 				.append("tokenHash", "h").append("createdAt", new java.util.Date()));
+		// A place on a shift that is over: it goes with the account, but frees nothing one by one.
+		Shift past = mongo.insert(Shift.builder().eventId("past").projectId(project.getId()).title("Gestern")
+				.startsAt(Instant.now().minus(Duration.ofDays(2))).endsAt(Instant.now().minus(Duration.ofDays(2))
+						.plus(hours(2))).requiredHelpers(1).assignedCount(1).build());
+		ShiftAssignment pastPlace = mongo.insert(ShiftAssignment.builder().shiftId(past.getId()).eventId("past")
+				.projectId(project.getId()).userId(planner.getId()).startsAt(past.getStartsAt())
+				.endsAt(past.getEndsAt()).status(ShiftAssignment.Status.CONFIRMED).build());
 
 		userService.delete(planner);
 
@@ -623,6 +630,10 @@ class ShiftPlannerIntegrationTest {
 				.isZero();
 		assertThat(mongo.findById(planner.getId(), ShiftUserGuard.class)).isNull();
 		assertThat(mongo.findById(shift.getId(), Shift.class).assigned()).isEqualTo(1);
+		assertThat(mongo.findById(past.getId(), Shift.class).assigned()).as("history keeps its count").isEqualTo(1);
+		assertThat(mongo.count(Query.query(Criteria.where("action").is(AuditAction.SHIFT_ASSIGNMENT_RELEASED)
+				.and("metadata.assignmentId").is(pastPlace.getId())), AuditLog.class)).isZero();
+		mongo.remove(Query.query(Criteria.where("_id").is(past.getId())), Shift.class);
 		assertCountersAgree();
 	}
 
