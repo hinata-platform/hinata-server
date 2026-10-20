@@ -38,7 +38,12 @@ public class SearchHit {
 
 	private String title;
 
-	/** Pre-resolved subtitle for people (job title) and boards (descriptor). */
+	/**
+	 * The second line of a hit; what it holds depends on the category: a person's job title, a
+	 * board's descriptor or a sprint's goal, the issue's title for a comment or an attachment, a
+	 * team's or a space's description, the event's title for a shift, the note of an absence
+	 * request. Omitted where there is none.
+	 */
 	private String subtitle;
 
 	/** True for archived (soft-deleted) issues / archived projects, so the
@@ -47,6 +52,7 @@ public class SearchHit {
 
 	// ---- issues ----
 	private String readableId;
+	/** Issues: the issue type (e.g. {@code TASK}). */
 	private String type;
 	private String state;
 	private String assigneeName;
@@ -101,9 +107,18 @@ public class SearchHit {
 	/** Timesheets and absence requests: their status as stored (e.g. {@code APPROVED}). */
 	private String status;
 
-	/** Absence types: their icon and hue; rates: amount in cents and currency. */
+	/** Absence types, spaces and teams: their icon and hue; rates: amount in cents and currency. */
 	private String icon;
 	private Integer hue;
 	private Long amountCents;
 	private String currency;
+
+	/**
+	 * Rates: what the rate applies to, as stored ({@code PROJECT}, {@code PROJECT_MEMBER},
+	 * {@code ISSUE}, {@code USER}, {@code TEAM} or {@code DEFAULT}).
+	 */
+	private String rateLevel;
+
+	/** Rates: {@code BILLABLE} (revenue) or {@code COST}. */
+	private String rateKind;
 }
