@@ -25,6 +25,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.mongodb.autoconfigure.MongoClientSettingsBuilderCustomizer;
+import org.springframework.boot.logging.LogLevel;
+import org.springframework.boot.logging.LoggingSystem;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -191,6 +193,22 @@ class ShiftFeedIntegrationTest {
 				.satisfies(record -> assertThat(record.getActorId()).isEqualTo(ann.getId()));
 		assertThat(JSON.writeValueAsString(personalData.data(ann))).doesNotContain(token).contains("lastUsedAt");
 		assertThat(output.getAll()).doesNotContain(token);
+	}
+
+	@Test
+	@DisplayName("with security logging at DEBUG the request path is logged, but never the token in it")
+	void securityDebugLogsTheFeedPathWithoutTheToken(CapturedOutput output) {
+		String url = feed.create(ann).url();
+		String token = token(url);
+		LoggingSystem logging = LoggingSystem.get(getClass().getClassLoader());
+		LogLevel before = logging.getLoggerConfiguration("org.springframework.security").getConfiguredLevel();
+		logging.setLogLevel("org.springframework.security", LogLevel.DEBUG);
+		try {
+			assertThat(fetch(url).statusCode()).isEqualTo(200);
+		} finally {
+			logging.setLogLevel("org.springframework.security", before);
+		}
+		assertThat(output.getAll()).contains("/api/v1/shifts/feed/***").doesNotContain(token);
 	}
 
 	@Test
