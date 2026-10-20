@@ -227,7 +227,9 @@ class AvailabilityMarkingIntegrationTest {
 		Set<String> readers = Set.of("TimeCalendarLayers.java", "TimeHintsService.java",
 				"TimeAvailabilityPolicy.java", "TimeReminders.java", "TimeWorkloadReport.java",
 				// Holiday dates of the default calendar for a budget's forecast, nothing personal.
-				"TimeForecastHolidays.java");
+				"TimeForecastHolidays.java",
+				// Today's absence on a person's profile (HIN-165), behind AvailabilityAccess.
+				"TimeProfileAbsence.java");
 		try (Stream<Path> files = Files.list(Path.of("src/main/java/com/ahmadre/hinata/timetracking"))) {
 			List<String> naming = files
 					.filter(path -> path.toString().endsWith(".java"))
