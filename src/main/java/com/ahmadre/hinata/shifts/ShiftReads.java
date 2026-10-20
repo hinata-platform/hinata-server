@@ -14,7 +14,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationOperation;
-import org.springframework.data.mongodb.core.aggregation.ComparisonOperators;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.support.PageableExecutionUtils;
@@ -382,8 +381,7 @@ public class ShiftReads {
 			criteria = criteria.and("eventId").in(eventIds);
 		}
 		if (Boolean.TRUE.equals(understaffed)) {
-			criteria = new Criteria().andOperator(criteria, Criteria.expr(ComparisonOperators.Lt.valueOf("assignedCount")
-					.lessThan("requiredHelpers")));
+			criteria = new Criteria().andOperator(criteria, ShiftRules.shortOfPeople());
 		}
 		List<Shift> found = mongo.find(Query.query(criteria).with(Sort.by("startsAt", "_id")).limit(cap + 1),
 				Shift.class);
@@ -556,11 +554,8 @@ public class ShiftReads {
 			return Set.of();
 		}
 		Criteria range = Criteria.where("projectId").in(projects)
-				.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to.plus(ShiftRules.EVENT_MAX))
-				.and("deleted").is(false)
-				.and("cancelled").ne(true);
-		Criteria shortOfPeople = new Criteria().andOperator(range,
-				Criteria.expr(ComparisonOperators.Lt.valueOf("assignedCount").lessThan("requiredHelpers")));
+				.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to.plus(ShiftRules.EVENT_MAX));
+		Criteria shortOfPeople = new Criteria().andOperator(range, ShiftRules.shortOfPeople());
 		return new HashSet<>(mongo.findDistinct(Query.query(shortOfPeople), "eventId", Shift.class, String.class));
 	}
 
@@ -591,9 +586,9 @@ public class ShiftReads {
 	private Map<String, Totals> totalsByEvent(List<String> eventIds) {
 		AggregationOperation group = context -> new Document("$group", new Document("_id", "$eventId")
 				.append("required", new Document("$sum", "$requiredHelpers"))
-				.append("taken", new Document("$sum", new Document("$min", List.of("$assignedCount", "$requiredHelpers"))))
+				.append("taken", new Document("$sum", ShiftRules.placesTakenExpression()))
 				.append("understaffed", new Document("$sum", new Document("$cond", List.of(
-						new Document("$lt", List.of("$assignedCount", "$requiredHelpers")), 1, 0)))));
+						ShiftRules.shortOfPeopleExpression(), 1, 0)))));
 		Aggregation aggregation = Aggregation.newAggregation(
 				Aggregation.match(Criteria.where("eventId").in(eventIds).and("deleted").is(false)), group);
 		Map<String, Totals> out = new HashMap<>();

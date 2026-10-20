@@ -306,7 +306,7 @@ public class ShiftPlanExport {
 
 	private List<String> row(Shift shift, List<String> people, Plan plan) {
 		ExportWords words = plan.words();
-		int missing = shift.required() - shift.assigned();
+		int missing = ShiftRules.shortOfPeople(shift) ? shift.required() - shift.assigned() : 0;
 		List<String> cells = new ArrayList<>(5);
 		cells.add(time(shift, words));
 		cells.add(shift.getTitle() == null || shift.getTitle().isBlank()
@@ -395,8 +395,7 @@ public class ShiftPlanExport {
 	private int[] places(String eventId) {
 		AggregationOperation group = context -> new Document("$group", new Document("_id", null)
 				.append("required", new Document("$sum", "$requiredHelpers"))
-				.append("taken", new Document("$sum",
-						new Document("$min", List.of("$assignedCount", "$requiredHelpers")))));
+				.append("taken", new Document("$sum", ShiftRules.placesTakenExpression())));
 		Aggregation aggregation = Aggregation.newAggregation(Aggregation.match(live(eventId)), group);
 		Document row = mongo.aggregate(aggregation, mongo.getCollectionName(Shift.class), Document.class)
 				.getUniqueMappedResult();

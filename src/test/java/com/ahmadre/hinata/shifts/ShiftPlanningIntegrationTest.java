@@ -74,6 +74,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -820,6 +821,33 @@ class ShiftPlanningIntegrationTest {
 				.extracting(ShiftReads.ShiftResponse::id).containsExactly(a.getId());
 		assertThat(reads.calendar(ann, base.minus(hours(1)), base.plus(hours(20)), null, null, false, null).shifts())
 				.isEmpty();
+	}
+
+	@Test
+	@DisplayName("a cancelled shift is never short of people: not in the calendar filter, the open shifts or the numbers")
+	void cancelledShiftsAreNeverShort() {
+		ShiftEvent open = event(project, lead, base, hours(10));
+		Shift stillShort = shift(open, base, hours(2), 2, null);
+		ShiftEvent called = event(project, lead, base.plus(hours(1)), hours(10));
+		shift(called, base.plus(hours(1)), hours(2), 2, null);
+		shift(called, base.plus(hours(4)), hours(2), 3, null);
+		service.cancelEvent(lead, called.getId(), null);
+		Instant from = base.minus(hours(1));
+		Instant to = base.plus(hours(20));
+
+		assertThat(reads.calendar(ann, from, to, null, true, null, null).shifts())
+				.extracting(ShiftReads.ShiftResponse::id).containsExactly(stillShort.getId());
+		// The open shifts "my shifts" suggests: short of people and open for sign-up.
+		assertThat(reads.calendar(ann, from, to, null, true, true, 3).shifts())
+				.extracting(ShiftReads.ShiftResponse::id).containsExactly(stillShort.getId());
+		assertThat(reads.event(ann, called.getId()).shifts()).extracting(ShiftReads.ShiftResponse::understaffed)
+				.containsOnly(false);
+		assertThat(reads.event(ann, called.getId()).shiftsUnderstaffed()).isZero();
+		assertThat(reads.events(ann, from, to, null, 0, 25).getContent())
+				.extracting(ShiftReads.EventSummary::id, ShiftReads.EventSummary::shiftsUnderstaffed)
+				.containsExactlyInAnyOrder(tuple(open.getId(), 1), tuple(called.getId(), 0));
+		assertThat(reads.events(ann, from, to, null, true, 0, 25).getContent())
+				.extracting(ShiftReads.EventSummary::id).containsExactly(open.getId());
 	}
 
 	@Test
