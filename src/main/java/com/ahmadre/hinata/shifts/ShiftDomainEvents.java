@@ -39,7 +39,7 @@ public final class ShiftDomainEvents {
 			String userId, String actorId, boolean self) {
 	}
 
-	/** Somebody's place on a shift was freed: declined, given up or taken off. */
+	/** Somebody's place on a shift was freed: declined, withdrawn from or taken off. */
 	public record Released(String assignmentId, String shiftId, String eventId, String projectId,
 			String userId, String actorId, ShiftAssignment.Status status) {
 	}

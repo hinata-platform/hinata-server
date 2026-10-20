@@ -89,8 +89,8 @@ public class ShiftDelivery {
 	}
 
 	/**
-	 * A place was freed. Taken off by a planner: the person hears it. Given up, declined or let lapse
-	 * by the person: see {@link #onGivenUp}. Freed by the system (membership or account ended):
+	 * A place was freed. Taken off by a planner: the person hears it. Withdrawn from, declined or let lapse
+	 * by the person: see {@link #onWithdrawn}. Freed by the system (membership or account ended):
 	 * nobody.
 	 */
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -109,7 +109,7 @@ public class ShiftDelivery {
 	 */
 	@Async(ShiftFollowUps.EXECUTOR)
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-	public void onGivenUp(ShiftDomainEvents.Released event) {
+	public void onWithdrawn(ShiftDomainEvents.Released event) {
 		if (event.actorId() == null || !event.actorId().equals(event.userId())) {
 			return;
 		}
@@ -248,7 +248,7 @@ public class ShiftDelivery {
 	}
 
 	/**
-	 * Somebody gave up or declined their place. When the shift now has fewer people than it needs,
+	 * Somebody withdrew from or declined their place. When the shift now has fewer people than it needs,
 	 * still lies ahead and is neither cancelled nor deleted, its planners hear it, unless they
 	 * heard about this shift within the hour: the stamp is set by a conditional update, so two
 	 * people leaving at once tell the planners once.

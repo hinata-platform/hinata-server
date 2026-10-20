@@ -557,7 +557,7 @@ class ShiftPlanningIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("signing up again after declining or giving up reuses the one document per person and shift")
+	@DisplayName("signing up again after declining or withdrawing reuses the one document per person and shift")
 	void reEnteringKeepsOneDocument() {
 		ShiftEvent event = event(project, lead, base, hours(10));
 		Shift shift = shift(event, base, hours(2), 1, 1);

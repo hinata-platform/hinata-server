@@ -143,7 +143,7 @@ class ShiftNotificationIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("a planner taking somebody off tells them; giving up one's own place does not")
+	@DisplayName("a planner taking somebody off tells them; withdrawing from one's own place does not")
 	void releasedByAPlanner() {
 		Shift shift = shift(event(), base, 2, 1, null);
 		String bobs = assignments.assign(lead, shift.getId(), bob.getId(), false).assignment().getId();

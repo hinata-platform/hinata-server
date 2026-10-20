@@ -68,7 +68,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The planner role and the assignment routes of HIN-45 against a real MongoDB replica set, over
- * real HTTP: who may plan, assign, sign up, confirm, decline and give up; what a membership, a
+ * real HTTP: who may plan, assign, sign up, confirm, decline and withdraw; what a membership, a
  * project or an account ending clears; and what the audit log records.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
@@ -288,7 +288,7 @@ class ShiftPlannerIntegrationTest {
 		assertThat(json(confirmed).path("status").asText()).isEqualTo("CONFIRMED");
 		assertThat(post("/api/v1/shifts/assignments/" + annAssignment + "/confirm", token(ann)).statusCode())
 				.isEqualTo(200);
-		// A confirmed place is given up, not declined.
+		// A confirmed place is withdrawn from, not declined.
 		HttpResponse<String> late = post("/api/v1/shifts/assignments/" + annAssignment + "/decline", token(ann));
 		assertThat(late.statusCode()).isEqualTo(409);
 		assertThat(json(late).path("details").path("code").asText()).isEqualTo("error.shifts.assignmentNotPending");
@@ -316,7 +316,7 @@ class ShiftPlannerIntegrationTest {
 	}
 
 	@Test
-	@DisplayName("a member signs up and gives up, cannot assign anybody, cannot take others off")
+	@DisplayName("a member signs up and withdraws, cannot assign anybody, cannot take others off")
 	void memberSignsUpOnly() throws Exception {
 		Shift shift = shift(event(base, hours(10), true), base, hours(2), 2, null);
 		String annToken = token(ann);

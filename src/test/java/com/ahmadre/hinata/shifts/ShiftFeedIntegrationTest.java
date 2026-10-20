@@ -341,7 +341,7 @@ class ShiftFeedIntegrationTest {
 				.containsExactlyInAnyOrderElementsOf(read.events().stream().map(IcsEvent::uid).toList())
 				.doesNotHaveDuplicates();
 
-		// Given up: gone on the next fetch.
+		// Withdrawn: gone on the next fetch.
 		assignments.release(ann, mine.getId());
 		assertThat(parse(fetch(url).body()).events()).extracting(IcsEvent::summary)
 				.doesNotContain("Kasse, Sommerfest");

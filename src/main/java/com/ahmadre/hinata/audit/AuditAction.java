@@ -309,8 +309,10 @@ public enum AuditAction {
 	SHIFT_UPDATED(DATA, INFO, true),
 	SHIFT_DELETED(DATA, INFO, true),
 	// --- Shift planning: who is on a shift, and who plans (HIN-45) -------------------
-	// A place taken (by a planner or the person, meta "self"), confirmed, declined or given up.
-	// Freed by the system when the membership or the account ended: no actor, meta "reason".
+	// A place taken (by a planner or the person, meta "self"), confirmed, declined or freed. RELEASED
+	// is any freeing of a place: the person withdrawing (meta "self"), a planner taking them off,
+	// the system when the membership or the account ended or a waiting-list deadline lapsed (no
+	// actor, meta "reason"). Its label says what happened to the place, never who did it.
 	SHIFT_ASSIGNMENT_CREATED(DATA, INFO, true),
 	SHIFT_ASSIGNMENT_CONFIRMED(DATA, INFO, true),
 	SHIFT_ASSIGNMENT_DECLINED(DATA, INFO, true),
@@ -337,7 +339,7 @@ public enum AuditAction {
 	// control, so who took them out has to be answerable.
 	SHIFT_PLAN_EXPORTED(DATA, INFO, true),
 	// --- Shift planning through MCP (HIN-164) --------------------------------------------
-	// A token signing its holder up, giving up, confirming or declining a place, or a planner's
+	// A token signing its holder up, withdrawing, confirming or declining a place, or a planner's
 	// token putting somebody on a shift or taking them off. Off by default like MCP_TIMER_*: the
 	// SHIFT_ASSIGNMENT_* record of the same change is written anyway, and naming the agent that
 	// pressed the button adds how somebody plans their work (§ 87 Abs. 1 Nr. 6 BetrVG). Meta:

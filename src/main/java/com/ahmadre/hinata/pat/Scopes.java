@@ -44,7 +44,7 @@ public final class Scopes {
 	public static final String NOTIFICATIONS_READ = "notifications:read";
 	/** Shift planning (HIN-164): reading events, shifts and the holder's own places. */
 	public static final String SHIFTS_READ = "shifts:read";
-	/** Shift planning: signing up, confirming, declining and giving up the holder's own places. */
+	/** Shift planning: signing up, confirming, declining and withdrawing from the holder's own places. */
 	public static final String SHIFTS_WRITE = "shifts:write";
 	/**
 	 * Shift planning: putting other people on a shift and taking them off it, as a planner. Never

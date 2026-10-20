@@ -63,7 +63,7 @@ public class ShiftAssignment {
 		CONFIRMED,
 		/** The person said no to a planner's assignment. */
 		DECLINED,
-		/** Given up by the person or taken off by a planner. */
+		/** The person withdrew, or a planner took them off. */
 		RELEASED,
 		/**
 		 * HIN-162: on the waiting list of a full shift. Holds no place: not in
@@ -75,7 +75,7 @@ public class ShiftAssignment {
 		/** The statuses that hold a place and count in {@code Shift.assignedCount}. */
 		public static final List<Status> ACTIVE = List.of(ASSIGNED, CONFIRMED);
 
-		/** HIN-162: the statuses a person can still give up: a place, or a spot on the waiting list. */
+		/** HIN-162: the statuses a person can still withdraw from: a place, or a spot on the waiting list. */
 		public static final List<Status> ACTIVE_OR_WAITING = List.of(ASSIGNED, CONFIRMED, WAITING);
 
 		/** The statuses a document can be turned back on from. */

@@ -257,7 +257,7 @@ public class HinataProperties {
 
 		/**
 		 * HIN-162: how close to its start a shift still takes people from its waiting list, in
-		 * minutes. Closer than this a freed place stays open for the planners, so a place given up
+		 * minutes. Closer than this a freed place stays open for the planners, so a place freed
 		 * shortly before the start does not set off a chain of notices.
 		 */
 		private int waitlistCutoffMinutes = 120;

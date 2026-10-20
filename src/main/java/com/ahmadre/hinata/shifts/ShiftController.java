@@ -30,7 +30,7 @@ import java.util.List;
  * id answer 404 for anything out of sight and 403 to a member who does not plan the project. Every
  * write answers with the updated object, so the app replaces it instead of reloading.
  *
- * <p>The assignment routes (assign, sign up, confirm, decline, give up) and the planner role come
+ * <p>The assignment routes (assign, sign up, confirm, decline, withdraw) and the planner role come
  * with HIN-45. Both ways onto a shift run through {@link ShiftAssignments#assign}; there is no
  * {@code DELETE} on an assignment, a freed place keeps its document until the retention run.
  *
@@ -211,7 +211,7 @@ public class ShiftController {
 		return reads.change(caller, assignments.decline(caller, id), List.of());
 	}
 
-	/** The person gives the shift up, or a planner takes them off it. */
+	/** The person withdraws from the shift, or a planner takes them off it. */
 	@PostMapping("/api/v1/shifts/assignments/{id}/release")
 	public ShiftReads.AssignmentChange release(@PathVariable String id) {
 		User caller = currentUser.require();
