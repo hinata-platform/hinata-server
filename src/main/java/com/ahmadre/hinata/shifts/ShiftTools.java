@@ -138,8 +138,12 @@ public class ShiftTools {
 			int shiftCount, List<ShiftDay> days) {
 	}
 
-	/** A person holding a place on a shift. */
-	public record Person(String userId, String name, String status) {
+	/**
+	 * A person holding a place on a shift. {@code status} and {@code assignmentId} (the id
+	 * {@code remove_assignment} takes) are there for a planner only.
+	 */
+	public record Person(String userId, String name, @JsonInclude(JsonInclude.Include.NON_NULL) String status,
+			@JsonInclude(JsonInclude.Include.NON_NULL) String assignmentId) {
 	}
 
 	/**
@@ -264,24 +268,28 @@ public class ShiftTools {
 
 	@McpTool(name = "get_shift", title = "Shift",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false),
-			description = "One shift with its event and the people holding a place on it (at most 50, with "
-					+ "their status). People on the waiting list are counted, never named. Also the caller's "
-					+ "own place (myAssignmentId) or waiting entry (myWaitAssignmentId, myWaitPosition).")
+			description = "One shift with its event and the people holding a place on it (at most 50). For a "
+					+ "planner of the project each person also carries status and assignmentId, the id "
+					+ "remove_assignment takes. People on the waiting list are counted, never named. Also the "
+					+ "caller's own place (myAssignmentId) or waiting entry (myWaitAssignmentId, myWaitPosition).")
 	public ShiftView get_shift(
 			@McpToolParam(required = true, description = "Shift id, from get_shift_event") String shiftId) {
 		User me = caller(Scopes.SHIFTS_READ);
 		ShiftReads.ShiftDetail detail = errors.readable(me, () -> reads.shift(me, shiftId));
 		ShiftReads.ShiftResponse shift = detail.shift();
 		ShiftReads.EventHead event = detail.event();
-		Map<String, String> statuses = new LinkedHashMap<>();
+		// A planner's handles on the places; nobody else gets any.
+		Map<String, ShiftReads.PlaceRow> places = new LinkedHashMap<>();
 		if (detail.assignments() != null) {
-			detail.assignments().forEach(place -> statuses.put(place.userId(), place.status().name()));
+			detail.assignments().forEach(place -> places.put(place.userId(), place));
 		}
 		// Only the people holding a place: a planner's detail also names the waiting list in
 		// users, and that list is nobody's business here.
 		List<Person> people = shift.assigneeIds().stream().map(id -> {
 			ShiftReads.UserCard card = detail.users().get(id);
-			return new Person(id, card == null ? null : card.name(), statuses.get(id));
+			ShiftReads.PlaceRow place = places.get(id);
+			return new Person(id, card == null ? null : card.name(), place == null ? null : place.status().name(),
+					place == null ? null : place.id());
 		}).toList();
 		String zone = event.timezone();
 		return new ShiftView(shift.id(), shift.title(), event.id(), event.title(), event.location(),
@@ -376,8 +384,8 @@ public class ShiftTools {
 
 	@McpTool(name = "remove_assignment", title = "Take somebody off a shift",
 			annotations = @McpTool.McpAnnotations(destructiveHint = true, idempotentHint = true, openWorldHint = false),
-			description = "As a planner of the project: takes a person off a shift or off its waiting list. "
-					+ "The assignment ids are in get_shift (people) for planners.")
+			description = "As a planner of the project: takes a person off a shift. The assignment id is the "
+					+ "assignmentId of that person in get_shift (people), which a planner gets.")
 	public AssignmentView remove_assignment(
 			@McpToolParam(required = true, description = "Assignment id") String assignmentId) {
 		User me = caller(Scopes.SHIFTS_PLAN);
