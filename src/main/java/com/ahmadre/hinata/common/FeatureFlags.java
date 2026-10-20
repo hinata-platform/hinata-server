@@ -19,7 +19,7 @@ import java.util.Map;
  * entirely once it holds anything", which would permanently hide any newly
  * shipped default flag the moment an admin had toggled something else. Finally,
  * put the module flags on top: those are owned by their own settings resolver
- * ({@code mcp}, {@code advanced_time_tracking}, later {@code schedule}) and must
+ * ({@code mcp}, {@code advanced_time_tracking}, {@code shift_planning}) and must
  * not be editable a second time as a free-form map entry.
  *
  * <p>This lived in three hand-kept copies before — {@code MetaController#meta()},
@@ -47,6 +47,16 @@ public class FeatureFlags {
 
 		/** Whether the module is on, resolved the module's own way (DB override over env). */
 		boolean flagEnabled();
+
+		/**
+		 * Whether this instance could run the module at all, whatever the switch says. Most
+		 * modules can always run; one that needs something of the deployment (shift planning
+		 * needs Mongo transactions) answers false without it, so the admin area can say why
+		 * instead of offering a switch that does nothing.
+		 */
+		default boolean flagAvailable() {
+			return true;
+		}
 	}
 
 	private final SettingsService settings;
@@ -108,5 +118,18 @@ public class FeatureFlags {
 			}
 		}
 		return Boolean.TRUE.equals(configurable().get(key));
+	}
+
+	/**
+	 * Whether the module behind {@code key} could be switched on here. A key that is not a
+	 * module is a plain flag and always can.
+	 */
+	public boolean available(String key) {
+		for (Module module : modules) {
+			if (module.flagKey().equals(key)) {
+				return module.flagAvailable();
+			}
+		}
+		return true;
 	}
 }
