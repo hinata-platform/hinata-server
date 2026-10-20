@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.pat;
 
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -40,13 +42,45 @@ public final class Scopes {
 	public static final String WORKLOG_WRITE = "worklog:write";
 	public static final String SEARCH_READ = "search:read";
 	public static final String NOTIFICATIONS_READ = "notifications:read";
+	/** Shift planning (HIN-164): reading events, shifts and the holder's own places. */
+	public static final String SHIFTS_READ = "shifts:read";
+	/** Shift planning: signing up, confirming, declining and giving up the holder's own places. */
+	public static final String SHIFTS_WRITE = "shifts:write";
+	/**
+	 * Shift planning: putting other people on a shift and taking them off it, as a planner. Never
+	 * part of {@link #DEFAULT_GRANT}: a client gets it only by asking for it by name.
+	 */
+	public static final String SHIFTS_PLAN = "shifts:plan";
 
 	/** Every scope a token may be granted. */
 	public static final Set<String> ALL = Set.of(
 			ISSUES_READ, ISSUES_WRITE, PROJECTS_READ, PROJECTS_WRITE,
 			BOARDS_READ, SPRINTS_WRITE, TEAMS_READ, USERS_READ,
 			KB_READ, KB_WRITE, WORKLOG_READ, WORKLOG_WRITE,
-			SEARCH_READ, NOTIFICATIONS_READ);
+			SEARCH_READ, NOTIFICATIONS_READ,
+			SHIFTS_READ, SHIFTS_WRITE, SHIFTS_PLAN);
+
+	/**
+	 * What an OAuth client is offered when it names no {@code scope}: everything except acting for
+	 * other people. Planning shifts for others is asked for explicitly or not at all.
+	 */
+	public static final Set<String> DEFAULT_GRANT = defaultGrant();
+
+	/**
+	 * Scopes that belong to a switchable module, by the flag that switches it. The consent screen
+	 * leaves them out while the module is off; a token may still hold them, and the tools then
+	 * answer that the feature is off.
+	 */
+	public static final Map<String, String> MODULE_FLAGS = Map.of(
+			SHIFTS_READ, "shift_planning",
+			SHIFTS_WRITE, "shift_planning",
+			SHIFTS_PLAN, "shift_planning");
+
+	private static Set<String> defaultGrant() {
+		Set<String> grant = new LinkedHashSet<>(ALL);
+		grant.remove(SHIFTS_PLAN);
+		return Set.copyOf(grant);
+	}
 
 	public static boolean isValid(String scope) {
 		return ALL.contains(scope);

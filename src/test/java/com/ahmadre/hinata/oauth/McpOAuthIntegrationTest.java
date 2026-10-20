@@ -290,6 +290,52 @@ class McpOAuthIntegrationTest {
 		assertThat(parse(tokenRes.body()).path("error").asText()).isEqualTo("invalid_grant");
 	}
 
+	/**
+	 * HIN-164: a client that names no scope is offered the default set, which never holds
+	 * {@code shifts:plan}; and while shift planning is off (as here) no shift scope is offered or
+	 * granted, even when a client asks for one by name.
+	 */
+	@Test
+	@DisplayName("OAuth without scope gets no shifts:plan, and no shift scope while the module is off")
+	void shiftScopesFollowTheDefaultGrantAndTheModule() throws Exception {
+		String clientId = registerClient();
+		String jwt = login();
+
+		String withoutScope = authorizeRequest(clientId, null);
+		JsonNode offered = parse(get("/api/v1/oauth/consent/" + withoutScope, jwt).body()).path("scopes");
+		assertThat(offered.toString()).contains("issues:read").doesNotContain("shifts:");
+
+		String byName = authorizeRequest(clientId, "issues:read shifts:read shifts:plan");
+		JsonNode named = parse(get("/api/v1/oauth/consent/" + byName, jwt).body()).path("scopes");
+		assertThat(named.toString()).contains("issues:read").doesNotContain("shifts:");
+		String clientRedirect = parse(postJson("/api/v1/oauth/consent", "{\"requestId\":\"" + byName
+				+ "\",\"approved\":true,\"grantedScopes\":[\"issues:read\",\"shifts:plan\"]}", jwt).body())
+				.path("redirectUri").asText();
+		HttpResponse<String> tokenRes = postForm("/oauth/token", form(
+				"grant_type", "authorization_code", "code", queryParam(clientRedirect, "code"),
+				"redirect_uri", REDIRECT_URI, "code_verifier", lastVerifier, "client_id", clientId));
+		assertThat(tokenRes.statusCode()).as("token").isEqualTo(200);
+		assertThat(parse(tokenRes.body()).path("scope").asText()).isEqualTo("issues:read");
+	}
+
+	/** The PKCE verifier of the last {@link #authorizeRequest}. */
+	private String lastVerifier;
+
+	/** Starts an authorization for [scope] (none when null) and returns the pending request id. */
+	private String authorizeRequest(String clientId, String scope) throws Exception {
+		byte[] bytes = new byte[32];
+		new SecureRandom().nextBytes(bytes);
+		lastVerifier = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+		String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
+				MessageDigest.getInstance("SHA-256").digest(lastVerifier.getBytes(StandardCharsets.US_ASCII)));
+		String authorize = "/oauth/authorize?response_type=code&client_id=" + enc(clientId)
+				+ "&redirect_uri=" + enc(REDIRECT_URI) + (scope == null ? "" : "&scope=" + enc(scope))
+				+ "&state=s&code_challenge=" + enc(challenge) + "&code_challenge_method=S256";
+		HttpResponse<String> res = get(authorize, null);
+		assertThat(res.statusCode()).as("authorize").isEqualTo(302);
+		return queryParam(res.headers().firstValue("Location").orElseThrow(), "request_id");
+	}
+
 	// --- MCP streamable-HTTP mini client -----------------------------------
 
 	private String mcpInitialize(String bearer) {

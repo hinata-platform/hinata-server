@@ -38,7 +38,11 @@ final class McpTestClient {
 
 	/** Signs in as [username] and opens a session with a new token holding [scopes]. */
 	static McpTestClient withScopes(int port, String username, String password, String... scopes) {
-		String jwt = login(port, username, password);
+		return withSession(port, login(port, username, password), scopes);
+	}
+
+	/** Opens a session with a new token holding [scopes], minted with an app session's [jwt]. */
+	static McpTestClient withSession(int port, String jwt, String... scopes) {
 		StringBuilder list = new StringBuilder("[");
 		for (int i = 0; i < scopes.length; i++) {
 			list.append(i > 0 ? "," : "").append('"').append(scopes[i]).append('"');

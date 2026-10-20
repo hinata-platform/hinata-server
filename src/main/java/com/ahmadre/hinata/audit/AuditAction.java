@@ -335,7 +335,19 @@ public enum AuditAction {
 	// An event's plan exported as PDF, Word or workbook. Meta: event id, format and whether the
 	// file names people (only planners may), never the title. Names on paper have left the access
 	// control, so who took them out has to be answerable.
-	SHIFT_PLAN_EXPORTED(DATA, INFO, true);
+	SHIFT_PLAN_EXPORTED(DATA, INFO, true),
+	// --- Shift planning through MCP (HIN-164) --------------------------------------------
+	// A token signing its holder up, giving up, confirming or declining a place, or a planner's
+	// token putting somebody on a shift or taking them off. Off by default like MCP_TIMER_*: the
+	// SHIFT_ASSIGNMENT_* record of the same change is written anyway, and naming the agent that
+	// pressed the button adds how somebody plans their work (§ 87 Abs. 1 Nr. 6 BetrVG). Meta:
+	// assignment, shift, event and project ids and the status, never a title.
+	MCP_SHIFT_SELF_ASSIGNED(INTEGRATION, INFO, false),
+	MCP_SHIFT_ASSIGNED_BY_PLANNER(INTEGRATION, INFO, false),
+	MCP_SHIFT_RELEASED(INTEGRATION, INFO, false),
+	MCP_SHIFT_CONFIRMED(INTEGRATION, INFO, false),
+	MCP_SHIFT_DECLINED(INTEGRATION, INFO, false),
+	MCP_SHIFT_REMOVED(INTEGRATION, INFO, false);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of a privileged act that
