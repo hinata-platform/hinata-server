@@ -229,7 +229,7 @@ public class ShiftAssignments {
 
 	/**
 	 * Frees a place: the person gives the shift up or a planner takes them off it
-	 * ({@code RELEASED}, "Abgeben"). The person themselves or a planner of the project; anybody
+	 * ({@code RELEASED}, "Austragen"). The person themselves or a planner of the project; anybody
 	 * else gets the 404 of an assignment that is not there. Freeing what is not active changes
 	 * nothing and returns the document as it is. HIN-162: on a waiting entry this is leaving the
 	 * waiting list, which frees no place.
