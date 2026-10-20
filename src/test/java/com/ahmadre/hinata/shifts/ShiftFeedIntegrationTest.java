@@ -17,8 +17,6 @@ import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mongodb.event.CommandListener;
-import com.mongodb.event.CommandStartedEvent;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,8 +58,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -91,25 +87,14 @@ class ShiftFeedIntegrationTest {
 	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
-	private static final Set<String> READS = Set.of("find", "aggregate", "count", "getMore", "distinct");
 
-	static final AtomicBoolean counting = new AtomicBoolean();
-	static final List<String> commands = new CopyOnWriteArrayList<>();
 
 	@TestConfiguration
 	static class Probes {
 
 		@Bean
 		MongoClientSettingsBuilderCustomizer countFeedReads() {
-			CommandListener listener = new CommandListener() {
-				@Override
-				public void commandStarted(CommandStartedEvent event) {
-					if (counting.get() && READS.contains(event.getCommandName())) {
-						commands.add(event.getCommandName() + " " + event.getCommand().get(event.getCommandName()));
-					}
-				}
-			};
-			return builder -> builder.addCommandListener(listener);
+			return builder -> builder.addCommandListener(ShiftReadCounter.listener());
 		}
 	}
 
@@ -163,7 +148,7 @@ class ShiftFeedIntegrationTest {
 
 	@AfterEach
 	void restore() {
-		counting.set(false);
+		ShiftReadCounter.reset();
 		ServerSettings current = settings.get();
 		current.setShifts(null);
 		if (current.getSecurity() != null) {
@@ -357,13 +342,13 @@ class ShiftFeedIntegrationTest {
 		String token = token(feed.create(ann).url());
 
 		int small = reads(() -> feed.fetch(token));
-		assertThat(small).as("reads of one fetch: %s", commands).isLessThanOrEqualTo(4);
+		assertThat(small).as("reads of one fetch: %s", ShiftReadCounter.commands).isLessThanOrEqualTo(4);
 
 		for (int i = 1; i <= 30; i++) {
 			Shift more = shift(fest, lead, "Schicht " + i, base.plus(Duration.ofHours(i * 2L)), 2);
 			assignments.assign(lead, more.getId(), ann.getId(), false);
 		}
-		assertThat(reads(() -> feed.fetch(token))).as("reads with 31 places: %s", commands).isEqualTo(small);
+		assertThat(reads(() -> feed.fetch(token))).as("reads with 31 places: %s", ShiftReadCounter.commands).isEqualTo(small);
 		assertThat(summaries(feed.fetch(token))).contains("Theke, Vereinsabend").hasSize(32);
 
 		// Out of the club's member list, without any event: the projects go into the query.
@@ -460,15 +445,7 @@ class ShiftFeedIntegrationTest {
 	}
 
 	private int reads(Runnable read) {
-		commands.clear();
-		counting.set(true);
-		try {
-			read.run();
-		}
-		finally {
-			counting.set(false);
-		}
-		return commands.size();
+		return ShiftReadCounter.reads(read);
 	}
 
 	private ShiftEvent event(Project in, User planner, String title, String location) {
