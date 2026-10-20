@@ -643,8 +643,8 @@ public class ShiftService {
 	}
 
 	private void audited(AuditAction action, User actor, String targetId, Map<String, String> meta) {
-		String label = actor.getDisplayName() != null ? actor.getDisplayName() : actor.getEmail();
-		events.publishEvent(new ShiftDomainEvents.Audited(action, actor.getId(), label, targetId, meta));
+		events.publishEvent(new ShiftDomainEvents.Audited(action, actor.getId(), ShiftDomainEvents.label(actor),
+				targetId, meta));
 	}
 
 	private static void setOrUnset(Update update, String field, Object value) {

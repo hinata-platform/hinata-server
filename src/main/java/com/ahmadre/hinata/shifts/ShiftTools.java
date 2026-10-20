@@ -482,11 +482,7 @@ public class ShiftTools {
 	 * a title; the person on the place is the target.
 	 */
 	private void audited(AuditAction action, User me, ShiftAssignment assignment) {
-		Map<String, String> meta = new LinkedHashMap<>();
-		meta.put("assignmentId", assignment.getId());
-		meta.put("shiftId", assignment.getShiftId());
-		meta.put("eventId", assignment.getEventId());
-		meta.put("projectId", assignment.getProjectId());
+		Map<String, String> meta = assignment.auditMeta();
 		meta.put("status", assignment.getStatus().name());
 		delivery.audit(new ShiftDomainEvents.Audited(action, me.getId(), ShiftDomainEvents.label(me),
 				assignment.getUserId(), meta));
