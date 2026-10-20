@@ -100,7 +100,7 @@ public class ShiftReads {
 	 * An event in a list. {@code placesRequired} adds up what the live shifts need,
 	 * {@code placesTaken} the places taken towards that (a shift over its need counts as met, not
 	 * as more), {@code shiftsUnderstaffed} the shifts still short, {@code mineCount} the caller's
-	 * own places. {@code canPlan} until HIN-45: the caller manages the project.
+	 * own places. {@code canPlan}: the caller plans the project (lead, team admin or planner).
 	 */
 	public record EventSummary(String id, String projectId, String title, String description, String location,
 			Instant startsAt, Instant endsAt, String startsLocal, String endsLocal, String timezone,
@@ -120,8 +120,30 @@ public class ShiftReads {
 	public record ShiftDetail(ShiftResponse shift, EventHead event, Map<String, UserCard> users, boolean canPlan) {
 	}
 
-	/** Shifts in a window, their events once each, and whether the cap cut the list. */
-	public record CalendarResponse(List<ShiftResponse> shifts, Map<String, EventHead> events, boolean truncated) {
+	/**
+	 * Shifts in a window, their events once each, whether the cap cut the list, and which of the
+	 * projects read the caller plans (HIN-45), so the calendar offers planning controls per project.
+	 */
+	public record CalendarResponse(List<ShiftResponse> shifts, Map<String, EventHead> events, boolean truncated,
+			Set<String> plannableProjectIds) {
+	}
+
+	/** One person's place on a shift, as a write answers it. */
+	public record AssignmentResponse(String id, String shiftId, String userId, ShiftAssignment.Status status,
+			String assignedBy, Instant createdAt) {
+
+		static AssignmentResponse from(ShiftAssignment assignment) {
+			return new AssignmentResponse(assignment.getId(), assignment.getShiftId(), assignment.getUserId(),
+					assignment.getStatus(), assignment.getAssignedBy(), assignment.getCreatedAt());
+		}
+	}
+
+	/**
+	 * What assigning, signing up, declining and giving up answer: the shift as it is now (with its
+	 * people), the assignment that changed and hints for whoever asked ({@code absent} only when the
+	 * caller may see absences, never a reason).
+	 */
+	public record AssignmentChange(ShiftResponse shift, AssignmentResponse assignment, List<String> warnings) {
 	}
 
 	/** One of the caller's own places. */
@@ -229,8 +251,9 @@ public class ShiftReads {
 		int cap = limit == null ? CALENDAR_MAX : Math.max(1, Math.min(limit, CALENDAR_MAX));
 		Set<String> projects = scope(caller, projectId);
 		if (projects.isEmpty()) {
-			return new CalendarResponse(List.of(), Map.of(), false);
+			return new CalendarResponse(List.of(), Map.of(), false, Set.of());
 		}
+		Set<String> plannable = access.plannableProjectIds(caller, projects);
 		Criteria criteria = Criteria.where("projectId").in(projects)
 				.and("startsAt").gt(from.minus(ShiftRules.SHIFT_MAX)).lt(to)
 				.and("endsAt").gt(from)
@@ -238,7 +261,7 @@ public class ShiftReads {
 		if (selfAssignable != null) {
 			Set<String> eventIds = eventIdsBySignUp(projects, from, to, selfAssignable);
 			if (eventIds.isEmpty()) {
-				return new CalendarResponse(List.of(), Map.of(), false);
+				return new CalendarResponse(List.of(), Map.of(), false, plannable);
 			}
 			criteria = criteria.and("eventId").in(eventIds);
 		}
@@ -259,7 +282,7 @@ public class ShiftReads {
 				.toList();
 		Map<String, EventHead> heads = new LinkedHashMap<>();
 		events.values().forEach(event -> heads.put(event.getId(), EventHead.from(event)));
-		return new CalendarResponse(rows, heads, truncated);
+		return new CalendarResponse(rows, heads, truncated, plannable);
 	}
 
 	// --- the caller's own -----------------------------------------------------
@@ -306,6 +329,19 @@ public class ShiftReads {
 		ShiftAssignment first = mongo.findOne(Query.query(criteria).with(Sort.by("startsAt", "_id")),
 				ShiftAssignment.class);
 		return first == null ? Optional.empty() : own(List.of(first)).stream().findFirst();
+	}
+
+	/** One of the caller's own places as "my shifts" shows it, after a confirmation. */
+	MyShiftResponse myShift(ShiftAssignment assignment) {
+		return own(List.of(assignment)).stream().findFirst()
+				.orElseThrow(() -> ApiException.notFound("shiftAssignment"));
+	}
+
+	/** The answer to an assignment write: the shift with its people, the assignment, the hints. */
+	AssignmentChange change(User caller, ShiftAssignment assignment, List<String> warnings) {
+		ShiftAccess.Scoped<Shift> scoped = access.visibleShift(assignment.getShiftId(), caller);
+		return new AssignmentChange(shiftDetail(caller, scoped.item(), scoped.project()).shift(),
+				AssignmentResponse.from(assignment), warnings == null ? List.of() : warnings);
 	}
 
 	private List<MyShiftResponse> own(List<ShiftAssignment> rows) {

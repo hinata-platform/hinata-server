@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.shifts;
 
 import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.user.User;
 
 import java.util.Map;
 
@@ -20,6 +21,14 @@ public final class ShiftDomainEvents {
 	 */
 	public record Audited(AuditAction action, String actorId, String actorLabel, String targetId,
 			Map<String, String> meta) {
+	}
+
+	/** How an audit record names its actor: the display name, else the address; null for the system. */
+	static String label(User actor) {
+		if (actor == null) {
+			return null;
+		}
+		return actor.getDisplayName() != null ? actor.getDisplayName() : actor.getEmail();
 	}
 
 	/** Somebody got a place on a shift. HIN-45 and HIN-46 deliver from it. */

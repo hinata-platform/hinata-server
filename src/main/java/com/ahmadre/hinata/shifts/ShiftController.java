@@ -30,8 +30,9 @@ import java.util.List;
  * id answer 404 for anything out of sight and 403 to a member who does not plan the project. Every
  * write answers with the updated object, so the app replaces it instead of reloading.
  *
- * <p>The assignment routes (sign up, assign, confirm, decline, give up) come with HIN-45; the
- * path they will call is {@link ShiftAssignments}.
+ * <p>The assignment routes (assign, sign up, confirm, decline, give up) and the planner role come
+ * with HIN-45. Both ways onto a shift run through {@link ShiftAssignments#assign}; there is no
+ * {@code DELETE} on an assignment, a freed place keeps its document until the retention run.
  */
 @Tag(name = "Shift planning")
 @RestController
@@ -40,6 +41,8 @@ public class ShiftController {
 
 	private final ShiftService shifts;
 	private final ShiftReads reads;
+	private final ShiftAssignments assignments;
+	private final ShiftPlanners planners;
 	private final ShiftAccess access;
 	private final CurrentUser currentUser;
 
@@ -147,6 +150,75 @@ public class ShiftController {
 			@RequestParam(required = false) Boolean selfAssignable,
 			@RequestParam(required = false) Integer limit) {
 		return reads.calendar(currentUser.require(), from, to, projectId, understaffed, selfAssignable, limit);
+	}
+
+	// --- assignments (HIN-45) -------------------------------------------------
+
+	/** Who a planner puts on a shift. */
+	public record AssignmentDraft(String userId) {
+	}
+
+	/** A planner puts somebody on the shift ({@code ASSIGNED}); 404 unseen, 403 not a planner. */
+	@PostMapping("/api/v1/shifts/shifts/{id}/assignments")
+	@ResponseStatus(HttpStatus.CREATED)
+	public ShiftReads.AssignmentChange assign(@PathVariable String id, @RequestBody AssignmentDraft draft) {
+		User caller = currentUser.require();
+		ShiftAssignments.Assigned done = assignments.assign(caller, id, draft == null ? null : draft.userId(), false);
+		return reads.change(caller, done.assignment(), done.warnings());
+	}
+
+	/** A member signs up ({@code CONFIRMED}); 403 {@code selfAssignDisabled} when the event is closed. */
+	@PostMapping("/api/v1/shifts/shifts/{id}/self-assign")
+	@ResponseStatus(HttpStatus.CREATED)
+	public ShiftReads.AssignmentChange selfAssign(@PathVariable String id) {
+		User caller = currentUser.require();
+		ShiftAssignments.Assigned done = assignments.assign(caller, id, null, true);
+		return reads.change(caller, done.assignment(), done.warnings());
+	}
+
+	/** The person confirms a planner's assignment. */
+	@PostMapping("/api/v1/shifts/assignments/{id}/confirm")
+	public ShiftReads.MyShiftResponse confirm(@PathVariable String id) {
+		return reads.myShift(assignments.confirm(currentUser.require(), id));
+	}
+
+	/** The person declines a planner's assignment; the place is free again. */
+	@PostMapping("/api/v1/shifts/assignments/{id}/decline")
+	public ShiftReads.AssignmentChange decline(@PathVariable String id) {
+		User caller = currentUser.require();
+		return reads.change(caller, assignments.decline(caller, id), List.of());
+	}
+
+	/** The person gives the shift up, or a planner takes them off it. */
+	@PostMapping("/api/v1/shifts/assignments/{id}/release")
+	public ShiftReads.AssignmentChange release(@PathVariable String id) {
+		User caller = currentUser.require();
+		return reads.change(caller, assignments.release(caller, id), List.of());
+	}
+
+	// --- planners (HIN-45) ----------------------------------------------------
+
+	/** Who is to plan. */
+	public record PlannerDraft(String userId) {
+	}
+
+	@GetMapping("/api/v1/projects/{projectId}/shifts/planners")
+	public ShiftPlanners.PlannersResponse planners(@PathVariable String projectId) {
+		return planners.list(currentUser.require(), projectId);
+	}
+
+	/** Leads and team admins only; the person has to see the project and be active. */
+	@PostMapping("/api/v1/projects/{projectId}/shifts/planners")
+	@ResponseStatus(HttpStatus.CREATED)
+	public ShiftPlanners.PlannersResponse grantPlanner(@PathVariable String projectId,
+			@RequestBody PlannerDraft draft) {
+		return planners.grant(currentUser.require(), projectId, draft == null ? null : draft.userId());
+	}
+
+	@DeleteMapping("/api/v1/projects/{projectId}/shifts/planners/{userId}")
+	public ResponseEntity<Void> revokePlanner(@PathVariable String projectId, @PathVariable String userId) {
+		planners.revoke(currentUser.require(), projectId, userId);
+		return ResponseEntity.noContent().build();
 	}
 
 	// --- the caller's own -----------------------------------------------------
