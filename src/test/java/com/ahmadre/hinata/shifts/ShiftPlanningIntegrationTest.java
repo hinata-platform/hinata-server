@@ -800,6 +800,18 @@ class ShiftPlanningIntegrationTest {
 		assertThat(forAnn.mineCount()).isEqualTo(2);
 		assertThat(forAnn.canPlan()).isFalse();
 		assertThat(forAnn.shifts()).extracting(ShiftReads.ShiftResponse::mine).containsExactly(true, false, true);
+		// The caller's own place rides along, from the read that already decides "mine".
+		assertThat(forAnn.shifts()).extracting(row -> row.myAssignment() == null ? null : row.myAssignment().status())
+				.containsExactly(ShiftAssignment.Status.CONFIRMED, null, ShiftAssignment.Status.ASSIGNED);
+		ShiftAssignment annOnC = mongo.findOne(Query.query(Criteria.where("shiftId").is(c.getId())
+				.and("userId").is(ann.getId())), ShiftAssignment.class);
+		assertThat(forAnn.shifts().get(2).myAssignment().id()).isEqualTo(annOnC.getId());
+		assertThat(reads.shift(ann, c.getId()).shift().myAssignment().id()).isEqualTo(annOnC.getId());
+		assertThat(reads.shift(bob, a.getId()).shift().myAssignment()).isNull();
+		assertThat(reads.calendar(ann, base.minus(hours(1)), base.plus(hours(20)), null, null, null, null).shifts())
+				.extracting(row -> row.myAssignment() == null ? null : row.myAssignment().id())
+				.containsExactly(mongo.findOne(Query.query(Criteria.where("shiftId").is(a.getId())
+						.and("userId").is(ann.getId())), ShiftAssignment.class).getId(), null, annOnC.getId());
 		assertThat(forAnn.shifts()).extracting(ShiftReads.ShiftResponse::understaffed).containsExactly(true, false, false);
 		assertThat(forAnn.shifts()).extracting(ShiftReads.ShiftResponse::full).containsExactly(false, true, false);
 		assertThat(forAnn.placesRequired()).isEqualTo(4);
@@ -872,7 +884,11 @@ class ShiftPlanningIntegrationTest {
 				"placesTaken", "shiftsUnderstaffed", "mineCount", "canPlan", "shifts", "users");
 		assertThat(fields(detail.path("shifts").get(0))).containsExactly("id", "eventId", "projectId", "title",
 				"startsAt", "endsAt", "startsLocal", "endsLocal", "requiredHelpers", "maxHelpers", "assignedCount",
-				"understaffed", "full", "mine", "cancelled", "assigneeIds");
+				"understaffed", "full", "mine", "myAssignment", "cancelled", "assigneeIds");
+		assertThat(fields(detail.path("shifts").get(0).path("myAssignment"))).containsExactly("id", "status");
+		assertThat(detail.path("shifts").get(0).path("myAssignment").path("status").asText()).isEqualTo("CONFIRMED");
+		assertThat(json(get("/api/v1/shifts/events/" + event.getId(), token(bob))).path("shifts").get(0)
+				.path("myAssignment").isNull()).isTrue();
 		assertThat(fields(detail.path("users").path(ann.getId()))).containsExactly("name", "avatarUrl");
 		JsonNode list = json(get("/api/v1/shifts/events" + window, annToken));
 		assertThat(list.path("content").get(0).has("shifts")).isFalse();
