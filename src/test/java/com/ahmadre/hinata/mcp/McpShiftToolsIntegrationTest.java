@@ -264,6 +264,41 @@ class McpShiftToolsIntegrationTest {
 		assertThat(onlyShort.path("total").asLong()).isEqualTo(1);
 	}
 
+	/**
+	 * HIN-162 through MCP: nobody waiting is ever named, not to a planner, not to the person
+	 * waiting, not to a colleague. Counts and the caller's own position are fine.
+	 */
+	@Test
+	@DisplayName("people on a waiting list are never named by a tool, not even to a planner")
+	void waitingPeopleAreNeverNamed() {
+		ShiftEvent event = event(base, true);
+		Shift full = shift(event, base, 1, 1);
+		assignments.assign(ann, full.getId(), null, true);
+		assignments.assign(bob, full.getId(), null, true);
+		assignments.assign(carl, full.getId(), null, true);
+
+		for (User reader : List.of(lead, ann, bob, carl)) {
+			McpTestClient agent = client(reader, "shifts:read");
+			String shiftText = McpTestClient.text(ok(agent.call("get_shift", "{\"shiftId\":\"" + full.getId() + "\"}")));
+			JsonNode shift = body(shiftText);
+			assertThat(shift.path("people")).as(reader.getUsername()).hasSize(1);
+			assertThat(shift.path("people").get(0).path("userId").asText()).isEqualTo(ann.getId());
+			assertThat(shift.path("waiting").asInt()).isEqualTo(2);
+			assertThat(shiftText).as(reader.getUsername()).doesNotContain("Bob").doesNotContain("Carl")
+					.doesNotContain(bob.getId()).doesNotContain(carl.getId());
+
+			String eventText = McpTestClient.text(ok(agent.call("get_shift_event",
+					"{\"eventId\":\"" + event.getId() + "\"}")));
+			assertThat(eventText).as(reader.getUsername()).doesNotContain("Ann").doesNotContain("Bob")
+					.doesNotContain("Carl").doesNotContain(bob.getId()).doesNotContain(carl.getId());
+			String listText = McpTestClient.text(ok(agent.call("list_shift_events", "{}")));
+			assertThat(listText).doesNotContain("Bob").doesNotContain(bob.getId());
+		}
+		JsonNode carls = body(ok(client(carl, "shifts:read").call("get_shift", "{\"shiftId\":\"" + full.getId() + "\"}")));
+		assertThat(carls.path("myWaitPosition").asInt()).isEqualTo(2);
+		assertThat(carls.has("myAssignmentId")).isFalse();
+	}
+
 	// --- writing -----------------------------------------------------------------------------
 
 	@Test
