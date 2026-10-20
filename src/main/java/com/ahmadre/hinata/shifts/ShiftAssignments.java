@@ -27,19 +27,25 @@ import java.util.Optional;
  * The one way onto a shift and the one way off it, for a planner's assignment and a member's own
  * sign-up alike (HIN-43), and the answers a person gives to an assignment (HIN-45).
  *
- * <p>Taking a place runs in one transaction ({@link ShiftTx}, retried on a write conflict):
+ * <p>Before the transaction, from what the request can see: the caller may see the shift (and
+ * plans the project, for an assignment), the person is an active account that can see the
+ * project, and the event is read for its sign-up flag. A change to the person that commits after
+ * these checks does not stop the assignment: a member who leaves the project gets the place freed
+ * again by {@link ShiftErasure}, a deactivated account keeps it like every place it already held.
+ * Then one transaction ({@link ShiftTx}, retried on a write conflict):
  * <ol>
  * <li>write the person's {@link ShiftUserGuard}, so two sign-ups of one person run one after the
  * other;</li>
- * <li>check the person: an active account that can see the project;</li>
- * <li>check the shift: not deleted, not cancelled, open for sign-up when it is one;</li>
+ * <li>check the shift as the transaction sees it: not deleted, not cancelled, open for sign-up
+ * when it is one;</li>
  * <li>check the person's other assignments for an overlap;</li>
  * <li>claim a place with a conditional increment that only matches below the upper limit;</li>
  * <li>turn the person's old document for this shift back on, or insert one.</li>
  * </ol>
- * HIN-162: a sign-up asks for capacity before step 4. On a full shift, or one somebody waits for,
+ * HIN-162: a sign-up asks for capacity before step 3. On a full shift, or one somebody waits for,
  * it becomes a {@code WAITING} entry at the end of the list instead, without an overlap check;
- * {@link ShiftWaitlist} runs that check when the person moves up.
+ * {@link ShiftWaitlist} runs that check when the person moves up, and checks the person again
+ * inside its own transaction, since moving up happens long after the sign-up.
  *
  * Anything failing after the claim rolls the whole transaction back, so the counter never moves
  * without an assignment. Freeing a place flips the status with a conditional update and gives the
@@ -97,7 +103,7 @@ public class ShiftAssignments {
 		String target = person.getId();
 		// 1. Serialise this person's sign-ups.
 		ShiftUserGuard.lock(mongo, target);
-		// 3. The shift as this transaction sees it.
+		// 2. The shift as this transaction sees it.
 		Shift shift = mongo.findById(shiftId, Shift.class);
 		if (shift == null || shift.isDeleted() || shift.isCancelled()) {
 			throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.shiftUnavailable");
@@ -119,7 +125,7 @@ public class ShiftAssignments {
 				return joinWaitlist(caller, shift);
 			}
 		}
-		// 4. The person's other places around this one.
+		// 3. The person's other places around this one.
 		List<ShiftAssignment> around = mongo.find(Query.query(around(target, shift.getStartsAt(), shift.getEndsAt())),
 				ShiftAssignment.class);
 		if (around.stream().anyMatch(other -> other.getShiftId().equals(shiftId) && other.active())) {
@@ -134,7 +140,7 @@ public class ShiftAssignments {
 			throw ShiftRules.refusal(HttpStatus.BAD_REQUEST, "error.shifts.overlappingAssignment",
 					mayName ? ShiftConflicts.details(other) : Map.of());
 		}
-		// 5. A place, if there is one left.
+		// 4. A place, if there is one left.
 		Instant now = clock.instant();
 		Shift claimed = mongo.findAndModify(Query.query(claimable(shiftId)),
 				new Update().inc("assignedCount", 1).set("updatedAt", now),
@@ -146,7 +152,7 @@ public class ShiftAssignments {
 			}
 			throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.shiftFull");
 		}
-		// 6. The person's document for this shift, turned back on or new. A waiting entry is turned
+		// 5. The person's document for this shift, turned back on or new. A waiting entry is turned
 		// on as well (HIN-162: a planner's "assign now"), so it never runs into the unique index.
 		ShiftAssignment.Status status = self ? ShiftAssignment.Status.CONFIRMED : ShiftAssignment.Status.ASSIGNED;
 		String assignedBy = self ? null : caller.getId();
