@@ -327,6 +327,9 @@ hinata:
     # hinata.mongodb.transactions-enabled (a replica set); without it the module
     # stays off whatever is set here, and the server says so at start.
     enabled: ${HINATA_SHIFTS_ENABLED:false}
+    # Months an assignment is kept after its shift ended; the nightly run
+    # deletes older ones (who worked when is personal data).
+    retention-months: ${HINATA_SHIFTS_RETENTION_MONTHS:12}
 
 springdoc:
   api-docs:

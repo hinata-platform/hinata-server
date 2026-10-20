@@ -314,7 +314,12 @@ class ModuleBoundaryTest {
 			TEMPLATE + ".HolidayCalendars",
 			// Utilization per team (HIN-96): capacity added up per team through
 			// TimeWorkloadReport, for administrators, in a report. It writes nothing.
-			ROOT + ".billing.BillingReportService");
+			ROOT + ".billing.BillingReportService",
+			// Shift planning (HIN-43). The door itself; the assignment path, which adds the
+			// "absent" hint to a place it has already taken and never refuses one for it; and the
+			// write service, which uses the door's static overlap arithmetic to report collisions
+			// after a move. None of the three holds an availability type.
+			SHIFTS + ".ShiftConflicts", SHIFTS + ".ShiftAssignments", SHIFTS + ".ShiftService");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {
@@ -554,6 +559,14 @@ class ModuleBoundaryTest {
 	@Test
 	void noShiftTransactionDeliversDirectly() {
 		NO_DELIVERY_INSIDE_A_SHIFT_TRANSACTION.check(PRODUCTION);
+		// The module runs its transactions through ShiftTx, a TransactionTemplate, which the
+		// annotation rule above cannot see. So delivery has one address: the after-commit listener.
+		noClasses()
+				.that().resideInAPackage("..shifts..")
+				.and().doNotHaveFullyQualifiedName(SHIFTS + ".ShiftDelivery")
+				.should().dependOnClassesThat(named(DELIVERY_SERVICES, "a delivery service"))
+				.because("shift writes publish domain events; ShiftDelivery hands them on after the commit")
+				.check(PRODUCTION);
 	}
 
 	/**

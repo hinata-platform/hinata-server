@@ -248,6 +248,12 @@ public class HinataProperties {
 
 		/** Master switch for shift planning. */
 		private boolean enabled = false;
+
+		/**
+		 * How long an assignment is kept after its shift ended, in months (HIN-43). Assignments are
+		 * a record of who worked when; the nightly retention run deletes them after this.
+		 */
+		private int retentionMonths = 12;
 	}
 
 	/**

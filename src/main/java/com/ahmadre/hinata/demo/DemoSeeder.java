@@ -121,6 +121,8 @@ public class DemoSeeder {
 	/** The two halves of HIN-120 the seeder needs: whether the module is on, and the copy. */
 	private final ProjectTemplateSettings templates;
 	private final ProjectCopyService copies;
+	/** Whether shift planning is on, asked by flag name: the seeder may not call the module. */
+	private final com.ahmadre.hinata.common.FeatureFlags flags;
 
 	private final Map<String, Long> counters = new LinkedHashMap<>();
 
@@ -130,7 +132,8 @@ public class DemoSeeder {
 			"time_marks", "time_imports", "saved_reports", "calendar_subscriptions", "calendar_events",
 			"working_schedules", "time_off", "time_off_requests", "time_off_entitlements",
 			"time_off_ledger", "time_off_notices", "time_off_employment", "time_off_proposals",
-			"billing_rates", "invoices", "invoice_sequences", "notifications");
+			"billing_rates", "invoices", "invoice_sequences", "notifications",
+			"shift_events", "shifts", "shift_assignments", "shift_user_guards");
 
 	@EventListener(ApplicationReadyEvent.class)
 	public void seed() {
@@ -1238,6 +1241,7 @@ public class DemoSeeder {
 		calendarSubscription(admin);
 		sharedEntry(admin, tomas, lastWeek);
 		billing(hin, admin, tomas, lastWeek);
+		shifts(hin, mob, admin);
 
 		syncSpent();
 		log.info("[demo] seeded {} work items", workItems.count());
@@ -2194,5 +2198,104 @@ public class DemoSeeder {
 				.authorId(author.getId())
 				.sortOrder(sortOrder)
 				.build());
+	}
+
+	/**
+	 * Two events with shifts in every state the plan shows (HIN-43), only where shift planning is
+	 * on: a company's trade-fair stand over five days in HIN, and a club's summer party with five
+	 * shifts in MOB. Between them there are shifts still short of people, shifts at their need,
+	 * shifts over their need below the upper limit and shifts at the upper limit. The admin holds
+	 * two places, both at the party.
+	 *
+	 * <p>Raw documents, like the other modules': the seeder may name the module's stored entities
+	 * and nothing else, and writing collections by name does not even need that. Every counter is
+	 * the number of places written beside it.
+	 */
+	private void shifts(Project hin, Project mob, User admin) {
+		if (!flags.enabled("shift_planning") || mongo.getCollection("shift_events").countDocuments() > 0) {
+			return;
+		}
+		java.time.ZoneId berlin = java.time.ZoneId.of("Europe/Berlin");
+		Map<String, User> people = new LinkedHashMap<>();
+		for (String name : List.of("tomas", "lena", "amara", "mei", "jonas")) {
+			users.findByUsernameIgnoreCase(name).ifPresent(user -> people.put(name, user));
+		}
+		people.put("admin", admin);
+
+		LocalDate fairMonday = LocalDate.now(berlin).with(java.time.temporal.TemporalAdjusters.next(DayOfWeek.MONDAY));
+		String fair = shiftEvent(hin, admin, "Trade fair stand", "Hall 4, stand B12",
+				"Our stand at the regional trade fair. Two people per slot answer questions and show the product.",
+				at(fairMonday, 8, 0, berlin), at(fairMonday.plusDays(4), 19, 0, berlin));
+		// Mornings need two and take three, afternoons need two and have no upper limit.
+		String[][] mornings = { { "tomas", "jonas" }, { "mei", "amara", "tomas" }, { "tomas", "lena" },
+				{ "tomas" }, { "tomas" } };
+		String[][] afternoons = { { "lena" }, { "jonas" }, { "amara", "mei", "jonas" }, {}, {} };
+		for (int day = 0; day < 5; day++) {
+			LocalDate date = fairMonday.plusDays(day);
+			demoShift(hin, fair, "Stand duty, morning", at(date, 8, 30, berlin), at(date, 13, 30, berlin), 2, 3,
+					admin, people, mornings[day]);
+			demoShift(hin, fair, "Stand duty, afternoon", at(date, 13, 30, berlin), at(date, 18, 30, berlin), 2,
+					null, admin, people, afternoons[day]);
+		}
+
+		LocalDate partyDay = fairMonday.plusDays(12);
+		String party = shiftEvent(mob, admin, "Summer party of the sports club", "Clubhouse garden",
+				"Members and families celebrate the season. Helpers set up, run the stalls and clear away.",
+				at(partyDay, 10, 0, berlin), at(partyDay, 22, 0, berlin));
+		demoShift(mob, party, "Setting up", at(partyDay, 10, 0, berlin), at(partyDay, 13, 0, berlin), 3, null,
+				admin, people, "admin", "amara");
+		demoShift(mob, party, "Grill", at(partyDay, 13, 0, berlin), at(partyDay, 17, 0, berlin), 2, 2,
+				admin, people, "lena", "mei");
+		demoShift(mob, party, "Cake buffet", at(partyDay, 13, 0, berlin), at(partyDay, 17, 0, berlin), 1, 3,
+				admin, people, "admin", "amara");
+		demoShift(mob, party, "Children's games", at(partyDay, 14, 0, berlin), at(partyDay, 17, 0, berlin), 2, null,
+				admin, people);
+		demoShift(mob, party, "Clearing away", at(partyDay, 19, 0, berlin), at(partyDay, 22, 0, berlin), 3, 5,
+				admin, people, "lena", "mei", "amara");
+	}
+
+	private static java.util.Date at(LocalDate day, int hour, int minute, java.time.ZoneId zone) {
+		return java.util.Date.from(day.atTime(hour, minute).atZone(zone).toInstant());
+	}
+
+	private String shiftEvent(Project project, User admin, String title, String location, String description,
+			java.util.Date start, java.util.Date end) {
+		org.bson.types.ObjectId id = new org.bson.types.ObjectId();
+		java.util.Date now = new java.util.Date();
+		mongo.getCollection("shift_events").insertOne(new org.bson.Document("_id", id)
+				.append("projectId", project.getId()).append("title", title).append("description", description)
+				.append("location", location).append("startsAt", start).append("endsAt", end)
+				.append("timezone", "Europe/Berlin").append("cancelled", false).append("selfAssignable", true)
+				.append("createdBy", admin.getId()).append("createdAt", now).append("updatedAt", now));
+		return id.toHexString();
+	}
+
+	/** One shift and its places; the first person on a shift confirmed, the rest assigned by the admin. */
+	private void demoShift(Project project, String eventId, String title, java.util.Date start, java.util.Date end,
+			int required, Integer max, User admin, Map<String, User> people, String... names) {
+		org.bson.types.ObjectId id = new org.bson.types.ObjectId();
+		java.util.Date now = new java.util.Date();
+		List<User> on = java.util.Arrays.stream(names).map(people::get).filter(java.util.Objects::nonNull).toList();
+		org.bson.Document shift = new org.bson.Document("_id", id).append("eventId", eventId)
+				.append("projectId", project.getId()).append("title", title).append("startsAt", start)
+				.append("endsAt", end).append("requiredHelpers", required).append("assignedCount", on.size())
+				.append("cancelled", false).append("deleted", false).append("createdAt", now).append("updatedAt", now);
+		if (max != null) {
+			shift.append("maxHelpers", max);
+		}
+		mongo.getCollection("shifts").insertOne(shift);
+		for (int i = 0; i < on.size(); i++) {
+			User person = on.get(i);
+			boolean self = i == 0;
+			org.bson.Document assignment = new org.bson.Document("_id", new org.bson.types.ObjectId())
+					.append("shiftId", id.toHexString()).append("eventId", eventId)
+					.append("projectId", project.getId()).append("userId", person.getId())
+					.append("startsAt", start).append("endsAt", end).append("cancelled", false)
+					.append("status", self ? "CONFIRMED" : "ASSIGNED").append("createdAt", now);
+			if (!self) {
+				assignment.append("assignedBy", admin.getId());
+			}
+			mongo.getCollection("shift_assignments").insertOne(assignment);
+		}
 	}
 }
