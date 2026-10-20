@@ -195,7 +195,8 @@ class BillingIntegrationTest {
 
 	@Test
 	void aLeadPricesTheirProjectAndNothingElse() {
-		rate(lead, BillingRate.Kind.BILLABLE, BillingRate.Scope.PROJECT, project.getId(), null, 9_000, FROM);
+		BillingRateService.RateView own = rate(lead, BillingRate.Kind.BILLABLE, BillingRate.Scope.PROJECT,
+				project.getId(), null, 9_000, FROM);
 		rate(lead, BillingRate.Kind.BILLABLE, BillingRate.Scope.PROJECT_MEMBER, project.getId(), member.getId(),
 				9_500, FROM);
 
@@ -214,6 +215,15 @@ class BillingIntegrationTest {
 		assertThatThrownBy(() -> rates.page(lead, BillingRate.Kind.COST, null, null, null, null, null, 0, 20))
 				.satisfies(thrown -> assertThat(statusOf(thrown)).isEqualTo(HttpStatus.FORBIDDEN));
 		assertThat(rates.page(admin, null, null, null, null, null, null, 0, 20).getTotalElements()).isEqualTo(3);
+		// One rate by its id, under the list's rule (HIN-165): what a lead may not read is not there.
+		BillingRateService.RateView cost = rates.page(admin, BillingRate.Kind.COST, null, null, null, null, null, 0, 20)
+				.getContent().getFirst();
+		assertThat(rates.one(lead, own.id())).isEqualTo(own);
+		assertThat(rates.one(admin, cost.id()).amountCents()).isEqualTo(5_000);
+		assertThatThrownBy(() -> rates.one(lead, cost.id()))
+				.satisfies(thrown -> assertThat(statusOf(thrown)).isEqualTo(HttpStatus.NOT_FOUND));
+		assertThatThrownBy(() -> rates.one(member, own.id()))
+				.satisfies(thrown -> assertThat(statusOf(thrown)).isEqualTo(HttpStatus.FORBIDDEN));
 		// The amount of a cost rate never reaches the log.
 		AuditLog costRecord = mongo.findOne(Query.query(Criteria.where("action").is(AuditAction.BILLING_RATE_CREATED)
 				.and("metadata.kind").is("COST")), AuditLog.class);
