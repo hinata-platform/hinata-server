@@ -35,8 +35,10 @@ import java.util.Map;
 @CompoundIndex(name = "user_start", def = "{'userId': 1, 'startsAt': 1, '_id': 1}")
 // Who is on a shift, and releasing a shift's assignments when it is deleted.
 @CompoundIndex(name = "shift_status", def = "{'shiftId': 1, 'status': 1}")
-// Moving and cancelling an event carries every assignment of it along.
-@CompoundIndex(name = "event", def = "{'eventId': 1}")
+// Moving and cancelling an event carries every assignment of it along (eventId alone, the prefix);
+// the event detail reads only the active ones, so status follows (it replaced event, see
+// ShiftIndexMigration).
+@CompoundIndex(name = "event_status", def = "{'eventId': 1, 'status': 1}")
 // HIN-46: the reminder sweep reads only assignments still owed a reminder, so it walks a small
 // partial index by start instead of scanning the collection.
 @CompoundIndex(name = "reminder_due", def = "{'startsAt': 1}",

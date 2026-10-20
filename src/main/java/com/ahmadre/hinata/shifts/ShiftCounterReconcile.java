@@ -62,6 +62,21 @@ public class ShiftCounterReconcile {
 		}
 	}
 
+	/**
+	 * One keyset page from ({@code cursor}, {@code lastId}) on, in {@code (startsAt, _id)} order.
+	 * The range starts at the cursor and the tie with it is a filter on top, so the whole page is
+	 * one walk along {@code live_start_id}, sorted by the index and never in memory.
+	 */
+	static Query page(Instant cursor, String lastId) {
+		Criteria live = Criteria.where("deleted").is(false).and("startsAt").gte(cursor);
+		Criteria criteria = lastId == null ? live
+				: new Criteria().andOperator(live, new Criteria().orOperator(Criteria.where("startsAt").gt(cursor),
+						Criteria.where("_id").gt(lastId)));
+		Query page = Query.query(criteria).with(Sort.by("startsAt", "_id")).limit(BATCH).withHint("live_start_id");
+		page.fields().include("assignedCount", "updatedAt", "startsAt");
+		return page;
+	}
+
 	/** One pass; returns how many counters were corrected. */
 	public int run() {
 		Instant now = clock.instant();
@@ -70,13 +85,7 @@ public class ShiftCounterReconcile {
 		Instant cursor = now.minus(LOOK_BACK);
 		String lastId = null;
 		while (true) {
-			Criteria after = lastId == null ? Criteria.where("startsAt").gte(cursor)
-					: new Criteria().orOperator(Criteria.where("startsAt").gt(cursor),
-							Criteria.where("startsAt").is(cursor).and("_id").gt(lastId));
-			Query page = Query.query(new Criteria().andOperator(Criteria.where("deleted").is(false), after))
-					.with(Sort.by("startsAt", "_id")).limit(BATCH);
-			page.fields().include("assignedCount", "updatedAt", "startsAt");
-			List<Shift> shifts = mongo.find(page, Shift.class);
+			List<Shift> shifts = mongo.find(page(cursor, lastId), Shift.class);
 			if (shifts.isEmpty()) {
 				return corrected;
 			}
