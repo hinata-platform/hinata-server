@@ -330,7 +330,12 @@ public enum AuditAction {
 	// or deleted from an occurrence on. Meta: project, series ids and how many occurrences, no title.
 	SHIFT_SERIES_CREATED(DATA, INFO, true),
 	SHIFT_SERIES_UPDATED(DATA, INFO, true),
-	SHIFT_SERIES_DELETED(DATA, INFO, true);
+	SHIFT_SERIES_DELETED(DATA, INFO, true),
+	// --- Shift planning: the plan as a file (HIN-163) ------------------------------------
+	// An event's plan exported as PDF, Word or workbook. Meta: event id, format and whether the
+	// file names people (only planners may), never the title. Names on paper have left the access
+	// control, so who took them out has to be answerable.
+	SHIFT_PLAN_EXPORTED(DATA, INFO, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of a privileged act that
