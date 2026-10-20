@@ -2,6 +2,7 @@ package com.ahmadre.hinata.oauth;
 
 import com.ahmadre.hinata.auth.TokenService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.pat.Scopes;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +57,7 @@ public class OAuthService {
 	private final TokenService tokenService;
 	private final HinataProperties properties;
 	private final PasswordEncoder passwordEncoder;
+	private final FeatureFlags featureFlags;
 	private final SecureRandom random = new SecureRandom();
 
 	// --- results ------------------------------------------------------------
@@ -209,8 +211,9 @@ public class OAuthService {
 		}
 		Set<String> requested = normalizeScopes(scope);
 		if (requested.isEmpty()) {
-			// No explicit scope → offer the full MCP scope set on the consent screen.
-			requested = new LinkedHashSet<>(Scopes.ALL);
+			// No explicit scope: offer the default set on the consent screen. Planning shifts for
+			// other people is not in it and comes only when a client asks for it by name.
+			requested = new LinkedHashSet<>(Scopes.DEFAULT_GRANT);
 		}
 		else if (!Scopes.ALL.containsAll(requested)) {
 			throw new OAuthRedirectException(redirectUri, state, "invalid_scope",
@@ -241,7 +244,7 @@ public class OAuthService {
 				.orElseThrow(() -> ApiException.notFound("oauthRequest"));
 		return new ConsentInfo(requestId, client.getClientName(),
 				URI.create(request.getRedirectUri()).getHost(),
-				new ArrayList<>(normalizeScopes(request.getScope())));
+				new ArrayList<>(offered(normalizeScopes(request.getScope()))));
 	}
 
 	/**
@@ -258,7 +261,7 @@ public class OAuthService {
 		if (!approved) {
 			return appendQuery(request.getRedirectUri(), "error", "access_denied", "state", request.getState());
 		}
-		Set<String> requested = normalizeScopes(request.getScope());
+		Set<String> requested = offered(normalizeScopes(request.getScope()));
 		Set<String> granted = new LinkedHashSet<>();
 		if (grantedScopes != null) {
 			for (String s : grantedScopes) {
@@ -385,6 +388,21 @@ public class OAuthService {
 	}
 
 	// --- helpers ------------------------------------------------------------
+
+	/**
+	 * The requested scopes a person is asked about: those of a module that is switched off (shift
+	 * planning) are left out, on the consent screen and in what an approval can grant.
+	 */
+	private Set<String> offered(Set<String> requested) {
+		Set<String> offered = new LinkedHashSet<>();
+		for (String scope : requested) {
+			String flag = Scopes.MODULE_FLAGS.get(scope);
+			if (flag == null || featureFlags.enabled(flag)) {
+				offered.add(scope);
+			}
+		}
+		return offered;
+	}
 
 	private Set<String> normalizeScopes(String scope) {
 		Set<String> out = new LinkedHashSet<>();

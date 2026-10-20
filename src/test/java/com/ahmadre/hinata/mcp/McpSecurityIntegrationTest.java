@@ -10,7 +10,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -363,5 +365,69 @@ class McpSecurityIntegrationTest {
 		}
 		JsonNode timesheet = agent.call("my_timesheet", "{\"from\":\"2026-09-01\",\"to\":\"2026-09-30\"}");
 		assertThat(timesheet.path("isError").asBoolean(false)).as("my_timesheet still answers").isFalse();
+	}
+
+	/** HIN-164: the eleven shift tools, as the module's MCP surface. */
+	private static final List<String> SHIFT_TOOLS = List.of("list_my_shifts", "next_shift", "list_shift_events",
+			"get_shift_event", "get_shift", "self_assign_shift", "release_shift", "confirm_shift", "decline_shift",
+			"assign_shift", "remove_assignment");
+
+	/**
+	 * HIN-164: shift planning is off on this instance. The tools stay registered with honest hints,
+	 * and each one answers the module-off sentence instead of a stack trace or a key.
+	 */
+	@Test
+	@DisplayName("with shift planning off the eleven shift tools are registered and refuse in words")
+	void shiftToolsAreRegisteredAndRefuseWhileTheModuleIsOff() {
+		McpTestClient agent = McpTestClient.withScopes(port, ADMIN_USER, ADMIN_PASS,
+				"shifts:read", "shifts:write", "shifts:plan");
+
+		Map<String, JsonNode> tools = new HashMap<>();
+		agent.tools().forEach(tool -> tools.put(tool.path("name").asText(), tool));
+		assertThat(tools).containsKeys(SHIFT_TOOLS.toArray(String[]::new));
+		for (String read : List.of("list_my_shifts", "next_shift", "list_shift_events", "get_shift_event", "get_shift")) {
+			assertThat(tools.get(read).path("annotations").path("readOnlyHint").asBoolean(false))
+					.as(read + " readOnlyHint").isTrue();
+		}
+		for (String destructive : List.of("release_shift", "remove_assignment")) {
+			assertThat(tools.get(destructive).path("annotations").path("destructiveHint").asBoolean(false))
+					.as(destructive + " destructiveHint").isTrue();
+		}
+		assertThat(tools.get("self_assign_shift").path("annotations").path("idempotentHint").asBoolean(true))
+				.as("self_assign_shift not idempotent").isFalse();
+
+		String arguments = "{\"shiftId\":\"x\",\"eventId\":\"x\",\"assignmentId\":\"x\",\"userId\":\"x\"}";
+		for (String tool : SHIFT_TOOLS) {
+			JsonNode refused = agent.call(tool, arguments);
+			assertThat(refused.path("isError").asBoolean(false)).as(tool + " refused").isTrue();
+			assertThat(McpTestClient.text(refused)).as(tool).contains("This feature is not enabled on this server");
+		}
+	}
+
+	/**
+	 * HIN-164: a PAT may hold the shift scopes, and each tool asks for its own: reading does not
+	 * sign up, signing up does not plan. The scope is checked before the module switch.
+	 */
+	@Test
+	@DisplayName("a PAT with shifts:write can be created; without shifts:write no sign-up, without shifts:plan no assigning")
+	void shiftToolsAreScopeGated() {
+		McpTestClient reader = McpTestClient.withScopes(port, ADMIN_USER, ADMIN_PASS, "shifts:read");
+		for (String write : List.of("self_assign_shift", "release_shift", "confirm_shift", "decline_shift")) {
+			JsonNode refused = reader.call(write, "{\"shiftId\":\"x\",\"assignmentId\":\"x\"}");
+			assertThat(refused.path("isError").asBoolean(false)).as(write + " refused").isTrue();
+			assertThat(McpTestClient.text(refused)).as(write).contains("shifts:write");
+		}
+
+		McpTestClient helper = McpTestClient.withScopes(port, ADMIN_USER, ADMIN_PASS, "shifts:read", "shifts:write");
+		for (String plan : List.of("assign_shift", "remove_assignment")) {
+			JsonNode refused = helper.call(plan, "{\"shiftId\":\"x\",\"userId\":\"x\",\"assignmentId\":\"x\"}");
+			assertThat(refused.path("isError").asBoolean(false)).as(plan + " refused").isTrue();
+			assertThat(McpTestClient.text(refused)).as(plan).contains("shifts:plan");
+		}
+
+		McpTestClient stranger = McpTestClient.withScopes(port, ADMIN_USER, ADMIN_PASS, "issues:read");
+		JsonNode refused = stranger.call("next_shift", "{}");
+		assertThat(refused.path("isError").asBoolean(false)).as("next_shift without shifts:read").isTrue();
+		assertThat(McpTestClient.text(refused)).contains("shifts:read");
 	}
 }
