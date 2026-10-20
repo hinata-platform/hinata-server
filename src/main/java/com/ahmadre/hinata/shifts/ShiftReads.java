@@ -95,7 +95,8 @@ public class ShiftReads {
 			return new ShiftResponse(shift.getId(), shift.getEventId(), shift.getProjectId(), shift.getTitle(),
 					shift.getStartsAt(), shift.getEndsAt(), ShiftRules.local(shift.getStartsAt(), zone),
 					ShiftRules.local(shift.getEndsAt(), zone), shift.required(), shift.getMaxHelpers(),
-					shift.assigned(), shift.understaffed(), shift.full(), mine != null, mine, shift.isCancelled(),
+					shift.assigned(), shift.understaffed(), shift.full(), mine != null, mine == null ? null : mine.in(zone),
+					shift.isCancelled(),
 					assigneeIds == null ? List.of() : assigneeIds, waiting.count(), waiting.myPosition(),
 					waiting.myAssignmentId(), waiting.ids());
 		}
@@ -129,11 +130,22 @@ public class ShiftReads {
 		}
 	}
 
-	/** The caller's own place on a shift: the assignment to act on and where it stands. */
-	public record MyAssignment(String id, ShiftAssignment.Status status) {
+	/**
+	 * The caller's own place on a shift: the assignment to act on and where it stands. {@code confirmBy}
+	 * is set while a place taken from the waiting list waits for the person's yes, with
+	 * {@code confirmByLocal} the same moment on the event's wall clock, so a sheet opened from anywhere
+	 * shows the deadline; both null otherwise.
+	 */
+	public record MyAssignment(String id, ShiftAssignment.Status status, Instant confirmBy, String confirmByLocal) {
 
 		static MyAssignment of(ShiftAssignment assignment) {
-			return assignment == null ? null : new MyAssignment(assignment.getId(), assignment.getStatus());
+			return assignment == null ? null
+					: new MyAssignment(assignment.getId(), assignment.getStatus(), assignment.getConfirmBy(), null);
+		}
+
+		/** This place with its deadline on the wall clock of [zone]. */
+		MyAssignment in(String zone) {
+			return confirmBy == null ? this : new MyAssignment(id, status, confirmBy, ShiftRules.local(confirmBy, zone));
 		}
 	}
 

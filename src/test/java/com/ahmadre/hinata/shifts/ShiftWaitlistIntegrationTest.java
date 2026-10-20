@@ -299,6 +299,10 @@ class ShiftWaitlistIntegrationTest {
 		ShiftReads.MyShiftResponse mine = reads.mine(bob, null, null, 0, 25).getContent().getFirst();
 		assertThat(mine.confirmBy()).isEqualTo(moved.getConfirmBy());
 		assertThat(mine.confirmByLocal()).isNotBlank();
+		// A sheet opened from the event page, not from "Meine", shows the same deadline.
+		ShiftReads.MyAssignment own = reads.shift(bob, shift.getId()).shift().myAssignment();
+		assertThat(own.confirmBy()).isEqualTo(moved.getConfirmBy());
+		assertThat(own.confirmByLocal()).isEqualTo(mine.confirmByLocal());
 		assertThat(assignments.confirm(bob, bobs).getConfirmBy()).isNull();
 		assertThat(mongo.findById(bobs, ShiftAssignment.class).getStatus()).isEqualTo(ShiftAssignment.Status.CONFIRMED);
 	}
