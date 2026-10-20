@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.springframework.data.convert.ValueConverter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -26,7 +27,8 @@ import java.util.List;
  * <p><b>Wall-clock times, not instants.</b> {@link #firstStart} and the templates' times are read in
  * {@link #timezone}, because "every Monday at 18:00" stays 18:00 across the change to summer time.
  * Every occurrence is computed afresh from its date, the wall-clock time and the zone, never by
- * adding an instant difference to another occurrence.
+ * adding an instant difference to another occurrence. They and the days are stored as ISO text,
+ * never as a date the driver would read in the server's zone.
  *
  * <p><b>{@link #rev} is the lock.</b> Every write to a series (the nightly run, a split, a deletion)
  * starts its transaction with a compare-and-set on the rev it read; a second writer finds a
@@ -63,7 +65,13 @@ public class ShiftSeries {
 	/** IANA zone the wall-clock times are read in. */
 	private String timezone;
 
-	/** Wall-clock start of the first occurrence; at most a year back and two years ahead. */
+	/**
+	 * Wall-clock start of the first occurrence; at most a year back and two years ahead. Stored as
+	 * ISO text ({@code 2026-10-26T18:00}), like every wall-clock time and day of the module: the
+	 * default mapping would turn it into an instant in the server's zone, and a server moved to
+	 * another zone would read a different time.
+	 */
+	@ValueConverter(ShiftWallClock.class)
 	private LocalDateTime firstStart;
 
 	/** How long one occurrence lasts, on the wall clock; at most fourteen days. */
@@ -74,6 +82,7 @@ public class ShiftSeries {
 
 	/** Days left out, written only by the server; at most 366, the past ones trimmed at night. */
 	@Builder.Default
+	@ValueConverter(ShiftWallClock.class)
 	private List<LocalDate> exdates = new ArrayList<>();
 
 	/** The shifts every occurrence gets; at most 50. */
@@ -83,7 +92,8 @@ public class ShiftSeries {
 	@Builder.Default
 	private Boolean selfAssignable = Boolean.TRUE;
 
-	/** The last day occurrences exist for. */
+	/** The last day occurrences exist for. ISO text; ISO dates sort as the days do. */
+	@ValueConverter(ShiftWallClock.class)
 	private LocalDate materializedUntil;
 
 	/** UNTIL or COUNT reached, or the project gone: the nightly run passes it by. */
