@@ -385,6 +385,24 @@ class ShiftWaitlistIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a deadline passing with nobody left to move up is a place given back: the planners hear the shift is short")
+	void deadlinePassingLeavesTheShiftShort() {
+		Shift shift = fullShift(1);
+		String anns = mongo.findOne(Query.query(Criteria.where("userId").is(ann.getId())), ShiftAssignment.class).getId();
+		String bobs = assignments.assign(bob, shift.getId(), null, true).assignment().getId();
+		assignments.release(ann, anns);
+		assertThat(notices(lead, Notification.Type.SHIFT_HELPER_DECLINED)).as("Bob took the place").isZero();
+		overdue(bobs);
+
+		assertThat(job.run(Instant.now()).expired()).isEqualTo(1);
+
+		assertThat(notices(lead, Notification.Type.SHIFT_HELPER_DECLINED)).isEqualTo(1);
+		assertThat(notices(bob, Notification.Type.SHIFT_HELPER_DECLINED)).isZero();
+		assertThat(notices(bob, Notification.Type.SHIFT_WAITLIST_EXPIRED)).isEqualTo(1);
+		assertCountersAgree();
+	}
+
+	@Test
 	@DisplayName("a confirmation before the job wins; the job then takes nothing back")
 	void confirmationWins() {
 		Shift shift = fullShift(1);

@@ -8,9 +8,12 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Somebody on a shift. One document per person and shift, ever: signing up again after declining
@@ -127,6 +130,43 @@ public class ShiftAssignment {
 
 	@CreatedDate
 	private Instant createdAt;
+
+	// --- the write rules every path shares ---------------------------------------------------
+
+	/**
+	 * A new document for [userId] on [shift], with the copies of the shift and [now] as its
+	 * {@code createdAt}; the caller sets status and whatever else belongs to its path.
+	 */
+	static ShiftAssignmentBuilder newFor(Shift shift, String userId, Instant now) {
+		return ShiftAssignment.builder().shiftId(shift.getId()).eventId(shift.getEventId())
+				.projectId(shift.getProjectId()).userId(userId).startsAt(shift.getStartsAt())
+				.endsAt(shift.getEndsAt()).cancelled(shift.isCancelled()).createdAt(now);
+	}
+
+	/**
+	 * What turning a person's existing document for [shift] back on writes besides its status: the
+	 * copies of the shift as it is now, a fresh {@code createdAt} (the order of a waiting list, the
+	 * time of a place) and no reminder mark from an earlier life. Sign-up, joining the waiting list
+	 * and moving up all start from this.
+	 */
+	static Update copiesOf(Shift shift, Instant now) {
+		return new Update().set("createdAt", now)
+				.set("startsAt", shift.getStartsAt()).set("endsAt", shift.getEndsAt())
+				.set("cancelled", shift.isCancelled()).set("eventId", shift.getEventId())
+				.set("projectId", shift.getProjectId())
+				.unset("reminderSentAt");
+	}
+
+	/** The audit metadata of a change to this document: ids only, never a title. */
+	Map<String, String> auditMeta() {
+		Map<String, String> meta = new LinkedHashMap<>();
+		meta.put("assignmentId", id);
+		meta.put("shiftId", shiftId);
+		meta.put("eventId", eventId);
+		meta.put("projectId", projectId);
+		meta.put("userId", userId);
+		return meta;
+	}
 
 	public boolean isCancelled() {
 		return Boolean.TRUE.equals(cancelled);
