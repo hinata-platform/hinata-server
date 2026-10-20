@@ -352,6 +352,28 @@ public class ProjectService {
 	}
 
 	/** One indexed existence check: a team owning the project with this user as its admin. */
+	/**
+	 * Everybody {@link #canManage} answers yes for: the project's leads and the admins of every
+	 * team that owns it. One team query, admin ids only.
+	 */
+	public Set<String> managerIds(Project project) {
+		Set<String> ids = new java.util.LinkedHashSet<>();
+		if (project.getLeadIds() != null) ids.addAll(project.getLeadIds());
+		if (project.getLeadId() != null) ids.add(project.getLeadId());
+		Query teams = Query.query(Criteria.where("projectIds").is(project.getId()));
+		teams.fields().include("members");
+		for (com.ahmadre.hinata.team.Team team : mongo.find(teams, com.ahmadre.hinata.team.Team.class)) {
+			if (team.getMembers() == null) continue;
+			team.getMembers().stream()
+					.filter(member -> member.getRole() == com.ahmadre.hinata.team.TeamRole.ADMIN)
+					.map(com.ahmadre.hinata.team.TeamMembership::getUserId)
+					.filter(java.util.Objects::nonNull)
+					.forEach(ids::add);
+		}
+		ids.remove(null);
+		return ids;
+	}
+
 	private boolean isTeamAdminOf(Project project, User user) {
 		return mongo.exists(Query.query(Criteria.where("projectIds").is(project.getId())
 				.and("members").elemMatch(Criteria.where("userId").is(user.getId())
