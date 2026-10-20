@@ -160,6 +160,15 @@ public class ShiftController {
 		return reads.calendar(currentUser.require(), from, to, projectId, understaffed, selfAssignable, limit);
 	}
 
+	/** The month view's counts per day; see {@link ShiftReads#marks}. */
+	@GetMapping("/api/v1/shifts/calendar/marks")
+	public ShiftReads.CalendarMarks calendarMarks(
+			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
+			@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+			@RequestParam(required = false) String projectId) {
+		return reads.marks(currentUser.require(), from, to, projectId);
+	}
+
 	// --- assignments (HIN-45) -------------------------------------------------
 
 	/** Who a planner puts on a shift. */

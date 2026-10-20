@@ -2,7 +2,9 @@ package com.ahmadre.hinata.shifts;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.project.Project;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
+import com.ahmadre.hinata.user.UserZones;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
@@ -21,7 +23,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -61,6 +65,7 @@ public class ShiftReads {
 	private final ShiftSettings settings;
 	private final Clock clock;
 	private final ShiftSeriesLabels labels;
+	private final SettingsService serverSettings;
 
 	// --- wire shapes ----------------------------------------------------------
 
@@ -211,6 +216,18 @@ public class ShiftReads {
 	 */
 	public record CalendarResponse(List<ShiftResponse> shifts, Map<String, EventHead> events, boolean truncated,
 			Set<String> plannableProjectIds) {
+	}
+
+	/**
+	 * One day of the month view: the shifts starting that day in the caller's zone, counted.
+	 * {@code mine} the caller's own places, {@code open} shifts open for sign-up with a free place,
+	 * {@code understaffed} shifts still short of people. Cancelled shifts are never open or short.
+	 */
+	public record DayMarks(String date, int mine, int open, int understaffed) {
+	}
+
+	/** The days of a window that have anything to mark, in order; days with nothing are left out. */
+	public record CalendarMarks(List<DayMarks> days) {
 	}
 
 	/** One person's place on a shift, as a write answers it. */
@@ -399,6 +416,54 @@ public class ShiftReads {
 		Map<String, String> seriesLabels = labels.of(caller, events.values());
 		events.values().forEach(event -> heads.put(event.getId(), EventHead.from(event, seriesLabels)));
 		return new CalendarResponse(rows, heads, truncated, plannable);
+	}
+
+	/**
+	 * The month view's dots without the shifts behind them: per day (the shift's start in the
+	 * caller's zone) how many places are the caller's, how many shifts are open for sign-up with a
+	 * free place, and how many are short of people. Same rights and window as {@link #calendar}; one
+	 * aggregation over {@code project_start}, after the ids of the caller's places and of the events
+	 * open for sign-up. No names, no shift rows.
+	 */
+	public CalendarMarks marks(User caller, Instant from, Instant to, String projectId) {
+		settings.requireEnabled();
+		ShiftRules.window(from, to, ShiftRules.WINDOW_MAX);
+		Set<String> projects = scope(caller, projectId);
+		if (projects.isEmpty()) {
+			return new CalendarMarks(List.of());
+		}
+		ZoneId zone = UserZones.of(caller, serverSettings.get());
+		List<String> mine = new ArrayList<>(myAssignments(caller, from, to).keySet());
+		List<String> openEvents = new ArrayList<>(eventIdsBySignUp(projects, from, to, true));
+		Document hasRoom = new Document("$or", List.of(
+				new Document("$eq", Arrays.asList(new Document("$ifNull",
+						Arrays.asList("$maxHelpers", null)), null)),
+				new Document("$lt", List.of("$assignedCount", "$maxHelpers"))));
+		Document open = new Document("$and", List.of(new Document("$ne", List.of("$cancelled", true)),
+				new Document("$in", List.of("$eventId", openEvents)), hasRoom));
+		AggregationOperation group = context -> new Document("$group", new Document("_id",
+				new Document("$dateToString", new Document("format", "%Y-%m-%d").append("date", "$startsAt")
+						.append("timezone", zone.getId())))
+				.append("mine", count(new Document("$in", List.of(new Document("$toString", "$_id"), mine))))
+				.append("open", count(open))
+				.append("understaffed", count(ShiftRules.shortOfPeopleExpression())));
+		Aggregation aggregation = Aggregation.newAggregation(
+				Aggregation.match(Criteria.where("projectId").in(projects).and("startsAt").gte(from).lt(to)
+						.and("deleted").is(false)),
+				group,
+				Aggregation.match(new Criteria().orOperator(Criteria.where("mine").gt(0), Criteria.where("open").gt(0),
+						Criteria.where("understaffed").gt(0))),
+				Aggregation.sort(Sort.by("_id")));
+		List<DayMarks> days = new ArrayList<>();
+		for (Document row : mongo.aggregate(aggregation, mongo.getCollectionName(Shift.class), Document.class)) {
+			days.add(new DayMarks(row.getString("_id"), number(row, "mine"), number(row, "open"),
+					number(row, "understaffed")));
+		}
+		return new CalendarMarks(days);
+	}
+
+	private static Document count(Document condition) {
+		return new Document("$sum", new Document("$cond", List.of(condition, 1, 0)));
 	}
 
 	// --- the caller's own -----------------------------------------------------
