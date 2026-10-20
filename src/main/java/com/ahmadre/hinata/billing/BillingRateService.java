@@ -140,6 +140,18 @@ public class BillingRateService {
 				() -> mongo.count(query, BillingRate.class));
 	}
 
+	/**
+	 * One rate by its id, under the rule of {@link #page}: an administrator any, a lead a revenue
+	 * rate of a project they lead. Any other is not found, so its existence stays unknown (HIN-165:
+	 * a search hit opens the rate this way rather than by paging until it shows up).
+	 */
+	public RateView one(User viewer, String id) {
+		BillingAccess.Reach reach = access.require(viewer);
+		BillingRate rate = rates.findById(id).orElseThrow(() -> ApiException.notFound("billingRate"));
+		hideUnless(reach, rate);
+		return views(List.of(rate)).getFirst();
+	}
+
 	/** Every rate of one target, newest start first: what the timeline of a target shows. */
 	public List<RateView> timeline(User viewer, BillingRate.Kind kind, BillingRate.Scope scope, String scopeId,
 			String secondaryId) {

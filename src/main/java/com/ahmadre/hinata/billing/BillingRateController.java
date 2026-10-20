@@ -78,6 +78,12 @@ public class BillingRateController {
 		return rates.page(currentUser.require(), kind, scope, scopeId, secondaryId, projectId, status, page, size);
 	}
 
+	@Operation(summary = "One rate, as the list shows it; 404 for a rate the reader may not read")
+	@GetMapping("/rates/{id}")
+	public BillingRateService.RateView one(@PathVariable @Size(max = 64) String id) {
+		return rates.one(currentUser.require(), id);
+	}
+
 	@Operation(summary = "Every rate of one target, newest first")
 	@GetMapping("/rates/timeline")
 	public List<BillingRateService.RateView> timeline(@RequestParam BillingRate.Kind kind,
