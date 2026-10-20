@@ -218,6 +218,21 @@ public class ShiftSeriesService {
 		return access.visibleSeries(seriesId, caller);
 	}
 
+	/**
+	 * The first occurrence from today on (in the series' zone) that exists and is not cancelled, or
+	 * null: the event the app opens after creating or reading a series. One read over
+	 * {@code series_day}.
+	 */
+	public String firstEventId(ShiftSeries series) {
+		Query query = Query.query(Criteria.where("seriesId").is(series.getId())
+				.and("occurrenceDate").gte(today(series))
+				.and("cancelled").ne(true))
+				.with(Sort.by("occurrenceDate"));
+		query.fields().include("_id");
+		ShiftEvent first = mongo.findOne(query, ShiftEvent.class);
+		return first == null ? null : first.getId();
+	}
+
 	/** The next [count] occurrences from today on, exdates left out, as they would be or are. */
 	public List<Upcoming> upcoming(ShiftSeries series, int count) {
 		LocalDate today = today(series);

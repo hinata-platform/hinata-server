@@ -59,13 +59,14 @@ public class ShiftSeriesController {
 	/**
 	 * A series. {@code recurrenceLabel} is the rule in the reader's words, {@code next} the next five
 	 * occurrences from today on, {@code occurrencesCreated} how many occurrences creating it brought
-	 * (only in the answer to the creation, null otherwise).
+	 * (only in the answer to the creation, null otherwise). {@code firstEventId} is the first
+	 * occurrence from today on that is not cancelled, the event to open; null when there is none.
 	 */
 	public record SeriesResponse(String id, String projectId, String title, String description, String location,
 			String timezone, LocalDateTime firstStart, int durationMinutes, String rrule, String recurrenceLabel,
 			List<LocalDate> exdates, List<TemplateResponse> shifts, boolean selfAssignable, LocalDate materializedUntil,
 			boolean finished, boolean canPlan, Instant createdAt, List<OccurrenceResponse> next,
-			Integer occurrencesCreated) {
+			Integer occurrencesCreated, String firstEventId) {
 	}
 
 	/** What a draft would make: its label and its next five occurrences. Nothing is saved. */
@@ -100,7 +101,7 @@ public class ShiftSeriesController {
 				labels.of(caller, found), found.getExdates() == null ? List.of() : found.getExdates(),
 				found.getShifts() == null ? List.of() : found.getShifts().stream().map(TemplateResponse::from).toList(),
 				found.isSelfAssignable(), found.getMaterializedUntil(), found.isFinished(), canPlan,
-				found.getCreatedAt(), next(found), created);
+				found.getCreatedAt(), next(found), created, series.firstEventId(found));
 	}
 
 	private List<OccurrenceResponse> next(ShiftSeries found) {
