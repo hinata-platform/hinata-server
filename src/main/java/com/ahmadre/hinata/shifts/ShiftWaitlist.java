@@ -213,7 +213,8 @@ public class ShiftWaitlist {
 				if (current == null || !current.waiting()) {
 					return Outcome.LEFT;
 				}
-				// The person as a sign-up checks them: an active account that still sees the project.
+				// The checks a sign-up makes before its transaction, made here inside it: an active
+				// account that still sees the project.
 				User person = users.findById(userId).orElse(null);
 				if (person == null || !person.isActive() || project.isEmpty() || !access.canSee(project.get(), person)) {
 					return leave(current, REASON_INELIGIBLE) ? Outcome.SKIPPED_INELIGIBLE : Outcome.LEFT;
