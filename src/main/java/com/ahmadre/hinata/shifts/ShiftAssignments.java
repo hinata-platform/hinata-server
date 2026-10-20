@@ -60,6 +60,7 @@ public class ShiftAssignments {
 	private final ShiftSettings settings;
 	private final UserRepository users;
 	private final ApplicationEventPublisher events;
+	private final ShiftSeats seats;
 	private final Clock clock;
 
 	/** What taking a place produced, and the hints for whoever asked. */
@@ -153,14 +154,12 @@ public class ShiftAssignments {
 				Query.query(Criteria.where("userId").is(target).and("shiftId").is(shiftId)
 						.and("status").in(ShiftAssignment.Status.DECLINED, ShiftAssignment.Status.RELEASED,
 								ShiftAssignment.Status.WAITING)),
-				turnedOn(new Update().set("status", status).set("assignedBy", assignedBy), claimed, now),
+				turnedOn(claimed, now).unset("waitlistedAt").set("status", status).set("assignedBy", assignedBy),
 				FindAndModifyOptions.options().returnNew(true), ShiftAssignment.class);
 		if (assignment == null) {
 			try {
-				assignment = mongo.insert(ShiftAssignment.builder().shiftId(shiftId).eventId(claimed.getEventId())
-						.projectId(claimed.getProjectId()).userId(target).startsAt(claimed.getStartsAt())
-						.endsAt(claimed.getEndsAt()).cancelled(claimed.isCancelled()).status(status)
-						.assignedBy(assignedBy).createdAt(now).build());
+				assignment = mongo.insert(ShiftAssignment.newFor(claimed, target, now).status(status)
+						.assignedBy(assignedBy).build());
 			}
 			catch (DuplicateKeyException twice) {
 				throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.alreadyAssigned");
@@ -278,11 +277,7 @@ public class ShiftAssignments {
 			ShiftAssignment released = mongo.findById(before.getId(), ShiftAssignment.class);
 			String actorId = actor == null ? null : actor.getId();
 			if (before.active()) {
-				mongo.updateFirst(Query.query(Criteria.where("_id").is(released.getShiftId())),
-						new Update().inc("assignedCount", -1).set("updatedAt", clock.instant()), Shift.class);
-				events.publishEvent(new ShiftDomainEvents.Released(released.getId(), released.getShiftId(),
-						released.getEventId(), released.getProjectId(), released.getUserId(), actorId, to));
-				events.publishEvent(ShiftDomainEvents.SeatsOpened.of(released.getShiftId()));
+				seats.free(released, actorId, to);
 			}
 			Map<String, String> meta = new LinkedHashMap<>();
 			meta.put("self", String.valueOf(released.getUserId().equals(actorId)));
@@ -322,12 +317,7 @@ public class ShiftAssignments {
 	 * ids only. [actor] is null when the system freed the place.
 	 */
 	private void audited(AuditAction action, User actor, ShiftAssignment assignment, Map<String, String> extra) {
-		Map<String, String> meta = new LinkedHashMap<>();
-		meta.put("assignmentId", assignment.getId());
-		meta.put("shiftId", assignment.getShiftId());
-		meta.put("eventId", assignment.getEventId());
-		meta.put("projectId", assignment.getProjectId());
-		meta.put("userId", assignment.getUserId());
+		Map<String, String> meta = assignment.auditMeta();
 		meta.putAll(extra);
 		events.publishEvent(new ShiftDomainEvents.Audited(action, actor == null ? null : actor.getId(),
 				ShiftDomainEvents.label(actor), assignment.getUserId(), meta));
@@ -349,15 +339,13 @@ public class ShiftAssignments {
 		ShiftAssignment entry = mongo.findAndModify(
 				Query.query(Criteria.where("userId").is(caller.getId()).and("shiftId").is(shift.getId())
 						.and("status").in(ShiftAssignment.Status.INACTIVE)),
-				turnedOn(new Update().set("status", ShiftAssignment.Status.WAITING).unset("assignedBy")
-						.set("waitlistedAt", now), shift, now),
+				turnedOn(shift, now).set("status", ShiftAssignment.Status.WAITING).unset("assignedBy")
+						.set("waitlistedAt", now),
 				FindAndModifyOptions.options().returnNew(true), ShiftAssignment.class);
 		if (entry == null) {
 			try {
-				entry = mongo.insert(ShiftAssignment.builder().shiftId(shift.getId()).eventId(shift.getEventId())
-						.projectId(shift.getProjectId()).userId(caller.getId()).startsAt(shift.getStartsAt())
-						.endsAt(shift.getEndsAt()).cancelled(shift.isCancelled()).status(ShiftAssignment.Status.WAITING)
-						.createdAt(now).waitlistedAt(now).build());
+				entry = mongo.insert(ShiftAssignment.newFor(shift, caller.getId(), now)
+						.status(ShiftAssignment.Status.WAITING).waitlistedAt(now).build());
 			}
 			catch (DuplicateKeyException twice) {
 				throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.alreadyWaiting");
@@ -374,20 +362,12 @@ public class ShiftAssignments {
 	}
 
 	/**
-	 * What turning a person's document for a shift back on writes besides the status: the copies
-	 * of the shift, a fresh {@code createdAt} (the order of a list, the time of a place) and none of
-	 * what an earlier life of the document left behind.
+	 * A sign-up or a waiting entry turning the person's document back on: {@link ShiftAssignment#copiesOf}
+	 * and none of the waiting list's marks from an earlier life ({@code promotedAt}, {@code confirmBy});
+	 * the caller decides about {@code waitlistedAt}.
 	 */
-	private static Update turnedOn(Update update, Shift shift, Instant now) {
-		update.set("createdAt", now)
-				.set("startsAt", shift.getStartsAt()).set("endsAt", shift.getEndsAt())
-				.set("cancelled", shift.isCancelled()).set("eventId", shift.getEventId())
-				.set("projectId", shift.getProjectId())
-				.unset("reminderSentAt").unset("promotedAt").unset("confirmBy");
-		if (!update.modifies("waitlistedAt")) {
-			update.unset("waitlistedAt");
-		}
-		return update;
+	private static Update turnedOn(Shift shift, Instant now) {
+		return ShiftAssignment.copiesOf(shift, now).unset("promotedAt").unset("confirmBy");
 	}
 
 	/**

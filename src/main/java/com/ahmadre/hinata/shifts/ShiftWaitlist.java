@@ -23,7 +23,6 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -79,6 +78,7 @@ public class ShiftWaitlist {
 	private final ShiftSettings settings;
 	private final UserRepository users;
 	private final ApplicationEventPublisher events;
+	private final ShiftSeats seats;
 	private final HinataProperties properties;
 	private final Clock clock;
 
@@ -155,11 +155,11 @@ public class ShiftWaitlist {
 			if (expired == null) {
 				return false;
 			}
-			mongo.updateFirst(Query.query(Criteria.where("_id").is(expired.getShiftId())),
-					new Update().inc("assignedCount", -1).set("updatedAt", clock.instant()), Shift.class);
 			events.publishEvent(new ShiftDomainEvents.WaitlistExpired(expired.getShiftId(), expired.getEventId(),
 					expired.getProjectId(), expired.getUserId()));
-			events.publishEvent(ShiftDomainEvents.SeatsOpened.of(expired.getShiftId()));
+			// Like giving the place up: the next person moves up, and the planners hear it when the
+			// shift is still short afterwards.
+			seats.free(expired, expired.getUserId(), ShiftAssignment.Status.RELEASED);
 			audited(AuditAction.SHIFT_ASSIGNMENT_RELEASED, expired, Map.of("reason", REASON_EXPIRED));
 			return true;
 		}));
@@ -235,11 +235,8 @@ public class ShiftWaitlist {
 				ShiftAssignment promoted = mongo.findAndModify(
 						Query.query(Criteria.where("_id").is(current.getId())
 								.and("status").is(ShiftAssignment.Status.WAITING)),
-						new Update().set("status", ShiftAssignment.Status.ASSIGNED).unset("assignedBy")
-								.set("promotedAt", now).set("confirmBy", due).set("createdAt", now)
-								.set("startsAt", claimed.getStartsAt()).set("endsAt", claimed.getEndsAt())
-								.set("cancelled", claimed.isCancelled()).set("eventId", claimed.getEventId())
-								.set("projectId", claimed.getProjectId()).unset("reminderSentAt"),
+						ShiftAssignment.copiesOf(claimed, now).set("status", ShiftAssignment.Status.ASSIGNED)
+								.unset("assignedBy").set("promotedAt", now).set("confirmBy", due),
 						FindAndModifyOptions.options().returnNew(true), ShiftAssignment.class);
 				if (promoted == null) {
 					// Left the list in between: give the claimed place back by rolling everything back.
@@ -271,12 +268,7 @@ public class ShiftWaitlist {
 
 	/** An audit record without an actor: the system moved the list on. Ids only. */
 	private void audited(AuditAction action, ShiftAssignment assignment, Map<String, String> extra) {
-		Map<String, String> meta = new LinkedHashMap<>();
-		meta.put("assignmentId", assignment.getId());
-		meta.put("shiftId", assignment.getShiftId());
-		meta.put("eventId", assignment.getEventId());
-		meta.put("projectId", assignment.getProjectId());
-		meta.put("userId", assignment.getUserId());
+		Map<String, String> meta = assignment.auditMeta();
 		meta.putAll(extra);
 		events.publishEvent(new ShiftDomainEvents.Audited(action, null, null, assignment.getUserId(), meta));
 	}
