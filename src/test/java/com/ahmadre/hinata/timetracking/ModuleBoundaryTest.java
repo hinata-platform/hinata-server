@@ -317,9 +317,10 @@ class ModuleBoundaryTest {
 			ROOT + ".billing.BillingReportService",
 			// Shift planning (HIN-43). The door itself; the assignment path, which adds the
 			// "absent" hint to a place it has already taken and never refuses one for it; and the
-			// write service, which uses the door's static overlap arithmetic to report collisions
-			// after a move. None of the three holds an availability type.
-			SHIFTS + ".ShiftConflicts", SHIFTS + ".ShiftAssignments", SHIFTS + ".ShiftService");
+			// collision report, which uses the door's static overlap arithmetic to tell the planner
+			// who collides after a move (HIN-161 moved it out of the write service so series changes
+			// share it). None of the three holds an availability type.
+			SHIFTS + ".ShiftConflicts", SHIFTS + ".ShiftAssignments", SHIFTS + ".ShiftWarnings");
 
 	@Test
 	void nobodyOutsideTheNamedReadersAsksAvailability() {

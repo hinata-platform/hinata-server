@@ -154,6 +154,16 @@ public class ShiftAccess {
 		return new Scoped<>(event, project);
 	}
 
+	/** A series addressed by id (HIN-161): 404 when it is missing or its project is out of sight. */
+	public Scoped<ShiftSeries> visibleSeries(String seriesId, User user) {
+		ShiftSeries series = seriesId == null ? null : mongo.findById(seriesId, ShiftSeries.class);
+		Project project = series == null ? null : projects.findOptional(series.getProjectId()).orElse(null);
+		if (project == null || !reach.canSee(project, user)) {
+			throw ApiException.notFound("shiftSeries");
+		}
+		return new Scoped<>(series, project);
+	}
+
 	/** As {@link #visibleEvent}, and the caller plans there: 403 for a member who does not. */
 	public Scoped<ShiftEvent> plannedEvent(String eventId, User user) {
 		Scoped<ShiftEvent> scoped = visibleEvent(eventId, user);

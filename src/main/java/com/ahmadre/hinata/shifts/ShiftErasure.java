@@ -30,7 +30,8 @@ import java.util.Map;
  * transaction per assignment, the counter given back only when the status changed. Places on
  * shifts that are over stay as they are: they are the record of who covered what, and the
  * retention run removes them in time.</li>
- * <li><b>A project is deleted</b>: every document of the module that belongs to it.</li>
+ * <li><b>A project is deleted</b>: every document of the module that belongs to it, its series
+ * first (HIN-161).</li>
  * <li><b>An account is deleted</b>: its places are freed first, so the counters stay right, then
  * every assignment, planner entry, guard and calendar feed token of the person is deleted.</li>
  * </ul>
@@ -76,7 +77,8 @@ public class ShiftErasure {
 	public void onProjectDeleted(ProjectDeleted event) {
 		try {
 			Query byProject = Query.query(Criteria.where("projectId").is(event.projectId()));
-			// HIN-161 puts shift_series first here, so no series materialises into a deleted project.
+			// The series first, so no nightly run materialises into a project that is going.
+			mongo.remove(byProject, ShiftSeries.class);
 			mongo.remove(byProject, ShiftAssignment.class);
 			mongo.remove(byProject, Shift.class);
 			mongo.remove(byProject, ShiftEvent.class);
@@ -98,6 +100,9 @@ public class ShiftErasure {
 			mongo.remove(byUser, ShiftPlanner.class);
 			mongo.remove(byUser, ShiftPersonalData.FEED_TOKENS);
 			mongo.remove(Query.query(Criteria.where("_id").is(userId)), ShiftUserGuard.class);
+			// The series a person created stay with their project; only the name of who made them goes.
+			mongo.updateMulti(Query.query(Criteria.where("createdBy").is(userId)), new Update().unset("createdBy"),
+					ShiftSeries.class);
 		}
 		catch (RuntimeException failure) {
 			log.warn("[shifts] could not finish shift erasure for deleted user {}: {}", userId, failure.toString());

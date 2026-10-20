@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 /**
  * Something that needs people for a while: a trade-fair stand, a summer party, a board meeting, a
@@ -30,6 +31,11 @@ import java.time.Instant;
 // value, or the visible projects as $in), startsAt the range and the sort, _id the tiebreaker of
 // the page order, so the read needs no SORT stage.
 @CompoundIndex(name = "project_start", def = "{'projectId': 1, 'startsAt': 1, '_id': 1}")
+// HIN-161: one occurrence per series and day. A net under the materialisation, not its mechanism
+// (that is the compare-and-set on the series' rev): only documents of a series are in it, and the
+// series' future occurrences are read by seriesId with the day as the range.
+@CompoundIndex(name = "series_day", def = "{'seriesId': 1, 'occurrenceDate': 1}", unique = true,
+		partialFilter = "{'seriesId': {$type: 'string'}}")
 public class ShiftEvent {
 
 	@Id
@@ -60,6 +66,18 @@ public class ShiftEvent {
 
 	private String createdBy;
 
+	/** HIN-161: the series this event is an occurrence of; null for an event of its own. */
+	private String seriesId;
+
+	/** HIN-161: the occurrence's day in the series' zone; set exactly when {@link #seriesId} is. */
+	private LocalDate occurrenceDate;
+
+	/**
+	 * HIN-161: changed on its own ("only this one"). It keeps {@link #seriesId} for the label and no
+	 * longer follows changes to the series.
+	 */
+	private Boolean detached;
+
 	@CreatedDate
 	private Instant createdAt;
 
@@ -68,6 +86,15 @@ public class ShiftEvent {
 
 	public boolean isCancelled() {
 		return Boolean.TRUE.equals(cancelled);
+	}
+
+	public boolean isDetached() {
+		return Boolean.TRUE.equals(detached);
+	}
+
+	/** An occurrence of a series, detached or not. */
+	public boolean inSeries() {
+		return seriesId != null;
 	}
 
 	/** Open for members to sign up unless somebody closed it. */

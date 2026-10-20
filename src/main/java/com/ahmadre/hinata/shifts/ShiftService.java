@@ -54,6 +54,8 @@ public class ShiftService {
 	private final SettingsService serverSettings;
 	private final ApplicationEventPublisher events;
 	private final Clock clock;
+	private final ShiftWarnings collisions;
+	private final ShiftSeriesService series;
 
 	/** A new event. Description and location optional; the zone defaults to the creator's. */
 	public record EventDraft(String title, String description, String location, Instant startsAt,
@@ -65,7 +67,13 @@ public class ShiftService {
 	 * {@code startsAt} alone moves the event with its duration; with {@code endsAt} it sets both.
 	 */
 	public record EventPatch(String title, String description, String location, Instant startsAt,
-			Instant endsAt, String timezone, Boolean selfAssignable) {
+			Instant endsAt, String timezone, Boolean selfAssignable, String rrule) {
+
+		/** HIN-161 added [rrule]: a new rule for the series from this occurrence on ({@code scope=future}). */
+		public EventPatch(String title, String description, String location, Instant startsAt, Instant endsAt,
+				String timezone, Boolean selfAssignable) {
+			this(title, description, location, startsAt, endsAt, timezone, selfAssignable, null);
+		}
 	}
 
 	/** A new shift. Without a count it needs one person and has no upper limit. */
@@ -125,8 +133,21 @@ public class ShiftService {
 	}
 
 	public Change<ShiftEvent> updateEvent(User caller, String eventId, EventPatch patch) {
+		return updateEvent(caller, eventId, patch, null);
+	}
+
+	/**
+	 * A change to an event. On an occurrence of a series (HIN-161) [scope] is required: "this"
+	 * detaches the occurrence, "future" changes the series from it on.
+	 */
+	public Change<ShiftEvent> updateEvent(User caller, String eventId, EventPatch patch, String scope) {
 		settings.requireEnabled();
 		ShiftEvent event = access.plannedEvent(eventId, caller).item();
+		ShiftSeriesService.Scope inSeries = series.scopeOf(event, scope);
+		if (inSeries == ShiftSeriesService.Scope.FUTURE) {
+			ShiftSeriesService.FutureChange change = series.changeEventFuture(caller, event, patch);
+			return new Change<>(change.event(), change.warnings());
+		}
 		Instant oldStart = event.getStartsAt();
 		Instant newStart = patch.startsAt() != null ? ShiftRules.stored(patch.startsAt()) : oldStart;
 		long delta = Duration.between(oldStart, newStart).toMillis();
@@ -177,6 +198,10 @@ public class ShiftService {
 			if (saved == null) {
 				throw ApiException.notFound("shiftEvent");
 			}
+			if (inSeries == ShiftSeriesService.Scope.THIS) {
+				series.detach(saved);
+				saved.setDetached(true);
+			}
 			if (delta != 0) {
 				mongo.updateMulti(Query.query(Criteria.where("eventId").is(eventId)), moveBy(delta, null, true),
 						Shift.class);
@@ -192,7 +217,7 @@ public class ShiftService {
 			return saved;
 		});
 		List<Warning> warnings = delta == 0 ? List.of()
-				: warnings(caller, Criteria.where("eventId").is(eventId));
+				: collisions.of(caller, Criteria.where("eventId").is(eventId));
 		return new Change<>(updated, warnings);
 	}
 
@@ -202,9 +227,25 @@ public class ShiftService {
 	 * other shift, is never reminded of and is never anybody's next shift.
 	 */
 	public ShiftEvent cancelEvent(User caller, String eventId) {
+		return cancelEvent(caller, eventId, null);
+	}
+
+	/**
+	 * As above. On an occurrence of a series [scope] is required: "this" cancels the occurrence and
+	 * leaves its day out of the series, "future" cancels it and every later one and ends the series.
+	 */
+	public ShiftEvent cancelEvent(User caller, String eventId, String scope) {
 		settings.requireEnabled();
 		ShiftEvent event = access.plannedEvent(eventId, caller).item();
+		ShiftSeriesService.Scope inSeries = series.scopeOf(event, scope);
+		if (inSeries == ShiftSeriesService.Scope.FUTURE) {
+			series.endFuture(caller, event, true);
+			return mongo.findById(eventId, ShiftEvent.class);
+		}
 		return tx.run(() -> {
+			if (inSeries == ShiftSeriesService.Scope.THIS) {
+				series.exclude(event);
+			}
 			ShiftEvent saved = mongo.findAndModify(Query.query(Criteria.where("_id").is(eventId)),
 					new Update().set("cancelled", true).set("updatedAt", clock.instant()),
 					FindAndModifyOptions.options().returnNew(true), ShiftEvent.class);
@@ -231,12 +272,28 @@ public class ShiftService {
 	 * racing the deletion either lands before it and blocks it or finds no place to take.
 	 */
 	public void deleteEvent(User caller, String eventId) {
+		deleteEvent(caller, eventId, null);
+	}
+
+	/**
+	 * As above. On an occurrence of a series [scope] is required: "this" deletes the occurrence and
+	 * leaves its day out of the series, "future" deletes the series from it on (HIN-161).
+	 */
+	public void deleteEvent(User caller, String eventId, String scope) {
 		settings.requireEnabled();
-		access.plannedEvent(eventId, caller);
+		ShiftEvent planned = access.plannedEvent(eventId, caller).item();
+		ShiftSeriesService.Scope inSeries = series.scopeOf(planned, scope);
+		if (inSeries == ShiftSeriesService.Scope.FUTURE) {
+			series.endFuture(caller, planned, false);
+			return;
+		}
 		tx.run(() -> {
 			ShiftEvent event = mongo.findById(eventId, ShiftEvent.class);
 			if (event == null) {
 				throw ApiException.notFound("shiftEvent");
+			}
+			if (inSeries == ShiftSeriesService.Scope.THIS) {
+				series.exclude(event);
 			}
 			Query ofEvent = Query.query(Criteria.where("eventId").is(eventId));
 			long shifts = mongo.updateMulti(ofEvent, new Update().set("deleted", true), Shift.class).getMatchedCount();
@@ -255,10 +312,32 @@ public class ShiftService {
 	// --- shifts ---------------------------------------------------------------
 
 	public Shift createShift(User caller, String eventId, ShiftDraft draft) {
+		return createShift(caller, eventId, draft, null);
+	}
+
+	/**
+	 * A new shift. On an occurrence of a series [scope] is required: "this" adds it to the
+	 * occurrence only, "future" makes it a template of the series from this occurrence on.
+	 */
+	public Shift createShift(User caller, String eventId, ShiftDraft draft, String scope) {
 		settings.requireEnabled();
 		ShiftEvent event = access.plannedEvent(eventId, caller).item();
 		Shift shift = newShift(event, draft, ShiftRules.stored(draft.startsAt()), ShiftRules.stored(draft.endsAt()));
+		ShiftSeriesService.Scope inSeries = series.scopeOf(event, scope);
+		if (inSeries == ShiftSeriesService.Scope.FUTURE) {
+			String key = ShiftSeriesPlan.newKey();
+			series.addShiftFuture(caller, event, draft, key);
+			Shift created = mongo.findOne(Query.query(Criteria.where("eventId").is(eventId).and("templateKey").is(key)),
+					Shift.class);
+			if (created == null) {
+				throw ApiException.notFound("shift");
+			}
+			return created;
+		}
 		return tx.run(() -> {
+			if (inSeries == ShiftSeriesService.Scope.THIS) {
+				series.detach(event);
+			}
 			assertRoomFor(eventId, 1);
 			Shift saved = mongo.insert(shift);
 			audited(AuditAction.SHIFT_CREATED, caller, saved.getId(), Map.of("eventId", eventId,
@@ -273,8 +352,20 @@ public class ShiftService {
 	 * ISO date to the message key).
 	 */
 	public List<Shift> createShifts(User caller, String eventId, BatchDraft batch) {
+		return createShifts(caller, eventId, batch, null);
+	}
+
+	/**
+	 * As above. On an occurrence of a series only "this" is possible: a batch spans the days of one
+	 * event, a series' days are its occurrences.
+	 */
+	public List<Shift> createShifts(User caller, String eventId, BatchDraft batch, String scope) {
 		settings.requireEnabled();
 		ShiftEvent event = access.plannedEvent(eventId, caller).item();
+		ShiftSeriesService.Scope inSeries = series.scopeOf(event, scope);
+		if (inSeries == ShiftSeriesService.Scope.FUTURE) {
+			throw ApiException.badRequest("error.shifts.seriesFutureUnsupported");
+		}
 		if (batch == null || batch.template() == null || batch.days() == null || batch.days().isEmpty()) {
 			throw ApiException.badRequest("error.shifts.batchEmpty");
 		}
@@ -306,6 +397,9 @@ public class ShiftService {
 			throw ShiftRules.refusal(HttpStatus.BAD_REQUEST, "error.shifts.batchInvalid", failures);
 		}
 		return tx.run(() -> {
+			if (inSeries == ShiftSeriesService.Scope.THIS) {
+				series.detach(event);
+			}
 			assertRoomFor(eventId, shifts.size());
 			List<Shift> saved = new ArrayList<>(mongo.insertAll(shifts));
 			saved.sort((a, b) -> a.getStartsAt().compareTo(b.getStartsAt()));
@@ -317,12 +411,21 @@ public class ShiftService {
 	}
 
 	public Change<Shift> updateShift(User caller, String shiftId, ShiftPatch patch) {
+		return updateShift(caller, shiftId, patch, null);
+	}
+
+	/**
+	 * A change to a shift. On an occurrence of a series [scope] is required: "this" detaches the
+	 * occurrence, "future" changes the shift's template from this occurrence on.
+	 */
+	public Change<Shift> updateShift(User caller, String shiftId, ShiftPatch patch, String scope) {
 		settings.requireEnabled();
 		Shift shift = access.plannedShift(shiftId, caller).item();
 		ShiftEvent event = mongo.findById(shift.getEventId(), ShiftEvent.class);
 		if (event == null) {
 			throw ApiException.notFound("shift");
 		}
+		ShiftSeriesService.Scope inSeries = series.scopeOf(event, scope);
 		Instant start = patch.startsAt() != null ? ShiftRules.stored(patch.startsAt()) : shift.getStartsAt();
 		Instant end = patch.endsAt() != null ? ShiftRules.stored(patch.endsAt()) : shift.getEndsAt();
 		boolean moved = !start.equals(shift.getStartsAt()) || !end.equals(shift.getEndsAt());
@@ -334,6 +437,17 @@ public class ShiftService {
 		int required = patch.requiredHelpers() != null ? patch.requiredHelpers() : shift.required();
 		ShiftRules.helpers(required, max);
 
+		if (inSeries == ShiftSeriesService.Scope.FUTURE) {
+			Shift changed = Shift.builder().title(patch.title() != null ? patch.title() : shift.getTitle())
+					.startsAt(start).endsAt(end).requiredHelpers(required).maxHelpers(max).build();
+			ShiftRules.shiftSpan(start, end, event);
+			ShiftSeriesService.FutureChange change = series.changeShiftFuture(caller, event, shift, changed);
+			Shift now = mongo.findById(shiftId, Shift.class);
+			if (now == null || now.isDeleted()) {
+				throw ApiException.notFound("shift");
+			}
+			return new Change<>(now, change.warnings());
+		}
 		Criteria live = Criteria.where("_id").is(shiftId).and("deleted").is(false);
 		// Rule 5: a lower limit is written only while it still holds everybody already on the shift,
 		// decided by the database in the write itself, so a sign-up in between cannot slip past it.
@@ -368,6 +482,9 @@ public class ShiftService {
 				throw ShiftRules.refusal(HttpStatus.CONFLICT, "error.shifts.maxBelowAssigned",
 						Map.of("assigned", String.valueOf(now.assigned())));
 			}
+			if (inSeries == ShiftSeriesService.Scope.THIS) {
+				series.detach(event);
+			}
 			if (moved) {
 				Update follow = new Update().set("startsAt", start).set("endsAt", end);
 				if (start.isAfter(clock.instant().plus(ShiftRules.SHIFT_MAX))) {
@@ -383,7 +500,7 @@ public class ShiftService {
 					"projectId", saved.getProjectId(), "changed", String.join(",", changed)));
 			return saved;
 		});
-		List<Warning> warnings = moved ? warnings(caller, Criteria.where("shiftId").is(shiftId)) : List.of();
+		List<Warning> warnings = moved ? collisions.of(caller, Criteria.where("shiftId").is(shiftId)) : List.of();
 		return new Change<>(updated, warnings);
 	}
 
@@ -392,9 +509,27 @@ public class ShiftService {
 	 * committed first is deleted with the shift; one that comes later finds the tombstone.
 	 */
 	public void deleteShift(User caller, String shiftId) {
+		deleteShift(caller, shiftId, null);
+	}
+
+	/**
+	 * As above. On an occurrence of a series [scope] is required: "this" detaches the occurrence,
+	 * "future" removes the shift's template from this occurrence on (409 while somebody holds one
+	 * of its shifts). A shift that came from no template goes on its own either way.
+	 */
+	public void deleteShift(User caller, String shiftId, String scope) {
 		settings.requireEnabled();
-		access.plannedShift(shiftId, caller);
+		Shift planned = access.plannedShift(shiftId, caller).item();
+		ShiftEvent event = mongo.findById(planned.getEventId(), ShiftEvent.class);
+		ShiftSeriesService.Scope inSeries = event == null ? null : series.scopeOf(event, scope);
+		if (inSeries == ShiftSeriesService.Scope.FUTURE && planned.getTemplateKey() != null) {
+			series.removeShiftFuture(caller, event, planned);
+			return;
+		}
 		tx.run(() -> {
+			if (inSeries != null) {
+				series.detach(event);
+			}
 			Shift tombstoned = mongo.findAndModify(Query.query(Criteria.where("_id").is(shiftId)),
 					new Update().set("deleted", true).set("updatedAt", clock.instant()),
 					FindAndModifyOptions.options().returnNew(true), Shift.class);
@@ -476,38 +611,6 @@ public class ShiftService {
 		}
 		AggregationOperation stage = context -> new Document("$set", set);
 		return AggregationUpdate.from(List.of(stage));
-	}
-
-	/**
-	 * Who now holds two overlapping places, after a move of the assignments [moved] selects. One
-	 * read over the user_start index for everybody affected, bounded below by the longest shift.
-	 */
-	private List<Warning> warnings(User caller, Criteria moved) {
-		List<ShiftAssignment> mine = mongo.find(Query.query(moved.and("status").in(ShiftAssignment.Status.ACTIVE)
-				.and("cancelled").is(false)), ShiftAssignment.class);
-		if (mine.isEmpty()) {
-			return List.of();
-		}
-		Set<String> people = new LinkedHashSet<>();
-		Instant from = null;
-		Instant to = null;
-		for (ShiftAssignment assignment : mine) {
-			people.add(assignment.getUserId());
-			from = from == null || assignment.getStartsAt().isBefore(from) ? assignment.getStartsAt() : from;
-			to = to == null || assignment.getEndsAt().isAfter(to) ? assignment.getEndsAt() : to;
-		}
-		List<ShiftAssignment> held = mongo.find(Query.query(Criteria.where("userId").in(people)
-				.and("startsAt").lt(to).gt(from.minus(ShiftRules.SHIFT_MAX))
-				.and("status").in(ShiftAssignment.Status.ACTIVE).and("cancelled").is(false)), ShiftAssignment.class);
-		List<ShiftConflicts.Collision> collisions = ShiftConflicts.collisions(mine, held);
-		if (collisions.isEmpty()) {
-			return List.of();
-		}
-		Set<String> visible = access.visibleProjectIds(caller);
-		return collisions.stream()
-				.map(collision -> new Warning(collision.userId(), collision.shiftId(),
-						visible.contains(collision.otherProjectId()) ? collision.otherShiftId() : null))
-				.toList();
 	}
 
 	private void audited(AuditAction action, User actor, String targetId, Map<String, String> meta) {

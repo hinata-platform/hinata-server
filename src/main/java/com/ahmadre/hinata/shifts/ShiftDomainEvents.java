@@ -56,4 +56,12 @@ public final class ShiftDomainEvents {
 	 */
 	public record ShiftChanged(Shift shift, String actorId, boolean deleted, List<String> userIds) {
 	}
+
+	/**
+	 * A series was changed from an occurrence on, cancelled or deleted (HIN-161). [counts] says per
+	 * person how many of their places it moved, cancelled or removed, read inside the transaction;
+	 * each of them hears once, with that number.
+	 */
+	public record SeriesChanged(String projectId, String actorId, Map<String, Integer> counts) {
+	}
 }

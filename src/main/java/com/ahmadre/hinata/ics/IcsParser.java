@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -175,6 +176,221 @@ public final class IcsParser {
 		finally {
 			own.shutdownNow();
 		}
+	}
+
+	// --- series of one's own (HIN-161) ------------------------------------------------------
+
+	/** The frequencies a series of shifts may have. */
+	private static final Set<String> SERIES_FREQUENCIES = Set.of("DAILY", "WEEKLY", "MONTHLY");
+
+	/** The parts a series rule may name; anything else is refused before the engine sees it. */
+	private static final Set<String> SERIES_PARTS = Set.of("FREQ", "INTERVAL", "BYDAY", "BYMONTHDAY", "UNTIL",
+			"COUNT", "WKST");
+
+	/** Most occurrences one expansion may collect from the first one on, far above three years of days. */
+	private static final int MAX_SERIES_OCCURRENCES = 5_000;
+
+	/**
+	 * A series rule {@link #expand} will not take: outside the subset a series of shifts may use
+	 * ({@link Reason#UNSUPPORTED}), or more work than the budget allows ({@link Reason#TOO_COMPLEX}).
+	 * It never carries the rule or the engine's message.
+	 */
+	public static final class RecurrenceRefused extends RuntimeException {
+
+		public enum Reason {
+			UNSUPPORTED, TOO_COMPLEX
+		}
+
+		private final Reason reason;
+
+		RecurrenceRefused(Reason reason) {
+			super(reason.name(), null, false, false);
+			this.reason = reason;
+		}
+
+		public Reason reason() {
+			return reason;
+		}
+	}
+
+	/**
+	 * The occurrences of a series of one's own (HIN-161) whose day lies in [fromDate, toDate], both
+	 * inclusive, as wall-clock times in [zone].
+	 *
+	 * <p>Every occurrence is [firstStart]'s time of day on its own date, turned into an instant
+	 * with the zone's rules of that date, so a weekly 18:00 stays 18:00 across the change to summer
+	 * time; a time in the hour that does not exist is read with the offset from before the gap, one
+	 * that happens twice is its first occurrence (RFC 5545 3.3.5). [firstStart] is always the first
+	 * occurrence and COUNT counts it. UNTIL is a DATE and is applied here, in [zone].
+	 *
+	 * <p>The rule has to be in the subset a series of shifts may use: FREQ DAILY, WEEKLY or
+	 * MONTHLY, INTERVAL 1 to 100, BYDAY with plain weekdays for a weekly rule, one BYMONTHDAY from
+	 * 1 to 31 for a monthly rule, UNTIL as a DATE or COUNT up to 5,000, and WKST. Anything else is
+	 * {@link RecurrenceRefused.Reason#UNSUPPORTED}. The rule then still passes {@link IcsRule},
+	 * runs on a thread of its own like a calendar and has the same step and time budget; spending
+	 * either is {@link RecurrenceRefused.Reason#TOO_COMPLEX}.
+	 *
+	 * @throws RecurrenceRefused        when the rule is outside the subset or too costly
+	 * @throws IllegalArgumentException when a value is missing
+	 */
+	public static List<ZonedDateTime> expand(String rrule, LocalDateTime firstStart, ZoneId zone, LocalDate fromDate,
+			LocalDate toDate) {
+		return expand(rrule, firstStart, zone, fromDate, toDate, WORK_BUDGET, TIME_BUDGET);
+	}
+
+	/** {@link #expand(String, LocalDateTime, ZoneId, LocalDate, LocalDate)} with other budgets, for tests. */
+	static List<ZonedDateTime> expand(String rrule, LocalDateTime firstStart, ZoneId zone, LocalDate fromDate,
+			LocalDate toDate, long workBudget, Duration timeBudget) {
+		if (rrule == null || firstStart == null || zone == null || fromDate == null || toDate == null) {
+			throw new IllegalArgumentException("a rule, a first start, a zone and a window are needed");
+		}
+		SeriesRule rule = seriesRule(rrule);
+		if (toDate.isBefore(fromDate) || toDate.isBefore(firstStart.toLocalDate())
+				|| rule.until() != null && rule.until().isBefore(firstStart.toLocalDate())) {
+			return List.of();
+		}
+		ForkJoinPool own = new ForkJoinPool(1, OWN_THREAD, null, false, 1, 1, 1, pool -> true, 1, TimeUnit.SECONDS);
+		try {
+			List<LocalDateTime> starts = own.submit(() -> walkSeries(rule, firstStart, toDate, workBudget, timeBudget))
+					.join();
+			ZoneRules rules = zone.getRules();
+			List<ZonedDateTime> out = new ArrayList<>();
+			for (LocalDateTime start : starts) {
+				LocalDate day = start.toLocalDate();
+				if (!day.isBefore(fromDate) && !day.isAfter(toDate)) {
+					out.add(IcsZones.instant(start, rules).atZone(zone));
+				}
+			}
+			return out;
+		}
+		finally {
+			own.shutdownNow();
+		}
+	}
+
+	/**
+	 * The instant a wall-clock time in [zone] means, resolved the way {@link #expand} resolves its
+	 * occurrences, so a series' shifts land where its events do.
+	 */
+	public static Instant instant(LocalDateTime local, ZoneId zone) {
+		return IcsZones.instant(local, zone.getRules());
+	}
+
+	/** A series rule, checked: what the engine gets (no COUNT, no UNTIL), COUNT and UNTIL. */
+	private record SeriesRule(String forRecur, int count, LocalDate until) {
+	}
+
+	private static SeriesRule seriesRule(String rrule) {
+		Map<String, String> parts = new LinkedHashMap<>();
+		for (String part : rrule.strip().split(";")) {
+			if (part.isBlank()) {
+				continue;
+			}
+			int equals = part.indexOf('=');
+			if (equals <= 0) {
+				throw new RecurrenceRefused(RecurrenceRefused.Reason.UNSUPPORTED);
+			}
+			String name = part.substring(0, equals).strip().toUpperCase(Locale.ROOT);
+			String value = part.substring(equals + 1).strip().toUpperCase(Locale.ROOT);
+			if (!SERIES_PARTS.contains(name) || parts.put(name, value) != null) {
+				throw new RecurrenceRefused(RecurrenceRefused.Reason.UNSUPPORTED);
+			}
+		}
+		String frequency = parts.get("FREQ");
+		String byDay = parts.get("BYDAY");
+		String byMonthDay = parts.get("BYMONTHDAY");
+		String until = parts.get("UNTIL");
+		boolean fits = frequency != null && SERIES_FREQUENCIES.contains(frequency)
+				&& (byDay == null || frequency.equals("WEEKLY") && byDay.matches("(MO|TU|WE|TH|FR|SA|SU)(,(MO|TU|WE|TH|FR|SA|SU))*"))
+				&& (byMonthDay == null || frequency.equals("MONTHLY") && byMonthDay.matches("[1-9]|[12]\\d|3[01]"))
+				&& (until == null || until.matches("\\d{8}"))
+				&& (parts.get("INTERVAL") == null || parts.get("INTERVAL").matches("\\d{1,3}")
+						&& Integer.parseInt(parts.get("INTERVAL")) >= 1
+						&& Integer.parseInt(parts.get("INTERVAL")) <= IcsRule.MAX_INTERVAL)
+				&& (parts.get("COUNT") == null || parts.get("COUNT").matches("\\d{1,4}")
+						&& Integer.parseInt(parts.get("COUNT")) >= 1
+						&& Integer.parseInt(parts.get("COUNT")) <= IcsRule.MAX_COUNT);
+		if (!fits) {
+			throw new RecurrenceRefused(RecurrenceRefused.Reason.UNSUPPORTED);
+		}
+		IcsRule checked;
+		try {
+			checked = IcsRule.read(rrule, false);
+		}
+		catch (DateTimeException | IllegalArgumentException ex) {
+			throw new RecurrenceRefused(RecurrenceRefused.Reason.UNSUPPORTED);
+		}
+		if (!checked.expandable()) {
+			throw new RecurrenceRefused(RecurrenceRefused.Reason.UNSUPPORTED);
+		}
+		StringBuilder engine = new StringBuilder();
+		for (String part : checked.forRecur().split(";")) {
+			if (!part.startsWith("COUNT=")) {
+				engine.append(engine.isEmpty() ? "" : ";").append(part);
+			}
+		}
+		int count = parts.get("COUNT") == null ? 0 : Integer.parseInt(parts.get("COUNT"));
+		return new SeriesRule(engine.toString(), count, checked.until() == null ? null : checked.until().day());
+	}
+
+	/**
+	 * The starts of the series from [firstStart] to the end of [toDate], in order, COUNT and UNTIL
+	 * applied. Runs on the series' own thread, which the alarm interrupts when the time is up.
+	 */
+	private static List<LocalDateTime> walkSeries(SeriesRule rule, LocalDateTime firstStart, LocalDate toDate,
+			long workBudget, Duration timeBudget) {
+		long deadline = System.nanoTime() + timeBudget.toNanos();
+		ScheduledFuture<?> alarm = ALARMS.schedule(Thread.currentThread()::interrupt, timeBudget.toNanos(),
+				TimeUnit.NANOSECONDS);
+		LocalDate last = rule.until() != null && rule.until().isBefore(toDate) ? rule.until() : toDate;
+		java.util.TreeSet<LocalDateTime> starts = new java.util.TreeSet<>();
+		starts.add(firstStart);
+		long budget = workBudget;
+		try {
+			Spliterator<LocalDateTime> dates = new Recur<LocalDateTime>(rule.forRecur(), false)
+					.getDatesAsStream(firstStart, firstStart, last.plusDays(1).atStartOfDay(), -1).spliterator();
+			Handed<LocalDateTime> handed = new Handed<>();
+			while (true) {
+				if (budget-- <= 0 || System.nanoTime() - deadline >= 0 || Thread.currentThread().isInterrupted()) {
+					throw new RecurrenceRefused(RecurrenceRefused.Reason.TOO_COMPLEX);
+				}
+				if (!dates.tryAdvance(handed)) {
+					break;
+				}
+				LocalDateTime start = handed.take();
+				if (start == null || start.isBefore(firstStart)) {
+					continue;
+				}
+				if (start.toLocalDate().isAfter(last)) {
+					break;
+				}
+				starts.add(start);
+				if (starts.size() > MAX_SERIES_OCCURRENCES
+						|| rule.count() > 0 && starts.size() >= rule.count() + 1) {
+					// COUNT reached (one beyond it is enough to know), or more than any series needs.
+					if (starts.size() > MAX_SERIES_OCCURRENCES) {
+						throw new RecurrenceRefused(RecurrenceRefused.Reason.TOO_COMPLEX);
+					}
+					break;
+				}
+			}
+		}
+		catch (RecurrenceRefused refused) {
+			throw refused;
+		}
+		catch (RuntimeException ex) {
+			// The alarm's interrupt makes ical4j give up a step with an exception of its own.
+			throw new RecurrenceRefused(RecurrenceRefused.Reason.TOO_COMPLEX);
+		}
+		finally {
+			alarm.cancel(false);
+			Thread.interrupted();
+		}
+		List<LocalDateTime> out = new ArrayList<>(starts);
+		if (rule.count() > 0 && out.size() > rule.count()) {
+			out = out.subList(0, rule.count());
+		}
+		return out;
 	}
 
 	private static IcsCalendar read(byte[] ics, Instant from, Instant to, ZoneId readerZone, long workBudget,
