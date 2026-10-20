@@ -139,6 +139,10 @@ class ShiftSeriesIntegrationTest {
 	private ShiftPersonalData personalData;
 	@Autowired
 	private ApplicationEventPublisher publisher;
+	@Autowired
+	private ShiftReminderJob reminders;
+	@Autowired
+	private ShiftFeed feed;
 
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -173,6 +177,51 @@ class ShiftSeriesIntegrationTest {
 	}
 
 	// --- creating -----------------------------------------------------------------------
+
+	@Test
+	@DisplayName("occurrences need no special case: the reminder finds the next one, the feed lists each with its own time")
+	void reminderAndFeedOnOccurrences() {
+		Instant plannedHour = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+		// The first occurrence starts in the reminder window of this hour's run, the second a day later.
+		LocalDateTime firstStart = LocalDateTime.ofInstant(plannedHour.plus(Duration.ofHours(23)), BERLIN);
+		ShiftSeriesService.Created created = series.create(lead, project.getId(), new ShiftSeriesService.SeriesDraft(
+				"Bereitschaft", null, "Leitstelle", "Europe/Berlin", firstStart, 120, "FREQ=DAILY;COUNT=3", true,
+				List.of(new ShiftSeriesService.TemplateDraft(null, "Dienst", 0, firstStart.toLocalTime(),
+						firstStart.toLocalTime().plusHours(1), 1, null))));
+		String id = created.series().getId();
+		List<Shift> shifts = mongo.find(Query.query(Criteria.where("projectId").is(project.getId()))
+				.with(Sort.by("startsAt")), Shift.class);
+		assertThat(shifts).hasSize(3);
+		String first = assignments.assign(ann, shifts.get(0).getId(), null, true).assignment().getId();
+		String second = assignments.assign(ann, shifts.get(1).getId(), null, true).assignment().getId();
+		assignments.assign(bob, shifts.get(1).getId(), null, true);
+
+		assertThat(reminders.run(plannedHour)).isEqualTo(1);
+		assertThat(mongo.count(Query.query(Criteria.where("userId").is(ann.getId())
+				.and("type").is(Notification.Type.SHIFT_REMINDER)), Notification.class)).isEqualTo(1);
+		assertThat(mongo.count(Query.query(Criteria.where("userId").is(bob.getId())
+				.and("type").is(Notification.Type.SHIFT_REMINDER)), Notification.class)).isZero();
+		assertThat(mongo.findById(second, ShiftAssignment.class).getReminderSentAt()).isNull();
+		// The next run, a day on, reminds the second occurrence and not the first again.
+		assertThat(reminders.run(plannedHour.plus(Duration.ofDays(1)))).isEqualTo(2);
+
+		String url = feed.create(ann).url();
+		String token = url.substring(url.lastIndexOf('/') + 1, url.length() - ".ics".length());
+		String ics = new String(((ShiftFeed.Calendar) feed.fetch(token)).body(), java.nio.charset.StandardCharsets.UTF_8);
+		List<com.ahmadre.hinata.ics.IcsEvent> events = com.ahmadre.hinata.ics.IcsParser.parse(
+				ics.getBytes(java.nio.charset.StandardCharsets.UTF_8), Instant.now().minus(Duration.ofDays(40)),
+				Instant.now().plus(Duration.ofDays(200)), java.time.ZoneOffset.UTC).events();
+		assertThat(events).hasSize(2);
+		assertThat(events).extracting(com.ahmadre.hinata.ics.IcsEvent::uid).allSatisfy(uid ->
+				assertThat(uid).matches("(" + first + "|" + second + ")@.*"));
+		assertThat(events).extracting(event -> ((com.ahmadre.hinata.ics.IcsEvent.Timed) event).start())
+				.containsExactlyInAnyOrder(shifts.get(0).getStartsAt(), shifts.get(1).getStartsAt());
+		assertThat(events).extracting(com.ahmadre.hinata.ics.IcsEvent::summary).containsOnly("Dienst, Bereitschaft");
+		// Each occurrence starts at the same wall-clock time in the series' zone, whatever the offset.
+		assertThat(shifts).allSatisfy(shift ->
+				assertThat(LocalDateTime.ofInstant(shift.getStartsAt(), BERLIN).toLocalTime()).isEqualTo(firstStart.toLocalTime()));
+		assertThat(occurrences(id)).isNotEmpty();
+	}
 
 	@Test
 	@DisplayName("wall-clock times and days are stored without a zone: a server in another zone reads the same series")
