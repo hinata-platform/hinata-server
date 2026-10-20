@@ -17,6 +17,9 @@ import com.ahmadre.hinata.user.UserRepository;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -29,6 +32,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.LocalDate;
+import java.time.Instant;
+import java.util.Date;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -171,6 +176,7 @@ class MoneyBudgetIntegrationTest {
 				List.of(), false), member);
 		assertThat(filed.isBillable()).isTrue();
 
+		backdateTimer();
 		WorkItem stopped = timers.stop(new TimerService.StopRequest(null, null, null, null, null, null, null, null),
 				member).entry();
 		assertThat(stopped.isBillable()).isTrue();
@@ -186,6 +192,7 @@ class MoneyBudgetIntegrationTest {
 				List.of(), false), member);
 		assertThat(patched.isBillable()).isFalse();
 
+		backdateTimer();
 		WorkItem stopped = timers.stop(new TimerService.StopRequest(null, null, null, null, null, null, null, null),
 				member).entry();
 		assertThat(stopped.isBillable()).isFalse();
@@ -199,6 +206,7 @@ class MoneyBudgetIntegrationTest {
 		timers.start(TimerService.StartDraft.stopwatch(new TimerService.TimerDraft(null, null, "work", null,
 				List.of(), null)), member);
 
+		backdateTimer();
 		WorkItem stopped = timers.stop(new TimerService.StopRequest(null, null, project.getId(), null, null, null,
 				null, false), member).entry();
 
@@ -277,8 +285,8 @@ class MoneyBudgetIntegrationTest {
 	}
 
 	private ProjectTimeSettings stored() {
-		return mongo.findOne(org.springframework.data.mongodb.core.query.Query.query(
-				org.springframework.data.mongodb.core.query.Criteria.where("projectId").is(project.getId())),
+		return mongo.findOne(Query.query(
+				Criteria.where("projectId").is(project.getId())),
 				ProjectTimeSettings.class);
 	}
 
@@ -289,8 +297,8 @@ class MoneyBudgetIntegrationTest {
 
 		save(lead, 100_000L, null);
 
-		assertThat(mongo.findOne(org.springframework.data.mongodb.core.query.Query.query(
-				org.springframework.data.mongodb.core.query.Criteria.where("projectId").is(project.getId())),
+		assertThat(mongo.findOne(Query.query(
+				Criteria.where("projectId").is(project.getId())),
 				ProjectTimeSettings.class).getBudgetCents()).isEqualTo(100_000L);
 	}
 
@@ -330,9 +338,9 @@ class MoneyBudgetIntegrationTest {
 	}
 
 	private void defaultBillable(Boolean billable) {
-		mongo.upsert(org.springframework.data.mongodb.core.query.Query.query(
-				org.springframework.data.mongodb.core.query.Criteria.where("projectId").is(project.getId())),
-				new org.springframework.data.mongodb.core.query.Update().set("defaultBillable", billable),
+		mongo.upsert(Query.query(
+				Criteria.where("projectId").is(project.getId())),
+				new Update().set("defaultBillable", billable),
 				ProjectTimeSettings.class);
 	}
 
@@ -363,4 +371,17 @@ class MoneyBudgetIntegrationTest {
 		timeTracking.create(new TimeTrackingService.NewEntry(project.getId(), null, minutes, day, null, "work",
 				null, null, List.of(), billable), WorkItem.Source.APP, owner);
 	}
+
+	/**
+	 * Moves the running timer ten minutes back. A stop in the same second as its start is a
+	 * zero-length entry, which the server rightly refuses, so the tests did not always pass.
+	 */
+	private void backdateTimer() {
+		mongo.updateFirst(Query.query(
+				Criteria.where("userId").is(member.getId())),
+				Update.update("startedAt",
+						Date.from(Instant.now().minusSeconds(600))),
+				RunningTimer.class);
+	}
+
 }
