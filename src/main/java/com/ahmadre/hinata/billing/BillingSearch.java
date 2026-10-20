@@ -73,4 +73,15 @@ class BillingSearch implements SearchSource {
 					.build();
 		}).toList();
 	}
+
+	/** The rates of the projects the caller sees and may price, revenue only without costs, up to [limit]. */
+	@Override
+	public long count(SearchContext context, int limit) {
+		BillingAccess.Reach reach = access.of(context.user());
+		List<String> priced = context.projectIds().stream().filter(reach::leads).toList();
+		if (priced.isEmpty()) return 0;
+		Criteria rates = Criteria.where("projectId").in(priced);
+		if (!reach.costs()) rates = rates.and("kind").is(BillingRate.Kind.BILLABLE);
+		return mongo.count(Query.query(rates).limit(limit), BillingRate.class);
+	}
 }

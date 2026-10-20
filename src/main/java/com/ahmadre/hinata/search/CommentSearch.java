@@ -52,23 +52,10 @@ class CommentSearch implements SearchSource {
 
 	@Override
 	public List<SearchHit> search(SearchContext context, int cap) {
-		Document issueReach = context.issues(false).getCriteriaObject();
-		List<Document> pipeline = List.of(
-				new Document("$match", new Document("text",
-						new Document("$regex", Pattern.quote(context.query())).append("$options", "i"))),
-				new Document("$sort", new Document("createdAt", -1).append("_id", -1)),
-				new Document("$lookup", new Document("from", mongo.getCollectionName(Issue.class))
-						.append("let", new Document("issue", new Document("$convert", new Document("input", "$issueId")
-								.append("to", "objectId").append("onError", "$issueId"))))
-						.append("pipeline", List.of(
-								new Document("$match", new Document("$expr", new Document("$eq", List.of("$_id", "$$issue")))),
-								new Document("$match", issueReach),
-								new Document("$project", new Document("title", 1).append("readableId", 1))))
-						.append("as", "issue")),
-				new Document("$match", new Document("issue.0", new Document("$exists", true))),
-				new Document("$limit", cap),
-				new Document("$project", new Document("issueId", 1).append("authorId", 1).append("text", 1)
-						.append("createdAt", 1).append("issue", 1)));
+		List<Document> pipeline = new ArrayList<>(visible(context, new Document("text",
+				new Document("$regex", Pattern.quote(context.query())).append("$options", "i")), cap));
+		pipeline.add(new Document("$project", new Document("issueId", 1).append("authorId", 1).append("text", 1)
+				.append("createdAt", 1).append("issue", 1)));
 		List<Document> rows = new ArrayList<>();
 		mongo.getCollection(mongo.getCollectionName(IssueComment.class)).aggregate(pipeline).into(rows);
 		Map<String, String> authors = authorNames(rows.stream().map(row -> row.getString("authorId"))
@@ -90,6 +77,37 @@ class CommentSearch implements SearchSource {
 					.createdAt(created == null ? null : created.toInstant())
 					.build();
 		}).toList();
+	}
+
+	/** Text comments on issues the caller reaches, by the same join as the hits, up to [limit]. */
+	@Override
+	public long count(SearchContext context, int limit) {
+		List<Document> pipeline = new ArrayList<>(visible(context,
+				new Document("type", new Document("$ne", IssueComment.Type.VOICE.name())), limit));
+		pipeline.add(new Document("$count", "n"));
+		Document counted = mongo.getCollection(mongo.getCollectionName(IssueComment.class)).aggregate(pipeline).first();
+		return counted == null ? 0 : ((Number) counted.get("n")).longValue();
+	}
+
+	/**
+	 * The comments matching [match], newest first, each joined to its issue with the caller's issue
+	 * reach inside the join, and capped at [limit] only after the join.
+	 */
+	private List<Document> visible(SearchContext context, Document match, int limit) {
+		Document issueReach = context.issues(false).getCriteriaObject();
+		return List.of(
+				new Document("$match", match),
+				new Document("$sort", new Document("createdAt", -1).append("_id", -1)),
+				new Document("$lookup", new Document("from", mongo.getCollectionName(Issue.class))
+						.append("let", new Document("issue", new Document("$convert", new Document("input", "$issueId")
+								.append("to", "objectId").append("onError", "$issueId"))))
+						.append("pipeline", List.of(
+								new Document("$match", new Document("$expr", new Document("$eq", List.of("$_id", "$$issue")))),
+								new Document("$match", issueReach),
+								new Document("$project", new Document("title", 1).append("readableId", 1))))
+						.append("as", "issue")),
+				new Document("$match", new Document("issue.0", new Document("$exists", true))),
+				new Document("$limit", limit));
 	}
 
 	private Map<String, String> authorNames(Set<String> ids) {

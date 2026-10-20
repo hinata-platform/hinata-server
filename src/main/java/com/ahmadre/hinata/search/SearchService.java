@@ -161,7 +161,9 @@ public class SearchService {
 		}
 		// The counts do not depend on what is typed: they are worked out when the
 		// palette opens (an empty query) and not again on every keystroke after it.
-		return new SearchResponse(groups, q.isBlank() ? counts(reach) : java.util.Map.of());
+		if (!q.isBlank()) return new SearchResponse(groups, Map.of(), List.of());
+		List<String> capped = new ArrayList<>();
+		return new SearchResponse(groups, counts(reach, capped), capped);
 	}
 
 	private List<SearchGroup> queryGroups(SearchContext reach, String q, SearchCategory only, int cap,
@@ -222,10 +224,9 @@ public class SearchService {
 		return groups;
 	}
 
-	private static List<SearchHit> await(SearchCategory cat, CompletableFuture<List<SearchHit>> part,
-			long deadline) {
+	private static <T> List<T> await(SearchCategory cat, CompletableFuture<List<T>> part, long deadline) {
 		try {
-			List<SearchHit> hits = part.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+			List<T> hits = part.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
 			return hits == null ? List.of() : hits;
 		} catch (TimeoutException e) {
 			part.cancel(true);
@@ -510,9 +511,43 @@ public class SearchService {
 				.toList();
 	}
 
-	/** Counts within the caller's reach; a total over everybody's data would say
-	 * how much there is that they cannot see. */
-	private Map<String, Long> counts(SearchContext reach) {
+	/**
+	 * Counts within the caller's reach, every category side by side: the five original ones exactly,
+	 * as before, and every source's capped at {@link SearchSource#COUNT_CAP}, those that reach it
+	 * listed in [capped]. A count that fails or runs out of time is left out, like a category.
+	 */
+	private Map<String, Long> counts(SearchContext reach, List<String> capped) {
+		CompletableFuture<Map<String, Long>> exact = executor.supply(() -> exactCounts(reach));
+		Map<SearchCategory, List<CompletableFuture<Long>>> parts = new LinkedHashMap<>();
+		for (SearchSource source : sources) {
+			if (!source.enabled()) continue;
+			parts.computeIfAbsent(source.category(), cat -> new ArrayList<>())
+					.add(executor.supply(() -> source.count(reach, SearchSource.COUNT_CAP)));
+		}
+		long deadline = System.nanoTime() + PART_TIMEOUT.toNanos();
+		Map<String, Long> totals = new LinkedHashMap<>();
+		List<Map<String, Long>> base = await(SearchCategory.ISSUES, exact.thenApply(List::of), deadline);
+		Map<String, Long> exactCounts = base.isEmpty() ? Map.of() : base.getFirst();
+		for (SearchCategory cat : SearchCategory.values()) {
+			Long known = exactCounts.get(cat.name());
+			long extra = 0;
+			for (CompletableFuture<Long> part : parts.getOrDefault(cat, List.of())) {
+				List<Long> value = await(cat, part.thenApply(List::of), deadline);
+				extra += value.isEmpty() ? 0 : value.getFirst();
+			}
+			if (known == null && !parts.containsKey(cat)) continue;
+			if (extra >= SearchSource.COUNT_CAP) {
+				extra = SearchSource.COUNT_CAP;
+				capped.add(cat.name());
+			}
+			totals.put(cat.name(), (known == null ? 0 : known) + extra);
+		}
+		return totals;
+	}
+
+	/** The five original categories, counted exactly; a total over everybody's data would say how
+	 * much there is that they cannot see. */
+	private Map<String, Long> exactCounts(SearchContext reach) {
 		Map<String, Long> counts = new LinkedHashMap<>();
 		counts.put(SearchCategory.ISSUES.name(), mongo.count(Query.query(reach.issues(false)), Issue.class));
 		counts.put(SearchCategory.PROJECTS.name(), (long) reach.projectIds().size());

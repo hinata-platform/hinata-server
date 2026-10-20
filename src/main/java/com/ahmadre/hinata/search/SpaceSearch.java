@@ -41,11 +41,7 @@ class SpaceSearch implements SearchSource {
 
 	@Override
 	public List<SearchHit> search(SearchContext context, int cap) {
-		List<String> read = mongo.findDistinct(Query.query(context.pages()), "space", Article.class, String.class)
-				.stream().filter(Objects::nonNull).toList();
-		Criteria seen = new Criteria().orOperator(Criteria.where("authorId").is(context.userId()),
-				Criteria.where("name").in(read));
-		Query query = Query.query(new Criteria().andOperator(context.contains("name"), seen))
+		Query query = Query.query(new Criteria().andOperator(context.contains("name"), seen(context)))
 				.with(Sort.by("sortOrder", "name")).limit(cap);
 		return mongo.find(query, Space.class).stream().map(space -> SearchHit.builder()
 				.category(SearchCategory.DOCS.name())
@@ -60,5 +56,18 @@ class SpaceSearch implements SearchSource {
 				.icon(space.getIcon())
 				.hue(space.getHue())
 				.build()).toList();
+	}
+
+	@Override
+	public long count(SearchContext context, int limit) {
+		return mongo.count(Query.query(seen(context)).limit(limit), Space.class);
+	}
+
+	/** The spaces the caller sees: their own, and those a page they read is filed in. */
+	private Criteria seen(SearchContext context) {
+		List<String> read = mongo.findDistinct(Query.query(context.pages()), "space", Article.class, String.class)
+				.stream().filter(Objects::nonNull).toList();
+		return new Criteria().orOperator(Criteria.where("authorId").is(context.userId()),
+				Criteria.where("name").in(read));
 	}
 }
