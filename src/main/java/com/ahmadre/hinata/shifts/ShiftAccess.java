@@ -21,8 +21,10 @@ import java.util.Set;
  * Who may see and who may plan shifts.
  *
  * <p>Seeing is {@link ProjectReach#canSee}: a direct member or a team grant, nothing else, and an
- * administrator is not a member by office. Planning is, until HIN-45 adds planners below the lead,
- * {@link ProjectService#canManage}: the project's leads and the admins of a team that owns it.
+ * administrator is not a member by office. Planning is {@link ProjectService#canManage} (the
+ * project's leads and the admins of a team that owns it) or an entry in {@code shift_planners}
+ * ({@link ShiftPlanner}, HIN-45), always after visibility: a planner entry never opens a project the
+ * person cannot see. Granting and revoking the planner role stays with {@code canManage}.
  *
  * <p>Lists ask {@link #visibleProjectIds} once per request and put the answer into the query as
  * {@code projectId $in}, so nothing invisible is ever read and then filtered out. Single objects
@@ -60,25 +62,42 @@ public class ShiftAccess {
 		return reach.canSee(project, user);
 	}
 
-	/** May the user plan shifts in this project. Visibility first, then the management rule. */
+	/**
+	 * May the user plan shifts in this project. Visibility first, then the management rule, then a
+	 * planner entry (one indexed lookup, only for somebody who does not manage the project).
+	 */
 	public boolean canPlan(Project project, User user) {
 		if (project == null || user == null || !reach.canSee(project, user)) {
 			return false;
 		}
-		return projects.canManage(project, user);
+		return plans(project, user);
 	}
 
 	/**
 	 * Which of [projectIds] the user may plan, for a list that shows a planner's controls per row:
-	 * two queries however many projects there are.
+	 * the two queries of {@link ProjectService#issueDeletableProjectIds} plus one planner query with
+	 * {@code projectId $in}, however many projects there are. [projectIds] are projects the caller
+	 * can see; the answer never adds one.
 	 */
 	public Set<String> plannableProjectIds(User user, Collection<String> projectIds) {
 		if (projectIds == null || projectIds.isEmpty()) {
 			return Set.of();
 		}
-		Set<String> managed = new HashSet<>(projects.issueDeletableProjectIds(user));
-		managed.retainAll(new HashSet<>(projectIds));
-		return managed;
+		Set<String> asked = new HashSet<>(projectIds);
+		Set<String> plannable = new HashSet<>(projects.issueDeletableProjectIds(user));
+		plannable.retainAll(asked);
+		Query planner = Query.query(Criteria.where("userId").is(user.getId()).and("projectId").in(asked));
+		planner.fields().include("projectId");
+		for (ShiftPlanner entry : mongo.find(planner, ShiftPlanner.class)) {
+			plannable.add(entry.getProjectId());
+		}
+		return plannable;
+	}
+
+	/** Whether the user holds a planner entry in the project; says nothing about visibility. */
+	public boolean isPlanner(String projectId, String userId) {
+		return projectId != null && userId != null && mongo.exists(
+				Query.query(Criteria.where("projectId").is(projectId).and("userId").is(userId)), ShiftPlanner.class);
 	}
 
 	/** The project behind a {@code /projects/{id}/...} route: 404 if missing, 403 if not a member. */
@@ -91,9 +110,17 @@ public class ShiftAccess {
 	/** As {@link #memberProject}, and the user plans there: 403 otherwise. */
 	public Project plannedProject(String projectId, User user) {
 		Project project = memberProject(projectId, user);
-		if (!projects.canManage(project, user)) {
-			throw ApiException.forbidden("error.shifts.notPlanner");
-		}
+		requirePlanner(project, user);
+		return project;
+	}
+
+	/**
+	 * As {@link #memberProject}, and the user runs the project (lead or team admin): 403 otherwise.
+	 * Who plans is decided here, never by a planner.
+	 */
+	public Project managedProject(String projectId, User user) {
+		Project project = memberProject(projectId, user);
+		projects.assertCanManage(project, user);
 		return project;
 	}
 
@@ -131,9 +158,14 @@ public class ShiftAccess {
 		return scoped;
 	}
 
+	/** The caller plans the project: 403 otherwise. Callers have checked visibility already. */
 	public void requirePlanner(Project project, User user) {
-		if (!projects.canManage(project, user)) {
+		if (!plans(project, user)) {
 			throw ApiException.forbidden("error.shifts.notPlanner");
 		}
+	}
+
+	private boolean plans(Project project, User user) {
+		return projects.canManage(project, user) || isPlanner(project.getId(), user.getId());
 	}
 }

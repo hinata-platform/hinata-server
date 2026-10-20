@@ -76,6 +76,14 @@ public class ShiftTx {
 		}
 	}
 
+	/**
+	 * Whether transactions are there at all. Without them the module is off; the erasure listeners
+	 * still clear what an earlier configuration left behind, with plain writes.
+	 */
+	public boolean available() {
+		return managers.getIfAvailable() != null;
+	}
+
 	public void run(Runnable work) {
 		run(() -> {
 			work.run();

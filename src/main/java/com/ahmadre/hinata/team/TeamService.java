@@ -369,6 +369,7 @@ public class TeamService {
 		// access check is what actually stops the notifications.
 		if (!revoked.isEmpty()) {
 			watcherCleanup.removeFromProject(project.getId(), revoked);
+			projects.announceMembersRemoved(project.getId(), revoked);
 		}
 	}
 

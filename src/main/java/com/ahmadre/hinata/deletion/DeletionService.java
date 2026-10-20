@@ -348,6 +348,9 @@ public class DeletionService {
 		mongo.remove(byProjectId(pid), TimesheetApproval.class);
 
 		projectHooks.forEach(hook -> hook.projectDeleted(pid));
+		// Optional modules that keep records per project (shift planning) listen for this
+		// rather than being named here.
+		projectService.announceDeleted(pid);
 
 		progress.step("deletingProject");
 		projects.deleteById(pid);

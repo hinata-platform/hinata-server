@@ -55,7 +55,7 @@ class ProjectSearchTest {
 		ProjectRepository projects = mock(ProjectRepository.class);
 		service = new ProjectService(projects, mock(ProjectTemplatePolicy.class), mongo, teams,
 				mock(NotificationService.class), mock(IssueWatcherCleanup.class),
-				new ProjectReach(projects, teams));
+				new ProjectReach(projects, teams), mock(org.springframework.context.ApplicationEventPublisher.class));
 	}
 
 	private User member() {

@@ -51,7 +51,7 @@ class ProjectServiceTest {
 		when(templates.offered()).thenReturn(true);
 		service = new ProjectService(projects, templates, mongo, teams, notifications,
 				mock(IssueWatcherCleanup.class),
-				new ProjectReach(projects, teams));
+				new ProjectReach(projects, teams), mock(org.springframework.context.ApplicationEventPublisher.class));
 	}
 
 	private User user(String id, Role... roles) {

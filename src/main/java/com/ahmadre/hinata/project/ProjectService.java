@@ -69,6 +69,7 @@ public class ProjectService {
 	// Owns the "may this user see that project" rule, so callers outside this domain
 	// (notifications, above all) can ask it without injecting this service back.
 	private final ProjectReach projectReach;
+	private final org.springframework.context.ApplicationEventPublisher events;
 
 	public Project get(String id) {
 		return projects.findById(id).orElseThrow(() -> ApiException.notFound("project"));
@@ -452,6 +453,42 @@ public class ProjectService {
 		removed.removeAll(saved.getMemberIds());
 		if (removed.isEmpty()) return;
 		watcherCleanup.removeFromProject(saved.getId(), removed);
+		announceMembersRemoved(saved.getId(), removed);
+	}
+
+	/**
+	 * Tells the modules that [userIds] lost [projectId]: one {@link ProjectMemberRemoved} for each
+	 * of them who no longer reaches the project at all. Somebody dropped from the member list who
+	 * still holds a team grant has lost nothing and is not announced. Called from both places that
+	 * end a membership, this class and the team grant reconciliation. Best-effort: a failure here
+	 * never fails the change that caused it.
+	 */
+	public void announceMembersRemoved(String projectId, java.util.Collection<String> userIds) {
+		if (projectId == null || userIds == null || userIds.isEmpty()) return;
+		try {
+			Set<String> stillReaching = projectReach.whoCanSee(projectId, userIds);
+			for (String userId : new LinkedHashSet<>(userIds)) {
+				if (userId == null || userId.isBlank() || stillReaching.contains(userId)) continue;
+				events.publishEvent(new ProjectMemberRemoved(projectId, userId));
+			}
+		}
+		catch (RuntimeException ex) {
+			log.warn("Could not announce removed members of project {}: {}", projectId, ex.toString());
+		}
+	}
+
+	/**
+	 * Tells the modules that [projectId] is being deleted ({@link ProjectDeleted}), from the deletion
+	 * cascade just before the project document goes. Best-effort like
+	 * {@link #announceMembersRemoved}.
+	 */
+	public void announceDeleted(String projectId) {
+		try {
+			events.publishEvent(new ProjectDeleted(projectId));
+		}
+		catch (RuntimeException ex) {
+			log.warn("Could not announce the deletion of project {}: {}", projectId, ex.toString());
+		}
 	}
 
 	/**
