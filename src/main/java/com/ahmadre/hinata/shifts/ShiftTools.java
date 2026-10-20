@@ -323,9 +323,9 @@ public class ShiftTools {
 		return view(assignment, null, done.warnings(), words.of(me, "shifts.mcp.signedUp"));
 	}
 
-	@McpTool(name = "release_shift", title = "Give up a shift",
+	@McpTool(name = "release_shift", title = "Withdraw from a shift",
 			annotations = @McpTool.McpAnnotations(destructiveHint = true, idempotentHint = true, openWorldHint = false),
-			description = "Gives up one of the caller's own places, or leaves the waiting list with the "
+			description = "Withdraws the caller from one of their own places, or leaves the waiting list with the "
 					+ "caller's own waiting entry. Only the caller's own: a planner takes somebody else off "
 					+ "with remove_assignment.")
 	public AssignmentView release_shift(
@@ -357,7 +357,7 @@ public class ShiftTools {
 	@McpTool(name = "decline_shift", title = "Decline a shift",
 			annotations = @McpTool.McpAnnotations(destructiveHint = false, idempotentHint = true, openWorldHint = false),
 			description = "Says no to a place a planner gave the caller (status ASSIGNED); the place is free "
-					+ "again. Only the caller's own; a confirmed place is given up with release_shift.")
+					+ "again. Only the caller's own; withdraw from a confirmed place with release_shift.")
 	public AssignmentView decline_shift(
 			@McpToolParam(required = true, description = "Assignment id: myAssignmentId") String assignmentId) {
 		User me = caller(Scopes.SHIFTS_WRITE);
