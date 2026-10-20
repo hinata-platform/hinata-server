@@ -13,6 +13,8 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -60,24 +62,58 @@ public class ShiftConflicts {
 	/**
 	 * Every collision between the assignments of [moved] (per shift id, the shift's new span) and
 	 * [held], everything the same people hold around them. Each person and moved shift is reported
-	 * once, with the first shift it collides with.
+	 * once, with the earliest-starting shift it collides with.
+	 *
+	 * <p>[held] is indexed once per person and sorted by start; each moved place then looks only at
+	 * that person's places starting from a day before it (no shift is longer) until it ends, so a
+	 * series change moving thousands of places stays O(n log n), not moved times held.
 	 */
 	public static List<Collision> collisions(Collection<ShiftAssignment> moved, Collection<ShiftAssignment> held) {
+		Map<String, List<ShiftAssignment>> byPerson = new HashMap<>();
+		for (ShiftAssignment other : held) {
+			if (occupies(other)) {
+				byPerson.computeIfAbsent(other.getUserId(), id -> new ArrayList<>()).add(other);
+			}
+		}
+		byPerson.values().forEach(list -> list.sort(Comparator.comparing(ShiftAssignment::getStartsAt)));
 		List<Collision> found = new ArrayList<>();
 		for (ShiftAssignment mine : moved) {
-			if (!occupies(mine)) {
+			List<ShiftAssignment> theirs = occupies(mine) ? byPerson.get(mine.getUserId()) : null;
+			if (theirs == null) {
 				continue;
 			}
-			held.stream()
-					.filter(other -> other.getUserId().equals(mine.getUserId()))
-					.filter(other -> occupies(other) && !other.getShiftId().equals(mine.getShiftId()))
-					.filter(other -> TimeRanges.overlaps(mine.getStartsAt(), mine.getEndsAt(),
-							other.getStartsAt(), other.getEndsAt()))
-					.findFirst()
-					.ifPresent(other -> found.add(new Collision(mine.getUserId(), mine.getShiftId(),
-							other.getShiftId(), other.getProjectId())));
+			Instant earliest = mine.getStartsAt().minus(ShiftRules.SHIFT_MAX);
+			for (int i = firstStartingAtOrAfter(theirs, earliest); i < theirs.size(); i++) {
+				ShiftAssignment other = theirs.get(i);
+				if (!other.getStartsAt().isBefore(mine.getEndsAt())) {
+					break;
+				}
+				if (!other.getShiftId().equals(mine.getShiftId())
+						&& TimeRanges.overlaps(mine.getStartsAt(), mine.getEndsAt(), other.getStartsAt(),
+								other.getEndsAt())) {
+					found.add(new Collision(mine.getUserId(), mine.getShiftId(), other.getShiftId(),
+							other.getProjectId()));
+					break;
+				}
+			}
 		}
 		return found;
+	}
+
+	/** The index of the first place in [sorted] starting at or after [instant]. */
+	private static int firstStartingAtOrAfter(List<ShiftAssignment> sorted, Instant instant) {
+		int low = 0;
+		int high = sorted.size();
+		while (low < high) {
+			int mid = (low + high) >>> 1;
+			if (sorted.get(mid).getStartsAt().isBefore(instant)) {
+				low = mid + 1;
+			}
+			else {
+				high = mid;
+			}
+		}
+		return low;
 	}
 
 	/** Holds a place: active and not cancelled with its event. */
