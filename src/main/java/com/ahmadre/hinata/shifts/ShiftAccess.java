@@ -130,7 +130,18 @@ public class ShiftAccess {
 		return ids;
 	}
 
-	/** The project behind a {@code /projects/{id}/...} route: 404 if missing, 403 if not a member. */
+	/**
+	 * The project behind a {@code /projects/{id}/...} route: 404 if missing, 403 if not a member.
+	 *
+	 * <p>Unlike objects addressed by id (404 for anything out of sight, see the class comment), this
+	 * tells a signed-in stranger that a project with the id exists. That is deliberate: every
+	 * project route of the server answers this way ({@code ProjectService.get} then
+	 * {@code assertMember}), the message {@code error.project.notMember} tells a former member why
+	 * the page is closed rather than "not found", and the answer names no title and no content. A module
+	 * that answered differently under the same path prefix would make the rule depend on the route.
+	 * Reads that are not under a project path ({@code ShiftReads.scope}, the MCP tools) answer 403 for
+	 * both cases, because there no project route convention applies.
+	 */
 	public Project memberProject(String projectId, User user) {
 		Project project = projects.get(projectId);
 		projects.assertMember(project, user);
