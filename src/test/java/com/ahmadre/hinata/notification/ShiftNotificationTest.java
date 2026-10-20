@@ -79,6 +79,13 @@ class ShiftNotificationTest {
 			}
 			return found;
 		});
+		lenient().when(users.findNoticeReadersByIdIn(any())).thenAnswer(call -> {
+			List<UserRepository.NoticeReaderView> found = new ArrayList<>();
+			for (String id : call.<java.util.Collection<String>>getArgument(0)) {
+				if (byId.containsKey(id)) found.add(reader(byId.get(id)));
+			}
+			return found;
+		});
 		service = new NotificationService(notifications, users, mail, push,
 				mock(GatewayService.class), new RichTextService(), reach,
 				new com.ahmadre.hinata.issue.IssueReach(mock(ProjectReach.class)),
@@ -95,6 +102,29 @@ class ShiftNotificationTest {
 			prefs.getEvents().put(NotificationPreferences.SHIFTS, new NotificationPreferences.Channel(email, pushOn));
 			someone.setNotificationPreferences(prefs);
 		}
+	}
+
+	/** The projection the service reads, backed by a whole account. */
+	private static UserRepository.NoticeReaderView reader(User user) {
+		return new UserRepository.NoticeReaderView() {
+			public String getId() { return user.getId(); }
+			public String getUsername() { return user.getUsername(); }
+			public String getDisplayName() { return user.getDisplayName(); }
+			public String getEmail() { return user.getEmail(); }
+			public String getLocale() { return user.getLocale(); }
+			public String getTimezone() { return user.getTimezone(); }
+			public Boolean getActive() { return user.isActive(); }
+			public NotificationPreferences getNotificationPreferences() { return user.getNotificationPreferences(); }
+		};
+	}
+
+	@SuppressWarnings("unchecked")
+	private List<Notification> savedBells(int calls) {
+		ArgumentCaptor<Iterable<Notification>> saved = ArgumentCaptor.forClass(Iterable.class);
+		verify(notifications, org.mockito.Mockito.times(calls)).saveAll(saved.capture());
+		List<Notification> out = new ArrayList<>();
+		saved.getAllValues().forEach(batch -> batch.forEach(out::add));
+		return out;
 	}
 
 	private static PersonalNotice notice() {
@@ -130,11 +160,11 @@ class ShiftNotificationTest {
 		service.notifyEach(Notification.Type.SHIFT_ASSIGNED, "p-1", List.of(ann.getId(), bob.getId()),
 				"/shifts/events/e-1", reader -> notice());
 
-		ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
-		verify(notifications).save(saved.capture());
-		assertThat(saved.getValue().getUserId()).isEqualTo(ann.getId());
-		assertThat(saved.getValue().getType()).isEqualTo(Notification.Type.SHIFT_ASSIGNED);
-		assertThat(saved.getValue().getLink()).isEqualTo("/shifts/events/e-1");
+		assertThat(savedBells(1)).singleElement().satisfies(bell -> {
+			assertThat(bell.getUserId()).isEqualTo(ann.getId());
+			assertThat(bell.getType()).isEqualTo(Notification.Type.SHIFT_ASSIGNED);
+			assertThat(bell.getLink()).isEqualTo("/shifts/events/e-1");
+		});
 		verify(push, never()).sendToUser(eq(bob.getId()), anyString(), anyString(), any(), any());
 	}
 
@@ -161,7 +191,7 @@ class ShiftNotificationTest {
 			service.notifyEach(type, "p-1", List.of(ann.getId()), "/shifts", reader -> notice());
 		}
 
-		verify(notifications, org.mockito.Mockito.times(shiftTypes().size())).save(any());
+		assertThat(savedBells(shiftTypes().size())).hasSize(shiftTypes().size());
 		verify(mail, never()).sendNotification(anyString(), anyString(), anyString(), anyString(), any(), any(),
 				any(), any());
 		verify(push, never()).sendToUser(anyString(), anyString(), anyString(), any(), any());
