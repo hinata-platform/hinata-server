@@ -90,12 +90,20 @@ public final class ExportText {
 	 * per RFC 5987 on the way out.
 	 */
 	static String fileNameStem(String readableId, String title) {
-		String stem = (nz(readableId) + " " + nz(title)).trim();
+		return slug(nz(readableId) + " " + nz(title), "issue");
+	}
+
+	/**
+	 * [text] as a part of a file name: letters and digits of any script, everything else one
+	 * hyphen, at most {@value #MAX_FILE_NAME_CHARS} characters; [fallback] when nothing is left.
+	 */
+	public static String slug(String text, String fallback) {
+		String stem = nz(text).trim();
 		stem = stem.replaceAll("[^\\p{L}\\p{N}]+", "-").replaceAll("^-+|-+$", "");
 		if (stem.length() > MAX_FILE_NAME_CHARS) {
 			stem = stem.substring(0, MAX_FILE_NAME_CHARS).replaceAll("-+$", "");
 		}
-		return stem.isEmpty() ? "issue" : stem;
+		return stem.isEmpty() ? fallback : stem;
 	}
 
 	/**
