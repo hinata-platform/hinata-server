@@ -851,6 +851,46 @@ class ShiftPlanningIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("the month marks: counts per day in the caller's zone, a cancelled shift neither open nor short, no names")
+	void calendarMarks() throws Exception {
+		ann.setTimezone("Asia/Tokyo");
+		ann = users.save(ann);
+		ShiftEvent open = event(project, lead, base, hours(20));
+		Shift morning = shift(open, base, hours(2), 2, null);
+		// 23:00 UTC is eight in the morning of the next day in Tokyo.
+		Shift night = shift(open, base.plus(hours(15)), hours(2), 1, 1);
+		assignments.assign(ann, morning.getId(), ann.getId(), true);
+		assignments.assign(lead, night.getId(), ann.getId(), false);
+		ShiftEvent called = event(project, lead, base.plus(hours(1)), hours(5));
+		shift(called, base.plus(hours(1)), hours(2), 2, null);
+		service.cancelEvent(lead, called.getId(), null);
+		ShiftEvent closed = event(project, lead, base.plus(hours(2)), hours(5));
+		shift(closed, base.plus(hours(2)), hours(2), 1, null);
+		service.updateEvent(lead, closed.getId(), new ShiftService.EventPatch(null, null, null, null, null, null, false,
+				null), null);
+		Instant from = base.minus(hours(8));
+		Instant to = from.plus(Duration.ofDays(3));
+		java.time.LocalDate day = base.atZone(java.time.ZoneId.of("Asia/Tokyo")).toLocalDate();
+
+		assertThat(reads.marks(ann, from, to, null).days()).containsExactly(
+				new ShiftReads.DayMarks(day.toString(), 1, 1, 2),
+				new ShiftReads.DayMarks(day.plusDays(1).toString(), 1, 0, 0));
+		// Bob holds nothing: the same open and short shifts, none of them his.
+		assertThat(reads.marks(bob, from, to, project.getId()).days()).extracting(ShiftReads.DayMarks::mine)
+				.containsOnly(0);
+
+		HttpResponse<String> response = get("/api/v1/shifts/calendar/marks?from=" + from + "&to=" + to, token(ann));
+		assertThat(response.statusCode()).isEqualTo(200);
+		JsonNode first = json(response).get("days").get(0);
+		assertThat(fields(first)).containsExactlyInAnyOrder("date", "mine", "open", "understaffed");
+		assertThat(response.body()).doesNotContain(ann.getId(), "Ann");
+		assertThat(get("/api/v1/shifts/calendar/marks?from=" + from + "&to=" + from.plus(Duration.ofDays(63)),
+				token(ann)).statusCode()).isEqualTo(400);
+		assertThat(get("/api/v1/shifts/calendar/marks?from=" + from + "&to=" + to + "&projectId=" + other.getId(),
+				token(bob)).statusCode()).isEqualTo(403);
+	}
+
+	@Test
 	@DisplayName("my shifts: only my own, only where I still see the project, gone after leaving or losing the grant")
 	void myShiftsFollowVisibility() {
 		ShiftEvent event = event(project, lead, base, hours(10));
