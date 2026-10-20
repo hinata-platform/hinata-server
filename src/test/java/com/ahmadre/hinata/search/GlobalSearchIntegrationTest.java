@@ -279,6 +279,33 @@ class GlobalSearchIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("person, team and default rates are found only by an organisation administrator")
+	void organisationRatesOnlyForOrganisationAdmins() {
+		User olga = user("olga", Role.ORG_ADMIN);
+		Team team = one(Team.class, me);
+		BillingRate person = mongo.save(BillingRate.builder().kind(BillingRate.Kind.COST).scope(BillingRate.Scope.USER)
+				.scopeId(stranger.getId()).amountCents(5000).currency("EUR").validFrom(today).build());
+		BillingRate ofTeam = mongo.save(BillingRate.builder().kind(BillingRate.Kind.BILLABLE)
+				.scope(BillingRate.Scope.TEAM).scopeId(team.getId()).amountCents(7000).currency("EUR")
+				.validFrom(today).build());
+		BillingRate fallback = mongo.save(BillingRate.builder().kind(BillingRate.Kind.BILLABLE)
+				.scope(BillingRate.Scope.DEFAULT).amountCents(6000).currency("EUR").validFrom(today).build());
+
+		assertThat(hits(olga, "sam", "BILLING")).extracting(SearchHit::getId, SearchHit::getRoute, SearchHit::getTitle)
+				.containsExactly(org.assertj.core.groups.Tuple.tuple(person.getId(), "/time/rates?rate=" + person.getId(), "sam"));
+		assertThat(hits(olga, team.getName(), "BILLING")).extracting(SearchHit::getId).containsExactly(ofTeam.getId());
+		assertThat(hits(olga, "Default rate", "BILLING")).extracting(SearchHit::getId).containsExactly(fallback.getId());
+		olga.setLocale("de");
+		mongo.save(olga);
+		assertThat(hits(olga, "Standardsatz", "BILLING")).extracting(SearchHit::getId).containsExactly(fallback.getId());
+		// A lead reaches none of them, neither as hits nor in the count.
+		assertThat(hits(me, "sam", "BILLING")).isEmpty();
+		assertThat(hits(me, "Default rate", "BILLING")).isEmpty();
+		assertThat(search.search(me, "", "BILLING", false, 2).counts()).containsEntry("BILLING", 2L);
+		assertThat(search.search(olga, "", null, false, 2).counts().get("BILLING")).isGreaterThanOrEqualTo(3L);
+	}
+
+	@Test
 	@DisplayName("a built-in absence type is found by its label in the caller's language")
 	void builtInAbsenceTypesMatchTheirLabel() {
 		assertThat(hits(me, "Vacation", "ABSENCES")).extracting(SearchHit::getKind, SearchHit::getTitle)
