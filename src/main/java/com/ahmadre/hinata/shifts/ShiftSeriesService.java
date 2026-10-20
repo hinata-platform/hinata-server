@@ -483,6 +483,18 @@ public class ShiftSeriesService {
 	 * nobody holds (409 otherwise, nothing written). Occurrences the new rule no longer has go as
 	 * a deleted series' do, days it newly has are created. Everybody whose place moved, was
 	 * cancelled or went hears once; the planner sees who now collides.
+	 *
+	 * <p>One transaction on purpose, however many occurrences there are (at most
+	 * {@link ShiftSeriesPlan#SHIFTS_IN_HORIZON_MAX} shifts): split into blocks, a failure halfway would leave the old
+	 * series closed and only part of its future moved, with assignments pointing at times the new
+	 * series does not have, and nothing could put it back. The price is its length. Every sign-up
+	 * on one of these shifts writes the same shift document, so a busy series meets write
+	 * conflicts: the sign-up then retries and answers {@code error.shifts.busy} after
+	 * {@link ShiftTx#MAX_ATTEMPTS} attempts, or a sign-up that committed first aborts this
+	 * transaction, which {@link ShiftTx} runs again, reads included, up to the same
+	 * {@link ShiftTx#MAX_ATTEMPTS} times before it answers the planner with {@code busy} and
+	 * nothing written. A planner who meets that tries again when sign-up is calmer, or closes
+	 * sign-up for the series first.
 	 */
 	FutureChange changeFuture(User caller, ShiftEvent occurrence, BiFunction<ShiftSeries, ShiftEvent, Shape> change) {
 		settings.requireEnabled();
