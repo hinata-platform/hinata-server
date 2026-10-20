@@ -62,6 +62,11 @@ public class ShiftAccess {
 		return reach.canSee(project, user);
 	}
 
+	/** Every account that may see the project, direct members and team grants alike. */
+	public Set<String> everyoneWhoCanSee(String projectId) {
+		return reach.everyoneWhoCanSee(projectId);
+	}
+
 	/** The project by id, without asking who looks: for work no request started (HIN-162). */
 	public java.util.Optional<Project> project(String projectId) {
 		return projectId == null ? java.util.Optional.empty() : projects.findOptional(projectId);
