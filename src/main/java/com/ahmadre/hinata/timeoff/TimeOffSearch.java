@@ -90,6 +90,14 @@ class TimeOffSearch implements SearchSource {
 		return requests(Criteria.where("userId").is(context.userId()), null, context, limit);
 	}
 
+	/** The caller's requests and the types on offer, each up to [limit]. */
+	@Override
+	public long count(SearchContext context, int limit) {
+		return mongo.count(Query.query(Criteria.where("userId").is(context.userId())).limit(limit),
+				TimeOffRequest.class)
+				+ mongo.count(Query.query(Criteria.where("active").ne(false)).limit(limit), TimeOffType.class);
+	}
+
 	private List<SearchHit> requests(Criteria mine, Criteria text, SearchContext context, int limit) {
 		Query query = Query.query(text == null ? mine : new Criteria().andOperator(mine, text))
 				.with(Sort.by(Sort.Direction.DESC, "from", "_id")).limit(limit);

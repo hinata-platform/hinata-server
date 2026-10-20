@@ -68,6 +68,17 @@ class TimeSearch implements SearchSource {
 		return entries(mongo.find(latest, WorkItem.class), context);
 	}
 
+	/** The caller's described entries, and their timesheets while those exist, each up to [limit]. */
+	@Override
+	public long count(SearchContext context, int limit) {
+		long entries = mongo.count(Query.query(new Criteria().andOperator(
+				Criteria.where("userId").is(context.userId()), Criteria.where("description").gt(""))).limit(limit),
+				WorkItem.class);
+		if (!settings.advancedEnabled() || !settings.approvalsEnabled()) return entries;
+		return entries + mongo.count(Query.query(Criteria.where("userId").is(context.userId())).limit(limit),
+				TimesheetApproval.class);
+	}
+
 	private List<SearchHit> entries(List<WorkItem> items, SearchContext context) {
 		// The calendar of the extended module where it is on, the base timesheet where it is not.
 		String page = settings.advancedEnabled() ? "/time/calendar" : "/timesheet";

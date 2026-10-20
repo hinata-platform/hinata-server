@@ -39,13 +39,24 @@ class BudgetSearch implements SearchSource {
 		return settings.advancedEnabled();
 	}
 
+	/** Budgets of the projects the caller sees, up to [limit]. */
+	@Override
+	public long count(SearchContext context, int limit) {
+		if (context.projectIds().isEmpty()) return 0;
+		return mongo.count(Query.query(new Criteria().andOperator(Criteria.where("projectId").in(context.projectIds()),
+				budgeted())).limit(limit), ProjectTimeSettings.class);
+	}
+
+	private static Criteria budgeted() {
+		return new Criteria().orOperator(Criteria.where("budgetMinutes").ne(null), Criteria.where("budgetCents").ne(null));
+	}
+
 	@Override
 	public List<SearchHit> search(SearchContext context, int cap) {
 		List<String> matching = context.projectsMatching().stream().map(Project::getId).toList();
 		if (matching.isEmpty()) return List.of();
 		Query query = Query.query(new Criteria().andOperator(Criteria.where("projectId").in(matching),
-				new Criteria().orOperator(Criteria.where("budgetMinutes").ne(null),
-						Criteria.where("budgetCents").ne(null)))).limit(cap);
+				budgeted())).limit(cap);
 		query.fields().include("projectId", "budgetMinutes");
 		return mongo.find(query, ProjectTimeSettings.class).stream().map(budget -> {
 			Project project = context.project(budget.getProjectId());

@@ -63,4 +63,20 @@ class AttachmentSearch implements SearchSource {
 		}
 		return hits;
 	}
+
+	/**
+	 * Attachments on issues the caller reaches, at most [limit]: the first [limit] issues that have
+	 * any, their attachments added up. Each such issue holds at least one, so the cap still holds.
+	 */
+	@Override
+	public long count(SearchContext context, int limit) {
+		List<org.bson.Document> pipeline = List.of(
+				new org.bson.Document("$match", new Criteria().andOperator(context.issues(false),
+						Criteria.where("attachments.0").exists(true)).getCriteriaObject()),
+				new org.bson.Document("$limit", limit),
+				new org.bson.Document("$group", new org.bson.Document("_id", null)
+						.append("n", new org.bson.Document("$sum", new org.bson.Document("$size", "$attachments")))));
+		org.bson.Document counted = mongo.getCollection(mongo.getCollectionName(Issue.class)).aggregate(pipeline).first();
+		return counted == null ? 0 : Math.min(limit, ((Number) counted.get("n")).longValue());
+	}
 }

@@ -241,6 +241,44 @@ class GlobalSearchIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("every category has a count under the hits' reach, capped at 100")
+	void everyCategoryIsCountedUnderTheSameReach() {
+		SearchResponse opened = search.search(me, "", null, false, 2);
+		assertThat(opened.counts()).containsKeys(java.util.Arrays.stream(SearchCategory.values())
+				.map(Enum::name).toArray(String[]::new));
+		// Only what is the caller's or in sight: one each of the visible seed, nothing of the hidden one.
+		assertThat(opened.counts()).containsEntry("COMMENTS", 1L).containsEntry("ATTACHMENTS", 1L)
+				.containsEntry("TEAMS", 1L).containsEntry("SHIFTS", 2L).containsEntry("TIME", 2L)
+				.containsEntry("BILLING", 2L).containsEntry("DOCS", 2L);
+		assertThat(opened.cappedCounts()).isEmpty();
+		// Nothing is counted while something is typed.
+		assertThat(search.search(me, NEEDLE, null, false, 2).counts()).isEmpty();
+
+		for (int i = 0; i < 120; i++) {
+			mongo.save(WorkItem.builder().userId(me.getId()).projectId(mine.getId()).date(today.minusDays(i))
+					.durationMinutes(15).description("Pruning " + i).build());
+		}
+		SearchResponse full = search.search(me, "", null, false, 2);
+		assertThat(full.counts()).containsEntry("TIME", 100L);
+		assertThat(full.cappedCounts()).containsExactly("TIME");
+		// A module that is off is not counted either.
+		modules(false);
+		assertThat(search.search(me, "", null, false, 2).counts()).doesNotContainKeys("SHIFTS", "ABSENCES", "BILLING");
+	}
+
+	@Test
+	@DisplayName("counting sends the same reads however much there is")
+	void countsSendConstantReads() {
+		search.search(me, "", null, false, 2);
+		int before = SearchReadCounter.reads(() -> search.search(me, "", null, false, 2));
+		for (int i = 0; i < 30; i++) {
+			seedFor(mine, me, "more" + i);
+		}
+		int after = SearchReadCounter.reads(() -> search.search(me, "", null, false, 2));
+		assertThat(after).as(SearchReadCounter.commands.toString()).isEqualTo(before);
+	}
+
+	@Test
 	@DisplayName("a built-in absence type is found by its label in the caller's language")
 	void builtInAbsenceTypesMatchTheirLabel() {
 		assertThat(hits(me, "Vacation", "ABSENCES")).extracting(SearchHit::getKind, SearchHit::getTitle)
