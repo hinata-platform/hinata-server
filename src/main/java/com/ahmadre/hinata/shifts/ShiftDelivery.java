@@ -7,7 +7,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.aggregation.ComparisonOperators;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -241,9 +240,8 @@ public class ShiftDelivery {
 	 */
 	private void shortOfPeople(ShiftDomainEvents.Released event) {
 		Instant now = clock.instant();
-		Criteria due = Criteria.where("_id").is(event.shiftId()).and("deleted").is(false).and("cancelled").is(false)
-				.and("endsAt").gt(now)
-				.andOperator(Criteria.expr(ComparisonOperators.Lt.valueOf("assignedCount").lessThan("requiredHelpers")),
+		Criteria due = Criteria.where("_id").is(event.shiftId()).and("endsAt").gt(now)
+				.andOperator(ShiftRules.shortOfPeople(),
 						new Criteria().orOperator(Criteria.where("lastShortNoticeAt").is(null),
 								Criteria.where("lastShortNoticeAt").lte(now.minus(SHORT_NOTICE_EVERY))));
 		Shift shift = mongo.findAndModify(Query.query(due), new Update().set("lastShortNoticeAt", now),

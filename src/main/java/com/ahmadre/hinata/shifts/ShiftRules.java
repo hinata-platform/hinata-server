@@ -1,6 +1,9 @@
 package com.ahmadre.hinata.shifts;
 
 import com.ahmadre.hinata.common.ApiException;
+import org.bson.Document;
+import org.springframework.data.mongodb.core.aggregation.ComparisonOperators;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.http.HttpStatus;
 
 import java.time.Duration;
@@ -10,6 +13,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -85,6 +89,38 @@ public final class ShiftRules {
 		if (max != null && max < required) {
 			throw ApiException.badRequest("error.shifts.maxBelowRequired");
 		}
+	}
+
+	// --- short of people ------------------------------------------------------
+	//
+	// The one rule of "somebody is still missing here": a live shift, not cancelled, with fewer
+	// people than it needs. A cancelled shift needs nobody, so it is never short and never open.
+	// The calendar filter, the event numbers, the MCP filter, the export and the planners' notice
+	// all use these three forms of it and nothing else.
+
+	/** The rule for one shift in memory. */
+	public static boolean shortOfPeople(Shift shift) {
+		return shift != null && !shift.isDeleted() && !shift.isCancelled() && shift.assigned() < shift.required();
+	}
+
+	/** The rule as a query over {@code shifts}. */
+	public static Criteria shortOfPeople() {
+		return new Criteria().andOperator(Criteria.where("deleted").is(false), Criteria.where("cancelled").ne(true),
+				Criteria.expr(ComparisonOperators.Lt.valueOf("assignedCount").lessThan("requiredHelpers")));
+	}
+
+	/**
+	 * The rule as an aggregation expression over a shift document that a {@code $match} on
+	 * {@code deleted: false} already let through: true when it is short of people.
+	 */
+	public static Document shortOfPeopleExpression() {
+		return new Document("$and", List.of(new Document("$ne", List.of("$cancelled", true)),
+				new Document("$lt", List.of("$assignedCount", "$requiredHelpers"))));
+	}
+
+	/** Places taken towards the need, as an aggregation expression: a shift over its need counts as met. */
+	public static Document placesTakenExpression() {
+		return new Document("$min", List.of("$assignedCount", "$requiredHelpers"));
 	}
 
 	/** Rule 7 for the texts: an event needs a title, a shift may go without one. */
