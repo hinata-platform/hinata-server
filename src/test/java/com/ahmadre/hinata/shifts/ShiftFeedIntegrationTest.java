@@ -304,7 +304,7 @@ class ShiftFeedIntegrationTest {
 		ShiftEvent cancelled = event(fair, lead, "Vorstandssitzung", null);
 		Shift protokoll = shift(cancelled, lead, "Protokoll", base.plus(Duration.ofDays(1)), 2);
 		assignments.assign(lead, protokoll.getId(), ann.getId(), false);
-		service.cancelEvent(lead, cancelled.getId());
+		service.cancelEvent(lead, cancelled.getId(), null);
 		ShiftEvent past = event(fair, lead, "Messe", null, base.minus(Duration.ofDays(40)));
 		Shift old = shift(past, lead, "Stand", base.minus(Duration.ofDays(40)), 2);
 		assignments.assign(lead, old.getId(), ann.getId(), false);
@@ -477,7 +477,7 @@ class ShiftFeedIntegrationTest {
 
 	private Shift shift(ShiftEvent event, User planner, String title, Instant start, int hours) {
 		return service.createShift(planner, event.getId(), new ShiftService.ShiftDraft(title, start,
-				start.plus(Duration.ofHours(hours)), 3, null));
+				start.plus(Duration.ofHours(hours)), 3, null), null);
 	}
 
 	private User user(String name, String locale) {

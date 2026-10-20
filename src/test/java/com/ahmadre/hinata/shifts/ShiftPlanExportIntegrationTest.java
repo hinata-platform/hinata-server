@@ -375,7 +375,7 @@ class ShiftPlanExportIntegrationTest {
 
 	private Shift shift(String title, LocalDateTime start, LocalDateTime end, int required, Integer max) {
 		return service.createShift(lead, event.getId(), new ShiftService.ShiftDraft(title, at(start), at(end),
-				required, max));
+				required, max), null);
 	}
 
 	private static java.time.Instant at(LocalDateTime wallClock) {

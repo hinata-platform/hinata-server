@@ -223,7 +223,7 @@ class ShiftPlanningIntegrationTest {
 				.hasMessage("error.shifts.endBeforeStart");
 		ShiftEvent event = event(project, lead, base, hours(10));
 		assertThatThrownBy(() -> service.createShift(lead, event.getId(),
-				new ShiftService.ShiftDraft("S", base.plus(hours(2)), base.plus(hours(1)), 1, null)))
+				new ShiftService.ShiftDraft("S", base.plus(hours(2)), base.plus(hours(1)), 1, null), null))
 				.hasMessage("error.shifts.endBeforeStart");
 	}
 
@@ -231,15 +231,15 @@ class ShiftPlanningIntegrationTest {
 	void rule2AShiftOutsideItsEventIsRefusedAlsoWhenOnlyTheEndMoves() {
 		ShiftEvent event = event(project, lead, base, hours(10));
 		assertThatThrownBy(() -> service.createShift(lead, event.getId(),
-				new ShiftService.ShiftDraft("S", base.minus(hours(1)), base.plus(hours(1)), 1, null)))
+				new ShiftService.ShiftDraft("S", base.minus(hours(1)), base.plus(hours(1)), 1, null), null))
 				.hasMessage("error.shifts.shiftOutsideEvent");
 		Shift shift = shift(event, base, hours(2), 1, null);
 		assertThatThrownBy(() -> service.updateShift(lead, shift.getId(),
-				new ShiftService.ShiftPatch(null, null, base.plus(hours(11)), null, null, null)))
+				new ShiftService.ShiftPatch(null, null, base.plus(hours(11)), null, null, null), null))
 				.hasMessage("error.shifts.shiftOutsideEvent");
 		// Shortening the event under a shift is the same rule from the other side.
 		assertThatThrownBy(() -> service.updateEvent(lead, event.getId(),
-				new ShiftService.EventPatch(null, null, null, null, base.plus(hours(1)), null, null)))
+				new ShiftService.EventPatch(null, null, null, null, base.plus(hours(1)), null, null, null), null))
 				.hasMessage("error.shifts.shiftOutsideEvent");
 	}
 
@@ -260,7 +260,7 @@ class ShiftPlanningIntegrationTest {
 			assignments.assign(lead, shift.getId(), person.getId(), false);
 		}
 		assertThatThrownBy(() -> service.updateShift(lead, shift.getId(),
-				new ShiftService.ShiftPatch(null, null, null, null, 2, null)))
+				new ShiftService.ShiftPatch(null, null, null, null, 2, null), null))
 				.isInstanceOfSatisfying(ApiException.class, error -> {
 					assertThat(error.getStatus()).isEqualTo(HttpStatus.CONFLICT);
 					assertThat(error.getMessageKey()).isEqualTo("error.shifts.maxBelowAssigned");
@@ -268,9 +268,9 @@ class ShiftPlanningIntegrationTest {
 				});
 		assertThat(activeOn(shift)).isEqualTo(3);
 		assertThat(service.updateShift(lead, shift.getId(),
-				new ShiftService.ShiftPatch(null, null, null, null, 3, null)).item().getMaxHelpers()).isEqualTo(3);
+				new ShiftService.ShiftPatch(null, null, null, null, 3, null), null).item().getMaxHelpers()).isEqualTo(3);
 		assertThat(service.updateShift(lead, shift.getId(),
-				new ShiftService.ShiftPatch(null, null, null, null, null, true)).item().getMaxHelpers()).isNull();
+				new ShiftService.ShiftPatch(null, null, null, null, null, true), null).item().getMaxHelpers()).isNull();
 	}
 
 	@Test
@@ -304,7 +304,7 @@ class ShiftPlanningIntegrationTest {
 		ShiftService.ShiftDraft template = new ShiftService.ShiftDraft("Stand", base.plus(hours(1)), base.plus(hours(5)), 2, 3);
 
 		assertThatThrownBy(() -> service.createShifts(lead, event.getId(),
-				new ShiftService.BatchDraft(template, List.of(first, first.plusDays(1), first.plusDays(5)))))
+				new ShiftService.BatchDraft(template, List.of(first, first.plusDays(1), first.plusDays(5))), null))
 				.isInstanceOfSatisfying(ApiException.class, error -> {
 					assertThat(error.getMessageKey()).isEqualTo("error.shifts.batchInvalid");
 					assertThat(error.getDetails()).containsEntry(first.plusDays(5).toString(), "error.shifts.shiftOutsideEvent");
@@ -312,7 +312,7 @@ class ShiftPlanningIntegrationTest {
 		assertThat(mongo.count(new Query(), Shift.class)).isZero();
 
 		List<Shift> created = service.createShifts(lead, event.getId(),
-				new ShiftService.BatchDraft(template, List.of(first, first.plusDays(1), first.plusDays(2))));
+				new ShiftService.BatchDraft(template, List.of(first, first.plusDays(1), first.plusDays(2))), null);
 		assertThat(created).hasSize(3);
 		assertThat(created).extracting(shift -> ShiftRules.local(shift.getStartsAt(), "Europe/Berlin").substring(11))
 				.containsOnly(ShiftRules.local(base.plus(hours(1)), "Europe/Berlin").substring(11));
@@ -334,7 +334,7 @@ class ShiftPlanningIntegrationTest {
 		assignments.assign(otherLead, clubShift.getId(), ann.getId(), false);
 
 		ShiftService.Change<ShiftEvent> moved = service.updateEvent(lead, event.getId(),
-				new ShiftService.EventPatch(null, null, null, base.plus(hours(3)), null, null, null));
+				new ShiftService.EventPatch(null, null, null, base.plus(hours(3)), null, null, null, null), null);
 
 		assertThat(moved.item().getStartsAt()).isEqualTo(base.plus(hours(3)));
 		assertThat(moved.item().getEndsAt()).isEqualTo(base.plus(hours(13)));
@@ -358,7 +358,7 @@ class ShiftPlanningIntegrationTest {
 		Instant sent = Instant.now().truncatedTo(ChronoUnit.MILLIS);
 		mongo.updateMulti(new Query(), new Update().set("reminderSentAt", sent), ShiftAssignment.class);
 
-		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, soon.plus(hours(1)), null, null, null));
+		service.updateEvent(lead, event.getId(), new ShiftService.EventPatch(null, null, null, soon.plus(hours(1)), null, null, null, null), null);
 
 		assertThat(mongo.findOne(new Query(), ShiftAssignment.class).getReminderSentAt()).isEqualTo(sent);
 	}
@@ -372,7 +372,7 @@ class ShiftPlanningIntegrationTest {
 		assignments.assign(lead, late.getId(), ann.getId(), false);
 
 		ShiftService.Change<Shift> moved = service.updateShift(lead, late.getId(),
-				new ShiftService.ShiftPatch(null, base.plus(hours(1)), base.plus(hours(3)), null, null, null));
+				new ShiftService.ShiftPatch(null, base.plus(hours(1)), base.plus(hours(3)), null, null, null), null);
 
 		assertThat(mongo.findOne(Query.query(Criteria.where("shiftId").is(late.getId())), ShiftAssignment.class)
 				.getStartsAt()).isEqualTo(base.plus(hours(1)));
@@ -386,7 +386,7 @@ class ShiftPlanningIntegrationTest {
 		Shift shift = shift(event, base, hours(2), 1, null);
 		assignments.assign(ann, shift.getId(), ann.getId(), true);
 
-		service.cancelEvent(lead, event.getId());
+		service.cancelEvent(lead, event.getId(), null);
 
 		assertThat(mongo.findById(shift.getId(), Shift.class).isCancelled()).isTrue();
 		ShiftAssignment held = mongo.findOne(Query.query(Criteria.where("shiftId").is(shift.getId())), ShiftAssignment.class);
@@ -402,7 +402,7 @@ class ShiftPlanningIntegrationTest {
 		assertThat(mongo.count(Query.query(Criteria.where("cancelled").is(false).and("reminderSentAt").is(null)
 				.and("status").in(ShiftAssignment.Status.ACTIVE)), ShiftAssignment.class)).isEqualTo(1);
 
-		service.deleteEvent(lead, event.getId());
+		service.deleteEvent(lead, event.getId(), null);
 		assertThat(mongo.findById(event.getId(), ShiftEvent.class)).isNull();
 		assertThat(mongo.count(Query.query(Criteria.where("eventId").is(event.getId())), ShiftAssignment.class)).isZero();
 	}
@@ -414,7 +414,7 @@ class ShiftPlanningIntegrationTest {
 		assignments.assign(lead, shift.getId(), ann.getId(), false);
 		assignments.assign(lead, shift.getId(), bob.getId(), false);
 
-		service.deleteShift(lead, shift.getId());
+		service.deleteShift(lead, shift.getId(), null);
 
 		assertThat(mongo.findById(shift.getId(), Shift.class)).isNull();
 		assertThat(mongo.count(Query.query(Criteria.where("shiftId").is(shift.getId())), ShiftAssignment.class)).isZero();
@@ -460,13 +460,13 @@ class ShiftPlanningIntegrationTest {
 		Shift shift = shift(event, base, hours(2), 1, null);
 		assignments.assign(lead, shift.getId(), ann.getId(), false);
 
-		assertThatThrownBy(() -> service.deleteEvent(lead, event.getId())).hasMessage("error.shifts.eventHasAssignments");
+		assertThatThrownBy(() -> service.deleteEvent(lead, event.getId(), null)).hasMessage("error.shifts.eventHasAssignments");
 		// The tombstones of the refused attempt were rolled back with it.
 		assertThat(mongo.findById(shift.getId(), Shift.class).isDeleted()).isFalse();
 		assertThat(auditCount(AuditAction.SHIFT_EVENT_DELETED)).isZero();
 
-		service.cancelEvent(lead, event.getId());
-		service.deleteEvent(lead, event.getId());
+		service.cancelEvent(lead, event.getId(), null);
+		service.deleteEvent(lead, event.getId(), null);
 		assertThat(mongo.count(new Query(), Shift.class)).isZero();
 		assertThat(auditCount(AuditAction.SHIFT_EVENT_DELETED)).isEqualTo(1);
 	}
@@ -730,10 +730,10 @@ class ShiftPlanningIntegrationTest {
 		tx.run(() -> {
 			if (moves.incrementAndGet() == 1) {
 				return conflictingOn("shift_events", new ObjectId(event.getId()), () -> service.updateEvent(lead,
-						event.getId(), new ShiftService.EventPatch("Renamed", null, null, null, null, null, null)));
+						event.getId(), new ShiftService.EventPatch("Renamed", null, null, null, null, null, null, null), null));
 			}
 			return service.updateEvent(lead, event.getId(),
-					new ShiftService.EventPatch("Renamed", null, null, null, null, null, null));
+					new ShiftService.EventPatch("Renamed", null, null, null, null, null, null, null), null);
 		});
 		assertThat(moves.get()).isEqualTo(2);
 		assertThat(auditCount(AuditAction.SHIFT_EVENT_UPDATED)).isEqualTo(1);
@@ -975,7 +975,7 @@ class ShiftPlanningIntegrationTest {
 				assertThat(get(path, leadToken).statusCode()).as(path).isEqualTo(404);
 			}
 			assertThat(delete("/api/v1/shifts/events/" + event.getId(), leadToken).statusCode()).isEqualTo(404);
-			assertThatThrownBy(() -> service.cancelEvent(lead, event.getId())).hasMessage("error.feature.disabled");
+			assertThatThrownBy(() -> service.cancelEvent(lead, event.getId(), null)).hasMessage("error.feature.disabled");
 		}
 		finally {
 			current = settings.get();
@@ -1143,7 +1143,7 @@ class ShiftPlanningIntegrationTest {
 	private Shift shift(ShiftEvent event, Instant start, Duration length, int required, Integer max) {
 		User planner = event.getProjectId().equals(project.getId()) ? lead : otherLead;
 		return service.createShift(planner, event.getId(), new ShiftService.ShiftDraft("S", start, start.plus(length),
-				required, max));
+				required, max), null);
 	}
 
 	private static ShiftService.EventDraft draft(String title, Instant start, Instant end, String zone) {
