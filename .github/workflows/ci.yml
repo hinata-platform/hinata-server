@@ -24,6 +24,11 @@ jobs:
       # and provides dependency/build caching.
       - uses: gradle/actions/setup-gradle@v4
       - name: Build & test
+        # The 2026-10-18 runner image ships a kernel on which mongo:8.0 refuses
+        # to start (SERVER-121912, vendored TCMalloc). 8.2 reads 8.0 data and
+        # keeps FCV at 8.0, so the tests still cover what live runs.
+        env:
+          HINATA_TEST_MONGO_IMAGE: mongo:8.2.12
         run: ./gradlew build
 
   docker:
