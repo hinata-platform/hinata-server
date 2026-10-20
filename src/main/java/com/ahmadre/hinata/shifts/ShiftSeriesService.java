@@ -203,12 +203,15 @@ public class ShiftSeriesService {
 		});
 	}
 
-	/** What a draft would make, without saving it: the label is the controller's, the days are here. */
+	/**
+	 * What a draft would make, without saving it: the label is the controller's, the days are here.
+	 * The title may still be missing; everything else is checked as for {@link #create}.
+	 */
 	public ShiftSeries preview(User caller, String projectId, SeriesDraft draft) {
 		settings.requireEnabled();
 		Project project = access.plannedProject(projectId, caller);
 		ShiftSeries series = fromDraft(caller, project.getId(), draft);
-		ShiftSeriesPlan.validate(series, today(series));
+		ShiftSeriesPlan.validate(series, today(series), false);
 		return series;
 	}
 
