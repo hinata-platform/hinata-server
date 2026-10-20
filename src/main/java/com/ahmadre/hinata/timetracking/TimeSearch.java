@@ -52,7 +52,7 @@ class TimeSearch implements SearchSource {
 						// $gt '' as well, so the query implies the partial index's filter.
 						Criteria.where("description").gt(""), context.contains("description")))
 				.with(Sort.by(Sort.Direction.DESC, "date", "_id")).limit(cap);
-		List<SearchHit> hits = new ArrayList<>(entries(mongo.find(entries, WorkItem.class), context));
+		List<SearchHit> hits = new ArrayList<>(entries(mongo.find(context.bounded(entries), WorkItem.class), context));
 		if (settings.advancedEnabled() && settings.approvalsEnabled()) {
 			hits.addAll(timesheets(context, cap));
 		}
@@ -65,18 +65,18 @@ class TimeSearch implements SearchSource {
 		Query latest = Query.query(new Criteria().andOperator(Criteria.where("userId").is(context.userId()),
 						Criteria.where("description").gt("")))
 				.with(Sort.by(Sort.Direction.DESC, "date", "_id")).limit(limit);
-		return entries(mongo.find(latest, WorkItem.class), context);
+		return entries(mongo.find(context.bounded(latest), WorkItem.class), context);
 	}
 
 	/** The caller's described entries, and their timesheets while those exist, each up to [limit]. */
 	@Override
 	public long count(SearchContext context, int limit) {
-		long entries = mongo.count(Query.query(new Criteria().andOperator(
-				Criteria.where("userId").is(context.userId()), Criteria.where("description").gt(""))).limit(limit),
+		long entries = mongo.count(context.bounded(Query.query(new Criteria().andOperator(
+				Criteria.where("userId").is(context.userId()), Criteria.where("description").gt(""))).limit(limit)),
 				WorkItem.class);
 		if (!settings.advancedEnabled() || !settings.approvalsEnabled()) return entries;
-		return entries + mongo.count(Query.query(Criteria.where("userId").is(context.userId())).limit(limit),
-				TimesheetApproval.class);
+		return entries + mongo.count(context.bounded(Query.query(Criteria.where("userId").is(context.userId()))
+				.limit(limit)), TimesheetApproval.class);
 	}
 
 	private List<SearchHit> entries(List<WorkItem> items, SearchContext context) {
@@ -104,7 +104,7 @@ class TimeSearch implements SearchSource {
 		if (projects.isEmpty()) return List.of();
 		Query query = Query.query(Criteria.where("userId").is(context.userId()).and("projectId").in(projects))
 				.with(Sort.by(Sort.Direction.DESC, "periodStart", "_id")).limit(cap);
-		return mongo.find(query, TimesheetApproval.class).stream().map(sheet -> {
+		return mongo.find(context.bounded(query), TimesheetApproval.class).stream().map(sheet -> {
 			Project project = context.project(sheet.getProjectId());
 			return SearchHit.builder()
 					.category(SearchCategory.TIME.name())

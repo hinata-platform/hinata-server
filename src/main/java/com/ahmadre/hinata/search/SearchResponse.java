@@ -16,6 +16,12 @@ public record SearchResponse(List<SearchGroup> groups, Map<String, Long> counts,
 		 */
 		List<String> cappedCounts) {
 
-	public record SearchGroup(String category, List<SearchHit> items) {
+	/**
+	 * One category's hits, best first, at most the cap of the request.
+	 *
+	 * @param more whether the category holds more than {@code items} (HIN-165): the search reads one
+	 *             hit past the cap to know, so "show all" is offered only where there is more
+	 */
+	public record SearchGroup(String category, List<SearchHit> items, boolean more) {
 	}
 }
