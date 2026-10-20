@@ -85,7 +85,7 @@ public class ShiftDelivery {
 			return;
 		}
 		safely("assigned", () -> aboutShift(Notification.Type.SHIFT_ASSIGNED, ShiftNotices.Kind.ASSIGNED,
-				event.shiftId(), List.of(event.userId()), eventLink(event.eventId())));
+				event.shiftId(), List.of(event.userId()), ShiftLinks.event(event.eventId())));
 	}
 
 	/**
@@ -99,7 +99,7 @@ public class ShiftDelivery {
 			return;
 		}
 		safely("released", () -> aboutShift(Notification.Type.SHIFT_RELEASED, ShiftNotices.Kind.RELEASED,
-				event.shiftId(), List.of(event.userId()), MY_SHIFTS));
+				event.shiftId(), List.of(event.userId()), ShiftLinks.MY_SHIFTS));
 	}
 
 	/**
@@ -134,7 +134,7 @@ public class ShiftDelivery {
 			ShiftNotices.Kind kind = event.cancelled() ? ShiftNotices.Kind.EVENT_CANCELLED
 					: ShiftNotices.Kind.EVENT_MOVED;
 			notifications.notifyEach(Notification.Type.SHIFT_EVENT_CHANGED, shiftEvent.getProjectId(), people,
-					eventLink(shiftEvent.getId()),
+					ShiftLinks.event(shiftEvent.getId()),
 					reader -> notices.of(reader, kind, null, shiftEvent.getTitle(), shiftEvent.getStartsAt(),
 							shiftEvent.getEndsAt(), shiftEvent.getTimezone()));
 		});
@@ -153,7 +153,7 @@ public class ShiftDelivery {
 			people.remove(event.actorId());
 			ShiftNotices.Kind kind = event.deleted() ? ShiftNotices.Kind.SHIFT_DELETED : ShiftNotices.Kind.SHIFT_MOVED;
 			notifications.notifyEach(Notification.Type.SHIFT_CHANGED, shift.getProjectId(), people,
-					event.deleted() ? MY_SHIFTS : eventLink(shiftEvent.getId()),
+					event.deleted() ? ShiftLinks.MY_SHIFTS : ShiftLinks.event(shiftEvent.getId()),
 					reader -> notices.of(reader, kind, shift.getTitle(), shiftEvent.getTitle(), shift.getStartsAt(),
 							shift.getEndsAt(), shiftEvent.getTimezone()));
 		});
@@ -166,7 +166,7 @@ public class ShiftDelivery {
 			Map<String, Integer> counts = new LinkedHashMap<>(event.counts());
 			counts.remove(event.actorId());
 			notifications.notifyEach(Notification.Type.SHIFT_SERIES_CHANGED, event.projectId(), counts.keySet(),
-					MY_SHIFTS, reader -> notices.seriesChanged(reader, counts.getOrDefault(reader.getId(), 1)));
+					ShiftLinks.MY_SHIFTS, reader -> notices.seriesChanged(reader, counts.getOrDefault(reader.getId(), 1)));
 		});
 	}
 
@@ -183,7 +183,7 @@ public class ShiftDelivery {
 				return;
 			}
 			notifications.notifyEach(Notification.Type.SHIFT_PROMOTED, shift.getProjectId(), List.of(event.userId()),
-					eventLink(shiftEvent.getId()),
+					ShiftLinks.event(shiftEvent.getId()),
 					reader -> notices.promoted(reader, shift.getTitle(), shiftEvent.getTitle(), shift.getStartsAt(),
 							shift.getEndsAt(), shiftEvent.getTimezone(), event.confirmBy()));
 		});
@@ -194,14 +194,14 @@ public class ShiftDelivery {
 	void onWaitlistSkipped(ShiftDomainEvents.WaitlistSkipped event) {
 		safely("waitlistSkipped", () -> aboutShift(Notification.Type.SHIFT_WAITLIST_SKIPPED,
 				ShiftNotices.Kind.WAITLIST_SKIPPED, event.shiftId(), List.of(event.userId()),
-				eventLink(event.eventId())));
+				ShiftLinks.event(event.eventId())));
 	}
 
 	/** HIN-162: the person did not confirm in time; the place went on. */
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	void onWaitlistExpired(ShiftDomainEvents.WaitlistExpired event) {
 		safely("waitlistExpired", () -> aboutShift(Notification.Type.SHIFT_WAITLIST_EXPIRED,
-				ShiftNotices.Kind.WAITLIST_EXPIRED, event.shiftId(), List.of(event.userId()), MY_SHIFTS));
+				ShiftNotices.Kind.WAITLIST_EXPIRED, event.shiftId(), List.of(event.userId()), ShiftLinks.MY_SHIFTS));
 	}
 
 	/**
@@ -232,19 +232,12 @@ public class ShiftDelivery {
 				return;
 			}
 			byProject.computeIfAbsent(shift.getProjectId(), id -> new java.util.ArrayList<>())
-					.add(new NotificationService.NoticeBatch(people, eventLink(event.getId()),
+					.add(new NotificationService.NoticeBatch(people, ShiftLinks.event(event.getId()),
 							reader -> notices.of(reader, ShiftNotices.Kind.REMINDER, shift.getTitle(), event.getTitle(),
 									shift.getStartsAt(), shift.getEndsAt(), event.getTimezone())));
 		});
 		byProject.forEach((projectId, batches) -> safely("reminder",
 				() -> notifications.notifyEachInProject(Notification.Type.SHIFT_REMINDER, projectId, batches)));
-	}
-
-	/** Where "my shifts" live in the app. */
-	static final String MY_SHIFTS = "/shifts";
-
-	static String eventLink(String eventId) {
-		return "/shifts/events/" + eventId;
 	}
 
 	/**
@@ -271,7 +264,7 @@ public class ShiftDelivery {
 		Set<String> planners = new LinkedHashSet<>(access.plannerIds(shift.getProjectId()));
 		planners.remove(event.userId());
 		notifications.notifyEach(Notification.Type.SHIFT_HELPER_DECLINED, shift.getProjectId(), planners,
-				eventLink(shiftEvent.getId()),
+				ShiftLinks.event(shiftEvent.getId()),
 				reader -> notices.of(reader, ShiftNotices.Kind.SHORT, shift.getTitle(), shiftEvent.getTitle(),
 						shift.getStartsAt(), shift.getEndsAt(), shiftEvent.getTimezone(), shift.assigned(),
 						shift.required()));
