@@ -16,6 +16,7 @@ import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
@@ -222,12 +223,23 @@ public class ShiftSeriesService {
 	}
 
 	/**
+	 * The occurrences of one series, written so the planner reads the query as inside the partial
+	 * index {@code series_day} ({@code seriesId: {$type: 'string'}}): equality on a string alone is
+	 * not taken as implying the type, and without it every series read was a collection scan
+	 * (checked by explain in {@code ShiftPlanningIntegrationTest}).
+	 */
+	static Criteria ofSeries(String seriesId) {
+		return new Criteria().andOperator(Criteria.where("seriesId").is(seriesId),
+				Criteria.where("seriesId").type(JsonSchemaObject.Type.stringType()));
+	}
+
+	/**
 	 * The first occurrence from today on (in the series' zone) that exists and is not cancelled, or
 	 * null: the event the app opens after creating or reading a series. One read over
 	 * {@code series_day}.
 	 */
 	public String firstEventId(ShiftSeries series) {
-		Query query = Query.query(Criteria.where("seriesId").is(series.getId())
+		Query query = Query.query(ofSeries(series.getId())
 				.and("occurrenceDate").gte(today(series))
 				.and("cancelled").ne(true))
 				.with(Sort.by("occurrenceDate"));
@@ -334,7 +346,7 @@ public class ShiftSeriesService {
 	}
 
 	private Set<LocalDate> existingDays(String seriesId, Collection<LocalDate> days) {
-		Query query = Query.query(Criteria.where("seriesId").is(seriesId).and("occurrenceDate").in(days));
+		Query query = Query.query(ofSeries(seriesId).and("occurrenceDate").in(days));
 		query.fields().include("occurrenceDate");
 		return mongo.find(query, ShiftEvent.class).stream().map(ShiftEvent::getOccurrenceDate)
 				.collect(Collectors.toSet());
@@ -645,7 +657,7 @@ public class ShiftSeriesService {
 
 	/** The future occurrences of [series] from [from] on that still follow it, and [event] itself. */
 	private List<ShiftEvent> futureOccurrences(ShiftSeries series, LocalDate from, ShiftEvent event) {
-		List<ShiftEvent> future = new ArrayList<>(mongo.find(Query.query(Criteria.where("seriesId").is(series.getId())
+		List<ShiftEvent> future = new ArrayList<>(mongo.find(Query.query(ofSeries(series.getId())
 				.and("occurrenceDate").gte(from).and("detached").ne(true))
 				.with(Sort.by("occurrenceDate")), ShiftEvent.class));
 		if (future.stream().noneMatch(found -> found.getId().equals(event.getId()))) {
@@ -673,7 +685,7 @@ public class ShiftSeriesService {
 			}
 		}
 		// Detached occurrences ahead stay where they are; the new series leaves their days out.
-		Query detached = Query.query(Criteria.where("seriesId").is(series.getId()).and("occurrenceDate").gte(from)
+		Query detached = Query.query(ofSeries(series.getId()).and("occurrenceDate").gte(from)
 				.and("detached").is(true).and("_id").ne(event.getId()));
 		detached.fields().include("occurrenceDate");
 		mongo.find(detached, ShiftEvent.class).forEach(found -> exdates.add(found.getOccurrenceDate().plusDays(delta)));

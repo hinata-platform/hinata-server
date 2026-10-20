@@ -33,9 +33,11 @@ import java.time.Instant;
 // The calendar without a join over events: projectId as $in over the visible projects, startsAt
 // the window and the sort, _id the tiebreaker so a truncated calendar cuts at a stable place.
 @CompoundIndex(name = "project_start", def = "{'projectId': 1, 'startsAt': 1, '_id': 1}")
-// The nightly counter reconciliation walks the live shifts that are still running or ahead:
-// deleted is the equality, startsAt the range.
-@CompoundIndex(name = "live_start", def = "{'deleted': 1, 'startsAt': 1}")
+// The nightly counter reconciliation walks the live shifts that are still running or ahead, a
+// keyset page at a time: deleted is the equality, startsAt the range, and startsAt with _id the
+// page order, so the index hands out the pages sorted (it replaced live_start, see
+// ShiftIndexMigration).
+@CompoundIndex(name = "live_start_id", def = "{'deleted': 1, 'startsAt': 1, '_id': 1}")
 public class Shift {
 
 	@Id
