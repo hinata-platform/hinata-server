@@ -26,6 +26,9 @@ import com.ahmadre.hinata.timetracking.TimesheetApproval;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
+import org.bson.BsonDocument;
+import org.bson.BsonString;
+import org.bson.BsonValue;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +43,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.containers.MongoDBContainer;
@@ -53,6 +58,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,13 +95,55 @@ class GlobalSearchIntegrationTest {
 			return builder -> builder.addCommandListener(SearchReadCounter.listener());
 		}
 
-		/** The categories on the calling thread, so the counter sees every read of a search. */
+		/**
+		 * The categories on the calling thread, so the counter sees every read of a search; on
+		 * threads of their own while {@link #parallel} is set, for the test of a slow category.
+		 */
 		@Bean
 		@Primary
 		SearchExecutor inlineSearchExecutor() {
-			return new SearchExecutor(Runnable::run);
+			Executor threads = Executors.newVirtualThreadPerTaskExecutor();
+			return new SearchExecutor(task -> {
+				if (parallel) threads.execute(task);
+				else task.run();
+			});
+		}
+
+		/** A team category that takes longer than a search waits, while {@link #slow} is set. */
+		@Bean
+		SearchSource slowTeams() {
+			return new SearchSource() {
+				@Override
+				public SearchCategory category() {
+					return SearchCategory.TEAMS;
+				}
+
+				@Override
+				public boolean enabled() {
+					return slow;
+				}
+
+				@Override
+				public List<SearchHit> search(SearchContext context, int cap) {
+					try {
+						Thread.sleep(SearchService.PART_TIMEOUT.plusSeconds(2).toMillis());
+					}
+					catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+					return List.of(SearchHit.builder().category("TEAMS").id("slow").build());
+				}
+
+				@Override
+				public long count(SearchContext context, int limit) {
+					return 0;
+				}
+			};
 		}
 	}
+
+	static volatile boolean parallel;
+	static volatile boolean slow;
 
 	private static final String NEEDLE = "Kiwi";
 
@@ -136,6 +185,8 @@ class GlobalSearchIntegrationTest {
 	@AfterEach
 	void stopCounting() {
 		SearchReadCounter.reset();
+		parallel = false;
+		slow = false;
 	}
 
 	@Test
@@ -173,9 +224,18 @@ class GlobalSearchIntegrationTest {
 				"/time/absences?scope=requests&request=" + request.getId(),
 				"/time/absences?scope=requests&type=" + type.getId());
 		BillingRate rate = one(BillingRate.class, mine);
-		assertThat(routes(byCategory, "BILLING")).containsExactlyInAnyOrder(
+		// Budgets first, then rates (BudgetSearch).
+		assertThat(routes(byCategory, "BILLING")).containsExactly(
 				"/projects/" + mine.getId() + "/settings?section=timeTracking",
 				"/time/rates?rate=" + rate.getId());
+		SearchHit rateHit = byCategory.get("BILLING").get(1);
+		assertThat(rateHit.getRateLevel()).isEqualTo("PROJECT");
+		assertThat(rateHit.getRateKind()).isEqualTo("BILLABLE");
+		assertThat(rateHit.getType()).isNull();
+		assertThat(rateHit.getStatus()).isNull();
+		assertThat(byCategory.get("TEAMS").getFirst().getHue()).isEqualTo(team.getColorHue());
+		SearchHit project = byCategory.get("PROJECTS").getFirst();
+		assertThat(project.getOpenCount() + project.getDoneCount()).isEqualTo(1);
 	}
 
 	@Test
@@ -301,8 +361,159 @@ class GlobalSearchIntegrationTest {
 		// A lead reaches none of them, neither as hits nor in the count.
 		assertThat(hits(me, "sam", "BILLING")).isEmpty();
 		assertThat(hits(me, "Default rate", "BILLING")).isEmpty();
-		assertThat(search.search(me, "", "BILLING", false, 2).counts()).containsEntry("BILLING", 2L);
+		assertThat(search.search(me, "", null, false, 2).counts()).containsEntry("BILLING", 2L);
 		assertThat(search.search(olga, "", null, false, 2).counts().get("BILLING")).isGreaterThanOrEqualTo(3L);
+	}
+
+	@Test
+	@DisplayName("counts only when the palette opens: no text, every category, not the archive")
+	void countsOnlyWhenThePaletteOpens() {
+		assertThat(search.search(me, "", null, false, 2).counts()).isNotEmpty();
+		assertThat(search.search(me, "", "ISSUES", false, 2).counts()).isEmpty();
+		assertThat(search.search(me, "", "ISSUES", false, 2).groups()).isNotEmpty();
+		assertThat(search.search(me, "", null, true, 2).counts()).isEmpty();
+		assertThat(search.search(me, NEEDLE, null, false, 2).counts()).isEmpty();
+	}
+
+	@Test
+	@DisplayName("one character asks the five built-in categories only")
+	void oneCharacterAsksTheBuiltInCategoriesOnly() {
+		assertThat(search.search(me, "k", null, false, 2).groups()).extracting(SearchResponse.SearchGroup::category)
+				.isNotEmpty()
+				.isSubsetOf("ISSUES", "PROJECTS", "PEOPLE", "BOARDS", "DOCS");
+		assertThat(hits(me, "k", "COMMENTS")).isEmpty();
+		assertThat(hits(me, "ki", "COMMENTS")).hasSize(1);
+	}
+
+	@Test
+	@DisplayName("a group says whether there is more than it shows")
+	void aGroupSaysWhetherThereIsMore() {
+		for (int i = 0; i < 5; i++) {
+			seedFor(mine, me, "more" + i);
+		}
+		Map<String, SearchResponse.SearchGroup> groups = new java.util.HashMap<>();
+		search.search(me, NEEDLE, null, false, 2).groups().forEach(group -> groups.put(group.category(), group));
+		assertThat(groups.get("ISSUES").items()).hasSize(5);
+		assertThat(groups.get("ISSUES").more()).isTrue();
+		assertThat(groups.get("TEAMS").items()).hasSize(1);
+		assertThat(groups.get("TEAMS").more()).isFalse();
+		SearchResponse.SearchGroup scoped = search.search(me, NEEDLE, "ISSUES", false, 2).groups().getFirst();
+		assertThat(scoped.items()).hasSize(6);
+		assertThat(scoped.more()).isFalse();
+	}
+
+	@Test
+	@DisplayName("a slow category is left out and the others answer in time")
+	void aSlowCategoryIsLeftOut() {
+		parallel = true;
+		slow = true;
+		long started = System.nanoTime();
+		SearchResponse response = search.search(me, NEEDLE, null, false, 2);
+		Duration took = Duration.ofNanos(System.nanoTime() - started);
+
+		assertThat(took).isLessThan(SearchService.PART_TIMEOUT.plusSeconds(1));
+		assertThat(response.groups()).extracting(SearchResponse.SearchGroup::category)
+				.contains("ISSUES", "COMMENTS", "TEAMS", "SHIFTS");
+		assertThat(response.groups().stream().flatMap(group -> group.items().stream()).map(SearchHit::getId))
+				.doesNotContain("slow");
+	}
+
+	@Test
+	@DisplayName("a small reach is brought to the comments before anything is joined")
+	void aSmallReachMatchesCommentsByIssue() {
+		Issue foreign = one(Issue.class, hidden);
+		List<IssueComment> many = new ArrayList<>();
+		for (int i = 0; i < 300; i++) {
+			many.add(IssueComment.builder().issueId(foreign.getId()).authorId(stranger.getId())
+					.type(IssueComment.Type.TEXT).text(NEEDLE + " note " + i).createdAt(Instant.now()).build());
+		}
+		mongo.insertAll(many);
+
+		SearchReadCounter.reads(() -> assertThat(hits(me, NEEDLE, "COMMENTS")).hasSize(1));
+		BsonDocument comments = SearchReadCounter.sent.stream()
+				.filter(command -> "issue_comments".equals(command.getString("aggregate", new BsonString("")).getValue()))
+				.findFirst().orElseThrow();
+		BsonDocument first = comments.getArray("pipeline").get(0).asDocument().getDocument("$match");
+		assertThat(first.toJson()).contains("issueId").contains("$in");
+		// Only the caller's own comments are read: none of the stranger's 300.
+		assertThat(docsExamined(explain(comments))).isLessThanOrEqualTo(5);
+
+		SearchReadCounter.reads(() -> assertThat(search.search(me, "", null, false, 2).counts())
+				.containsEntry("COMMENTS", 1L));
+		BsonDocument count = SearchReadCounter.sent.stream()
+				.filter(command -> "issue_comments".equals(command.getString("aggregate", new BsonString("")).getValue()))
+				.findFirst().orElseThrow();
+		assertThat(docsExamined(explain(count))).isLessThanOrEqualTo(5);
+	}
+
+	@Test
+	@DisplayName("a large reach walks a bounded number of comments and joins the reach")
+	void aLargeReachWalksABoundedNumberOfComments() {
+		List<Issue> many = new ArrayList<>();
+		for (int i = 0; i <= CommentSearch.REACH_IDS_MAX; i++) {
+			many.add(Issue.builder().projectId(mine.getId()).numberInProject(1000 + i).readableId("KG-" + (1000 + i))
+					.title("Bulk " + i).state("Open").updatedAt(Instant.now()).build());
+		}
+		mongo.insertAll(many);
+
+		SearchReadCounter.reads(() -> assertThat(hits(me, NEEDLE, "COMMENTS")).hasSize(1));
+		BsonDocument comments = SearchReadCounter.sent.stream()
+				.filter(command -> "issue_comments".equals(command.getString("aggregate", new BsonString("")).getValue()))
+				.findFirst().orElseThrow();
+		assertThat(comments.getArray("pipeline").get(2).asDocument().getInt32("$limit").getValue())
+				.isEqualTo(CommentSearch.SCAN_MAX);
+		assertThat(hits(me, "hidden", "COMMENTS")).isEmpty();
+		assertThat(search.search(me, "", null, false, 2).counts()).containsEntry("COMMENTS", 1L);
+	}
+
+	@Test
+	@DisplayName("the attachment search reads only issues that hold a file, on their own index")
+	void attachmentsAreReadOnlyFromIssuesWithFiles() {
+		for (int i = 0; i < 20; i++) {
+			mongo.save(Issue.builder().projectId(mine.getId()).numberInProject(100 + i).readableId("KG-" + (100 + i))
+					.title("Plain " + i).state("Open").updatedAt(Instant.now()).build());
+		}
+		SearchContext context = new SearchContext(me, Map.of(mine.getId(), mine), Set.of(), new Criteria(), NEEDLE,
+				Duration.ofSeconds(5));
+		Query projects = new AttachmentSearch(mongo).queries(context, 5).getFirst();
+		Document plan = mongo.getCollection("issues").find(projects.getQueryObject()).sort(projects.getSortObject())
+				.hintString(projects.getHint()).explain(com.mongodb.ExplainVerbosity.EXECUTION_STATS);
+		assertThat(plan.toJson()).contains(Issue.WITH_FILES_INDEX);
+		// One issue of the caller's project holds a file; the twenty without are never read.
+		assertThat(docsExamined(BsonDocument.parse(plan.toJson()))).isEqualTo(1);
+		assertThat(search.search(me, "", null, false, 2).counts()).containsEntry("ATTACHMENTS", 1L);
+	}
+
+	@Test
+	@DisplayName("a money budget the caller may not see is neither found nor counted")
+	void aHiddenMoneyBudgetIsNotFound() {
+		User max = user("max", Role.MEMBER);
+		Project costly = project("CO", NEEDLE + " Costly", me);
+		costly.getMemberIds().add(max.getId());
+		mongo.save(costly);
+		mongo.save(ProjectTimeSettings.builder().projectId(costly.getId()).budgetCents(500_000L)
+				.budgetRateKind(ProjectTimeSettings.RateKind.COST).build());
+
+		assertThat(hits(max, "Costly", "BILLING")).isEmpty();
+		assertThat(search.search(max, "", null, false, 2).counts()).containsEntry("BILLING", 0L);
+		// The lead neither: a cost budget is an administrator's alone. A revenue budget is theirs.
+		assertThat(hits(me, "Costly", "BILLING")).isEmpty();
+		mongo.updateFirst(Query.query(Criteria.where("projectId").is(costly.getId())),
+				new org.springframework.data.mongodb.core.query.Update().set("budgetRateKind", "BILLABLE"),
+				ProjectTimeSettings.class);
+		assertThat(hits(me, "Costly", "BILLING")).extracting(SearchHit::getKind).containsExactly("BUDGET");
+		assertThat(hits(max, "Costly", "BILLING")).isEmpty();
+	}
+
+	@Test
+	@DisplayName("a space is found by whoever reads a page filed in it")
+	void aSpaceIsFoundThroughAReadablePage() {
+		mongo.save(Space.builder().name(NEEDLE + " shared").authorId(stranger.getId()).build());
+		mongo.save(Article.builder().projectId(mine.getId()).title("Notes").space(NEEDLE + " shared")
+				.authorId(stranger.getId()).updatedAt(Instant.now()).build());
+
+		assertThat(hits(me, NEEDLE, "DOCS")).filteredOn(hit -> "SPACE".equals(hit.getKind()))
+				.extracting(SearchHit::getTitle).containsExactlyInAnyOrder(NEEDLE + " visible", NEEDLE + " shared");
 	}
 
 	@Test
@@ -445,6 +656,31 @@ class GlobalSearchIntegrationTest {
 	private List<SearchHit> hits(User caller, String q, String scope) {
 		return search.search(caller, q, scope, false, 2).groups().stream()
 				.flatMap(group -> group.items().stream()).toList();
+	}
+
+	/** The plan of an aggregation [command] as sent, with what it read. */
+	private BsonDocument explain(BsonDocument command) {
+		BsonDocument aggregate = new BsonDocument("aggregate", command.get("aggregate"))
+				.append("pipeline", command.get("pipeline")).append("cursor", new BsonDocument());
+		Document plan = mongo.getDb().runCommand(new Document("explain", aggregate).append("verbosity", "executionStats"));
+		return BsonDocument.parse(plan.toJson());
+	}
+
+	/** Every document a plan read, added up over its stages. */
+	private static long docsExamined(BsonValue plan) {
+		long total = 0;
+		if (plan.isDocument()) {
+			for (Map.Entry<String, BsonValue> field : plan.asDocument().entrySet()) {
+				if (field.getKey().equals("totalDocsExamined") && field.getValue().isNumber()) {
+					total += field.getValue().asNumber().longValue();
+				} else {
+					total += docsExamined(field.getValue());
+				}
+			}
+		} else if (plan.isArray()) {
+			for (BsonValue item : plan.asArray()) total += docsExamined(item);
+		}
+		return total;
 	}
 
 	private static List<String> routes(Map<String, List<SearchHit>> byCategory, String category) {

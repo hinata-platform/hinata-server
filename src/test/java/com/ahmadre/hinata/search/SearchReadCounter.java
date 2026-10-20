@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.search;
 
 import com.mongodb.event.CommandListener;
+import org.bson.BsonDocument;
 import com.mongodb.event.CommandStartedEvent;
 
 import java.util.List;
@@ -19,6 +20,9 @@ final class SearchReadCounter {
 
 	static final List<String> commands = new CopyOnWriteArrayList<>();
 
+	/** The read commands themselves, in the order they were sent, for a test that explains one. */
+	static final List<BsonDocument> sent = new CopyOnWriteArrayList<>();
+
 	private static volatile Thread counting;
 
 	private SearchReadCounter() {
@@ -30,6 +34,7 @@ final class SearchReadCounter {
 			public void commandStarted(CommandStartedEvent event) {
 				if (Thread.currentThread() == counting && READS.contains(event.getCommandName())) {
 					commands.add(event.getCommandName() + " " + event.getCommand().get(event.getCommandName()));
+					sent.add(BsonDocument.parse(event.getCommand().toJson()));
 				}
 			}
 		};
@@ -37,6 +42,7 @@ final class SearchReadCounter {
 
 	static int reads(Runnable read) {
 		commands.clear();
+		sent.clear();
 		counting = Thread.currentThread();
 		try {
 			read.run();
@@ -50,5 +56,6 @@ final class SearchReadCounter {
 	static void reset() {
 		counting = null;
 		commands.clear();
+		sent.clear();
 	}
 }
