@@ -83,6 +83,7 @@ public class HinataProperties {
 	@Valid
 	private Availability availability = new Availability();
 	private ProjectTemplates projectTemplates = new ProjectTemplates();
+	private Shifts shifts = new Shifts();
 
 	/** Tuning for the notification fan-out that is not a per-user preference. */
 	@Getter
@@ -230,6 +231,23 @@ public class HinataProperties {
 		 */
 		private com.ahmadre.hinata.common.RelativeDate.Basis defaultBasis =
 				com.ahmadre.hinata.common.RelativeDate.Basis.CALENDAR;
+	}
+
+	/**
+	 * Shift planning (HIN-27): events, shifts and who covers them.
+	 *
+	 * <p>Off by default, like every module that brings routes and screens of its own. Also
+	 * published as the {@code shift_planning} client flag, and an administrator's stored value in
+	 * {@code ServerSettings.Shifts} wins over what is set here. Neither switch takes effect without
+	 * {@link Mongodb#isTransactionsEnabled()}: assigning a shift runs in a transaction, and a
+	 * module that silently dropped its atomicity would double-book the last place.
+	 */
+	@Getter
+	@Setter
+	public static class Shifts {
+
+		/** Master switch for shift planning. */
+		private boolean enabled = false;
 	}
 
 	/**

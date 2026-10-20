@@ -49,8 +49,18 @@ public class MetaController {
 			 * How a new relative deadline counts where a project does not say:
 			 * {@code CALENDAR} or {@code WORKING}, the organisation's default.
 			 */
-			String defaultDeadlineBasis) {
+			String defaultDeadlineBasis,
+			/**
+			 * Whether shift planning could be switched on here at all. False on an
+			 * instance without Mongo transactions (no replica set), where the admin
+			 * area shows the reason instead of the switch. Not part of
+			 * {@code featureFlags}: it is a property of the deployment, not a flag.
+			 */
+			boolean shiftPlanningAvailable) {
 	}
+
+	/** The flag whose availability {@link Meta#shiftPlanningAvailable()} reports. */
+	private static final String SHIFT_PLANNING_FLAG = "shift_planning";
 
 	/** Attachment upload constraints so the client can validate before sending. */
 	public record UploadLimits(int maxFileMb, int maxFiles, int maxRequestMb,
@@ -88,7 +98,9 @@ public class MetaController {
 				new UploadLimits(storage.getMaxUploadMb(), storage.getMaxFilesPerRequest(),
 						storage.getMaxRequestMb(), storage.getAllowedContentTypes()),
 				securityPolicy.passwordMinLength(),
-				templatePolicy.defaultBasis().name());
+				templatePolicy.defaultBasis().name(),
+				// By flag name rather than by class: meta is core and knows no module.
+				featureFlags.available(SHIFT_PLANNING_FLAG));
 	}
 
 	@Operation(summary = "Organization logo", description = "Serves the organization logo same-origin so clients (incl. the web app and the PDF export) load it without CORS restrictions. An uploaded logo is streamed from object storage; a configured external URL is fetched server-side through the SSRF-hardened image fetcher and cached.")

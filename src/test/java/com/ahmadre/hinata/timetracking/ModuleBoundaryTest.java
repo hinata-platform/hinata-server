@@ -3,10 +3,15 @@ package com.ahmadre.hinata.timetracking;
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaMethod;
+import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.domain.properties.HasName;
 import com.tngtech.archunit.core.importer.ImportOption;
+import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
+import com.tngtech.archunit.lang.ConditionEvents;
+import com.tngtech.archunit.lang.SimpleConditionEvent;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -16,8 +21,10 @@ import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideOutsideOfPackages;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The boundary around time tracking, availability and billing, stated as a rule
@@ -65,6 +72,7 @@ class ModuleBoundaryTest {
 	private static final String TIME = ROOT + ".timetracking";
 	private static final String TIME_OFF = ROOT + ".timeoff";
 	private static final String TEMPLATE = ROOT + ".template";
+	private static final String SHIFTS = ROOT + ".shifts";
 
 	/** The module and the three packages that hang off it. */
 	private static final String[] MODULE_PACKAGES = {
@@ -156,7 +164,7 @@ class ModuleBoundaryTest {
 		// a write: a marking must never turn into a refusal (R9).
 		noClasses()
 				.that(resideOutsideOfPackages("..availability..", "..timetracking..", "..timeoff..",
-						"..schedule..", "..template.."))
+						"..shifts..", "..template.."))
 				.should().dependOnClassesThat().resideInAnyPackage("..availability..")
 				.because("capacity is read by time tracking and shift planning, and by nobody else")
 				.check(PRODUCTION);
@@ -264,7 +272,12 @@ class ModuleBoundaryTest {
 			// The organisation's whole-day holidays for a budget's forecast (HIN-156). A calendar,
 			// never a person: the default calendar's dates and nothing else, so a forecast never
 			// moves because somebody booked leave.
-			TIME + ".TimeForecastHolidays");
+			TIME + ".TimeForecastHolidays",
+			// Shift planning's one door to capacity (HIN-43/45): whether a shift collides with an
+			// absence, shown as a hint and only to whoever may see that absence anyway. Named
+			// before the class exists, so it is the only class of the module that ever may; its
+			// callers join READERS_AND_THEIR_ROUTES when HIN-43 writes them.
+			SHIFTS + ".ShiftConflicts");
 
 	/**
 	 * The readers and the routes that serve what they compute: the only classes that may call a
@@ -393,6 +406,194 @@ class ModuleBoundaryTest {
 						.and(not(HasName.Predicates.name("net.fortuna.ical4j.model.Recur"))))
 				.because("the parser borrows the recurrence engine and nothing else")
 				.check(PRODUCTION);
+	}
+
+	// --- shift planning (HIN-49) -------------------------------------------------
+
+	/**
+	 * Who outside the module may name it. The wire contracts carry {@code SHIFT_*} constants
+	 * because those names travel to clients and to the audit log. The demo seeder is listed
+	 * separately below, because it may name the stored entities and nothing else.
+	 */
+	private static final Set<String> SHIFT_WIRE_CONTRACTS = Set.of(
+			ROOT + ".audit.AuditAction",
+			ROOT + ".notification.Notification");
+
+	private static final Set<String> DEMO_SEEDER = Set.of(ROOT + ".demo.DemoSeeder");
+
+	/**
+	 * The packages {@code shifts} may read, whole. Anything else under {@code com.ahmadre.hinata}
+	 * is refused unless it is one of {@link #SHIFT_READABLE_CLASSES}; time tracking, absences,
+	 * billing and templates are absent on purpose. Third-party libraries are not this rule's
+	 * business.
+	 */
+	private static final List<String> SHIFT_READABLE_PACKAGES = List.of(
+			SHIFTS, ROOT + ".project", ROOT + ".user", ROOT + ".me", ROOT + ".auth",
+			ROOT + ".notification", ROOT + ".availability", ROOT + ".common", ROOT + ".audit",
+			ROOT + ".ics", ROOT + ".setup", ROOT + ".config",
+			// The document export the schedule export renders through (HIN-163).
+			ROOT + ".issue.export");
+
+	/** Single classes of other packages, each for its stage: the MCP tools of HIN-164. */
+	private static final Set<String> SHIFT_READABLE_CLASSES = Set.of(
+			ROOT + ".mcp.ScopeGuard", ROOT + ".mcp.McpErrors", ROOT + ".pat.Scopes");
+
+	/** The two services whose calls deliver something: a notification or an audit record. */
+	private static final Set<String> DELIVERY_SERVICES = Set.of(
+			ROOT + ".notification.NotificationService", ROOT + ".audit.AuditService");
+
+	private static final String[] TRANSACTIONAL = {
+			"org.springframework.transaction.annotation.Transactional",
+			"jakarta.transaction.Transactional" };
+
+	private static DescribedPredicate<JavaClass> inPackages(List<String> packages, String description) {
+		return DescribedPredicate.describe(description, javaClass -> {
+			String name = javaClass.getPackageName();
+			return packages.stream().anyMatch(pkg -> name.equals(pkg) || name.startsWith(pkg + "."));
+		});
+	}
+
+	/** An entity the seeder may write: a {@code @Document}, or a type nested in one (its builder). */
+	private static final DescribedPredicate<JavaClass> STORED_ENTITY =
+			DescribedPredicate.describe("a stored entity of the module", javaClass -> {
+				JavaClass current = javaClass;
+				while (current != null) {
+					if (current.isAnnotatedWith("org.springframework.data.mongodb.core.mapping.Document")) {
+						return true;
+					}
+					current = current.getEnclosingClass().orElse(null);
+				}
+				return false;
+			});
+
+	static final ArchRule NOTHING_OUTSIDE_SHIFTS_REACHES_IN = noClasses()
+			.that(resideOutsideOfPackages("..shifts..")
+					.and(not(named(SHIFT_WIRE_CONTRACTS, "a wire contract")))
+					.and(not(named(DEMO_SEEDER, "the demo seeder"))))
+			.should().dependOnClassesThat().resideInAnyPackage("..shifts..")
+			.because("shift planning has to be switchable off and removable by deleting its package");
+
+	static final ArchRule THE_SEEDER_NAMES_ONLY_SHIFT_ENTITIES = noClasses()
+			.that(named(DEMO_SEEDER, "the demo seeder"))
+			.should().dependOnClassesThat(resideInAnyPackage("..shifts..").and(not(STORED_ENTITY)))
+			.because("demo data is written as stored documents, not through the module's services");
+
+	static final ArchRule SHIFTS_READS_ONLY_WHAT_IT_IS_ALLOWED_TO = noClasses()
+			.that().resideInAPackage("..shifts..")
+			.should().dependOnClassesThat(resideInAnyPackage(ROOT + "..")
+					.and(not(inPackages(SHIFT_READABLE_PACKAGES, "a package shift planning may read")))
+					.and(not(named(SHIFT_READABLE_CLASSES, "a class shift planning may read"))))
+			.because("shift planning stands on the core, never on time tracking, absences, billing "
+					+ "or templates");
+
+	/** A method that runs in a transaction, by its own annotation or its class's. */
+	private static final DescribedPredicate<JavaMethod> TRANSACTIONAL_METHOD =
+			DescribedPredicate.describe("run in a transaction", method -> {
+				for (String annotation : TRANSACTIONAL) {
+					if (method.isAnnotatedWith(annotation) || method.getOwner().isAnnotatedWith(annotation)) {
+						return true;
+					}
+				}
+				return false;
+			});
+
+	/**
+	 * Calls a delivery service from the method's body, including the lambdas written in it: a
+	 * {@code forEach(n -> notifications.notify(n))} inside the transaction delivers just as early.
+	 */
+	private static final ArchCondition<JavaMethod> NOT_DELIVER_DIRECTLY =
+			new ArchCondition<>("not call NotificationService or AuditService directly") {
+				@Override
+				public void check(JavaMethod method, ConditionEvents events) {
+					String lambdaPrefix = "lambda$" + method.getName() + "$";
+					method.getOwner().getMethods().stream()
+							.filter(candidate -> candidate.equals(method)
+									|| candidate.getName().startsWith(lambdaPrefix))
+							.flatMap(candidate -> candidate.getMethodCallsFromSelf().stream())
+							.filter(call -> delivers(call))
+							.forEach(call -> events.add(SimpleConditionEvent.violated(method,
+									method.getFullName() + " runs in a transaction and calls "
+											+ call.getTarget().getFullName() + " directly "
+											+ call.getSourceCodeLocation())));
+				}
+			};
+
+	private static boolean delivers(JavaMethodCall call) {
+		String owner = call.getTargetOwner().getFullName();
+		return DELIVERY_SERVICES.stream()
+				.anyMatch(name -> owner.equals(name) || owner.startsWith(name + "$"));
+	}
+
+	static final ArchRule NO_DELIVERY_INSIDE_A_SHIFT_TRANSACTION = methods()
+			.that().areDeclaredInClassesThat().resideInAPackage("..shifts..")
+			.and(TRANSACTIONAL_METHOD)
+			.should(NOT_DELIVER_DIRECTLY)
+			.because("a rolled-back assignment must not have told anybody; deliver from "
+					+ "@TransactionalEventListener(phase = AFTER_COMMIT)")
+			// Until HIN-43 writes the first transaction there is nothing to check, and that is fine.
+			.allowEmptyShould(true);
+
+	@Test
+	void nothingOutsideShiftsReachesIn() {
+		NOTHING_OUTSIDE_SHIFTS_REACHES_IN.check(PRODUCTION);
+		THE_SEEDER_NAMES_ONLY_SHIFT_ENTITIES.allowEmptyShould(true).check(PRODUCTION);
+		// The wire contracts may spell the module's vocabulary; they may not depend on it.
+		noClasses()
+				.that(named(SHIFT_WIRE_CONTRACTS, "a wire contract"))
+				.should().dependOnClassesThat().resideInAnyPackage("..shifts..")
+				.because("they may spell the module's vocabulary, not depend on it")
+				.check(PRODUCTION);
+	}
+
+	@Test
+	void shiftPlanningReadsOnlyItsNamedPackages() {
+		assertThat(PRODUCTION.stream().map(JavaClass::getFullName)).contains(SHIFTS + ".ShiftSettings");
+		SHIFTS_READS_ONLY_WHAT_IT_IS_ALLOWED_TO.check(PRODUCTION);
+	}
+
+	@Test
+	void noShiftTransactionDeliversDirectly() {
+		NO_DELIVERY_INSIDE_A_SHIFT_TRANSACTION.check(PRODUCTION);
+	}
+
+	/**
+	 * The shift rules against classes written to break them, so a rule that passes on production
+	 * code is known to be able to fail. The probes live in the test sources and are imported on
+	 * their own; {@link #PRODUCTION} never sees them.
+	 */
+	@Test
+	void theShiftRulesCatchWhatTheyAreThereFor() {
+		JavaClasses coreReachingIn = new ClassFileImporter().importClasses(CoreReachingIntoShifts.class);
+		assertThatThrownBy(() -> NOTHING_OUTSIDE_SHIFTS_REACHES_IN.check(coreReachingIn))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("CoreReachingIntoShifts");
+
+		JavaClasses forbiddenRead = new ClassFileImporter()
+				.importClasses(com.ahmadre.hinata.shifts.ShiftBoundaryProbes.ReadsTimeTracking.class);
+		assertThatThrownBy(() -> SHIFTS_READS_ONLY_WHAT_IT_IS_ALLOWED_TO.check(forbiddenRead))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("TimeTrackingSettings");
+
+		JavaClasses delivering = new ClassFileImporter().importClasses(
+				com.ahmadre.hinata.shifts.ShiftBoundaryProbes.NotifiesInsideTransaction.class,
+				com.ahmadre.hinata.shifts.ShiftBoundaryProbes.AuditsInsideTransactionalClass.class,
+				com.ahmadre.hinata.shifts.ShiftBoundaryProbes.NotifiesFromALambda.class);
+		assertThatThrownBy(() -> NO_DELIVERY_INSIDE_A_SHIFT_TRANSACTION.check(delivering))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("NotifiesInsideTransaction.assign")
+				.hasMessageContaining("AuditsInsideTransactionalClass.release")
+				.hasMessageContaining("NotifiesFromALambda.assignAll");
+
+		// And the sanctioned shape passes: delivery after the commit, from a listener.
+		JavaClasses afterCommit = new ClassFileImporter()
+				.importClasses(com.ahmadre.hinata.shifts.ShiftBoundaryProbes.DeliversAfterCommit.class);
+		NO_DELIVERY_INSIDE_A_SHIFT_TRANSACTION.check(afterCommit);
+	}
+
+	/** A core class naming the module: what {@link #NOTHING_OUTSIDE_SHIFTS_REACHES_IN} refuses. */
+	@SuppressWarnings("unused")
+	static class CoreReachingIntoShifts {
+		private com.ahmadre.hinata.shifts.ShiftSettings settings;
 	}
 
 	@Test
