@@ -267,7 +267,7 @@ class ShiftWaitlistIntegrationTest {
 	// --- moving up -----------------------------------------------------------------------
 
 	@Test
-	@DisplayName("giving up a place moves the first person up after the commit, with a deadline and one notice")
+	@DisplayName("withdrawing from a place moves the first person up after the commit, with a deadline and one notice")
 	void releaseMovesTheFirstUp() {
 		Shift shift = fullShift(1);
 		String anns = mongo.findOne(Query.query(Criteria.where("userId").is(ann.getId())), ShiftAssignment.class).getId();

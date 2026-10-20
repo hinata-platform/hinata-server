@@ -179,7 +179,7 @@ public class ShiftAssignments {
 
 	/**
 	 * The person says yes to a planner's assignment: {@code ASSIGNED} becomes {@code CONFIRMED}.
-	 * Only their own; confirming twice changes nothing; an assignment that was declined or given up
+	 * Only their own; confirming twice changes nothing; an assignment that was declined or withdrawn from
 	 * meanwhile is a 409.
 	 */
 	public ShiftAssignment confirm(User caller, String assignmentId) {
@@ -211,7 +211,7 @@ public class ShiftAssignments {
 	/**
 	 * The person says no to a planner's assignment: {@code ASSIGNED} becomes {@code DECLINED} and the
 	 * place is free again. Only their own and only while it waits for an answer; a place they
-	 * confirmed or signed up for is given up with {@link #release} instead.
+	 * confirmed or signed up for is withdrawn from with {@link #release} instead.
 	 */
 	public ShiftAssignment decline(User caller, String assignmentId) {
 		settings.requireEnabled();
@@ -228,8 +228,8 @@ public class ShiftAssignments {
 	}
 
 	/**
-	 * Frees a place: the person gives the shift up or a planner takes them off it
-	 * ({@code RELEASED}, "Austragen"). The person themselves or a planner of the project; anybody
+	 * Frees a place ({@code RELEASED}): the person withdraws from the shift ("Austragen") or a
+	 * planner takes them off it. The person themselves or a planner of the project; anybody
 	 * else gets the 404 of an assignment that is not there. Freeing what is not active changes
 	 * nothing and returns the document as it is. HIN-162: on a waiting entry this is leaving the
 	 * waiting list, which frees no place.
