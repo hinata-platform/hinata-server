@@ -175,6 +175,59 @@ class ShiftSeriesIntegrationTest {
 	// --- creating -----------------------------------------------------------------------
 
 	@Test
+	@DisplayName("wall-clock times and days are stored without a zone: a server in another zone reads the same series")
+	void wallClockSurvivesAServerZoneChange() {
+		java.util.TimeZone original = java.util.TimeZone.getDefault();
+		LocalDate monday = today.plusDays(1).with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY));
+		try {
+			// Fourteen hours ahead of UTC: midnight there is the day before in UTC.
+			java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Pacific/Kiritimati"));
+			ShiftSeriesService.Created created = series.create(lead, project.getId(), new ShiftSeriesService.SeriesDraft(
+					"Sprechstunde", null, null, "Europe/Berlin", monday.atTime(18, 0), 240, "FREQ=WEEKLY;BYDAY=MO", true,
+					List.of(new ShiftSeriesService.TemplateDraft(null, "Beratung", 0, LocalTime.of(18, 0),
+							LocalTime.of(20, 0), 1, null))));
+			String id = created.series().getId();
+			ShiftEvent second = occurrence(id, monday.plusWeeks(1));
+			service.cancelEvent(lead, second.getId(), "this");
+			int occurrences = (int) mongo.count(Query.query(Criteria.where("seriesId").is(id)), ShiftEvent.class);
+
+			Document raw = mongo.getCollection("shift_series").find(new Document("_id", new org.bson.types.ObjectId(id)))
+					.first();
+			assertThat(raw.get("firstStart")).isEqualTo(monday.atTime(18, 0).toString());
+			assertThat(raw.getList("shifts", Document.class).getFirst().get("start")).isEqualTo("18:00");
+			assertThat(raw.getList("exdates", Object.class)).containsExactly(monday.plusWeeks(1).toString());
+			assertThat(raw.get("materializedUntil")).isInstanceOf(String.class);
+			assertThat(mongo.getCollection("shift_events").find(new Document("seriesId", id)).first()
+					.get("occurrenceDate")).isInstanceOf(String.class);
+
+			// Eleven hours behind UTC: the same instants are a different local day here.
+			java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Pacific/Pago_Pago"));
+			ShiftSeries read = mongo.findById(id, ShiftSeries.class);
+			assertThat(read.getFirstStart()).isEqualTo(monday.atTime(18, 0));
+			assertThat(read.getShifts().getFirst().getStart()).isEqualTo(LocalTime.of(18, 0));
+			assertThat(read.getShifts().getFirst().getEnd()).isEqualTo(LocalTime.of(20, 0));
+			assertThat(read.getExdates()).containsExactly(monday.plusWeeks(1));
+			assertThat(read.getMaterializedUntil()).isEqualTo(created.series().getMaterializedUntil());
+			assertThat(occurrence(id, monday)).isNotNull();
+			assertThat(occurrences(id)).allSatisfy(event ->
+					assertThat(event.getOccurrenceDate().getDayOfWeek()).isEqualTo(DayOfWeek.MONDAY));
+
+			// Pulled along again from an earlier horizon: the days that exist are found by date, none twice.
+			mongo.updateFirst(Query.query(Criteria.where("_id").is(id)),
+					new Update().set("materializedUntil", monday.plusWeeks(2)), ShiftSeries.class);
+			series.materialize(id);
+			List<ShiftEvent> after = mongo.find(Query.query(Criteria.where("seriesId").is(id)), ShiftEvent.class);
+			assertThat(after).hasSize(occurrences);
+			assertThat(after.stream().map(ShiftEvent::getOccurrenceDate).distinct().count()).isEqualTo(occurrences);
+			assertThat(series.upcoming(read, 2)).extracting(ShiftSeriesService.Upcoming::date)
+					.doesNotContain(monday.plusWeeks(1));
+		}
+		finally {
+			java.util.TimeZone.setDefault(original);
+		}
+	}
+
+	@Test
 	@DisplayName("a weekly series on two weekdays materialises its events with their shifts")
 	void weeklyOnTwoDays() throws Exception {
 		LocalDate monday = today.plusDays(1).with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY));
