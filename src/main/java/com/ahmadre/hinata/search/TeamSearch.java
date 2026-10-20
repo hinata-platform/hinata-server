@@ -44,6 +44,11 @@ class TeamSearch implements SearchSource {
 		return find(mine(context), limit);
 	}
 
+	@Override
+	public long count(SearchContext context, int limit) {
+		return mongo.count(Query.query(mine(context)).limit(limit), Team.class);
+	}
+
 	private static Criteria mine(SearchContext context) {
 		return Criteria.where("members.userId").is(context.userId());
 	}

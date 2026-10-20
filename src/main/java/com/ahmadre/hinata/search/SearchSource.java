@@ -25,6 +25,12 @@ import java.util.List;
  */
 public interface SearchSource {
 
+	/**
+	 * Where a category's count stops (HIN-165). The palette shows a number on every scope chip; past
+	 * this it says "99+" rather than paying for an exact total of somebody's whole history.
+	 */
+	int COUNT_CAP = 100;
+
 	SearchCategory category();
 
 	/** Whether the module behind the source is switched on right now. */
@@ -40,4 +46,11 @@ public interface SearchSource {
 	default List<SearchHit> suggest(SearchContext context, int limit) {
 		return List.of();
 	}
+
+	/**
+	 * How many entries of the category the caller could find, counted under the same reach as the
+	 * hits and at most [limit] ({@link #COUNT_CAP}): a count query with a limit, never a read of the
+	 * rows. Asked when the palette opens, independent of what is typed.
+	 */
+	long count(SearchContext context, int limit);
 }

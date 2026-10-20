@@ -79,6 +79,15 @@ class ShiftSearch implements SearchSource {
 		return mongo.find(next, ShiftEvent.class).stream().map(event -> event(event, context)).toList();
 	}
 
+	/** Events and live shifts of the caller's projects, each counted up to [limit]. */
+	@Override
+	public long count(SearchContext context, int limit) {
+		if (context.projectIds().isEmpty()) return 0;
+		return mongo.count(Query.query(inReach(context)).limit(limit), ShiftEvent.class)
+				+ mongo.count(Query.query(new Criteria().andOperator(inReach(context),
+						Criteria.where("deleted").ne(true))).limit(limit), Shift.class);
+	}
+
 	private static Criteria inReach(SearchContext context) {
 		return Criteria.where("projectId").in(context.projectIds());
 	}
