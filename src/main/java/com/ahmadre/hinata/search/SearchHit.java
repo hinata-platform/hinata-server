@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -17,8 +18,17 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class SearchHit {
 
-	/** ISSUES | PROJECTS | PEOPLE | BOARDS | DOCS. */
+	/** One of {@link SearchCategory}. */
 	private String category;
+
+	/**
+	 * What the hit is within its category, where a category holds more than one
+	 * kind (HIN-165): {@code BOARD}/{@code SPRINT}, {@code ARTICLE}/{@code SPACE},
+	 * {@code EVENT}/{@code SHIFT}, {@code ENTRY}/{@code TIMESHEET},
+	 * {@code REQUEST}/{@code TYPE}, {@code BUDGET}/{@code RATE}. Omitted where a
+	 * category has one kind only.
+	 */
+	private String kind;
 
 	/** Entity id (used as the row key). */
 	private String id;
@@ -55,4 +65,45 @@ public class SearchHit {
 	// ---- docs ----
 	private String space;
 	private Instant updatedAt;
+
+	// ---- HIN-165 ----
+
+	/** People: the account name; teams: the team key. */
+	private String username;
+	private String key;
+
+	/** The project a hit belongs to, for the hits that have one and that the caller sees. */
+	private String projectId;
+	private String projectName;
+
+	/** Comments and attachments: the issue they sit on. */
+	private String issueId;
+
+	/** Comments: who wrote it; also the moment for comments. */
+	private String authorName;
+	private Instant createdAt;
+
+	/** Attachments: the file's media type and size in bytes. */
+	private String contentType;
+	private Long size;
+
+	/** Shift events and shifts: when they run, and the event's place. */
+	private Instant startsAt;
+	private Instant endsAt;
+	private String location;
+	private Boolean cancelled;
+
+	/** Time entries, timesheets, absence requests: the days (ISO dates). */
+	private LocalDate from;
+	private LocalDate to;
+	private Integer minutes;
+
+	/** Timesheets and absence requests: their status as stored (e.g. {@code APPROVED}). */
+	private String status;
+
+	/** Absence types: their icon and hue; rates: amount in cents and currency. */
+	private String icon;
+	private Integer hue;
+	private Long amountCents;
+	private String currency;
 }
