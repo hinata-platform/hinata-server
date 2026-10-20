@@ -6,6 +6,8 @@ import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.mongodb.client.result.UpdateResult;
 import lombok.RequiredArgsConstructor;
+import org.bson.Document;
+import org.bson.types.ObjectId;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
@@ -22,6 +24,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * The planner role of a project (HIN-45): who may plan shifts there without leading it.
@@ -38,6 +41,10 @@ public class ShiftPlanners {
 
 	/** Far above any real project; the list is not paged. */
 	static final int LIST_MAX = 500;
+
+	/** How many people the assignment picker gets without asking, and at most. */
+	static final int CANDIDATES_DEFAULT = 20;
+	static final int CANDIDATES_MAX = 50;
 
 	private final MongoTemplate mongo;
 	private final ShiftTx tx;
@@ -100,6 +107,48 @@ public class ShiftPlanners {
 				audited(AuditAction.SHIFT_PLANNER_REVOKED, caller, project.getId(), userId);
 			}
 		});
+	}
+
+	/** One person a planner may put on a shift. */
+	public record Candidate(String userId, String name, String avatarUrl) {
+	}
+
+	/** The people a planner may put on a shift, by name, and whether [limit] cut the list. */
+	public record CandidatesResponse(List<Candidate> candidates, boolean truncated) {
+	}
+
+	/**
+	 * Who a planner may put on a shift of the project: every active account that sees it, direct
+	 * members and team grants alike, the rule the assignment itself checks. [q] narrows by display
+	 * name or username (literal, case-insensitive), the list is sorted by name and capped at
+	 * [limit] ({@value #CANDIDATES_DEFAULT} unless asked, at most {@value #CANDIDATES_MAX}). The
+	 * caller plans the project: 403 otherwise. Addresses are never part of the answer.
+	 */
+	public CandidatesResponse candidates(User caller, String projectId, String q, Integer limit) {
+		settings.requireEnabled();
+		Project project = access.plannedProject(projectId, caller);
+		int cap = limit == null ? CANDIDATES_DEFAULT : Math.max(1, Math.min(limit, CANDIDATES_MAX));
+		List<Object> ids = access.everyoneWhoCanSee(project.getId()).stream()
+				.map(raw -> ObjectId.isValid(raw) ? (Object) new ObjectId(raw) : raw).toList();
+		if (ids.isEmpty()) {
+			return new CandidatesResponse(List.of(), false);
+		}
+		Criteria criteria = Criteria.where("_id").in(ids).and("active").is(true);
+		String term = q == null ? "" : q.trim();
+		if (!term.isEmpty()) {
+			String literal = Pattern.quote(term);
+			criteria = criteria.orOperator(Criteria.where("displayName").regex(literal, "i"),
+					Criteria.where("username").regex(literal, "i"));
+		}
+		Query query = Query.query(criteria).with(Sort.by("displayName", "username", "_id")).limit(cap + 1);
+		query.fields().include("displayName", "username", "avatarUrl");
+		List<Document> found = mongo.find(query, Document.class, mongo.getCollectionName(User.class));
+		List<Candidate> candidates = found.stream().limit(cap).map(user -> {
+			String name = user.getString("displayName");
+			return new Candidate(String.valueOf(user.get("_id")),
+					name != null && !name.isBlank() ? name : user.getString("username"), user.getString("avatarUrl"));
+		}).toList();
+		return new CandidatesResponse(candidates, found.size() > cap);
 	}
 
 	private PlannersResponse of(String projectId) {

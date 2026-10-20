@@ -527,6 +527,43 @@ class ShiftPlannerIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("the picker's candidates: active people who see the project, team grants included, planners only")
+	void candidatesForThePicker() throws Exception {
+		grantPlanner();
+		User dana = user("dana");
+		User gone = user("gone");
+		gone.setActive(false);
+		users.save(gone);
+		addMember(gone);
+		teams.save(Team.builder().key("CREW").name("Crew").createdBy(lead.getId())
+				.projectIds(new ArrayList<>(List.of(project.getId())))
+				.members(new ArrayList<>(List.of(TeamMembership.builder().userId(dana.getId()).role(TeamRole.MEMBER)
+						.access(ProjectAccess.all()).build())))
+				.build());
+		String path = "/api/v1/projects/" + project.getId() + "/shifts/candidates";
+
+		JsonNode all = json(get(path, token(planner)));
+		assertThat(fields(all)).containsExactly("candidates", "truncated");
+		assertThat(fields(all.path("candidates").get(0))).containsExactly("userId", "name", "avatarUrl");
+		List<String> names = new ArrayList<>();
+		all.path("candidates").forEach(row -> names.add(row.path("name").asText()));
+		assertThat(names).containsExactly("Ann", "Bob", "Dana", "Lead", "Pia");
+		assertThat(all.path("truncated").asBoolean()).isFalse();
+		assertThat(all.toString()).doesNotContain("@");
+
+		JsonNode filtered = json(get(path + "?q=an", token(lead)));
+		assertThat(filtered.path("candidates")).extracting(row -> row.path("userId").asText())
+				.containsExactly(ann.getId(), dana.getId());
+		JsonNode capped = json(get(path + "?limit=2", token(lead)));
+		assertThat(capped.path("candidates")).hasSize(2);
+		assertThat(capped.path("truncated").asBoolean()).isTrue();
+		assertThat(json(get(path + "?q=.*", token(lead))).path("candidates")).isEmpty();
+
+		assertThat(get(path, token(ann)).statusCode()).isEqualTo(403);
+		assertThat(get(path, token(outsider)).statusCode()).isEqualTo(403);
+	}
+
+	@Test
 	@DisplayName("a direct member who still reaches the project through a team keeps role and places")
 	void aTeamGrantKeepsThePlace() {
 		grantPlanner();

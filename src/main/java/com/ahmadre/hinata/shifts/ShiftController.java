@@ -228,6 +228,16 @@ public class ShiftController {
 		return planners.grant(currentUser.require(), projectId, draft == null ? null : draft.userId());
 	}
 
+	/**
+	 * Who a planner may put on a shift here: active accounts that see the project, team grants
+	 * included. Planners only (403 otherwise); [q] filters by name, [limit] at most 50.
+	 */
+	@GetMapping("/api/v1/projects/{projectId}/shifts/candidates")
+	public ShiftPlanners.CandidatesResponse candidates(@PathVariable String projectId,
+			@RequestParam(required = false) String q, @RequestParam(required = false) Integer limit) {
+		return planners.candidates(currentUser.require(), projectId, q, limit);
+	}
+
 	@DeleteMapping("/api/v1/projects/{projectId}/shifts/planners/{userId}")
 	public ResponseEntity<Void> revokePlanner(@PathVariable String projectId, @PathVariable String userId) {
 		planners.revoke(currentUser.require(), projectId, userId);
