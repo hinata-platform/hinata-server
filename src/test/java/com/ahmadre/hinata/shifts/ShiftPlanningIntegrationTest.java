@@ -24,8 +24,6 @@ import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Updates;
-import com.mongodb.event.CommandListener;
-import com.mongodb.event.CommandStartedEvent;
 import org.bson.Document;
 import org.bson.types.ObjectId;
 import org.junit.jupiter.api.AfterEach;
@@ -67,13 +65,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -105,26 +101,14 @@ class ShiftPlanningIntegrationTest {
 	static final MongoDBContainer MONGO = new MongoDBContainer(DockerImageName.parse(TestMongo.IMAGE));
 
 	private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
-	private static final Set<String> READS = Set.of("find", "aggregate", "count", "getMore", "distinct");
 
-	/** Counts the read commands sent while {@link #counting} is on. */
-	static final AtomicBoolean counting = new AtomicBoolean();
-	static final List<String> commands = new CopyOnWriteArrayList<>();
 
 	@TestConfiguration
 	static class Probes {
 
 		@Bean
 		MongoClientSettingsBuilderCustomizer countReads() {
-			CommandListener listener = new CommandListener() {
-				@Override
-				public void commandStarted(CommandStartedEvent event) {
-					if (counting.get() && READS.contains(event.getCommandName())) {
-						commands.add(event.getCommandName() + " " + event.getCommand().get(event.getCommandName()));
-					}
-				}
-			};
-			return builder -> builder.addCommandListener(listener);
+			return builder -> builder.addCommandListener(ShiftReadCounter.listener());
 		}
 
 		@Bean
@@ -210,8 +194,7 @@ class ShiftPlanningIntegrationTest {
 
 	@AfterEach
 	void stopCounting() {
-		counting.set(false);
-		commands.clear();
+		ShiftReadCounter.reset();
 	}
 
 	// --- rules 1 to 7 --------------------------------------------------------------------
@@ -890,7 +873,7 @@ class ShiftPlanningIntegrationTest {
 				"startsAt", "endsAt", "startsLocal", "endsLocal", "requiredHelpers", "maxHelpers", "assignedCount",
 				"understaffed", "full", "mine", "myAssignment", "cancelled", "assigneeIds", "waitingCount",
 				"myWaitPosition", "myWaitAssignmentId", "waitingIds");
-		assertThat(fields(detail.path("shifts").get(0).path("myAssignment"))).containsExactly("id", "status");
+		assertThat(fields(detail.path("shifts").get(0).path("myAssignment"))).containsExactly("id", "status", "confirmBy", "confirmByLocal");
 		assertThat(detail.path("shifts").get(0).path("myAssignment").path("status").asText()).isEqualTo("CONFIRMED");
 		assertThat(json(get("/api/v1/shifts/events/" + event.getId(), token(bob))).path("shifts").get(0)
 				.path("myAssignment").isNull()).isTrue();
@@ -1093,15 +1076,7 @@ class ShiftPlanningIntegrationTest {
 	}
 
 	private int reads(Runnable read) {
-		commands.clear();
-		counting.set(true);
-		try {
-			read.run();
-		}
-		finally {
-			counting.set(false);
-		}
-		return commands.size();
+		return ShiftReadCounter.reads(read);
 	}
 
 	/** An event with [shifts] shifts, Ann on every other one and Bob on the rest. */
