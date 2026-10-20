@@ -911,6 +911,19 @@ class ShiftPlanningIntegrationTest {
 		assertThat(fields(one)).containsExactly("shift", "event", "users", "canPlan");
 
 		String leadToken = token(lead);
+		// A planner also gets the places to act on, each with the id "take off" needs.
+		JsonNode planned = json(get("/api/v1/shifts/shifts/" + shift.getId(), leadToken));
+		assertThat(fields(planned)).containsExactly("shift", "event", "users", "canPlan", "assignments");
+		assertThat(fields(planned.path("assignments").get(0))).containsExactly("id", "userId", "status");
+		ShiftAssignment annsPlace = mongo.findOne(Query.query(Criteria.where("shiftId").is(shift.getId())
+				.and("userId").is(ann.getId())), ShiftAssignment.class);
+		assertThat(planned.path("assignments").get(0).path("id").asText()).isEqualTo(annsPlace.getId());
+		assertThat(planned.path("assignments").get(0).path("userId").asText()).isEqualTo(ann.getId());
+		assertThat(planned.path("assignments").get(0).path("status").asText()).isEqualTo("CONFIRMED");
+		assertThat(post("/api/v1/shifts/assignments/" + annsPlace.getId() + "/release", leadToken).statusCode())
+				.isEqualTo(200);
+		assertThat(json(get("/api/v1/shifts/shifts/" + shift.getId(), leadToken)).path("assignments")).isEmpty();
+		assignments.assign(ann, shift.getId(), ann.getId(), true);
 		HttpResponse<String> created = post("/api/v1/projects/" + project.getId() + "/shifts/events",
 				body(draft("Open day", base, base.plus(hours(6)), null)), leadToken);
 		assertThat(created.statusCode()).isEqualTo(201);

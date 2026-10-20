@@ -3,6 +3,7 @@ package com.ahmadre.hinata.shifts;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.user.User;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.bson.types.ObjectId;
@@ -176,8 +177,21 @@ public class ShiftReads {
 			boolean detached, List<ShiftResponse> shifts, Map<String, UserCard> users) {
 	}
 
-	/** One shift with its event and the people on it. */
-	public record ShiftDetail(ShiftResponse shift, EventHead event, Map<String, UserCard> users, boolean canPlan) {
+	/**
+	 * One shift with its event and the people on it. {@code assignments} is there for a planner
+	 * only: the active places in the order of {@code shift.assigneeIds}, each with the id to take
+	 * the person off with; anybody else gets no such field.
+	 */
+	public record ShiftDetail(ShiftResponse shift, EventHead event, Map<String, UserCard> users, boolean canPlan,
+			@JsonInclude(JsonInclude.Include.NON_NULL) List<PlaceRow> assignments) {
+	}
+
+	/** A planner's handle on one active place: whose it is, how far it got, and its id. */
+	public record PlaceRow(String id, String userId, ShiftAssignment.Status status) {
+
+		static PlaceRow from(ShiftAssignment assignment) {
+			return new PlaceRow(assignment.getId(), assignment.getUserId(), assignment.getStatus());
+		}
 	}
 
 	/**
@@ -310,9 +324,12 @@ public class ShiftReads {
 		WaitView wait = WaitView.of(waitlists(List.of(shift.getId())).get(shift.getId()), caller.getId(), canPlan);
 		Set<String> people = new LinkedHashSet<>(ids);
 		people.addAll(wait.ids());
+		List<PlaceRow> places = canPlan
+				? active.stream().limit(ASSIGNEES_MAX).map(PlaceRow::from).toList()
+				: null;
 		return new ShiftDetail(ShiftResponse.from(shift, event.getTimezone(), mine, ids, wait),
 				EventHead.from(event, labels.of(caller, List.of(event))),
-				users(people), canPlan);
+				users(people), canPlan, places);
 	}
 
 	/**
