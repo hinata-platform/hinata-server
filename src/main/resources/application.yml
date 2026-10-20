@@ -320,6 +320,13 @@ hinata:
     # An organisation admin can change it for the organisation, and every project
     # for itself; this is only where both start.
     default-basis: ${HINATA_PROJECT_TEMPLATES_DEFAULT_BASIS:CALENDAR}
+  shifts:
+    # Master switch for shift planning: events, shifts and who covers them. Off
+    # by default. Also published as the `shift_planning` client flag, and the
+    # switch in the admin area takes precedence over this value. Needs
+    # hinata.mongodb.transactions-enabled (a replica set); without it the module
+    # stays off whatever is set here, and the server says so at start.
+    enabled: ${HINATA_SHIFTS_ENABLED:false}
 
 springdoc:
   api-docs:

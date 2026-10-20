@@ -93,6 +93,13 @@ public class ServerSettings {
 	 */
 	private ProjectTemplates projectTemplates;
 	/**
+	 * Shift-planning overrides. Not initialised, for the reason
+	 * {@link #timeTracking} is not: an absent block has to arrive as null so the
+	 * settings PUT can tell "the caller left this section out" from "the caller
+	 * cleared the switch".
+	 */
+	private Shifts shifts;
+	/**
 	 * Where the platform's holidays come from. Not initialised, for the reason
 	 * {@link #timeTracking} is not.
 	 */
@@ -854,6 +861,32 @@ public class ServerSettings {
 		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
 		@JsonInclude(JsonInclude.Include.NON_NULL)
 		private ProjectTemplates effective;
+	}
+
+	/**
+	 * Shift planning (HIN-27). One nullable switch: null means "no opinion here, use
+	 * {@code hinata.shifts.enabled}", which is what "Use the environment default"
+	 * writes when an administrator clears the field.
+	 *
+	 * <p>The effective value is resolved by {@code shifts.ShiftSettings}, which
+	 * caches it and also refuses it on an instance without Mongo transactions;
+	 * nothing reads this block directly to decide anything.
+	 */
+	@Data
+	public static class Shifts {
+
+		/** Master switch override; null ⇒ {@code hinata.shifts.enabled}. */
+		private Boolean enabled;
+
+		/**
+		 * What the switch currently resolves to, for the admin area to show beside
+		 * the field it edits. Never stored; filled by the module on the way out,
+		 * like {@link ProjectTemplates#getEffective()}.
+		 */
+		@Transient
+		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+		@JsonInclude(JsonInclude.Include.NON_NULL)
+		private Shifts effective;
 	}
 
 	/**
