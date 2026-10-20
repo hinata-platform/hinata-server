@@ -957,6 +957,12 @@ public class NotificationService {
 		Delivery delivery = delivery(user, eventId);
 		notifications.save(delivery.mark(Notification.builder()
 				.userId(user.getId()).type(type).title(title).body(body).link(link)).build());
+		sendOut(user, type, delivery, title, body, pushTitle, pushBody, link, ctaLabel);
+	}
+
+	/** Mail and push of a bell already written, as [delivery] allows them now. */
+	private void sendOut(User user, Notification.Type type, Delivery delivery, String title, String body,
+			String pushTitle, String pushBody, String link, String ctaLabel) {
 		if (delivery.email()) {
 			mail.sendNotification(user.getEmail(), mail.subjectPrefix() + title, title, body, appLink(link),
 					ctaLabel != null ? ctaLabel : buttonLabel(words.localeOf(user)), localeOf(user), eyebrowKey(type));
@@ -979,13 +985,25 @@ public class NotificationService {
 		if (projectId == null || userIds == null || userIds.isEmpty()) return;
 		Set<String> allowed = reach.whoCanSee(projectId, userIds);
 		if (allowed.isEmpty()) return;
-		for (User user : users.findAllById(allowed)) {
+		// The readers with only the fields a notice reads; the bells in one insert, then mail and
+		// push per person exactly as deliverGated sends them.
+		String eventId = eventId(type);
+		List<Notification> bells = new java.util.ArrayList<>();
+		List<Runnable> outbound = new java.util.ArrayList<>();
+		for (UserRepository.NoticeReaderView reader : users.findNoticeReadersByIdIn(allowed)) {
+			User user = reader.asUser();
 			if (!user.isActive()) continue;
 			PersonalNotice notice = text.apply(user);
 			if (notice == null) continue;
-			deliverGated(user, type, notice.title(), notice.body(), notice.pushTitle(), notice.pushBody(), link,
-					notice.ctaLabel());
+			Delivery delivery = delivery(user, eventId);
+			bells.add(delivery.mark(Notification.builder()
+					.userId(user.getId()).type(type).title(notice.title()).body(notice.body()).link(link)).build());
+			outbound.add(() -> sendOut(user, type, delivery, notice.title(), notice.body(), notice.pushTitle(),
+					notice.pushBody(), link, notice.ctaLabel()));
 		}
+		if (bells.isEmpty()) return;
+		notifications.saveAll(bells);
+		outbound.forEach(Runnable::run);
 	}
 
 	/**

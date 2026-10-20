@@ -72,6 +72,46 @@ public interface UserRepository extends MongoRepository<User, String> {
 	@Query("{ '_id': { $in: ?0 } }")
 	List<PronounsView> findPronounsByIdIn(Collection<String> ids);
 
+	/**
+	 * What a notice worded per reader needs of each reader ({@code NotificationService.notifyEach}):
+	 * the address, the language, the zone, whether the account is on and the delivery preferences,
+	 * plus the names. A fan-out to thousands of people then reads a few hundred bytes each instead
+	 * of whole accounts with their security fields.
+	 */
+	@Query("{ '_id': { $in: ?0 } }")
+	List<NoticeReaderView> findNoticeReadersByIdIn(Collection<String> ids);
+
+	/** The fields of {@link #findNoticeReadersByIdIn}. */
+	interface NoticeReaderView {
+
+		String getId();
+
+		String getUsername();
+
+		String getDisplayName();
+
+		String getEmail();
+
+		String getLocale();
+
+		String getTimezone();
+
+		Boolean getActive();
+
+		com.ahmadre.hinata.me.NotificationPreferences getNotificationPreferences();
+
+		/**
+		 * The reader as the delivery code takes it, with exactly the values a whole account read
+		 * would have for these fields (a missing one stays missing).
+		 */
+		default User asUser() {
+			return User.builder().id(getId()).username(getUsername()).displayName(getDisplayName())
+					.email(getEmail()).locale(getLocale()).timezone(getTimezone())
+					.active(Boolean.TRUE.equals(getActive()))
+					.notificationPreferences(getNotificationPreferences()).build();
+		}
+	}
+
 	/** Id + pronouns, and nothing else off the wire. */
 	interface PronounsView {
 
