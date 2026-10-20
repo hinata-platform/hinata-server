@@ -205,7 +205,7 @@ public class ShiftPlanExport {
 		List<ExportBlock> blocks = new ArrayList<>();
 		List<ExportBlock.KeyValue> head = new ArrayList<>();
 		head.add(new ExportBlock.KeyValue(words.t("export.shiftPlan.period"),
-				words.instant(event.getStartsAt()) + " – " + words.instant(event.getEndsAt())));
+				words.t("export.shiftPlan.range", words.instant(event.getStartsAt()), words.instant(event.getEndsAt()))));
 		if (event.getLocation() != null && !event.getLocation().isBlank()) {
 			head.add(new ExportBlock.KeyValue(words.t("export.shiftPlan.location"), event.getLocation().trim()));
 		}
@@ -224,7 +224,8 @@ public class ShiftPlanExport {
 		List<String> headers = new ArrayList<>(List.of(words.t("export.shiftPlan.column.time"),
 				words.t("export.shiftPlan.column.shift"), words.t("export.shiftPlan.column.required"),
 				words.t("export.shiftPlan.column.assigned")));
-		List<Float> widths = new ArrayList<>(List.of(1.2f, 2f, 0.8f, 1.2f));
+		// Wide enough for the longest header word of the nine languages ("Gebraucht") on one line.
+		List<Float> widths = new ArrayList<>(List.of(1.4f, 2f, 1.2f, 1.2f));
 		if (plan.names()) {
 			headers.add(words.t("export.shiftPlan.column.people"));
 			widths.add(3.5f);
@@ -326,7 +327,7 @@ public class ShiftPlanExport {
 		ZonedDateTime end = shift.getEndsAt().atZone(words.zone());
 		String until = end.toLocalDate().equals(start.toLocalDate()) ? TIME.format(end)
 				: words.date(end.toLocalDate()) + " " + TIME.format(end);
-		return TIME.format(start) + " – " + until;
+		return words.t("export.shiftPlan.range", TIME.format(start), until);
 	}
 
 	/**

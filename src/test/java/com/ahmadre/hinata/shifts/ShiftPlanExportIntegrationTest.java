@@ -172,7 +172,8 @@ class ShiftPlanExportIntegrationTest {
 			String text = text(format, export(lead, format, false, Locale.GERMAN));
 			assertThat(text).as(format.name())
 					.contains("Sommerfest am See", "Festwiese", "3 von 6 Plätzen")
-					.contains("09:00 – 13:00", "14:00 – 18:00", "16:00 – 19:00")
+					.contains("09:00 bis 13:00", "14:00 bis 18:00", "16:00 bis 19:00")
+					.doesNotContain(" – ")
 					.contains("Aufbau", "Kasse", "Abbau")
 					.contains("2, fehlt 1", "0, fehlt 2")
 					.contains("Der Stand kann sich ändern")
