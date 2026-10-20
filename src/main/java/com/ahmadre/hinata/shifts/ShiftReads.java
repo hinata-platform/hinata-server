@@ -242,10 +242,21 @@ public class ShiftReads {
 
 	/** Events of every visible project, or of one, touching the window. */
 	public Page<EventSummary> events(User caller, Instant from, Instant to, String projectId, int page, int size) {
+		return events(caller, from, to, projectId, false, page, size);
+	}
+
+	/**
+	 * As {@link #events(User, Instant, Instant, String, int, int)}; with [understaffedOnly] only the
+	 * events with at least one live shift still short of people (HIN-164, "where are people
+	 * missing"), filtered in the query so the pages stay whole.
+	 */
+	Page<EventSummary> events(User caller, Instant from, Instant to, String projectId, boolean understaffedOnly,
+			int page, int size) {
 		settings.requireEnabled();
 		ShiftRules.window(from, to, ShiftRules.WINDOW_MAX);
 		Set<String> projects = scope(caller, projectId);
-		return eventPage(caller, projects, from, to, page, size);
+		Set<String> only = understaffedOnly ? understaffedEventIds(projects, from, to) : null;
+		return eventPage(caller, projects, from, to, only, page, size);
 	}
 
 	/** Events of one project; 403 for somebody who is not a member. */
@@ -254,7 +265,7 @@ public class ShiftReads {
 		settings.requireEnabled();
 		ShiftRules.window(from, to, ShiftRules.WINDOW_MAX);
 		Project project = access.memberProject(projectId, caller);
-		return eventPage(caller, Set.of(project.getId()), from, to, page, size);
+		return eventPage(caller, Set.of(project.getId()), from, to, null, page, size);
 	}
 
 	public EventResponse event(User caller, String eventId) {
@@ -507,19 +518,38 @@ public class ShiftReads {
 	 * so "ends after [from]" is read as "starts after [from] minus fourteen days" for the index and
 	 * then checked exactly.
 	 */
-	private Page<EventSummary> eventPage(User caller, Set<String> projects, Instant from, Instant to, int page,
-			int size) {
+	private Page<EventSummary> eventPage(User caller, Set<String> projects, Instant from, Instant to,
+			Set<String> onlyIds, int page, int size) {
 		Pageable pageable = PageRequest.of(Math.max(page, 0), ShiftRules.pageSize(size), Sort.by("startsAt", "_id"));
-		if (projects.isEmpty()) {
+		if (projects.isEmpty() || (onlyIds != null && onlyIds.isEmpty())) {
 			return Page.empty(pageable);
 		}
-		Criteria criteria = Criteria.where("projectId").in(projects)
+		Criteria window = Criteria.where("projectId").in(projects)
 				.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to)
 				.and("endsAt").gt(from);
+		Criteria criteria = onlyIds == null ? window : window.and("_id").in(onlyIds);
 		List<ShiftEvent> events = mongo.find(Query.query(criteria).with(pageable), ShiftEvent.class);
 		List<EventSummary> content = summaries(caller, events);
 		return PageableExecutionUtils.getPage(content, pageable,
 				() -> mongo.count(Query.query(criteria), ShiftEvent.class));
+	}
+
+	/**
+	 * The events touching the window that have a live, not cancelled shift below its need, in one
+	 * distinct read over {@code project_start}. A shift lies inside its event, and an event starts
+	 * at most fourteen days before it ends, so the shift range is the event range widened by that.
+	 */
+	private Set<String> understaffedEventIds(Set<String> projects, Instant from, Instant to) {
+		if (projects.isEmpty()) {
+			return Set.of();
+		}
+		Criteria range = Criteria.where("projectId").in(projects)
+				.and("startsAt").gt(from.minus(ShiftRules.EVENT_MAX)).lt(to.plus(ShiftRules.EVENT_MAX))
+				.and("deleted").is(false)
+				.and("cancelled").ne(true);
+		Criteria shortOfPeople = new Criteria().andOperator(range,
+				Criteria.expr(ComparisonOperators.Lt.valueOf("assignedCount").lessThan("requiredHelpers")));
+		return new HashSet<>(mongo.findDistinct(Query.query(shortOfPeople), "eventId", Shift.class, String.class));
 	}
 
 	private List<EventSummary> summaries(User caller, List<ShiftEvent> events) {
