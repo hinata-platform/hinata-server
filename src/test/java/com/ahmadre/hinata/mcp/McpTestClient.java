@@ -111,7 +111,7 @@ final class McpTestClient {
 			builder.header("Mcp-Session-Id", session);
 		}
 		try {
-			return sendOnce(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+			return exchange(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
 		}
 		catch (Exception e) {
 			throw new AssertionError("MCP request failed", e);
@@ -146,7 +146,7 @@ final class McpTestClient {
 			builder.header("Authorization", "Bearer " + bearer);
 		}
 		try {
-			return sendOnce(builder.build(), HttpResponse.BodyHandlers.ofString());
+			return exchange(builder.build(), HttpResponse.BodyHandlers.ofString());
 		}
 		catch (Exception e) {
 			throw new AssertionError("HTTP request failed: " + path, e);
@@ -163,24 +163,15 @@ final class McpTestClient {
 	}
 
 	/**
-	 * Sends [request], once more if the pooled connection it went out on had been closed by the
-	 * server meanwhile. A test that spends a while on fixtures (200 shifts on a slow CI runner) can
-	 * outlast the server's keep-alive; the request then fails with an EOF before the server has read
-	 * it, so sending it again is safe.
+	 * Sends [request] on a connection of its own. The client is shared by every test class in the
+	 * JVM, and the context cache closes servers whose random port the OS later hands to a new one;
+	 * a pooled connection to the old server then fails the next request with an EOF. Closing each
+	 * connection after its answer leaves nothing in the pool to go stale.
 	 */
-	private static <T> HttpResponse<T> sendOnce(HttpRequest request, HttpResponse.BodyHandler<T> handler)
+	private static <T> HttpResponse<T> exchange(HttpRequest request, HttpResponse.BodyHandler<T> handler)
 			throws IOException, InterruptedException {
-		try {
-			return HTTP.send(request, handler);
-		}
-		catch (IOException e) {
-			for (Throwable cause = e; cause != null; cause = cause.getCause()) {
-				if (cause instanceof java.io.EOFException) {
-					return HTTP.send(request, handler);
-				}
-			}
-			throw e;
-		}
+		return HTTP.send(HttpRequest.newBuilder(request, (name, value) -> true).header("Connection", "close").build(),
+				handler);
 	}
 
 }

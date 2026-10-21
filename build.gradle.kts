@@ -255,6 +255,10 @@ tasks.withType<Test>().configureEach {
     // (the containers are per-class statics), so eviction costs almost nothing
     // and the heap number above stops being load-bearing.
     systemProperty("spring.test.context.cache.maxSize", "8")
+    // The MCP test client closes every connection after its answer (see
+    // McpTestClient#exchange), and the JDK client only sends that header when
+    // allowed to.
+    systemProperty("jdk.httpclient.allowRestrictedHeaders", "connection")
     // And if it ever does run out, say so. The failure this replaces was an
     // executor that died without naming a test — which reads as a green build
     // with fewer results, and is the same symptom an OOM-killed CI runner
