@@ -28,5 +28,10 @@ public record AdminUserResponse(
 		String invitedBy,
 		Instant joinedAt,
 		/** Whether the person runs the organisation's time, absence and billing side. */
-		boolean orgAdmin) {
+		boolean orgAdmin,
+		/**
+		 * Whether the account is bound to an identity at an SSO provider (HIN-179), which an
+		 * administrator can undo when the person's key there changed.
+		 */
+		boolean ssoLinked) {
 }

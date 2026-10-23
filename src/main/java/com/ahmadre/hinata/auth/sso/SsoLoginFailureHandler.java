@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.auth.sso;
 
-import com.ahmadre.hinata.config.HinataProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -10,8 +9,6 @@ import org.springframework.security.web.authentication.AuthenticationFailureHand
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 
 /**
  * SSO failures on a pure API server must not end on Spring's default
@@ -23,7 +20,7 @@ import java.nio.charset.StandardCharsets;
 @RequiredArgsConstructor
 public class SsoLoginFailureHandler implements AuthenticationFailureHandler {
 
-	private final HinataProperties properties;
+	private final SsoReturn back;
 	private final SsoCallbackReplay replay;
 
 	@Override
@@ -42,14 +39,7 @@ public class SsoLoginFailureHandler implements AuthenticationFailureHandler {
 		}
 		log.error("SSO login failed: {} (root cause: {})", exception.getMessage(), root.toString(), exception);
 
-		String error = URLEncoder.encode(trim(exception.getMessage()), StandardCharsets.UTF_8);
-		String webOrigin = SsoController.consumeReturnOrigin(request, response,
-				properties.getCors().getAllowedOrigins());
-		String target = webOrigin != null
-				? webOrigin + "/login?ssoError=" + error
-				: properties.getApp().getCallbackScheme() + "://auth-callback?error=" + error;
-		replay.record(request, target);
-		response.sendRedirect(target);
+		back.failed(request, response, trim(exception.getMessage()));
 	}
 
 	private String trim(String message) {

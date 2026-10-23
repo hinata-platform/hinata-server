@@ -5,7 +5,6 @@ import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.me.TintPreferences;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -253,79 +252,6 @@ public class UserService {
 				.build());
 	}
 
-	/** Languages we ship email templates for; anything else keeps the default. */
-	private static final Set<String> SUPPORTED_LOCALES =
-			Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
-
-	/**
-	 * Find-or-create for accounts arriving via OIDC, SAML or LDAP. The profile is
-	 * whatever {@link com.ahmadre.hinata.auth.sso.SsoProfileMapper} could resolve
-	 * from the IdP's attributes.
-	 *
-	 * <p>On a later login the directory stays the source of truth while
-	 * [syncProfile] is on: display name and position follow the IdP. Two rules
-	 * hold regardless — an attribute the IdP does <em>not</em> send never clears a
-	 * stored value, and only SSO-provisioned accounts are touched, so an IdP can
-	 * never rewrite the profile of a local account that happens to share the
-	 * address.
-	 */
-	public User provisionSso(com.ahmadre.hinata.auth.sso.SsoProfileMapper.SsoProfile profile,
-			User.Origin origin, boolean syncProfile) {
-		String email = profile.email();
-		return users.findByEmailIgnoreCase(email)
-				.map(existing -> applyIdpProfile(existing, profile, syncProfile))
-				.orElseGet(() -> {
-					// New SSO users inherit the browser language from the login redirect
-					// (Accept-Language) so their emails are localized from the start.
-					String displayName = profile.displayName();
-					User.UserBuilder builder = User.builder()
-							.email(email.toLowerCase(Locale.ROOT))
-							.username(uniqueUsernameFrom(email))
-							.displayName(displayName != null && !displayName.isBlank() ? displayName : email)
-							.title(trimToNull(profile.title()))
-							.roles(Set.of(Role.MEMBER))
-							.origin(origin);
-					String lang = LocaleContextHolder.getLocale().getLanguage();
-					if (SUPPORTED_LOCALES.contains(lang)) builder.locale(lang);
-					return users.save(builder.build());
-				});
-	}
-
-	/** Re-applies the IdP profile to an existing SSO account; see {@link #provisionSso}. */
-	private User applyIdpProfile(User user, com.ahmadre.hinata.auth.sso.SsoProfileMapper.SsoProfile profile,
-			boolean syncProfile) {
-		if (!user.isSso()) {
-			return user;
-		}
-		boolean changed = false;
-		// A display name that is just the address was our fallback for an IdP that
-		// sent no name — never something the user chose — so it is replaced even
-		// when the admin has switched continuous syncing off.
-		boolean placeholderName = user.getDisplayName() == null || user.getDisplayName().isBlank()
-				|| user.getDisplayName().equalsIgnoreCase(user.getEmail());
-		String displayName = trimToNull(profile.displayName());
-		if (displayName != null && !displayName.equals(user.getDisplayName())
-				&& (syncProfile || placeholderName)) {
-			user.setDisplayName(displayName);
-			changed = true;
-		}
-		String title = trimToNull(profile.title());
-		if (title != null && !title.equals(user.getTitle())
-				&& (syncProfile || user.getTitle() == null || user.getTitle().isBlank())) {
-			user.setTitle(title);
-			changed = true;
-		}
-		return changed ? users.save(user) : user;
-	}
-
-	private String trimToNull(String value) {
-		if (value == null) {
-			return null;
-		}
-		String trimmed = value.trim();
-		return trimmed.isEmpty() ? null : trimmed;
-	}
-
 	public void changePassword(User user, String currentPassword, String newPassword) {
 		if (user.getPasswordHash() == null
 				|| !passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
@@ -353,8 +279,17 @@ public class UserService {
 		}
 	}
 
-	private String uniqueUsernameFrom(String email) {
-		String base = email.substring(0, email.indexOf('@')).replaceAll("[^a-zA-Z0-9._-]", "");
+	/**
+	 * A free username made from the part of [email] before the {@code @}, or from all of it where
+	 * it has none. Characters a username cannot hold are dropped, and a part with none left, as in
+	 * {@code ü@example.org}, becomes {@code user}.
+	 */
+	String uniqueUsernameFrom(String email) {
+		int at = email.indexOf('@');
+		String base = (at > 0 ? email.substring(0, at) : email).replaceAll("[^a-zA-Z0-9._-]", "");
+		if (base.isEmpty()) {
+			base = "user";
+		}
 		String candidate = base;
 		int suffix = 1;
 		while (users.existsByUsernameIgnoreCase(candidate)) {

@@ -318,6 +318,7 @@ public class MeService {
 		profile.put("locale", user.getLocale());
 		profile.put("timezone", user.getTimezone());
 		profile.put("origin", user.getOrigin().name());
+		profile.put("ssoLink", ssoLink(user));
 		profile.put("roles", user.getRoles().stream().map(Enum::name).sorted().toList());
 		profile.put("createdAt", user.getCreatedAt());
 		out.put("profile", profile);
@@ -334,6 +335,20 @@ public class MeService {
 						"role", projectRole(p, user.getId()))).toList());
 		personalData.forEach(module -> out.put(module.key(), module.data(user)));
 		out.put("generatedAt", Instant.now());
+		return out;
+	}
+
+	/** The identity at an SSO provider the account is bound to (HIN-179), or null. */
+	private static Map<String, Object> ssoLink(User user) {
+		com.ahmadre.hinata.user.SsoLink link = user.getSsoLink();
+		if (link == null) {
+			return null;
+		}
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("provider", link.provider());
+		out.put("issuer", link.issuer());
+		out.put("subject", link.subject());
+		out.put("linkedAt", link.linkedAt());
 		return out;
 	}
 

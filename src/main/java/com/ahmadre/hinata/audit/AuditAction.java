@@ -21,6 +21,7 @@ public enum AuditAction {
 	LOGIN_BLOCKED(AUTHENTICATION, WARNING, true),
 	MFA_FAILURE(AUTHENTICATION, WARNING, true),
 	SSO_LOGIN(AUTHENTICATION, INFO, true),
+	SSO_LINKED(AUTHENTICATION, NOTICE, true),
 	SESSION_REVOKED(AUTHENTICATION, NOTICE, true),
 
 	// --- Account (self-service) ---------------------------------------------
@@ -50,6 +51,7 @@ public enum AuditAction {
 	// with both addresses and cannot be switched off.
 	USER_EMAIL_CHANGED(ADMINISTRATION, WARNING, true),
 	USER_SESSIONS_REVOKED(ADMINISTRATION, NOTICE, true),
+	USER_SSO_LINK_REMOVED(ADMINISTRATION, WARNING, true),
 
 	// --- Configuration -------------------------------------------------------
 	SETTINGS_CHANGED(CONFIGURATION, WARNING, true),
@@ -352,13 +354,15 @@ public enum AuditAction {
 	MCP_SHIFT_REMOVED(INTEGRATION, INFO, false);
 
 	/**
-	 * Recorded whatever the settings say. Each is the trace of a privileged act that
-	 * would otherwise leave none: who was made organisation admin or administrator, and
-	 * whose sign-in address an administrator changed. An administrator must not be
-	 * able to switch off the record of what administrators do.
+	 * Recorded whatever the settings say. Each is the trace of an act that opens a way into
+	 * an account and would otherwise leave none: who was made organisation admin or
+	 * administrator, whose sign-in address an administrator changed, and, since HIN-179,
+	 * which account an SSO sign-in bound by its address and whose binding an administrator
+	 * undid, which lets the next sign-in with that address bind the account again. An
+	 * administrator must not be able to switch off the record of either.
 	 */
 	public static final java.util.Set<AuditAction> ALWAYS_RECORDED =
-			java.util.EnumSet.of(USER_ROLE_CHANGED, USER_EMAIL_CHANGED);
+			java.util.EnumSet.of(USER_ROLE_CHANGED, USER_EMAIL_CHANGED, SSO_LINKED, USER_SSO_LINK_REMOVED);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

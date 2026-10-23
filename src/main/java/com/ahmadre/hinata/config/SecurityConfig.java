@@ -326,6 +326,12 @@ public class SecurityConfig {
 			// on every 401 (OWASP A05). Sessions remain available only for the
 			// SAML2/OAuth2 login redirect flows that genuinely need them.
 			.requestCache(cache -> cache.disable())
+			// Those flows need the session for their own state, never for who is signed in: the
+			// API authenticates every request by its token. Kept in the session, the principal of
+			// an SSO login outlived the redirect, and one Hinata refused (HIN-179) still passed
+			// every rule that asks only for an authenticated caller.
+			.securityContext(context -> context.securityContextRepository(
+					new org.springframework.security.web.context.RequestAttributeSecurityContextRepository()))
 			.headers(headers -> headers
 				.httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000))
 				.contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'; frame-ancestors 'none'"))

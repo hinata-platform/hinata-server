@@ -25,7 +25,7 @@ import java.util.Map;
  *
  * <p>Nothing is ever invented: an attribute the IdP does not send yields
  * {@code null}, and a {@code null} never overwrites a stored value (see
- * {@link com.ahmadre.hinata.user.UserService#provisionSso}). Attribute names are
+ * {@link com.ahmadre.hinata.user.SsoAccounts}). Attribute names are
  * matched case-insensitively as a fallback, because directories disagree on
  * casing ({@code displayName} vs {@code displayname}) far more often than they
  * disagree on meaning.
@@ -35,11 +35,23 @@ import java.util.Map;
 public class SsoProfileMapper {
 
 	/**
-	 * A resolved SSO profile. {@code email} is the account key and always set;
-	 * {@code displayName} and {@code title} are {@code null} when the IdP sends
+	 * A resolved SSO profile. {@code email} is always set, though for a provider that sends no
+	 * address it is the principal's name and no address ({@code SsoAccounts} refuses to make an
+	 * account of that); {@code displayName} and {@code title} are {@code null} when the IdP sends
 	 * nothing usable for them.
+	 * {@code emailVerified} is what the provider says about the address: true or false
+	 * where it says so (OIDC {@code email_verified}), null where it says nothing (SAML,
+	 * LDAP, most OAuth2 providers).
 	 */
-	public record SsoProfile(String email, String displayName, String title) {
+	public record SsoProfile(String email, String displayName, String title, Boolean emailVerified) {
+
+		public SsoProfile(String email, String displayName, String title) {
+			this(email, displayName, title, null);
+		}
+
+		public SsoProfile withEmailVerified(Boolean verified) {
+			return new SsoProfile(email, displayName, title, verified);
+		}
 	}
 
 	/**
@@ -63,7 +75,8 @@ public class SsoProfileMapper {
 					name, typeOf(value), preview(value)));
 		}
 		String email = resolve(source, mapping.getEmailAttribute());
-		if (isBlank(email)) {
+		if (isBlank(email) || !email.contains("@")) {
+			// Free text in a mail attribute is no address; the principal's own name may be one.
 			email = fallbackEmail;
 		}
 		String displayName = resolve(source, mapping.getDisplayNameAttribute());

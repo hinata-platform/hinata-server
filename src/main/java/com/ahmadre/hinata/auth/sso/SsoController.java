@@ -4,6 +4,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.auth.Invitations;
 import com.ahmadre.hinata.auth.TokenService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -47,6 +48,17 @@ public class SsoController {
 	 */
 	public static final String COOKIE_RETURN_ORIGIN = "HINATA_SSO_RETURN";
 
+	/**
+	 * Session attribute holding the invitation token an SSO sign-in was started from, and the
+	 * cookie mirroring it for the same reason as {@link #COOKIE_RETURN_ORIGIN}. The sign-in that
+	 * comes back completes that invitation (HIN-179).
+	 */
+	public static final String SESSION_INVITE = "hinata.sso.invite";
+	public static final String COOKIE_INVITE = "HINATA_SSO_INVITE";
+
+	/** How long the way back from the provider stays open. */
+	private static final Duration FLOW_LIFETIME = Duration.ofMinutes(10);
+
 	private static final String START_PATH = "/api/v1/auth/sso/start/";
 
 	private static final Set<String> KNOWN_IDS = Set.of(
@@ -57,6 +69,7 @@ public class SsoController {
 	private final SettingsService settings;
 	private final HinataProperties properties;
 	private final SsoHandoffService handoff;
+	private final Invitations invitations;
 
 	public record SsoProvider(String id, String displayName, String loginUrl) {
 	}
@@ -115,14 +128,19 @@ public class SsoController {
 	 * The web app passes {@code ?return=<origin>}; after login the browser is
 	 * redirected to {@code <origin>/#/auth-callback} instead. The origin must
 	 * match one of the configured CORS origins (open-redirect protection).
+	 *
+	 * <p>{@code invite} is the token of an invitation the sign-in is to complete. A sign-in
+	 * started without one drops any invitation an earlier, abandoned flow in this browser left.
 	 */
 	@Operation(summary = "Start an SSO login flow",
 			description = "Redirects to the identity provider. Web clients pass `return=<origin>` "
-					+ "(must be a configured CORS origin) to receive the tokens back in the browser.")
+					+ "(must be a configured CORS origin) to receive the tokens back in the browser. "
+					+ "`invite=<token>` completes that invitation with the sign-in.")
 	@SecurityRequirements
 	@GetMapping("/start/{registrationId}")
 	public void start(@PathVariable String registrationId,
 			@RequestParam(name = "return", required = false) String returnOrigin,
+			@RequestParam(name = "invite", required = false) String invite,
 			HttpServletRequest request, HttpServletResponse response) throws IOException {
 		if (!KNOWN_IDS.contains(registrationId)) {
 			throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND,
@@ -131,14 +149,15 @@ public class SsoController {
 		if (returnOrigin != null && !returnOrigin.isBlank()) {
 			String origin = validatedOrigin(returnOrigin);
 			request.getSession(true).setAttribute(SESSION_RETURN_ORIGIN, origin);
-			ResponseCookie cookie = ResponseCookie.from(COOKIE_RETURN_ORIGIN, origin)
-					.httpOnly(true)
-					.secure(request.isSecure())
-					.path("/")
-					.maxAge(Duration.ofMinutes(10))
-					.sameSite("Lax")
-					.build();
-			response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+			response.addHeader(HttpHeaders.SET_COOKIE, flowCookie(request, COOKIE_RETURN_ORIGIN, origin).toString());
+		}
+		if (invite != null && !invite.isBlank()) {
+			invitations.resolve(invite);
+			request.getSession(true).setAttribute(SESSION_INVITE, invite);
+			response.addHeader(HttpHeaders.SET_COOKIE, flowCookie(request, COOKIE_INVITE, invite).toString());
+		}
+		else {
+			clearInvite(request, response);
 		}
 		String path = DynamicRelyingPartyRegistrationRepository.SAML_ID.equals(registrationId)
 				? "/saml2/authenticate/" + registrationId
@@ -171,6 +190,46 @@ public class SsoController {
 				.httpOnly(true).path("/").maxAge(0).sameSite("Lax").build();
 		response.addHeader(HttpHeaders.SET_COOKIE, clear.toString());
 		return origin != null && allowedOrigins.contains(origin) ? origin : null;
+	}
+
+	/**
+	 * The invitation token the current SSO flow was started with, or null. Read before the sign-in
+	 * is decided; {@link #clearInvite} drops it on the way back, whatever the outcome.
+	 */
+	public static String inviteOf(HttpServletRequest request) {
+		var session = request.getSession(false);
+		if (session != null && session.getAttribute(SESSION_INVITE) instanceof String token) {
+			return token;
+		}
+		if (request.getCookies() != null) {
+			for (jakarta.servlet.http.Cookie cookie : request.getCookies()) {
+				if (COOKIE_INVITE.equals(cookie.getName()) && !cookie.getValue().isBlank()) {
+					return cookie.getValue();
+				}
+			}
+		}
+		return null;
+	}
+
+	/** Drops the invitation of the current SSO flow, from the session and the browser. */
+	public static void clearInvite(HttpServletRequest request, HttpServletResponse response) {
+		var session = request.getSession(false);
+		if (session != null) {
+			session.removeAttribute(SESSION_INVITE);
+		}
+		ResponseCookie clear = ResponseCookie.from(COOKIE_INVITE, "")
+				.httpOnly(true).path("/").maxAge(0).sameSite("Lax").build();
+		response.addHeader(HttpHeaders.SET_COOKIE, clear.toString());
+	}
+
+	private static ResponseCookie flowCookie(HttpServletRequest request, String name, String value) {
+		return ResponseCookie.from(name, value)
+				.httpOnly(true)
+				.secure(request.isSecure())
+				.path("/")
+				.maxAge(FLOW_LIFETIME)
+				.sameSite("Lax")
+				.build();
 	}
 
 	private String validatedOrigin(String candidate) {

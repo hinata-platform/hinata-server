@@ -185,4 +185,11 @@ public class AdminUserController {
 	public void delete(@PathVariable String id) {
 		service.delete(List.of(id));
 	}
+
+	/** Undoes the account's binding to its SSO identity (HIN-179); see {@link AdminUserService#unlinkSso}. */
+	@DeleteMapping("/{id}/sso-link")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void unlinkSso(@PathVariable String id) {
+		service.unlinkSso(id);
+	}
 }

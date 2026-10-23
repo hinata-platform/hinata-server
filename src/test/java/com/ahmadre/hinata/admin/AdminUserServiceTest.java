@@ -9,6 +9,7 @@ import com.ahmadre.hinata.me.AccountMailService;
 import com.ahmadre.hinata.me.SessionService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.user.Role;
+import com.ahmadre.hinata.user.SsoAccounts;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
@@ -63,8 +64,8 @@ class AdminUserServiceTest {
 		when(audit.event(any())).thenReturn(mock(AuditService.Entry.class, RETURNS_SELF));
 		MailService mail = mock(MailService.class);
 		when(mail.organizationName()).thenReturn("Hinata");
-		service = new AdminUserService(users, userService, sessions, notifications, gateway, adminMail,
-				mail, accountMail, currentUser, new BCryptPasswordEncoder(4), audit);
+		service = new AdminUserService(users, userService, mock(SsoAccounts.class), sessions, notifications, gateway,
+				adminMail, mail, accountMail, currentUser, new BCryptPasswordEncoder(4), audit);
 	}
 
 	private User user(String id, Role role, boolean active, User.Origin origin) {
