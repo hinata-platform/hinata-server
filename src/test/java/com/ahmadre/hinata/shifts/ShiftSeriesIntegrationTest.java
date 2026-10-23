@@ -186,8 +186,10 @@ class ShiftSeriesIntegrationTest {
 		assertThat(mongo.count(Query.query(Criteria.where("userId").is(bob.getId())
 				.and("type").is(Notification.Type.SHIFT_REMINDER)), Notification.class)).isZero();
 		assertThat(mongo.findById(second, ShiftAssignment.class).getReminderSentAt()).isNull();
-		// The next run, a day on, reminds the second occurrence and not the first again.
-		assertThat(reminders.run(plannedHour.plus(Duration.ofDays(1)))).isEqualTo(2);
+		// The next run, a day on, reminds the second occurrence and not the first again. A day in
+		// the series' zone, not 24 hours: across a change of daylight saving time the second
+		// occurrence starts 23 or 25 hours after the first, and a fixed day misses its window.
+		assertThat(reminders.run(shifts.get(1).getStartsAt().minus(Duration.ofHours(23)))).isEqualTo(2);
 
 		String url = feed.create(ann).url();
 		String token = url.substring(url.lastIndexOf('/') + 1, url.length() - ".ics".length());
