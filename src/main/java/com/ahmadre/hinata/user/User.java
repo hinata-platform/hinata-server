@@ -33,6 +33,11 @@ import java.util.Set;
 // accounts and nobody else; the flag is the equality, _id the cursor.
 @CompoundIndex(name = "time_targets_id", def = "{'timePreferences.targetsSet': 1, '_id': 1}",
 		partialFilter = "{'timePreferences.targetsSet': true}")
+// An SSO sign-in finds its account by the provider's key for the person (HIN-179). Unique, so
+// one identity can never hold two accounts; partial, so the accounts without one cost nothing.
+@CompoundIndex(name = "sso_link",
+		def = "{'ssoLink.provider': 1, 'ssoLink.issuer': 1, 'ssoLink.subject': 1}",
+		unique = true, partialFilter = "{'ssoLink.subject': {$exists: true}}")
 public class User {
 
 	public enum Origin { LOCAL, OIDC, SAML, LDAP }
@@ -59,6 +64,15 @@ public class User {
 
 	@Builder.Default
 	private Origin origin = Origin.LOCAL;
+
+	/**
+	 * The identity at an SSO provider this account is bound to, or null. An SSO sign-in finds
+	 * its account through this, not through the address; see {@link SsoAccounts}. Never
+	 * serialized with the user: the subject is the provider's key for the person, which only the
+	 * person's own data export names, and administrators see only whether there is one.
+	 */
+	@JsonIgnore
+	private SsoLink ssoLink;
 
 	/**
 	 * Where this user's picture is served from, or null. The URL carries the

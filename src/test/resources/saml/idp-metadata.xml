@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A SAML identity provider for the tests: its entity id is what names it (HIN-179). -->
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+		xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+		entityID="https://idp.example.org/saml">
+	<md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+		<md:KeyDescriptor use="signing">
+			<ds:KeyInfo>
+				<ds:X509Data>
+					<ds:X509Certificate>MIIDFzCCAf+gAwIBAgIUOgbyImdycVXKgX6ZQs7CPDf0lGQwDQYJKoZIhvcNAQELBQAwGjEYMBYGA1UEAwwPaWRwLmV4YW1wbGUub3JnMCAXDTI2MTAyMzIxMjEzOVoYDzIxMjYwOTI5MjEyMTM5WjAaMRgwFgYDVQQDDA9pZHAuZXhhbXBsZS5vcmcwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCeFdZjEPKZ8ceBXXslDtkWg5GCHaT5eQCFrkl0Tlv7+Q3eg8YWWqXsgpfGzaK75xQG2t7ao/IMMr+gRl3aA7nNiQC/F1hHWHKXDKTALskmLVZQC1csUmv91zTfRgU6OhKy4WtU7GzLpsJJRYmJORIOj1hE1pheeeqtWfSKM/rGlF3PAIsJU+cbLeg2EAldLY7NsHhIH5CuilMtnOBARm66DHXOqcN5lAgm4voY9cpToFo/XkonVvxzRqHvvmmGFt8u43TR86pLfIoRPxcvSdbFnsXi8gQO+BvQjCjRJ//HP3JhBtyEQRAnNcQH5uPtkjxBDKAm/pjNki/nYzUV3NlFAgMBAAGjUzBRMB0GA1UdDgQWBBRHw8BYByr5TWVVLaqvsnTS5ZI0xDAfBgNVHSMEGDAWgBRHw8BYByr5TWVVLaqvsnTS5ZI0xDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBG6/BmAV1zG7j7O63js6Bf4UcKVHGu5bztjuNU3YezYHIk36D6WpYEI+BFEqdnXbA1Cga68VZFUQG+ah4IDIQ6p9ubnybe0F6YEKbxpS35zmfTT6Q/PvsHIOfS/E8PzSuRVDKv/Xdh+4E6NEYmNhhi9bjTx9K33ZLI3Utwrczcvcgh8MzVNutf31dWaEiTpprxN0/wwBR5nG2EhSAQ+PbuHDAKJs5RAB147iqlAu7aFitGjdYgmJ+JejeygGNsPvh88VooZt54YmCMsPTrZROCMTBhAPa5ymeBTGUfjvx0EBZhGdt0UvfyiqGo33OQA8nxC69As3MRUUbhuAf/O9is</ds:X509Certificate>
+				</ds:X509Data>
+			</ds:KeyInfo>
+		</md:KeyDescriptor>
+		<md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
+		<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+				Location="https://idp.example.org/saml/sso"/>
+	</md:IDPSSODescriptor>
+</md:EntityDescriptor>

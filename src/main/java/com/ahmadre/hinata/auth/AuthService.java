@@ -9,9 +9,9 @@ import com.ahmadre.hinata.me.RefreshSession;
 import com.ahmadre.hinata.me.SessionService;
 import com.ahmadre.hinata.me.TotpService;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.user.SsoAccounts;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
-import com.ahmadre.hinata.user.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -23,7 +23,7 @@ import java.util.Optional;
 public class AuthService {
 
 	private final UserRepository users;
-	private final UserService userService;
+	private final SsoAccounts ssoAccounts;
 	private final PasswordEncoder passwordEncoder;
 	private final TokenService tokens;
 	private final LoginAttemptService attempts;
@@ -61,8 +61,32 @@ public class AuthService {
 			throw blocked;
 		}
 
-		Optional<User> resolved = localLogin(identifier, password)
-				.or(() -> ldapLogin(identifier, password));
+		Optional<User> resolved = localLogin(identifier, password);
+		boolean ownerTold = false;
+		if (resolved.isEmpty()) {
+			try {
+				Optional<SsoAccounts.SsoSignIn> directory = ldapLogin(identifier, password);
+				resolved = directory.map(SsoAccounts.SsoSignIn::user);
+				ownerTold = directory.map(SsoAccounts.SsoSignIn::ownerTold).orElse(false);
+			}
+			catch (SignInRefusedException refused) {
+				// The directory knew the person, but the account their entry points at may
+				// not be entered with it, or its state keeps it out (HIN-179).
+				if (refused.refusal().countsAsFailedAttempt()) {
+					attempts.recordFailure(identifier, ip);
+				}
+				var entry = audit.event(AuditAction.LOGIN_FAILURE).ip(ip).userAgent(userAgent)
+						.meta("reason", refused.recorded().reason());
+				if (refused.account() != null) {
+					entry.actor(refused.account());
+				}
+				else {
+					entry.actor(null, identifier);
+				}
+				entry.log();
+				throw refused;
+			}
+		}
 
 		User user = resolved.orElseThrow(() -> {
 			attempts.recordFailure(identifier, ip);
@@ -70,24 +94,11 @@ public class AuthService {
 					.ip(ip).userAgent(userAgent).meta("reason", "invalidCredentials").log();
 			return ApiException.unauthorized("error.auth.invalidCredentials");
 		});
-		// Self-registered locals: give a precise reason. Scoped to LOCAL origin so
-		// an SSO/LDAP account is never gated on email verification; and since
-		// emailVerified defaults true for invited/admin-created accounts, this only
-		// blocks a genuine unverified sign-up.
-		if (user.getOrigin() == User.Origin.LOCAL && !user.isEmailVerified()) {
+		Optional<SignInRefusal> refusal = SignInRefusal.of(user);
+		if (refusal.isPresent()) {
 			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
-					.ip(ip).userAgent(userAgent).meta("reason", "emailNotVerified").log();
-			throw ApiException.forbidden("error.auth.emailNotVerified");
-		}
-		if (user.isAwaitingApproval()) {
-			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
-					.ip(ip).userAgent(userAgent).meta("reason", "pendingApproval").log();
-			throw ApiException.forbidden("error.auth.pendingApproval");
-		}
-		if (!user.isActive()) {
-			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
-					.ip(ip).userAgent(userAgent).meta("reason", "accountDeactivated").log();
-			throw ApiException.forbidden("error.auth.accountDeactivated");
+					.ip(ip).userAgent(userAgent).meta("reason", refusal.get().reason()).log();
+			throw ApiException.forbidden(refusal.get().messageKey());
 		}
 		attempts.recordSuccess(identifier, ip);
 		if (user.isTotpEnabled()) {
@@ -95,7 +106,7 @@ public class AuthService {
 			// challenge is completed — LOGIN_SUCCESS is recorded there.
 			return new AuthOutcome(user, null, tokens.issueMfaChallenge(user));
 		}
-		AuthOutcome outcome = new AuthOutcome(user, issueWithSession(user, ip, userAgent), null);
+		AuthOutcome outcome = new AuthOutcome(user, issueWithSession(user, ip, userAgent, ownerTold), null);
 		audit.event(AuditAction.LOGIN_SUCCESS).actor(user).ip(ip).userAgent(userAgent).log();
 		return outcome;
 	}
@@ -129,27 +140,37 @@ public class AuthService {
 
 	/** Opens a tracked session and issues tokens carrying its id. */
 	public TokenService.TokenPair issueWithSession(User user, String ip, String userAgent) {
-		RefreshSession session = sessions.start(user, ip, userAgent);
+		return issueWithSession(user, ip, userAgent, false);
+	}
+
+	/** As above; [ownerTold] as in {@link SessionService#start(User, String, String, boolean)}. */
+	private TokenService.TokenPair issueWithSession(User user, String ip, String userAgent, boolean ownerTold) {
+		RefreshSession session = sessions.start(user, ip, userAgent, ownerTold);
 		return tokens.issue(user, session.getId());
 	}
 
+	/**
+	 * The account [identifier] names, by address or else by username, if [password] is its own.
+	 * The password is checked on the address match before the username is tried: an account
+	 * whose address is somebody else's username must not shut that person out.
+	 */
 	private Optional<User> localLogin(String identifier, String password) {
 		// When local auth is disabled (SSO-only mode), skip password matching
 		// entirely; LDAP/OIDC/SAML sign-in stays available.
 		if (!authPolicy.localAuthEnabled()) {
 			return Optional.empty();
 		}
-		return users.findByEmailIgnoreCase(identifier)
-				.or(() -> users.findByUsernameIgnoreCase(identifier))
-				.filter(u -> u.getPasswordHash() != null
-						&& passwordEncoder.matches(password, u.getPasswordHash()));
+		java.util.function.Predicate<User> ownPassword = u -> u.getPasswordHash() != null
+				&& passwordEncoder.matches(password, u.getPasswordHash());
+		return users.findByEmailIgnoreCase(identifier).filter(ownPassword)
+				.or(() -> users.findByUsernameIgnoreCase(identifier).filter(ownPassword));
 	}
 
-	private Optional<User> ldapLogin(String identifier, String password) {
+	private Optional<SsoAccounts.SsoSignIn> ldapLogin(String identifier, String password) {
 		com.ahmadre.hinata.setup.ServerSettings.Ldap config = settings.get().getLdap();
 		return ldap.authenticate(config, identifier, password)
-				.map(profile -> userService.provisionSso(
-						profile, User.Origin.LDAP, config.isSyncProfileOnLogin()));
+				.map(login -> ssoAccounts.signIn(login.identity(), login.profile(),
+						User.Origin.LDAP, config.isSyncProfileOnLogin()));
 	}
 
 	/**

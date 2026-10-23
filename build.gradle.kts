@@ -191,6 +191,10 @@ dependencies {
     // client they talk to.
     testImplementation("com.squareup.okhttp3:mockwebserver:$okhttpVersion")
     testImplementation("com.squareup.okhttp3:okhttp-tls:$okhttpVersion")
+    // An in-memory directory for the LDAP sign-in tests: a real bind over the
+    // wire, the same way the server talks to Active Directory or OpenLDAP.
+    // Version managed by Spring Boot.
+    testImplementation("com.unboundid:unboundid-ldapsdk")
     testCompileOnly("org.projectlombok:lombok")
     testAnnotationProcessor("org.projectlombok:lombok")
 

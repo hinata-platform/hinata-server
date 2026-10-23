@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.auth;
 
-import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.ClientIpResolver;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -27,6 +26,10 @@ import java.time.Instant;
  * page calls {@code GET /invite/info} to show who is joining and
  * {@code POST /invite/accept} to set the password and sign in. No backend pages
  * are rendered.
+ *
+ * <p>While local sign-in is off there is no password to set: the page then
+ * starts an SSO sign-in with the token instead ({@code /sso/start/{id}?invite=}),
+ * and that sign-in completes the invitation (HIN-179).
  */
 @Tag(name = "Auth · Invite")
 @RestController
@@ -41,6 +44,8 @@ public class InviteController {
 	private final UserService userService;
 	private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 	private final AuthService authService;
+	private final AuthPolicy authPolicy;
+	private final Invitations invitations;
 	private final ClientIpResolver clientIpResolver;
 
 	public record InviteInfo(String email, String displayName) {
@@ -50,7 +55,7 @@ public class InviteController {
 	@SecurityRequirements
 	@GetMapping("/api/v1/auth/invite/info")
 	public InviteInfo info(@RequestParam String token) {
-		User user = resolve(token);
+		User user = invitations.resolve(token);
 		return new InviteInfo(user.getEmail(), user.getDisplayName());
 	}
 
@@ -62,7 +67,10 @@ public class InviteController {
 	@PostMapping("/api/v1/auth/invite/accept")
 	public AuthController.LoginResponse accept(@RequestBody @Valid AcceptRequest request,
 			HttpServletRequest http) {
-		User user = resolve(request.token());
+		// A password nobody can sign in with would only make a session without SSO, and leave
+		// the account for whoever signs in by SSO with its address first.
+		authPolicy.assertLocalAuthEnabled();
+		User user = invitations.resolve(request.token());
 		userService.validatePassword(request.password());
 		user.setPasswordHash(passwordEncoder.encode(request.password()));
 		// Adopt the invitee's own device/browser language (sent as Accept-Language
@@ -80,22 +88,5 @@ public class InviteController {
 				clientIpResolver.resolve(http), http.getHeader("User-Agent"));
 		return new AuthController.LoginResponse(false, null, pair.accessToken(), pair.refreshToken(),
 				pair.expiresInSeconds(), AuthController.UserResponse.from(saved));
-	}
-
-	/** Resolves a {@code userId.secret} invite token to its pending user, or 400s. */
-	private User resolve(String token) {
-		int dot = token == null ? -1 : token.indexOf('.');
-		if (dot <= 0) throw ApiException.badRequest("error.user.inviteInvalid");
-		String id = token.substring(0, dot);
-		String secret = token.substring(dot + 1);
-		User user = users.findById(id)
-				.orElseThrow(() -> ApiException.badRequest("error.user.inviteInvalid"));
-		if (!user.isInvitePending() || user.getInviteTokenHash() == null
-				|| user.getInviteExpiresAt() == null
-				|| user.getInviteExpiresAt().isBefore(Instant.now())
-				|| !passwordEncoder.matches(secret, user.getInviteTokenHash())) {
-			throw ApiException.badRequest("error.user.inviteInvalid");
-		}
-		return user;
 	}
 }

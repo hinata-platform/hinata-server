@@ -172,6 +172,9 @@ public class DataExportPdfService {
 		if (user.isTotpEnabled()) {
 			rows.add(kv(t(locale, "export.pdf.twoFactorAt"), fmt(user.getTotpEnabledAt())));
 		}
+		com.ahmadre.hinata.user.SsoLink link = user.getSsoLink();
+		rows.add(kv(t(locale, "export.pdf.ssoLink"), link == null ? NONE
+				: link.provider() + " · " + link.subject() + " · " + fmt(link.linkedAt())));
 		blocks.add(new ExportBlock.KeyValues(rows));
 	}
 

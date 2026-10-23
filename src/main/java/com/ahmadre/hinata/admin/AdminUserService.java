@@ -7,6 +7,8 @@ import com.ahmadre.hinata.me.SessionService;
 import com.ahmadre.hinata.notification.GatewayService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.user.Role;
+import com.ahmadre.hinata.user.SsoAccounts;
+import com.ahmadre.hinata.user.SsoLink;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
@@ -45,6 +47,7 @@ public class AdminUserService {
 
 	private final UserRepository users;
 	private final UserService userService;
+	private final SsoAccounts ssoAccounts;
 	private final SessionService sessions;
 	private final NotificationService notifications;
 	private final GatewayService gateway;
@@ -363,6 +366,26 @@ public class AdminUserService {
 		}
 	}
 
+	/**
+	 * Undoes the account's binding to its SSO identity (HIN-179), for a person whose key at
+	 * the provider changed and who no longer gets in. The next SSO sign-in with the account's
+	 * address may bind it again, so this is a way into the account: recorded with the identity
+	 * it was bound to, whatever the audit settings say. Its sessions end with it, so whoever was
+	 * signed in through that identity is not anymore.
+	 */
+	public void unlinkSso(String id) {
+		User u = userService.get(id);
+		SsoLink link = u.getSsoLink();
+		if (link == null) {
+			return;
+		}
+		ssoAccounts.unlink(u);
+		sessions.revokeAll(u.getId());
+		audit.event(AuditAction.USER_SSO_LINK_REMOVED).actor(actingAdmin()).target(u)
+				.meta("registration", link.provider()).meta("issuer", link.issuer())
+				.meta("subject", link.subject()).log();
+	}
+
 	// --- Edit details / delete ----------------------------------------------
 
 	public AdminUserResponse updateDetails(String id, String displayName, String title, String email) {
@@ -422,7 +445,8 @@ public class AdminUserService {
 		return new AdminUserResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
 				u.getAvatarUrl(), u.getTitle(), u.getPronouns(), effectiveRole(u),
 				u.getOrigin().name(), status(u), u.isTotpEnabled(), u.isSso(), activity.sessions(),
-				activity.lastActive(), u.getInvitedAt(), u.getInvitedBy(), u.getJoinedAt(), u.isOrgAdmin());
+				activity.lastActive(), u.getInvitedAt(), u.getInvitedBy(), u.getJoinedAt(), u.isOrgAdmin(),
+				u.getSsoLink() != null);
 	}
 
 	private static SessionService.Activity activityOf(Map<String, SessionService.Activity> activity, User u) {

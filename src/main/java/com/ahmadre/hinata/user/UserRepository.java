@@ -15,6 +15,10 @@ public interface UserRepository extends MongoRepository<User, String> {
 
 	Optional<User> findByUsernameIgnoreCase(String username);
 
+	/** The account bound to this identity at an SSO provider, served by the {@code sso_link} index. */
+	@Query("{ 'ssoLink.provider': ?0, 'ssoLink.issuer': ?1, 'ssoLink.subject': ?2 }")
+	Optional<User> findBySsoLink(String provider, String issuer, String subject);
+
 	boolean existsByEmailIgnoreCase(String email);
 
 	boolean existsByUsernameIgnoreCase(String username);

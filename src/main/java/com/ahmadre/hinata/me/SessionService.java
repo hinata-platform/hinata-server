@@ -28,8 +28,20 @@ public class SessionService {
 	private final NotificationService notifications;
 	private final com.ahmadre.hinata.common.UserWords words;
 
+	/** Sessions ended per write when many end at once. */
+	private static final int REVOKE_BATCH = 1000;
+
 	/** Opens a new session for a fresh sign-in. Best-effort device metadata. */
 	public RefreshSession start(User user, String ip, String userAgent) {
+		return start(user, ip, userAgent, false);
+	}
+
+	/**
+	 * As {@link #start(User, String, String)}. [ownerTold] is set when the person was just sent a
+	 * security notice about this very sign-in (an SSO binding, HIN-179): the notice about a new
+	 * device would only repeat it.
+	 */
+	public RefreshSession start(User user, String ip, String userAgent, boolean ownerTold) {
 		Instant now = Instant.now();
 		Agent agent = parse(userAgent);
 		// A device we've never seen before triggers a security alert (new sign-in).
@@ -47,7 +59,7 @@ public class SessionService {
 				.lastActiveAt(now)
 				.expiresAt(now.plusSeconds(properties.getJwt().getRefreshTokenSeconds()))
 				.build());
-		if (!knownDevice) {
+		if (!knownDevice && !ownerTold) {
 			notifyNewSignIn(user, saved);
 		}
 		return saved;
@@ -138,6 +150,23 @@ public class SessionService {
 	public void revokeAll(String userId) {
 		sessions.deleteByUserId(userId);
 		userEvents.revokedAll(userId); // sign every device out now
+	}
+
+	/**
+	 * Ends every session opened before [cutoff] of the people in [userIds], or of everybody when
+	 * that is null, and signs those devices out now. A session opened since is a sign-in after
+	 * whatever the cutoff marks, and stays. Returns how many ended.
+	 */
+	public int revokeOpenedBefore(Instant cutoff, java.util.Collection<String> userIds) {
+		List<RefreshSession> ended = userIds == null
+				? sessions.findOpenedBefore(cutoff)
+				: sessions.findOpenedBefore(userIds, cutoff);
+		for (int from = 0; from < ended.size(); from += REVOKE_BATCH) {
+			List<RefreshSession> batch = ended.subList(from, Math.min(ended.size(), from + REVOKE_BATCH));
+			sessions.deleteAllById(batch.stream().map(RefreshSession::getId).toList());
+			batch.forEach(session -> userEvents.revoked(session.getUserId(), session.getId()));
+		}
+		return ended.size();
 	}
 
 	/** Masks the last two octets of an IPv4 address (best-effort for IPv6). */
