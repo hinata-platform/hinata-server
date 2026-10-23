@@ -16,7 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -69,6 +71,25 @@ class AdminUserServiceTest {
 		Set<Role> roles = role == Role.ADMIN ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER);
 		return User.builder().id(id).email(id + "@x.de").username(id).displayName(id)
 				.roles(roles).origin(origin).active(active).build();
+	}
+
+	@Test
+	void theListReadsEverybodysSessionFiguresOnce() {
+		// Sorted by last activity, the list asked for each person's sessions inside the
+		// comparator: two reads per comparison, some thousand for a page of a big instance.
+		User early = user("early", Role.MEMBER, true, User.Origin.LOCAL);
+		User late = user("late", Role.MEMBER, true, User.Origin.LOCAL);
+		User never = user("never", Role.MEMBER, true, User.Origin.LOCAL);
+		when(users.findAll()).thenReturn(List.of(early, never, late));
+		when(sessions.activityByUser()).thenReturn(Map.of(
+				"early", new SessionService.Activity("early", 1, Instant.parse("2026-10-01T08:00:00Z")),
+				"late", new SessionService.Activity("late", 2, Instant.parse("2026-10-20T08:00:00Z"))));
+
+		AdminUserListResponse page = service.list(null, null, null, null, "lastActive", "desc", 1, 25);
+
+		assertThat(page.items()).extracting(AdminUserResponse::id).containsExactly("late", "early", "never");
+		assertThat(page.items()).extracting(AdminUserResponse::sessions).containsExactly(2, 1, 0);
+		verify(sessions, never()).list(anyString());
 	}
 
 	@Test

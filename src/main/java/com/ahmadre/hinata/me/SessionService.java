@@ -92,6 +92,25 @@ public class SessionService {
 		return sessions.findByUserIdOrderByLastActiveAtDesc(userId);
 	}
 
+	/** A person's sessions in figures: how many, and when the latest was last active (or null). */
+	public record Activity(String id, int sessions, Instant lastActive) {
+
+		public static final Activity NONE = new Activity(null, 0, null);
+
+		/** The figures of [list], one person's sessions. */
+		public static Activity of(List<RefreshSession> list) {
+			Instant last = list.stream().map(RefreshSession::getLastActiveAt).filter(Objects::nonNull)
+					.max(java.util.Comparator.naturalOrder()).orElse(null);
+			return new Activity(null, list.size(), last);
+		}
+	}
+
+	/** {@link Activity} of every person with a session, by user id, in one read. */
+	public java.util.Map<String, Activity> activityByUser() {
+		return sessions.activityByUser().stream()
+				.collect(java.util.stream.Collectors.toMap(Activity::id, activity -> activity));
+	}
+
 	public Page<RefreshSession> list(String userId, Pageable pageable) {
 		return sessions.findByUserIdOrderByLastActiveAtDesc(userId, pageable);
 	}

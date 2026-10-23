@@ -3,7 +3,6 @@ package com.ahmadre.hinata.admin;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.me.AccountMailService;
-import com.ahmadre.hinata.me.RefreshSession;
 import com.ahmadre.hinata.me.SessionService;
 import com.ahmadre.hinata.notification.GatewayService;
 import com.ahmadre.hinata.notification.NotificationService;
@@ -25,6 +24,7 @@ import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -61,6 +61,9 @@ public class AdminUserService {
 			String origin, String sortKey, String dir, int page, int perPage) {
 		String term = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
 		List<User> all = users.findAll();
+		// Everybody's sessions in one read: the default sort is by last activity, and asking per
+		// person inside the comparator cost two reads per comparison.
+		Map<String, SessionService.Activity> activity = sessions.activityByUser();
 
 		List<User> filtered = all.stream().filter(u -> {
 			if (role != null && !role.isBlank() && !role.equalsIgnoreCase(effectiveRole(u))) return false;
@@ -72,7 +75,7 @@ public class AdminUserService {
 						|| contains(u.getTitle(), term) || contains(u.getUsername(), term);
 			}
 			return true;
-		}).sorted(comparator(sortKey, dir)).toList();
+		}).sorted(comparator(sortKey, dir, activity)).toList();
 
 		long total = filtered.size();
 		int pp = Math.max(1, perPage);
@@ -81,7 +84,7 @@ public class AdminUserService {
 		int from = (current - 1) * pp;
 		int to = (int) Math.min(from + (long) pp, total);
 		List<AdminUserResponse> items = (from >= total ? List.<User>of() : filtered.subList(from, to))
-				.stream().map(this::toResponse).toList();
+				.stream().map(u -> toResponse(u, activityOf(activity, u))).toList();
 		return new AdminUserListResponse(items, total, current, pp, counts(all));
 	}
 
@@ -106,14 +109,14 @@ public class AdminUserService {
 				&& u.getInviteExpiresAt().isBefore(Instant.now());
 	}
 
-	private Comparator<User> comparator(String key, String dir) {
+	private Comparator<User> comparator(String key, String dir, Map<String, SessionService.Activity> activity) {
 		Comparator<User> cmp = switch (key == null ? "lastActive" : key) {
 			case "name" -> Comparator.comparing(u -> safe(u.getDisplayName()));
 			case "role" -> Comparator.comparing(this::effectiveRole);
 			case "origin" -> Comparator.comparing(u -> u.getOrigin().name());
 			case "status" -> Comparator.comparing(this::status);
 			case "joinedAt" -> Comparator.comparing(u -> orEpoch(u.getJoinedAt()));
-			default -> Comparator.comparing(u -> orEpoch(lastActiveOf(u)));
+			default -> Comparator.comparing(u -> orEpoch(activityOf(activity, u).lastActive()));
 		};
 		return "asc".equalsIgnoreCase(dir) ? cmp : cmp.reversed();
 	}
@@ -412,11 +415,18 @@ public class AdminUserService {
 	}
 
 	public AdminUserResponse toResponse(User u) {
-		List<RefreshSession> ss = sessions.list(u.getId());
+		return toResponse(u, SessionService.Activity.of(sessions.list(u.getId())));
+	}
+
+	private AdminUserResponse toResponse(User u, SessionService.Activity activity) {
 		return new AdminUserResponse(u.getId(), u.getDisplayName(), u.getUsername(), u.getEmail(),
 				u.getAvatarUrl(), u.getTitle(), u.getPronouns(), effectiveRole(u),
-				u.getOrigin().name(), status(u), u.isTotpEnabled(), u.isSso(), ss.size(),
-				lastActiveOf(ss), u.getInvitedAt(), u.getInvitedBy(), u.getJoinedAt(), u.isOrgAdmin());
+				u.getOrigin().name(), status(u), u.isTotpEnabled(), u.isSso(), activity.sessions(),
+				activity.lastActive(), u.getInvitedAt(), u.getInvitedBy(), u.getJoinedAt(), u.isOrgAdmin());
+	}
+
+	private static SessionService.Activity activityOf(Map<String, SessionService.Activity> activity, User u) {
+		return activity.getOrDefault(u.getId(), SessionService.Activity.NONE);
 	}
 
 	private String effectiveRole(User u) {
@@ -427,15 +437,6 @@ public class AdminUserService {
 		if (u.isInvitePending()) return "INVITED";
 		if (u.isPendingApproval()) return "PENDING";
 		return u.isActive() ? "ACTIVE" : "DISABLED";
-	}
-
-	private Instant lastActiveOf(User u) {
-		return lastActiveOf(sessions.list(u.getId()));
-	}
-
-	private Instant lastActiveOf(List<RefreshSession> ss) {
-		return ss.stream().map(RefreshSession::getLastActiveAt)
-				.filter(java.util.Objects::nonNull).max(Comparator.naturalOrder()).orElse(null);
 	}
 
 	/**
