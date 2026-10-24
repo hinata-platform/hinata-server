@@ -66,7 +66,7 @@ public class PersonProfileService {
 	}
 
 	private static List<String> roles(User person) {
-		return Stream.of(Role.ADMIN, Role.ORG_ADMIN, Role.MEMBER)
+		return Stream.of(Role.ADMIN, Role.ORG_ADMIN, Role.MODERATOR, Role.MEMBER)
 				.filter(role -> person.getRoles() != null && person.getRoles().contains(role))
 				.map(Role::name).toList();
 	}

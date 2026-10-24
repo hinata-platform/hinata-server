@@ -127,7 +127,16 @@ public class AdminUserController {
 	@PostMapping("/org-role")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void orgRole(@RequestBody @Valid OrgRoleRequest request) {
-		service.setOrgAdmin(request.ids(), request.orgAdmin());
+		service.setPlatformRole(request.ids(), Role.ORG_ADMIN, request.orgAdmin());
+	}
+
+	public record ModeratorRoleRequest(@NotEmpty @Size(max = 100) List<String> ids, boolean moderator) {
+	}
+
+	@PostMapping("/moderator-role")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void moderatorRole(@RequestBody @Valid ModeratorRoleRequest request) {
+		service.setPlatformRole(request.ids(), Role.MODERATOR, request.moderator());
 	}
 
 	// --- Approvals ------------------------------------------------------------
@@ -156,7 +165,7 @@ public class AdminUserController {
 
 	public record AdminUpdateUserRequest(Boolean active, Boolean admin,
 			@Size(max = 120) String displayName, @Size(max = 120) String title,
-			@Email String email, Boolean orgAdmin) {
+			@Email String email, Boolean orgAdmin, Boolean moderator) {
 	}
 
 	@PatchMapping("/{id}")
@@ -169,7 +178,10 @@ public class AdminUserController {
 			service.setRole(List.of(id), request.admin() ? "ADMIN" : "USER");
 		}
 		if (request.orgAdmin() != null) {
-			service.setOrgAdmin(List.of(id), request.orgAdmin());
+			service.setPlatformRole(List.of(id), Role.ORG_ADMIN, request.orgAdmin());
+		}
+		if (request.moderator() != null) {
+			service.setPlatformRole(List.of(id), Role.MODERATOR, request.moderator());
 		}
 		return service.updateDetails(id, request.displayName(), request.title(), request.email());
 	}

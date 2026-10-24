@@ -33,5 +33,7 @@ public record AdminUserResponse(
 		 * Whether the account is bound to an identity at an SSO provider (HIN-179), which an
 		 * administrator can undo when the person's key there changed.
 		 */
-		boolean ssoLinked) {
+		boolean ssoLinked,
+		/** Whether the person reviews reported content and decides on it (HIN-26). */
+		boolean moderator) {
 }

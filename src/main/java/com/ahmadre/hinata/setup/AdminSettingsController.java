@@ -246,6 +246,9 @@ public class AdminSettingsController {
 		if (updated.getShifts() == null) {
 			updated.setShifts(current.getShifts());
 		}
+		if (updated.getModeration() == null) {
+			updated.setModeration(current.getModeration());
+		}
 		if (updated.getProjectTemplates() == null) {
 			updated.setProjectTemplates(current.getProjectTemplates());
 		} else if (updated.getProjectTemplates() != current.getProjectTemplates()) {

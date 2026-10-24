@@ -34,6 +34,14 @@ public class MetaController {
 	private final FeatureFlags featureFlags;
 	private final com.ahmadre.hinata.project.ProjectTemplatePolicy templatePolicy;
 	private final BrandLogoService brandLogo;
+	private final com.ahmadre.hinata.setup.OperatorContact operatorContact;
+
+	/**
+	 * What the server's moderation can do, for the app to offer reporting and blocking (HIN-26):
+	 * 1 since both arrived. Both are always there, on every instance, with no switch, so this is
+	 * a constant and no flag.
+	 */
+	static final int MODERATION_VERSION = 1;
 
 	@Value("${hinata.version:1.0.0}")
 	private String serverVersion;
@@ -56,7 +64,18 @@ public class MetaController {
 			 * area shows the reason instead of the switch. Not part of
 			 * {@code featureFlags}: it is a property of the deployment, not a flag.
 			 */
-			boolean shiftPlanningAvailable) {
+			boolean shiftPlanningAvailable,
+			/** Moderation's version and the operator's published contact (HIN-26). */
+			ModerationMeta moderation) {
+	}
+
+	/**
+	 * What the app needs before anybody signs in: whether reporting and blocking exist
+	 * ({@code version} 1 and up), and whom the operator names for reports and questions. A
+	 * missing contact is said as such rather than filled in.
+	 */
+	public record ModerationMeta(int version, String operatorName, String contactEmail, String imprintUrl,
+			boolean contactMissing) {
 	}
 
 	/** The flag whose availability {@link Meta#shiftPlanningAvailable()} reports. */
@@ -100,7 +119,14 @@ public class MetaController {
 				securityPolicy.passwordMinLength(),
 				templatePolicy.defaultBasis().name(),
 				// By flag name rather than by class: meta is core and knows no module.
-				featureFlags.available(SHIFT_PLANNING_FLAG));
+				featureFlags.available(SHIFT_PLANNING_FLAG),
+				moderationMeta());
+	}
+
+	private ModerationMeta moderationMeta() {
+		com.ahmadre.hinata.setup.OperatorContact.Contact contact = operatorContact.current();
+		return new ModerationMeta(MODERATION_VERSION, contact.operatorName(), contact.contactEmail(),
+				contact.imprintUrl(), contact.missing());
 	}
 
 	@Operation(summary = "Organization logo", description = "Serves the organization logo same-origin so clients (incl. the web app and the PDF export) load it without CORS restrictions. An uploaded logo is streamed from object storage; a configured external URL is fetched server-side through the SSRF-hardened image fetcher and cached.")
