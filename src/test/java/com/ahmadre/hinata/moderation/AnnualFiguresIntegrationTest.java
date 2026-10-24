@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.content.ContentKind;
+import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.RemovalScope;
 import com.ahmadre.hinata.content.ReportCategory;
 import com.ahmadre.hinata.content.TargetRef;
@@ -98,6 +99,27 @@ class AnnualFiguresIntegrationTest extends RemovalIntegrationSupport {
 				+ "visibility of information", "Total number")).isEqualTo("1");
 		// Nothing of moderation's own in this year.
 		assertThat(cell(parts.get("6_own_initiative_TC"), "TOTAL", AnnualFigures.MEASURES)).isEqualTo("0");
+	}
+
+	/** A person decided on what the text check found: a measure detected by automated means. */
+	@Test
+	void aRemovalOnWhatTheTextCheckFoundCountsAsDetectedByAutomatedMeans() {
+		Issue issue = issue("Stand B12", doc("Aufbau"));
+		IssueComment insult = issues.addComment(issue.getId(),
+				richText.fromLexical(doc(DecisionIntegrationTest.INSULT)), null, author);
+		reports.fileAutomated(new ContentRef(ContentKind.COMMENT, insult.getId(), issue.getId(), issue.getProjectId()),
+				ReportCategory.HARASSMENT, List.of("idiot"), "auto:COMMENT");
+		ModerationCase c = mongo.findOne(Query.query(Criteria.where("target.id").is(insult.getId())),
+				ModerationCase.class);
+		actingAs(mira);
+		moderation.decide(c.getId(), DecisionIntegrationTest.action(c.getRev(), RemovalScope.WHOLE));
+		followUpsDone();
+
+		List<List<String>> rules = figures.parts(year).get("6_own_initiative_TC");
+		assertThat(cell(rules, "TOTAL", AnnualFigures.MEASURES)).isEqualTo("1");
+		assertThat(cell(rules, "TOTAL", AnnualFigures.AUTOMATED)).isEqualTo("1");
+		assertThat(cell(rules, "TOTAL", AnnualFigures.REMOVAL)).isEqualTo("1");
+		assertThat(cell(figures.parts(year).get("4_notices"), "TOTAL", AnnualFigures.NOTICES)).isEqualTo("0");
 	}
 
 	@Test

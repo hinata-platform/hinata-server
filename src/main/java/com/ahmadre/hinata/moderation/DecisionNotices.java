@@ -65,7 +65,7 @@ class DecisionNotices {
 
 	/** Whether the decided [c] owes a statement: its decision does, and it restricted something. */
 	static boolean owesStatement(ModerationCase c) {
-		return c.getDecision() != null && owesStatement(c.getDecision()) && c.restricted();
+		return c.getDecision() != null && owesStatement(c.getDecision()) && c.measures().any();
 	}
 
 	/**
@@ -88,11 +88,11 @@ class DecisionNotices {
 
 	/** The words of the notice: content removed, account suspended, or both (HIN-172). */
 	private static String noticeKey(ModerationCase c) {
-		boolean suspended = c.getSuspension() != null;
-		if (!suspended) {
+		ModerationCase.Measures measures = c.measures();
+		if (!measures.suspension()) {
 			return "moderation.notice.statement";
 		}
-		return c.getDecision().removal() == null ? "moderation.notice.suspended" : "moderation.notice.removedAndSuspended";
+		return measures.removal() ? "moderation.notice.removedAndSuspended" : "moderation.notice.suspended";
 	}
 
 	/** The person responsible told that their notice changed: an appeal decided, the content back. */
@@ -170,8 +170,7 @@ class DecisionNotices {
 	 */
 	boolean reporters(ModerationCase c) {
 		Decision decision = c.getDecision();
-		boolean removed = decision.outcome() == Decision.Outcome.ACTION && decision.removal() != null
-				&& c.getRestoration() == null;
+		boolean removed = c.measures().removal() && c.getRestoration() == null;
 		// An action that removed nothing says only that moderation acted: what it did to a person is
 		// not for whoever reported.
 		String key = "moderation.decision." + (decision.outcome() == Decision.Outcome.ACTION && !removed

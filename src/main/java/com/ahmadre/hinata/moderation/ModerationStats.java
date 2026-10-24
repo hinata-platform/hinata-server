@@ -54,7 +54,7 @@ public class ModerationStats {
 
 	/** A new report by a member or by somebody without an account. */
 	public void notice(ReportCategory category) {
-		count(StatMetric.NOTICE, category.name());
+		count(StatMetric.NOTICE, StatKey.of(category));
 	}
 
 	/**
@@ -65,45 +65,47 @@ public class ModerationStats {
 		if (!decision.acted() || decision.category() == null || decision.ground() == null) {
 			return;
 		}
-		if (decision.outcome() == Decision.Outcome.ACTION && !c.restricted()) {
+		ModerationCase.Measures measures = c.measures();
+		if (decision.outcome() == Decision.Outcome.ACTION && !measures.any()) {
 			// An action whose suspension was refused restricted nothing.
 			return;
 		}
-		String category = decision.category().name();
-		String ground = decision.ground().name();
+		ReportCategory category = decision.category();
+		Decision.Ground ground = decision.ground();
 		if (decision.basis() == Decision.Basis.NOTICE) {
-			count(StatMetric.NOTICE_ACTION, category + ":" + ground);
-			count(StatMetric.NOTICE_HOURS, category + ":" + hoursBucket(c.getFirstReportedAt(), now));
+			count(StatMetric.NOTICE_ACTION, StatKey.of(category, ground));
+			count(StatMetric.NOTICE_HOURS, StatKey.of(category, hoursBucket(c.getFirstReportedAt(), now)));
 			return;
 		}
-		count(StatMetric.OWN_MEASURE, ground + ":" + category);
-		for (Restriction restriction : restrictionsOf(decision, c.getSuspension() != null)) {
-			count(StatMetric.OWN_RESTRICTION, ground + ":" + category + ":" + restriction);
+		count(StatMetric.OWN_MEASURE, StatKey.of(category, ground, decision.basis()));
+		for (Restriction restriction : restrictionsOf(decision, measures)) {
+			count(StatMetric.OWN_RESTRICTION, StatKey.of(category, ground, restriction));
 		}
 	}
 
 	/** An appeal against [decision]. */
 	public void appealFiled(Decision decision) {
-		count(StatMetric.APPEAL_FILED, complaintOf(decision).name());
+		count(StatMetric.APPEAL_FILED, StatKey.of(complaintOf(decision)));
 	}
 
 	/** The appeal [appeal] against [decision] decided as [result] at [now]. */
-	public void appealDecided(Decision decision, Appeal appeal, String result, Instant now) {
-		String complaint = complaintOf(decision).name();
-		count(StatMetric.APPEAL_RESULT, complaint + ":" + result);
-		count(StatMetric.APPEAL_HOURS, complaint + ":" + hoursBucket(appeal == null ? null : appeal.filedAt(), now));
+	public void appealDecided(Decision decision, Appeal appeal, AppealService.AppealDecisionRequest.Result result,
+			Instant now) {
+		Complaint complaint = complaintOf(decision);
+		count(StatMetric.APPEAL_RESULT, StatKey.of(complaint, result));
+		count(StatMetric.APPEAL_HOURS, StatKey.of(complaint, hoursBucket(appeal == null ? null : appeal.filedAt(), now)));
 	}
 
 	/**
-	 * What [decision] restricted, a suspension only when it took effect ([suspended]); a removal and
-	 * a suspension decided together are two.
+	 * What [decision] restricted, as its [measures] took effect; a removal and a suspension decided
+	 * together are two.
 	 */
-	static List<Restriction> restrictionsOf(Decision decision, boolean suspended) {
+	static List<Restriction> restrictionsOf(Decision decision, ModerationCase.Measures measures) {
 		List<Restriction> restrictions = new ArrayList<>();
-		if (decision.removal() != null) {
+		if (measures.removal()) {
 			restrictions.add(Restriction.REMOVAL);
 		}
-		if (decision.suspension() != null && suspended) {
+		if (decision.suspension() != null && measures.suspension()) {
 			restrictions.add(decision.suspension() == Decision.SuspensionLength.INDEFINITE ? Restriction.TERMINATION
 					: Restriction.SUSPENSION);
 		}
@@ -124,6 +126,7 @@ public class ModerationStats {
 		return hours > HOURS_COUNTED ? OVERFLOW : String.valueOf(hours);
 	}
 
+	/** One more of [metric] under [key], a {@link StatKey}; one name is a key of its own. */
 	public void count(StatMetric metric, String key) {
 		int year = clock.instant().atZone(ZoneOffset.UTC).getYear();
 		Query query = Query.query(Criteria.where("year").is(year).and("metric").is(metric).and("key").is(key));

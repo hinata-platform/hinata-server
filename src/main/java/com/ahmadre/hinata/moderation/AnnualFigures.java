@@ -229,7 +229,7 @@ public class AnnualFigures {
 	private List<List<String>> notices(List<List<String>> template, Head head, Counts counts) {
 		Map<Placement, Figures> placed = new LinkedHashMap<>();
 		for (Map.Entry<String, Long> notice : counts.of(StatMetric.NOTICE).entrySet()) {
-			ReportCategory category = category(notice.getKey());
+			ReportCategory category = StatKey.parse(notice.getKey()).part(0, ReportCategory.class);
 			if (category == null) {
 				continue;
 			}
@@ -239,22 +239,23 @@ public class AnnualFigures {
 			figures.add(NOTICE_ITEMS, notice.getValue());
 		}
 		for (Map.Entry<String, Long> action : counts.of(StatMetric.NOTICE_ACTION).entrySet()) {
-			String[] key = action.getKey().split(":");
-			ReportCategory category = key.length == 2 ? category(key[0]) : null;
-			if (category == null) {
+			StatKey key = StatKey.parse(action.getKey());
+			ReportCategory category = key.part(0, ReportCategory.class);
+			Decision.Ground ground = key.part(1, Decision.Ground.class);
+			if (category == null || ground == null) {
 				continue;
 			}
 			placed.computeIfAbsent(TransparencyCategories.notice(category), p -> new Figures())
-					.add("LAW".equals(key[1]) ? LAW_ACTIONS : RULES_ACTIONS, action.getValue());
+					.add(ground == Decision.Ground.LAW ? LAW_ACTIONS : RULES_ACTIONS, action.getValue());
 		}
 		for (Map.Entry<String, Long> hours : counts.of(StatMetric.NOTICE_HOURS).entrySet()) {
-			String[] key = hours.getKey().split(":");
-			ReportCategory category = key.length == 2 ? category(key[0]) : null;
-			if (category == null) {
+			StatKey key = StatKey.parse(hours.getKey());
+			ReportCategory category = key.part(0, ReportCategory.class);
+			if (category == null || key.part(1) == null) {
 				continue;
 			}
 			placed.computeIfAbsent(TransparencyCategories.notice(category), p -> new Figures())
-					.hours(key[1], hours.getValue());
+					.hours(key.part(1), hours.getValue());
 		}
 		return categories(template, head, placed, Figures.sum(placed.values()),
 				Set.of(NOTICES, NOTICE_ITEMS, LAW_ACTIONS, RULES_ACTIONS), MEDIAN_ACTION);
@@ -266,22 +267,31 @@ public class AnnualFigures {
 		Map<Placement, Figures> placed = new LinkedHashMap<>();
 		Figures total = new Figures();
 		for (Map.Entry<String, Long> measure : counts.of(StatMetric.OWN_MEASURE).entrySet()) {
-			String[] key = measure.getKey().split(":");
-			ReportCategory category = key.length == 2 ? category(key[1]) : null;
-			if (category == null || !ground.name().equals(key[0])) {
+			StatKey key = StatKey.parse(measure.getKey());
+			ReportCategory category = key.part(0, ReportCategory.class);
+			if (category == null || key.part(1, Decision.Ground.class) != ground) {
 				continue;
 			}
+			// A person decided, on what the text check found: detected by automated means alone.
+			boolean detected = key.part(2, Decision.Basis.class) == Decision.Basis.AUTOMATED_DETECTION;
 			total.add(MEASURES, measure.getValue());
+			if (detected) {
+				total.add(AUTOMATED, measure.getValue());
+			}
 			Placement placement = placementOf(category, law);
 			if (placement != null) {
-				placed.computeIfAbsent(placement, p -> new Figures()).add(MEASURES, measure.getValue());
+				Figures figures = placed.computeIfAbsent(placement, p -> new Figures());
+				figures.add(MEASURES, measure.getValue());
+				if (detected) {
+					figures.add(AUTOMATED, measure.getValue());
+				}
 			}
 		}
 		for (Map.Entry<String, Long> restriction : counts.of(StatMetric.OWN_RESTRICTION).entrySet()) {
-			String[] key = restriction.getKey().split(":");
-			ReportCategory category = key.length == 3 ? category(key[1]) : null;
-			ModerationStats.Restriction kind = key.length == 3 ? restriction(key[2]) : null;
-			if (category == null || kind == null || !ground.name().equals(key[0])) {
+			StatKey key = StatKey.parse(restriction.getKey());
+			ReportCategory category = key.part(0, ReportCategory.class);
+			ModerationStats.Restriction kind = key.part(2, ModerationStats.Restriction.class);
+			if (category == null || kind == null || key.part(1, Decision.Ground.class) != ground) {
 				continue;
 			}
 			String column = switch (kind) {
@@ -300,7 +310,7 @@ public class AnnualFigures {
 			// What the text check and the upload gate refused is a measure of the provider's own,
 			// taken by automated means alone, on the ground of the house rules.
 			for (Map.Entry<String, Long> refused : counts.of(StatMetric.TEXT_REFUSED).entrySet()) {
-				ReportCategory category = category(refused.getKey());
+				ReportCategory category = StatKey.parse(refused.getKey()).part(0, ReportCategory.class);
 				Placement placement = TransparencyCategories.termsAndConditions(
 						category == null ? ReportCategory.OTHER : category);
 				refusals(placed.computeIfAbsent(placement, p -> new Figures()), refused.getValue());
@@ -314,25 +324,6 @@ public class AnnualFigures {
 		}
 		return categories(template, head, placed, total,
 				Set.of(MEASURES, AUTOMATED, REMOVAL, VISIBILITY_OTHER, SUSPENSION, TERMINATION), null);
-	}
-
-	/** A counter's category; null for a name this version no longer knows, which is skipped. */
-	private static ReportCategory category(String name) {
-		try {
-			return ReportCategory.valueOf(name);
-		}
-		catch (IllegalArgumentException unknown) {
-			return null;
-		}
-	}
-
-	private static ModerationStats.Restriction restriction(String name) {
-		try {
-			return ModerationStats.Restriction.valueOf(name);
-		}
-		catch (IllegalArgumentException unknown) {
-			return null;
-		}
 	}
 
 	/** The years with figures, and this one: what the admin area offers to download. */
@@ -369,20 +360,22 @@ public class AnnualFigures {
 		long reversed = 0;
 		for (ModerationStats.Complaint complaint : ModerationStats.Complaint.values()) {
 			String indicator = complaint == ModerationStats.Complaint.REMOVAL ? removal : account;
-			long upheldOf = counts.get(StatMetric.APPEAL_RESULT, complaint + ":UPHOLD");
-			long reversedOf = counts.get(StatMetric.APPEAL_RESULT, complaint + ":REVERSE");
+			long upheldOf = counts.get(StatMetric.APPEAL_RESULT,
+					StatKey.of(complaint, AppealService.AppealDecisionRequest.Result.UPHOLD));
+			long reversedOf = counts.get(StatMetric.APPEAL_RESULT,
+					StatKey.of(complaint, AppealService.AppealDecisionRequest.Result.REVERSE));
 			upheld += upheldOf;
 			reversed += reversedOf;
 			values.put(key(indicator, "Total number"), String.valueOf(counts.get(StatMetric.APPEAL_FILED, complaint.name())));
 			values.put(key(indicator, "Decisions upheld"), String.valueOf(upheldOf));
 			values.put(key(indicator, "Decisions partially reversed"), "0");
 			values.put(key(indicator, "Decisions reversed"), String.valueOf(reversedOf));
-			values.put(key(indicator, "Median time"), median(prefixed(counts.of(StatMetric.APPEAL_HOURS), complaint + ":")));
+			values.put(key(indicator, "Median time"), median(hoursOf(counts.of(StatMetric.APPEAL_HOURS), complaint)));
 		}
 		values.put(key(internal, "Decisions upheld"), String.valueOf(upheld));
 		values.put(key(internal, "Decisions partially reversed"), "0");
 		values.put(key(internal, "Decisions reversed"), String.valueOf(reversed));
-		values.put(key(internal, "Median time"), median(stripped(counts.of(StatMetric.APPEAL_HOURS))));
+		values.put(key(internal, "Median time"), median(hoursOf(counts.of(StatMetric.APPEAL_HOURS), null)));
 		// Hinata decides every appeal it is given and never imposes anything new through one.
 		values.put(key(internal, "Decision omitted"), "0");
 		values.put(key("Number of restrictions newly imposed as a result of an internal complaint", "Total number"), "0");
@@ -547,21 +540,15 @@ public class AnnualFigures {
 		return String.valueOf(sorted.lastKey());
 	}
 
-	/** The buckets of [counts] whose key starts with [prefix], by what follows it. */
-	private static Map<String, Long> prefixed(Map<String, Long> counts, String prefix) {
+	/** The hours buckets of [counts], keyed {@code COMPLAINT:HOURS}, of [complaint] or of all when null. */
+	private static Map<String, Long> hoursOf(Map<String, Long> counts, ModerationStats.Complaint complaint) {
 		Map<String, Long> buckets = new HashMap<>();
-		counts.forEach((key, count) -> {
-			if (key.startsWith(prefix)) {
-				buckets.merge(key.substring(prefix.length()), count, Long::sum);
+		counts.forEach((raw, count) -> {
+			StatKey key = StatKey.parse(raw);
+			if (key.part(1) != null && (complaint == null || key.part(0, ModerationStats.Complaint.class) == complaint)) {
+				buckets.merge(key.part(1), count, Long::sum);
 			}
 		});
-		return buckets;
-	}
-
-	/** The buckets of [counts] by what follows the first colon of each key. */
-	private static Map<String, Long> stripped(Map<String, Long> counts) {
-		Map<String, Long> buckets = new HashMap<>();
-		counts.forEach((key, count) -> buckets.merge(key.substring(key.indexOf(':') + 1), count, Long::sum));
 		return buckets;
 	}
 

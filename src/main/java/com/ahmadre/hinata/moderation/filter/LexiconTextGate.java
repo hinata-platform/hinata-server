@@ -91,8 +91,8 @@ class LexiconTextGate implements TextGate {
 
 	@Override
 	public void flagged(ContentRef ref, TextField field, TextVerdict verdict) {
+		// Counted when somebody decides the case it opens, as a measure detected by automated means.
 		reports.fileAutomated(ref, verdict.category(), verdict.newFlagTerms(), "auto:" + field.name());
-		count(StatMetric.TEXT_FLAGGED, verdict);
 	}
 
 	/** The verdict on [text] as [field], without counting anything: also for the admin's test. */

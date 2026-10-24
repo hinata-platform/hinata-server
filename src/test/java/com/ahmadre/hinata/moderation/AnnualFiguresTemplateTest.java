@@ -63,13 +63,15 @@ class AnnualFiguresTemplateTest {
 				stat(StatMetric.NOTICE_ACTION, "HARASSMENT:RULES", 2),
 				stat(StatMetric.NOTICE_HOURS, "HARASSMENT:5", 1),
 				stat(StatMetric.NOTICE_HOURS, "HARASSMENT:30", 1),
-				stat(StatMetric.OWN_MEASURE, "RULES:OTHER", 1),
-				stat(StatMetric.OWN_RESTRICTION, "RULES:OTHER:SUSPENSION", 1),
+				stat(StatMetric.OWN_MEASURE, "OTHER:RULES:OWN_INITIATIVE", 1),
+				stat(StatMetric.OWN_RESTRICTION, "OTHER:RULES:SUSPENSION", 1),
+				stat(StatMetric.OWN_MEASURE, "THREAT:RULES:AUTOMATED_DETECTION", 1),
+				stat(StatMetric.OWN_RESTRICTION, "THREAT:RULES:REMOVAL", 1),
 				stat(StatMetric.APPEAL_FILED, "REMOVAL", 1),
 				stat(StatMetric.APPEAL_RESULT, "REMOVAL:REVERSE", 1),
 				stat(StatMetric.APPEAL_HOURS, "REMOVAL:12", 1),
 				stat(StatMetric.TEXT_REFUSED, "THREAT", 4),
-				stat(StatMetric.UPLOAD_REFUSED, "EXECUTABLE", 2)));
+				stat(StatMetric.UPLOAD_REFUSED, "ATTACHMENT", 2)));
 		figures = new AnnualFigures(mongo, settings,
 				Clock.fixed(Instant.parse("2027-01-15T10:00:00Z"), ZoneOffset.UTC));
 	}
@@ -138,11 +140,13 @@ class AnnualFiguresTemplateTest {
 		assertThat(cell(notices, "STATEMENT_CATEGORY_ANIMAL_WELFARE", AnnualFigures.NOTICES)).isEqualTo("0");
 
 		List<List<String>> rules = parts.get("6_own_initiative_TC");
-		// Four refused texts, two refused files, one suspension of moderation's own.
-		assertThat(cell(rules, "TOTAL", AnnualFigures.MEASURES)).isEqualTo("7");
-		assertThat(cell(rules, "TOTAL", AnnualFigures.AUTOMATED)).isEqualTo("6");
+		// Four refused texts, two refused files, one suspension of moderation's own, and one removal a
+		// person decided on what the text check found, which counts as detected by automated means.
+		assertThat(cell(rules, "TOTAL", AnnualFigures.MEASURES)).isEqualTo("8");
+		assertThat(cell(rules, "TOTAL", AnnualFigures.AUTOMATED)).isEqualTo("7");
 		assertThat(cell(rules, "TOTAL", AnnualFigures.SUSPENSION)).isEqualTo("1");
-		assertThat(cell(rules, "STATEMENT_CATEGORY_VIOLENCE", AnnualFigures.AUTOMATED)).isEqualTo("4");
+		assertThat(cell(rules, "TOTAL", AnnualFigures.REMOVAL)).isEqualTo("1");
+		assertThat(cell(rules, "STATEMENT_CATEGORY_VIOLENCE", AnnualFigures.AUTOMATED)).isEqualTo("5");
 		// Hinata never demotes: the column cannot apply, so it stays blank.
 		assertThat(cell(rules, "TOTAL", "Visibility restriction Demoted")).isEmpty();
 		List<List<String>> others = rows(rules, "KEYWORD_OTHER").stream()
