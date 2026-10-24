@@ -113,10 +113,10 @@ public class ProjectCopyService {
 	 *       a webhook registered for one repository and one project. Handing them to a second
 	 *       project would mean two projects reacting to the same push under one set of
 	 *       credentials, so a copy reconnects deliberately or not at all;
-	 *   <li>{@code reporterId} and the e-mail-ingest quartet ({@code reporterEmail},
-	 *       {@code inboundMessageId}, {@code inboundSubject}, {@code ingestConnectionId}): the
-	 *       copy did not arrive by mail, and duplicating a message id would break the dedupe that
-	 *       stops a re-polled mail becoming a second ticket;
+	 *   <li>{@code reporterId} and what came with an e-mail ({@code reporterEmail},
+	 *       {@code inboundMessageId}, {@code inboundSubject}, {@code ingestConnectionId},
+	 *       {@code refusedAttachments}): the copy did not arrive by mail, and duplicating a message
+	 *       id would break the dedupe that stops a re-polled mail becoming a second ticket;
 	 *   <li>{@code watcherIds}: a subscription is one person's decision about one ticket;
 	 *   <li>{@code sprintId}: sprints hang off the board, not the project, and a sprint without
 	 *       its dates is not a sprint;
@@ -141,7 +141,8 @@ public class ProjectCopyService {
 			"git", "extraRepos", "archived", "issueCounter",
 			// --- Issue ---
 			"formerReadableIds", "reporterId", "reporterEmail", "inboundMessageId",
-			"inboundSubject", "ingestConnectionId", "watcherIds", "participantIds", "participantMeta",
+			"inboundSubject", "ingestConnectionId", "refusedAttachments", "watcherIds", "participantIds",
+			"participantMeta",
 			"sprintId", "spentMinutes",
 			"resolvedAt", "archivedAt", "dueReminderFor", "assigneeId", "assigneeIds",
 			"subtaskCount", "subtaskDoneCount",
