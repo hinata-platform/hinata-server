@@ -16,7 +16,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -42,49 +44,73 @@ class NotificationCopies implements ContentCopies {
 
 	private static final int BATCH = 500;
 
+	/** Previews one search for older notices looks for at once, and issues one write covers. */
+	private static final int PER_QUERY = 50;
+
 	private final MongoTemplate mongo;
 	private final NotificationService notifications;
 
 	@Override
 	public void scrub(List<CopySource> sources, ScrubReason reason, Placeholders placeholders) {
-		for (CopySource source : sources) {
-			if (source.ref().kind() == ContentKind.COMMENT) {
-				scrubComment(source, placeholders.textFor(reason));
-			}
-			else if (source.ref().kind() == ContentKind.ISSUE) {
-				scrubIssue(source, reason, placeholders);
-			}
+		List<CopySource> comments = ofKind(sources, ContentKind.COMMENT);
+		if (!comments.isEmpty()) {
+			scrubComments(comments, placeholders.textFor(reason));
 		}
+		List<CopySource> issues = ofKind(sources, ContentKind.ISSUE);
+		if (reason == ScrubReason.DELETED) {
+			scrubDeletedIssues(issues, placeholders.deletedText());
+			return;
+		}
+		issues.forEach(source -> scrubRemovedIssue(source, placeholders));
 	}
 
-	private void scrubComment(CopySource source, String placeholder) {
+	private static List<CopySource> ofKind(List<CopySource> sources, ContentKind kind) {
+		return sources.stream().filter(source -> source.ref().kind() == kind).toList();
+	}
+
+	/**
+	 * The notices quoting [comments]: one write for those that kept their source, and per issue
+	 * one for the older ones, found by the very previews they quote.
+	 */
+	private void scrubComments(List<CopySource> comments, String placeholder) {
 		Update body = Update.update("body", placeholder);
-		mongo.updateMulti(Query.query(Criteria.where("sourceId").is(source.ref().id())), body, Notification.class);
-		if (source.textDoc() == null || source.issueKeys().isEmpty()) {
-			return;
+		mongo.updateMulti(Query.query(Criteria.where("sourceId").in(comments.stream().map(source -> source.ref().id())
+				.toList())), body, Notification.class);
+		Map<List<String>, List<String>> previewsByIssue = new LinkedHashMap<>();
+		for (CopySource source : comments) {
+			if (source.textDoc() == null || source.issueKeys().isEmpty()) {
+				continue;
+			}
+			String preview = notifications.preview(source.textDoc());
+			if (!preview.isBlank()) {
+				previewsByIssue.computeIfAbsent(source.issueKeys(), keys -> new ArrayList<>()).add(Pattern.quote(preview));
+			}
 		}
-		String preview = notifications.preview(source.textDoc());
-		if (preview.isBlank()) {
-			return;
-		}
-		mongo.updateMulti(Query.query(new Criteria().andOperator(linkTo(source.issueKeys()),
-				Criteria.where("type").in(COMMENT_TYPES)
-						.and("sourceId").exists(false)
-						.and("body").regex(Pattern.quote(preview)))), body, Notification.class);
+		previewsByIssue.forEach((keys, previews) -> {
+			for (List<String> some : chunks(previews)) {
+				mongo.updateMulti(Query.query(new Criteria().andOperator(linkTo(keys),
+						Criteria.where("type").in(COMMENT_TYPES)
+								.and("sourceId").exists(false)
+								.and("body").regex(String.join("|", some)))), body, Notification.class);
+			}
+		});
 	}
 
-	private void scrubIssue(CopySource source, ScrubReason reason, Placeholders placeholders) {
+	/** Nothing of a deleted issue stays readable on the bell; that something happened does. */
+	private void scrubDeletedIssues(List<CopySource> issues, String deletedText) {
+		List<CopySource> linked = issues.stream().filter(source -> !source.issueKeys().isEmpty()).toList();
+		for (List<CopySource> some : chunks(linked)) {
+			List<String> keys = some.stream().flatMap(source -> source.issueKeys().stream()).toList();
+			mongo.updateMulti(Query.query(new Criteria().andOperator(linkTo(keys),
+					Criteria.where("body").ne(deletedText))), Update.update("body", deletedText), Notification.class);
+		}
+	}
+
+	private void scrubRemovedIssue(CopySource source, Placeholders placeholders) {
 		if (source.issueKeys().isEmpty()) {
 			return;
 		}
 		Criteria about = linkTo(source.issueKeys());
-		if (reason == ScrubReason.DELETED) {
-			// Nothing of a deleted issue stays readable on the bell; that something happened does.
-			mongo.updateMulti(Query.query(new Criteria().andOperator(about,
-					Criteria.where("body").ne(placeholders.deletedText()))),
-					Update.update("body", placeholders.deletedText()), Notification.class);
-			return;
-		}
 		if (source.title() != null && !source.title().isBlank()) {
 			replaceIn(about, source.title(), placeholders.removedTitle());
 		}
@@ -100,6 +126,14 @@ class NotificationCopies implements ContentCopies {
 							new Criteria().orOperator(quoting))),
 					Update.update("body", placeholders.removedText()), Notification.class);
 		}
+	}
+
+	private static <T> List<List<T>> chunks(List<T> items) {
+		List<List<T>> chunks = new ArrayList<>();
+		for (int from = 0; from < items.size(); from += PER_QUERY) {
+			chunks.add(items.subList(from, Math.min(items.size(), from + PER_QUERY)));
+		}
+		return chunks;
 	}
 
 	/** Puts [placeholder] wherever a notice about the issue spells [words], in its title or body. */

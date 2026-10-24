@@ -426,9 +426,11 @@ public class DeletionService {
 		projectIssues.forEach(issue -> byId.put(issue.getId(), issue));
 		Query voiceComments = new Query(Criteria.where("issueId").in(issueIds)
 				.and("voice.objectKey").exists(true).ne(null));
+		com.ahmadre.hinata.storage.StoredObjects.Batch voices = storedObjects.batch();
 		for (IssueComment c : mongo.find(voiceComments, IssueComment.class)) {
-			storedObjects.deleteVoice(byId.get(c.getIssueId()), c);
+			voices.voiceOf(byId.get(c.getIssueId()), c);
 		}
+		voices.release();
 	}
 
 	private void migrateIssues(List<Issue> projectIssues, String pid, Project target,
