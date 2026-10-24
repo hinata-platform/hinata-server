@@ -1,0 +1,105 @@
+# Reports whether asta and bear trust the reverse proxy in front of them.
+#
+# From HIN-26 on, the server takes a client's address from X-Forwarded-For only
+# when the request comes from an address in HINATA_TRUSTED_PROXIES. Behind a
+# proxy that is not entered, every request counts as the proxy's address, and
+# the limits per address (sign-in, reports without an account) count all
+# members together. This job looks at both stacks before that code deploys:
+# whether the variable is set in the running container, and whether the peers
+# that actually reach the server are covered by it. To see a peer at a quiet
+# hour, it asks each instance for its public metadata while it watches.
+#
+# Read only: it writes nothing and recreates nothing. Manual only, and never on
+# a fork: the runner reaches the host's docker.
+#
+# This repository is public, so its logs are. Nothing below prints a value or an
+# address, only counts and whether something is there. And a dollar followed by
+# two braces is an Actions expression anywhere in this file, comments included.
+name: Trusted proxies
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    name: Inspect HINATA_TRUSTED_PROXIES on asta + bear
+    runs-on: [self-hosted, astasrv01]
+    steps:
+      - name: Inspect
+        run: |
+          set -euo pipefail
+
+          # Reads /proc/net/tcp and tcp6 of the server container from stdin and
+          # compares the peers on the server's port with the trusted entries.
+          PY=$(cat <<'EOF'
+          import ipaddress, os, sys
+
+          port = int(os.environ["PORT"])
+          entries = [e.strip() for e in os.environ.get("CIDRS", "").split(",") if e.strip()]
+          networks, broken = [], 0
+          for entry in entries:
+              try:
+                  networks.append(ipaddress.ip_network(entry, strict=False))
+              except ValueError:
+                  broken += 1
+
+          def address(text):
+              raw = bytes.fromhex(text)
+              if len(raw) == 4:
+                  return ipaddress.IPv4Address(raw[::-1])
+              # The kernel writes an IPv6 address as four words in host order.
+              ip = ipaddress.IPv6Address(b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4)))
+              return ip.ipv4_mapped or ip
+
+          peers = set()
+          for line in sys.stdin:
+              cols = line.split()
+              if len(cols) < 4 or cols[3] != "01" or ":" not in cols[1]:
+                  continue
+              if int(cols[1].split(":")[1], 16) == port:
+                  peers.add(address(cols[2].split(":")[0]))
+
+          def trusted(ip):
+              return any(ip in n for n in networks if n.version == ip.version)
+
+          def kind(ip):
+              if ip.is_loopback:
+                  return "loopback"
+              if ip.version == 4 and ip in ipaddress.ip_network("172.16.0.0/12"):
+                  return "docker network"
+              return "private network" if ip.is_private else "public"
+
+          print("trusted entries:     %d%s" % (len(networks), " (%d not a CIDR)" % broken if broken else ""))
+          print("peers on the port:   %d" % len(peers))
+          for name in ("private network", "docker network", "loopback", "public"):
+              group = [p for p in peers if kind(p) == name]
+              if group:
+                  print("  %-18s %d, of them trusted %d" % (name + ":", len(group), sum(map(trusted, group))))
+          EOF
+          )
+
+          for STACK in hinata hinata-bear; do
+            case "$STACK" in
+              hinata) URL=https://api.track.asta.hn/api/v1/meta ;;
+              hinata-bear) URL=https://api.track.bear.ahmadre.com/api/v1/meta ;;
+            esac
+            C="$STACK-hinata-server-1"
+            echo "::group::$STACK"
+            ENV=$(docker inspect "$C" --format '{{range .Config.Env}}{{println .}}{{end}}')
+            CIDRS=$(printf '%s\n' "$ENV" | sed -n 's/^HINATA_TRUSTED_PROXIES=//p')
+            PORT=$(printf '%s\n' "$ENV" | sed -n 's/^HINATA_PORT=//p')
+            PORT=${PORT:-8080}
+            if [ -n "$CIDRS" ]; then echo "variable live:       yes"; else echo "variable live:       no"; fi
+
+            # Traffic through the proxy from the host's network, which reaches
+            # the edge where the runner's own network does not.
+            docker run --rm --network host curlimages/curl:8.10.1 \
+              sh -c "for i in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null -m 4 $URL; sleep 1; done" &
+            SAMPLES=$(for i in $(seq 1 20); do docker exec "$C" cat /proc/net/tcp /proc/net/tcp6 2>/dev/null || true; sleep 1; done)
+            # A request that does not get through only means less to watch.
+            wait || true
+
+            printf '%s\n' "$SAMPLES" | docker run --rm -i -e CIDRS="$CIDRS" -e PORT="$PORT" \
+              python:3.12-alpine python3 -c "$PY"
+            echo "::endgroup::"
+          done
