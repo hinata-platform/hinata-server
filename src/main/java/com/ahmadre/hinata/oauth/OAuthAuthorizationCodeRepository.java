@@ -4,4 +4,6 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 
 public interface OAuthAuthorizationCodeRepository
 		extends MongoRepository<OAuthAuthorizationCode, String> {
+
+	long deleteByUserId(String userId);
 }

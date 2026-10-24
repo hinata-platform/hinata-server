@@ -2,8 +2,10 @@ package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.notification.NotificationService;
+import com.ahmadre.hinata.user.SessionsRevokedEvent;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -27,6 +29,7 @@ public class SessionService {
 	private final UserEvents userEvents;
 	private final NotificationService notifications;
 	private final com.ahmadre.hinata.common.UserWords words;
+	private final ApplicationEventPublisher events;
 
 	/** Sessions ended per write when many end at once. */
 	private static final int REVOKE_BATCH = 1000;
@@ -150,6 +153,8 @@ public class SessionService {
 	public void revokeAll(String userId) {
 		sessions.deleteByUserId(userId);
 		userEvents.revokedAll(userId); // sign every device out now
+		// And close the person's other streams, which would otherwise run out their half hour (HIN-172).
+		events.publishEvent(new SessionsRevokedEvent(userId));
 	}
 
 	/**

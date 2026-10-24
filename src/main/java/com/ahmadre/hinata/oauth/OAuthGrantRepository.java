@@ -7,4 +7,6 @@ import java.util.Optional;
 public interface OAuthGrantRepository extends MongoRepository<OAuthGrant, String> {
 
 	Optional<OAuthGrant> findByRefreshTokenHash(String refreshTokenHash);
+
+	long deleteByUserId(String userId);
 }

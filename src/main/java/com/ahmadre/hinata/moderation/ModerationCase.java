@@ -151,6 +151,15 @@ public class ModerationCase {
 	/** The decision's removal undone, after an appeal or without one (HIN-171). */
 	private Restoration restoration;
 
+	/**
+	 * A decision that suspends a person with a role, waiting for a second person to confirm it
+	 * (HIN-172). The case stays open meanwhile.
+	 */
+	private Decision pendingDecision;
+
+	/** The suspension the decision put into effect (HIN-172). */
+	private CaseSuspension suspension;
+
 	/** When the notice of the person responsible last changed, and when they were last told of it. */
 	private Instant noticeChangedAt;
 	private Instant noticeChangeSentAt;

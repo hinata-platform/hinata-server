@@ -693,8 +693,9 @@ public class IssueController {
 	 */
 	@GetMapping(value = "/{id}/comments/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter commentStream(@PathVariable String id) {
-		Issue issue = issueService.getForUser(id, currentUser.require());
-		return commentEvents.subscribe(issue.getId());
+		User viewer = currentUser.require();
+		Issue issue = issueService.getForUser(id, viewer);
+		return commentEvents.subscribe(issue.getId(), viewer.getId());
 	}
 
 	/**

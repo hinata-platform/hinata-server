@@ -35,6 +35,11 @@ import java.util.Set;
 // accounts and nobody else; the flag is the equality, _id the cursor.
 @CompoundIndex(name = "time_targets_id", def = "{'timePreferences.targetsSet': 1, '_id': 1}",
 		partialFilter = "{'timePreferences.targetsSet': true}")
+// The suspension job's due accounts and the moderation's list of suspended ones (HIN-172).
+@CompoundIndex(name = "suspension_until", def = "{'suspension.until': 1}",
+		partialFilter = "{'suspension.until': {$type: 'date'}}")
+@CompoundIndex(name = "suspended", def = "{'suspension.at': -1, '_id': -1}",
+		partialFilter = "{'suspension.at': {$exists: true}}")
 // An SSO sign-in finds its account by the provider's key for the person (HIN-179). Unique, so
 // one identity can never hold two accounts; partial, so the accounts without one cost nothing.
 @CompoundIndex(name = "sso_link",
@@ -104,6 +109,12 @@ public class User {
 
 	@Builder.Default
 	private boolean active = true;
+
+	/**
+	 * Set while moderation keeps the account out (HIN-172), always together with
+	 * {@code active = false}: an account is never active and suspended at once.
+	 */
+	private Suspension suspension;
 
 	/**
 	 * What moderation removed from the profile, by field (HIN-169): {@code avatar} and the
@@ -248,6 +259,11 @@ public class User {
 	}
 
 	/** Whether this person reviews reported content and decides on it. See {@link Role}. */
+	/** Whether moderation keeps the account out right now (HIN-172). */
+	public boolean isSuspended() {
+		return suspension != null;
+	}
+
 	public boolean isModerator() {
 		return roles != null && roles.contains(Role.MODERATOR);
 	}

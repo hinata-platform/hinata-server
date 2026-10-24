@@ -37,6 +37,7 @@ public class ModerationCaseController {
 	private final CaseService cases;
 	private final DecisionService decisions;
 	private final AppealService appeals;
+	private final SuspendedAccounts suspended;
 
 	/** A step on a case at the revision the moderator saw. */
 	public record ClaimRequest(@NotNull Long rev, boolean takeOver) {
@@ -114,6 +115,32 @@ public class ModerationCaseController {
 	@PostMapping("/cases/{id}/decision")
 	public CaseViews.CaseSummary decide(@PathVariable String id, @Valid @RequestBody DecisionService.DecisionRequest request) {
 		return decisions.decide(id, request);
+	}
+
+	@Operation(summary = "Confirm a decision that suspends a person with a role, as the second person")
+	@PostMapping("/cases/{id}/decision/confirm")
+	public CaseViews.CaseSummary confirm(@PathVariable String id, @Valid @RequestBody DecisionService.StepRequest request) {
+		return decisions.confirm(id, request);
+	}
+
+	@Operation(summary = "Turn down a decision waiting for a second person; the case is open again")
+	@PostMapping("/cases/{id}/decision/reject")
+	public CaseViews.CaseSummary reject(@PathVariable String id, @Valid @RequestBody DecisionService.NoteRequest request) {
+		return decisions.reject(id, request);
+	}
+
+	@Operation(summary = "Lift the suspension a case decided")
+	@PostMapping("/cases/{id}/suspension/lift")
+	public CaseViews.CaseSummary liftSuspension(@PathVariable String id,
+			@Valid @RequestBody DecisionService.NoteRequest request) {
+		return decisions.liftSuspension(id, request);
+	}
+
+	@Operation(summary = "The accounts moderation suspended, newest first")
+	@GetMapping("/suspensions")
+	public Page<SuspendedAccounts.SuspendedAccount> suspensions(@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "25") int size) {
+		return suspended.page(page, size);
 	}
 
 	@Operation(summary = "The statement a decision would send, without deciding")

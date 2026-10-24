@@ -54,11 +54,11 @@ public class ModerationNotices {
 				List.of(person), "/moderation", reader -> notice(reader, "moderation.notice.overdue", count), null));
 	}
 
-	/** A second pair of eyes asked for: to whoever may give it. */
-	void confirmRequested(ModerationCase moderationCase) {
+	/** A second pair of eyes asked for, in the words of [key]: to whoever may give it. */
+	void confirmRequested(ModerationCase moderationCase, String key) {
 		notifications.notifyPeople(Notification.Type.MODERATION_CONFIRM_REQUESTED,
 				access.eligibleModerators(moderationCase, CaseAccess.Purpose.SECOND_PERSON), caseLink(moderationCase),
-				person -> notice(person, "moderation.notice.confirm"), QUIET);
+				person -> notice(person, key), QUIET);
 	}
 
 	/**

@@ -1,6 +1,9 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.common.ViewerStreams;
+import com.ahmadre.hinata.user.SessionsRevokedEvent;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -29,21 +32,25 @@ public class CommentEvents {
 
 	private final Map<String, List<SseEmitter>> byIssue = new ConcurrentHashMap<>();
 
+	/** The same streams by who opened them, to close them all when their sessions are revoked (HIN-172). */
+	private final ViewerStreams viewers = new ViewerStreams();
+
 	/** Registers a new SSE subscriber for the given (canonical) issue id. */
-	public SseEmitter subscribe(String issueId) {
+	public SseEmitter subscribe(String issueId, String viewerId) {
 		SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
 		List<SseEmitter> list = byIssue.computeIfAbsent(issueId, k -> new CopyOnWriteArrayList<>());
 		list.add(emitter);
-		emitter.onCompletion(() -> remove(issueId, emitter));
+		viewers.add(viewerId, emitter);
+		emitter.onCompletion(() -> remove(issueId, viewerId, emitter));
 		emitter.onTimeout(emitter::complete);
-		emitter.onError(e -> remove(issueId, emitter));
+		emitter.onError(e -> remove(issueId, viewerId, emitter));
 		try {
 			// An initial comment opens the stream immediately and makes buffering
 			// proxies (e.g. ngrok) flush, so the client knows it is connected.
 			emitter.send(SseEmitter.event().comment("connected"));
 		}
 		catch (IOException ex) {
-			remove(issueId, emitter);
+			remove(issueId, viewerId, emitter);
 		}
 		return emitter;
 	}
@@ -89,6 +96,17 @@ public class CommentEvents {
 				remove(issueId, emitter);
 			}
 		}
+	}
+
+	/** A viewer signed out everywhere: their streams close now, not when they time out. */
+	@EventListener
+	public void onSessionsRevoked(SessionsRevokedEvent event) {
+		viewers.closeAll(event.userId());
+	}
+
+	private void remove(String issueId, String viewerId, SseEmitter emitter) {
+		viewers.remove(viewerId, emitter);
+		remove(issueId, emitter);
 	}
 
 	private void remove(String issueId, SseEmitter emitter) {

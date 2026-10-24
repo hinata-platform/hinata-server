@@ -186,6 +186,16 @@ public class AdminUserController {
 		return service.updateDetails(id, request.displayName(), request.title(), request.email());
 	}
 
+	/** Lifting a suspension, with a note for the record. */
+	public record LiftSuspensionRequest(@Size(max = 500) String note) {
+	}
+
+	@PostMapping("/{id}/suspension/lift")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void liftSuspension(@PathVariable String id, @Valid @RequestBody LiftSuspensionRequest request) {
+		service.liftSuspension(id, request.note());
+	}
+
 	@PostMapping("/delete")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void deleteBulk(@RequestBody @Valid IdsRequest request) {

@@ -57,6 +57,7 @@ public class AdminUserService {
 	private final CurrentUser currentUser;
 	private final PasswordEncoder passwordEncoder;
 	private final AuditService audit;
+	private final SuspensionService suspensions;
 
 	// --- Read: filter + sort + paginate --------------------------------------
 
@@ -220,6 +221,18 @@ public class AdminUserService {
 		for (String id : ids) {
 			User u = userService.get(id);
 			if (u.isInvitePending()) continue; // invites have no active/disabled state
+			if (u.isSuspended()) {
+				// One way out of a suspension, whatever the door (HIN-172): activating lifts it,
+				// deactivating ends it and keeps the account out without an end.
+				if (activate) {
+					suspensions.lift(u, SuspensionService.LiftReason.ADMIN, actingAdmin(), null);
+				}
+				else if (suspensions.lift(u, SuspensionService.LiftReason.DEACTIVATED, actingAdmin(), null)) {
+					notifications.notifyAccountDeactivated(u);
+					audit.event(AuditAction.USER_DEACTIVATED).actor(actingAdmin()).target(u).log();
+				}
+				continue;
+			}
 			boolean wasActive = u.isActive();
 			if (!activate) {
 				if (u.getId().equals(currentUser.requireId())) {
@@ -237,6 +250,17 @@ public class AdminUserService {
 				audit.event(saved.isActive() ? AuditAction.USER_ACTIVATED : AuditAction.USER_DEACTIVATED)
 						.actor(actingAdmin()).target(saved).log();
 			}
+		}
+	}
+
+	/**
+	 * Lifts the suspension of account [id] (HIN-172) with an administrator's [note]. Who decided it
+	 * and why stays with moderation; the moderators hear that an administrator lifted it.
+	 */
+	public void liftSuspension(String id, String note) {
+		User u = userService.get(id);
+		if (!suspensions.lift(u, SuspensionService.LiftReason.ADMIN, actingAdmin(), note)) {
+			throw ApiException.conflict("error.user.notSuspended");
 		}
 	}
 
@@ -433,6 +457,8 @@ public class AdminUserService {
 			notifications.notifyAccountDeleted(u);
 			audit.event(AuditAction.USER_DELETED).actor(actingAdmin()).target(u)
 					.meta("email", u.getEmail()).log();
+			// Signed out everywhere before the account goes, as when people delete their own (HIN-172).
+			sessions.revokeAll(u.getId());
 			userService.delete(u);
 		}
 	}
@@ -458,7 +484,8 @@ public class AdminUserService {
 				u.getAvatarUrl(), u.getTitle(), u.getPronouns(), effectiveRole(u),
 				u.getOrigin().name(), status(u), u.isTotpEnabled(), u.isSso(), activity.sessions(),
 				activity.lastActive(), u.getInvitedAt(), u.getInvitedBy(), u.getJoinedAt(), u.isOrgAdmin(),
-				u.getSsoLink() != null, u.isModerator());
+				u.getSsoLink() != null, u.isModerator(), u.isSuspended(),
+				u.isSuspended() ? u.getSuspension().until() : null);
 	}
 
 	private static SessionService.Activity activityOf(Map<String, SessionService.Activity> activity, User u) {

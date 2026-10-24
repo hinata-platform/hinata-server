@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.admin.SuspensionService;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
@@ -23,6 +24,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -49,6 +51,7 @@ import java.util.function.Function;
  * follow-up job carries it out later. The human decision is never in question, only its execution
  * is repeated.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DecisionService {
@@ -81,10 +84,15 @@ public class DecisionService {
 	private final UserWords words;
 	private final ModerationAccess moderators;
 	private final ModerationRules rules;
+	private final SuspensionService suspensions;
 	private final Clock clock;
 
-	/** What a removal takes; HIN-172 adds a suspension beside it. */
+	/** What a removal takes. */
 	public record RemovalChoice(@NotNull RemovalScope scope) {
+	}
+
+	/** How long the person responsible is suspended (HIN-172). */
+	public record SuspensionChoice(@NotNull Decision.SuspensionLength duration) {
 	}
 
 	/** A decision as a moderator makes it. */
@@ -101,7 +109,24 @@ public class DecisionService {
 			boolean deceptiveCommercial,
 			@Size(max = 1000) String messageToAuthor,
 			@Size(max = 2000) String internalNote,
-			boolean lawEnforcementNotified) {
+			boolean lawEnforcementNotified,
+			@Valid SuspensionChoice suspension) {
+
+		/** A decision that suspends nobody. */
+		public DecisionRequest(Long rev, Decision.Outcome outcome, RemovalChoice removal, Decision.Ground ground,
+				ReportCategory category, String facts, String ruleReference, String lawReference, String responsibleId,
+				boolean deceptiveCommercial, String messageToAuthor, String internalNote, boolean lawEnforcementNotified) {
+			this(rev, outcome, removal, ground, category, facts, ruleReference, lawReference, responsibleId,
+					deceptiveCommercial, messageToAuthor, internalNote, lawEnforcementNotified, null);
+		}
+	}
+
+	/** A step on a case at the revision seen. */
+	public record StepRequest(@NotNull Long rev) {
+	}
+
+	/** A step on a case at the revision seen, with a reason of at least twenty characters. */
+	public record NoteRequest(@NotNull Long rev, @NotBlank @Size(max = 2000) String note) {
 	}
 
 	/** Undoing a removal without an appeal, at the revision seen, with a reason. */
@@ -121,26 +146,60 @@ public class DecisionService {
 
 	/**
 	 * Decides case [id] as [request] says: 409 when the case moved since the revision seen, or
-	 * somebody else holds it; a case nobody holds is taken by deciding it.
+	 * somebody else holds it; a case nobody holds is taken by deciding it. A decision that suspends
+	 * a person with a role waits for a second person instead (HIN-172).
 	 */
 	public CaseSummary decide(String id, DecisionRequest request) {
 		Guarded guarded = access.require(id, Purpose.DECIDE);
+		ModerationCase c = guarded.moderationCase();
 		User moderator = guarded.moderator();
+		if (c.getPendingDecision() != null) {
+			throw ApiException.conflict("error.moderation.confirmationPending");
+		}
 		Instant now = clock.instant();
-		Decision decision = decisionOf(guarded.moderationCase(), request, moderator, now);
+		Decision decision = decisionOf(c, request, moderator, now);
+		User suspended = suspendedBy(decision, moderator);
+		if (suspended != null && (suspended.isModerator() || suspended.isOrgAdmin())) {
+			return requestConfirmation(id, request.rev(), decision, moderator, now);
+		}
+		Criteria free = new Criteria().andOperator(Criteria.where("pendingDecision").is(null),
+				new Criteria().orOperator(Criteria.where("assigneeId").is(null),
+						Criteria.where("assigneeId").is(moderator.getId())));
+		return apply(id, request.rev(), free, decision, moderator, moderator, now);
+	}
+
+	/** Whom [decision] suspends, checked: 400 when nobody with an account is responsible or may be. */
+	private User suspendedBy(Decision decision, User moderator) {
+		if (decision.suspension() == null) {
+			return null;
+		}
+		User person = decision.responsibleId() == null ? null : users.findById(decision.responsibleId()).orElse(null);
+		if (person == null || !person.isActive()) {
+			throw ApiException.badRequest("error.moderation.suspensionNotAllowed");
+		}
+		suspensions.requireSuspendable(person, moderator);
+		return person;
+	}
+
+	/**
+	 * Saves [decision] on case [id] at [rev] where [condition] holds, then carries it out: the
+	 * removal, the suspension, and off the request the copies, the statement and the reporters.
+	 * [decider] decided it, [actor] is who acts now, the second person for a confirmed decision.
+	 */
+	private CaseSummary apply(String id, long rev, Criteria condition, Decision decision, User decider, User actor,
+			Instant now) {
 		boolean removing = decision.outcome() == Decision.Outcome.ACTION && decision.removal() != null;
 		Query open = Query.query(new Criteria().andOperator(
-				Criteria.where("_id").is(id).and("rev").is(request.rev()).and("status").is(CaseStatus.OPEN),
-				new Criteria().orOperator(Criteria.where("assigneeId").is(null),
-						Criteria.where("assigneeId").is(moderator.getId()))));
+				Criteria.where("_id").is(id).and("rev").is(rev).and("status").is(CaseStatus.OPEN), condition));
 		Update update = CaseSteps.step(new Update()
 						.set("status", CaseStatus.DECIDED)
 						.set("decision", decision)
 						.set("decidedAt", now)
-						.set("assigneeId", moderator.getId())
+						.set("assigneeId", decider.getId())
 						.set("retainUntil", Retention.afterDecision(decision, now, retentionMonths()))
-						.set("followUpDue", now),
-				new CaseEvent(now, CaseEvent.Kind.DECIDED, moderator.getId(), decision.outcome().name()));
+						.set("followUpDue", now)
+						.unset("pendingDecision"),
+				new CaseEvent(now, CaseEvent.Kind.DECIDED, actor.getId(), decision.outcome().name()));
 		if (decision.responsibleId() != null) {
 			update.set("responsibleId", decision.responsibleId());
 		}
@@ -160,16 +219,110 @@ public class DecisionService {
 			throw CaseSteps.stale(mongo, id);
 		}
 		count(decided, decision, now);
-		audit.event(AuditAction.MODERATION_DECIDED).actor(moderator).meta("case", id).log();
+		audit.event(AuditAction.MODERATION_DECIDED).actor(actor).meta("case", id).log();
 		if (Boolean.TRUE.equals(decision.lawEnforcementNotified())) {
-			audit.event(AuditAction.MODERATION_LEGAL_HOLD_CHANGED).actor(moderator).meta("case", id).log();
+			audit.event(AuditAction.MODERATION_LEGAL_HOLD_CHANGED).actor(actor).meta("case", id).log();
 		}
 		if (removing) {
 			decided = followUps.removeFor(decided);
-			alertOnManyRemovals(decided, moderator, now);
+		}
+		if (decision.suspension() != null) {
+			decided = suspendFor(decided, decider, now);
+		}
+		if (removing || decision.suspension() != null) {
+			alertOnManyRemovals(decided, decider, now);
 		}
 		followUps.later(id);
-		return CaseService.summaryOf(decided, personOf(moderator), access.reported(decided, moderator.getId()));
+		return CaseService.summaryOf(decided, personOf(decider), access.reported(decided, actor.getId()));
+	}
+
+	/**
+	 * Suspends the person responsible for [c] as its decision says. A refusal now (the last
+	 * moderator left meanwhile) leaves the decision standing and the case without a suspension,
+	 * which the statement then does not mention.
+	 */
+	private ModerationCase suspendFor(ModerationCase c, User decider, Instant now) {
+		Decision decision = c.getDecision();
+		User person = users.findById(decision.responsibleId()).orElse(null);
+		if (person == null) {
+			return c;
+		}
+		Instant until = untilOf(decision.suspension(), now);
+		try {
+			suspensions.suspend(person, until, c.getId(), decider);
+		}
+		catch (ApiException refused) {
+			log.warn("[moderation] suspension for case {} refused: {}", c.getId(), refused.getMessageKey());
+			return c;
+		}
+		stats.count(StatMetric.SUSPENSION_DURATION, decision.suspension().name());
+		Update update = new Update().set("suspension", new CaseSuspension(person.getId(), until, now, null, null));
+		update.push("history").slice(-ModerationCase.HISTORY_MAX)
+				.each(new CaseEvent(now, CaseEvent.Kind.SUSPENDED, decider.getId(), decision.suspension().name()));
+		return mongo.findAndModify(Query.query(Criteria.where("_id").is(c.getId())), update,
+				FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
+	}
+
+	/** When a suspension of [length] from [from] ends; null for until further notice. */
+	static Instant untilOf(Decision.SuspensionLength length, Instant from) {
+		return switch (length) {
+			case DAYS_7 -> from.plus(Duration.ofDays(7));
+			case DAYS_30 -> from.plus(Duration.ofDays(30));
+			case INDEFINITE -> null;
+		};
+	}
+
+	/**
+	 * Keeps [decision], which suspends a person with a role, until a second person confirms it.
+	 * The second persons hear of it, and the admins, without content.
+	 */
+	private CaseSummary requestConfirmation(String id, long rev, Decision decision, User moderator, Instant now) {
+		Query open = Query.query(new Criteria().andOperator(
+				Criteria.where("_id").is(id).and("rev").is(rev).and("status").is(CaseStatus.OPEN)
+						.and("pendingDecision").is(null),
+				new Criteria().orOperator(Criteria.where("assigneeId").is(null),
+						Criteria.where("assigneeId").is(moderator.getId()))));
+		Update update = CaseSteps.step(new Update().set("pendingDecision", decision).set("assigneeId", moderator.getId())
+						.set("claimedAt", now),
+				new CaseEvent(now, CaseEvent.Kind.CONFIRMATION_REQUESTED, moderator.getId(), decision.outcome().name()));
+		ModerationCase pending = mongo.findAndModify(open, update, FindAndModifyOptions.options().returnNew(true),
+				ModerationCase.class);
+		if (pending == null) {
+			throw CaseSteps.stale(mongo, id);
+		}
+		notices.confirmRequested(pending, "moderation.notice.confirmDecision");
+		notices.adminAlert(pending, "moderation.alert.suspendRole");
+		return CaseService.summaryOf(pending, personOf(moderator), access.reported(pending, moderator.getId()));
+	}
+
+	/** Confirms the decision waiting on case [id], as the second pair of eyes; then it takes effect. */
+	public CaseSummary confirm(String id, StepRequest request) {
+		Guarded guarded = access.require(id, Purpose.SECOND_PERSON);
+		Decision pending = guarded.moderationCase().getPendingDecision();
+		if (pending == null) {
+			throw CaseSteps.stale(mongo, id);
+		}
+		User confirmer = guarded.moderator();
+		User decider = users.findById(pending.decidedBy()).orElse(confirmer);
+		return apply(id, request.rev(), Criteria.where("pendingDecision").exists(true),
+				pending.confirmedBy(confirmer.getId()), decider, confirmer, clock.instant());
+	}
+
+	/** Turns down the decision waiting on case [id], with a reason; the case is open again. */
+	public CaseSummary reject(String id, NoteRequest request) {
+		Guarded guarded = access.require(id, Purpose.SECOND_PERSON);
+		requireFacts(request.note());
+		Instant now = clock.instant();
+		Query pending = Query.query(Criteria.where("_id").is(id).and("rev").is(request.rev())
+				.and("pendingDecision").exists(true));
+		Update update = CaseSteps.step(new Update().unset("pendingDecision").unset("assigneeId").unset("claimedAt"),
+				new CaseEvent(now, CaseEvent.Kind.CONFIRMATION_REJECTED, guarded.moderator().getId(), request.note().strip()));
+		ModerationCase reopened = mongo.findAndModify(pending, update, FindAndModifyOptions.options().returnNew(true),
+				ModerationCase.class);
+		if (reopened == null) {
+			throw CaseSteps.stale(mongo, id);
+		}
+		return CaseService.summaryOf(reopened, null, access.reported(reopened, guarded.moderator().getId()));
 	}
 
 	/**
@@ -196,12 +349,16 @@ public class DecisionService {
 		ContentKind kind = c.getTarget() == null ? ContentKind.OTHER : c.getTarget().kind();
 		boolean other = kind == ContentKind.OTHER;
 		boolean acts = outcome == Decision.Outcome.ACTION || outcome == Decision.Outcome.HANDLED;
+		boolean suspends = request.suspension() != null;
 		if (outcome == Decision.Outcome.ACTION && other || outcome == Decision.Outcome.HANDLED && !other
-				|| request.removal() != null && outcome != Decision.Outcome.ACTION) {
+				|| (request.removal() != null || suspends) && outcome != Decision.Outcome.ACTION) {
 			throw ApiException.badRequest("error.moderation.outcomeNotAllowed");
 		}
 		if (outcome == Decision.Outcome.ACTION) {
-			surface(kind).requireScope(request.removal() == null ? null : request.removal().scope());
+			// An action removes, suspends, or both (HIN-172).
+			if (request.removal() != null || !suspends) {
+				surface(kind).requireScope(request.removal() == null ? null : request.removal().scope());
+			}
 		}
 		if (acts && request.ground() == null) {
 			throw ApiException.badRequest("error.moderation.groundRequired");
@@ -221,14 +378,19 @@ public class DecisionService {
 			throw ApiException.badRequest("error.moderation.outcomeNotAllowed");
 		}
 		Set<ReportSource> sources = c.getSources() == null ? Set.of() : c.getSources();
+		String responsible = outcome == Decision.Outcome.ACTION ? responsibleOf(c, request.responsibleId()) : null;
+		if (suspends && responsible == null) {
+			// Content from e-mail or a smart commit has nobody responsible to suspend (HIN-169).
+			throw ApiException.badRequest("error.moderation.suspensionNotAllowed");
+		}
 		return new Decision(outcome,
-				outcome == Decision.Outcome.ACTION ? request.removal().scope() : null,
+				request.removal() == null ? null : request.removal().scope(),
 				acts ? request.ground() : null,
 				acts ? request.category() : null,
 				strip(request.facts()),
 				acts ? strip(request.ruleReference()) : null,
 				acts ? strip(request.lawReference()) : null,
-				outcome == Decision.Outcome.ACTION ? responsibleOf(c, request.responsibleId()) : null,
+				responsible,
 				request.deceptiveCommercial(),
 				outcome == Decision.Outcome.ACTION ? strip(request.messageToAuthor()) : null,
 				strip(request.internalNote()),
@@ -238,6 +400,8 @@ public class DecisionService {
 				null,
 				moderator.getId(),
 				now,
+				null,
+				suspends ? request.suspension().duration() : null,
 				null);
 	}
 
@@ -304,7 +468,7 @@ public class DecisionService {
 		requireFacts(request.note());
 		Instant now = clock.instant();
 		Undone undone = undo(id, request.rev(), moderator, request.note().strip(), now,
-				Criteria.where("appeal.state").ne(Appeal.State.PENDING),
+				Criteria.where("appeal.state").ne(Appeal.State.PENDING), SuspensionService.LiftReason.MODERATION,
 				outcome -> new Update().push("history").slice(-ModerationCase.HISTORY_MAX)
 						.each(new CaseEvent(now, CaseEvent.Kind.RESTORED, moderator.getId(), outcome.name())));
 		audit.event(AuditAction.MODERATION_RESTORED).actor(moderator).meta("case", id).log();
@@ -324,10 +488,11 @@ public class DecisionService {
 	 * asked, who can try once more. [after] adds the caller's own fields to the final write.
 	 */
 	Undone undo(String id, long rev, User moderator, String note, Instant now, Criteria condition,
-			Function<RestoreOutcome, Update> after) {
+			SuspensionService.LiftReason liftReason, Function<RestoreOutcome, Update> after) {
 		Query query = Query.query(new Criteria().andOperator(Criteria.where("_id").is(id).and("rev").is(rev)
 				.and("status").is(CaseStatus.DECIDED).and("decision.outcome").is(Decision.Outcome.ACTION)
-				.and("decision.removal").exists(true).and("restoration").is(null), condition));
+				.and("restoration").is(null), new Criteria().orOperator(Criteria.where("decision.removal").exists(true),
+						Criteria.where("decision.suspension").exists(true)), condition));
 		Update claim = new Update().set("restoration", new Restoration(now, moderator.getId(), note, null))
 				.inc("rev", 1).set("updatedAt", now);
 		ModerationCase held = mongo.findAndModify(query, claim, FindAndModifyOptions.options().returnNew(true),
@@ -337,7 +502,8 @@ public class DecisionService {
 		}
 		RestoreOutcome outcome;
 		try {
-			outcome = followUps.restoreFor(held);
+			// A decision that only suspended has no content to put back.
+			outcome = held.getDecision().removal() == null ? RestoreOutcome.RESTORED : followUps.restoreFor(held);
 		}
 		catch (RuntimeException failed) {
 			mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update().unset("restoration"),
@@ -354,7 +520,36 @@ public class DecisionService {
 		// The comment is back: what its reporters fold away is theirs to see again (HIN-173).
 		mongo.updateMulti(Query.query(Criteria.where("caseId").is(id)), new Update().set("removed", false),
 				ContentReport.class);
+		if (undone.getSuspension() != null && undone.getSuspension().running()) {
+			users.findById(undone.getSuspension().personId())
+					.ifPresent(person -> suspensions.lift(person, liftReason, moderator, note));
+			undone = mongo.findById(id, ModerationCase.class);
+		}
 		return new Undone(undone, outcome);
+	}
+
+	/** Lifts the suspension case [id] decided, with a reason; whatever it removed stays removed. */
+	public CaseSummary liftSuspension(String id, NoteRequest request) {
+		Guarded guarded = access.require(id, Purpose.DECIDE);
+		User moderator = guarded.moderator();
+		requireFacts(request.note());
+		CaseSuspension running = guarded.moderationCase().getSuspension();
+		if (running == null || !running.running()) {
+			throw CaseSteps.stale(mongo, id);
+		}
+		Instant now = clock.instant();
+		Query query = Query.query(Criteria.where("_id").is(id).and("rev").is(request.rev())
+				.and("suspension.liftedAt").is(null).and("suspension.personId").is(running.personId()));
+		Update step = CaseSteps.step(new Update(),
+				new CaseEvent(now, CaseEvent.Kind.SUSPENSION_LIFTED, moderator.getId(), request.note().strip()));
+		if (mongo.findAndModify(query, step, ModerationCase.class) == null) {
+			throw CaseSteps.stale(mongo, id);
+		}
+		users.findById(running.personId())
+				.ifPresent(person -> suspensions.lift(person, SuspensionService.LiftReason.MODERATION, moderator,
+						request.note().strip()));
+		ModerationCase after = mongo.findById(id, ModerationCase.class);
+		return CaseService.summaryOf(after, assigneeOf(after), access.reported(after, moderator.getId()));
 	}
 
 	/** Holds case [id] beyond its time: never shorter than it is held already. */

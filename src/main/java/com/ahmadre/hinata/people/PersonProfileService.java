@@ -51,7 +51,9 @@ public class PersonProfileService {
 	public PersonProfile profile(User viewer, String personId) {
 		User person = personId == null ? null : users.findById(personId).orElse(null);
 		boolean admin = viewer.isAdmin();
-		if (person == null || (!person.isActive() && !admin)) {
+		// Moderators see whom moderation suspended (HIN-172); a deactivated account stays the admins'.
+		boolean moderatesIt = viewer.isModerator() && person != null && person.isSuspended();
+		if (person == null || (!person.isActive() && !admin && !moderatesIt)) {
 			throw ApiException.notFound("person");
 		}
 		boolean self = viewer.getId().equals(person.getId());
@@ -62,7 +64,15 @@ public class PersonProfileService {
 		return new PersonProfile(person.getId(), person.getDisplayName(), person.getUsername(),
 				person.getAvatarUrl(), person.getTitle(), person.getPronouns(), roles(person), zone.getId(),
 				sharedTeams(viewer, person), sharedProjects(viewer, person, self), away,
-				admin ? person.getEmail() : null, person.isActive(), self, admin);
+				admin ? person.getEmail() : null, person.isActive(), self, admin, suspensionOf(person, viewer));
+	}
+
+	private static PersonProfile.SuspensionView suspensionOf(User person, User viewer) {
+		if (!person.isSuspended() || !viewer.isModerator() && !viewer.isAdmin()) {
+			return null;
+		}
+		return new PersonProfile.SuspensionView(person.getSuspension().until(),
+				viewer.isModerator() ? person.getSuspension().caseId() : null);
 	}
 
 	private static List<String> roles(User person) {

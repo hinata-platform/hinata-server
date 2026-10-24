@@ -22,7 +22,7 @@ import java.util.List;
 
 /**
  * Deletes decided cases once their time is up (HIN-170), at 03:20. Skipped are cases with an appeal
- * still open and cases under a legal hold; a running suspension joins them with HIN-172.
+ * still open, cases under a legal hold, and cases whose suspension still runs (HIN-172).
  *
  * <p>In this order, so an interrupted run leaves nothing nobody can find: the objects under
  * {@code quarantine/<caseId>/} (the orphan sweep knows nothing of that prefix), the quarantine's
@@ -67,6 +67,9 @@ public class ModerationRetentionJob {
 				Criteria.where("appeal.state").ne(Appeal.State.PENDING),
 				new Criteria().orOperator(Criteria.where("legalHoldUntil").is(null),
 						Criteria.where("legalHoldUntil").lt(now)),
+				// A suspension the case decided still runs (HIN-172): the case is its reasons.
+				new Criteria().orOperator(Criteria.where("suspension").is(null),
+						Criteria.where("suspension.liftedAt").exists(true)),
 				new Criteria().orOperator(Criteria.where("purgingAt").is(null),
 						Criteria.where("purgingAt").lt(now.minus(STALE_CLAIM)))));
 		return mongo.findAndModify(due, new Update().set("purgingAt", now),
