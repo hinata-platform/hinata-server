@@ -107,7 +107,8 @@ class PersonContentSurface implements ContentSurface {
 				person.getCreatedAt(),
 				person.getUpdatedAt(),
 				ContentSnapshot.hashOf(person.getDisplayName(), person.getTitle(), person.getPronouns(),
-						person.getUsername(), person.getAvatarUrl()));
+						person.getUsername(), person.getAvatarUrl()),
+				isRemoved(person, PROFILE) && person.getAvatarUrl() == null);
 	}
 
 	private static String blankIfNull(String value) {

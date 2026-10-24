@@ -1329,6 +1329,41 @@ public class NotificationService {
 	}
 
 	/**
+	 * Notices about no project (HIN-170), one per person in [people] and worded for each, behind
+	 * [type]'s preference. The bell always records. Mail and push go out at most once per [quiet]
+	 * and person for this type: twenty reports in a minute are one ping, and the bell lists all
+	 * twenty. A null [quiet] sends every one.
+	 */
+	public void notifyPeople(Notification.Type type, java.util.Collection<User> people, String link,
+			Function<User, PersonalNotice> wording, java.time.Duration quiet) {
+		java.time.Instant since = quiet == null ? null : java.time.Instant.now().minus(quiet);
+		for (User user : people) {
+			if (user == null || !user.isActive()) continue;
+			PersonalNotice notice = wording.apply(user);
+			boolean recent = since != null
+					&& notifications.existsByUserIdAndTypeAndSentOutTrueAndCreatedAtAfter(user.getId(), type, since);
+			Delivery delivery = delivery(user, eventId(type));
+			notifications.save(delivery.mark(Notification.builder()
+					.userId(user.getId()).type(type).title(notice.title()).body(notice.body()).link(link)
+					.sentOut(recent ? null : Boolean.TRUE)).build());
+			if (!recent) {
+				sendOut(user, type, delivery, notice.title(), notice.body(), notice.pushTitle(), notice.pushBody(),
+						link, notice.ctaLabel());
+			}
+		}
+	}
+
+	/**
+	 * A mail to an address with no account behind it, in [locale]: the instance's contact, when
+	 * nobody with an account is left to tell (HIN-170). Carries no content, only the two texts.
+	 */
+	public void mailAddress(String to, Locale locale, String titleKey, String bodyKey) {
+		String title = words.in(locale, titleKey);
+		mail.sendNotification(to, mail.subjectPrefix() + title, title, words.in(locale, bodyKey), null,
+				buttonLabel(locale), locale.getLanguage(), null);
+	}
+
+	/**
 	 * A quiet note in the bell and nowhere else: news about the product that nobody
 	 * needs a mail or a push for.
 	 */
@@ -1812,6 +1847,9 @@ public class NotificationService {
 			case SHIFT_ASSIGNED, SHIFT_RELEASED, SHIFT_REMINDER, SHIFT_EVENT_CHANGED, SHIFT_CHANGED,
 					SHIFT_HELPER_DECLINED, SHIFT_SERIES_CHANGED, SHIFT_PROMOTED, SHIFT_WAITLIST_SKIPPED,
 					SHIFT_WAITLIST_EXPIRED -> NotificationPreferences.SHIFTS;
+			case MODERATION_CASE_OPENED, MODERATION_CASE_OVERDUE, MODERATION_CONFIRM_REQUESTED,
+					MODERATION_TEAM_NOTE -> NotificationPreferences.MODERATION;
+			// MODERATION_ADMIN_ALERT goes to admins, who have no moderation switch: locked.
 			// TIME_OFF_EXPIRY_NOTICE is deliberately absent and therefore locked: it is the notice
 			// without which no leave lapses (BAG 19.02.2019 – 9 AZR 541/15), and a preference that
 			// switched it off would switch off the protection it gives the person.

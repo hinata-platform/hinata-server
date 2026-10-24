@@ -123,12 +123,17 @@ class IssueContentSurface implements ContentSurface {
 	private ContentSnapshot snapshotOf(Issue issue) {
 		boolean mailed = issue.getInboundMessageId() != null;
 		List<String> writers = writersOf(issue);
+		if (mailed) {
+			// The account a mail was filed under did not necessarily write it: a sender can be
+			// forged. Whoever edited it since did write their part.
+			writers = writers.stream().filter(id -> !id.equals(issue.getReporterId())).toList();
+		}
 		return new ContentSnapshot(
 				refOf(issue),
 				mailed ? ContentOrigin.EMAIL : ContentOrigin.MEMBER,
 				mailed ? issue.getReporterEmail() : null,
 				new LinkedHashSet<>(writers),
-				writers.isEmpty() ? issue.getReporterId() : writers.getFirst(),
+				writers.isEmpty() ? (mailed ? null : issue.getReporterId()) : writers.getFirst(),
 				issue.getTitle(),
 				ContentSnapshot.clip(issue.getDescription(), ContentSnapshot.EXCERPT_MAX),
 				null,
@@ -138,7 +143,8 @@ class IssueContentSurface implements ContentSurface {
 						.toList(),
 				issue.getCreatedAt(),
 				issue.getUpdatedAt(),
-				ContentSnapshot.hashOf(issue.getTitle(), issue.getDescriptionDoc()));
+				ContentSnapshot.hashOf(issue.getTitle(), issue.getDescriptionDoc()),
+				isRemoved(issue, TITLE) && isRemoved(issue, DESCRIPTION));
 	}
 
 	/**

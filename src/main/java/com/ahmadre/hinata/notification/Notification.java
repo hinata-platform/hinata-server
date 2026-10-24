@@ -49,7 +49,10 @@ public class Notification {
 		// HIN-161: a series changed or ended from an occurrence on; one notice per person.
 		SHIFT_SERIES_CHANGED,
 		// HIN-162: the waiting list. Moved up, passed over because of another shift, deadline missed.
-		SHIFT_PROMOTED, SHIFT_WAITLIST_SKIPPED, SHIFT_WAITLIST_EXPIRED
+		SHIFT_PROMOTED, SHIFT_WAITLIST_SKIPPED, SHIFT_WAITLIST_EXPIRED,
+		// Moderation (HIN-170). The names are the wire contract; none of them carries content.
+		MODERATION_CASE_OPENED, MODERATION_CASE_OVERDUE, MODERATION_CONFIRM_REQUESTED, MODERATION_TEAM_NOTE,
+		MODERATION_ADMIN_ALERT
 	}
 
 	@Id
@@ -95,6 +98,13 @@ public class Notification {
 
 	@JsonIgnore
 	private Boolean heldPush;
+
+	/**
+	 * Mail and push went out for this one (HIN-170): within the quiet window after it, the next
+	 * notice of its type stays in the bell. Boxed for the same reason as {@code held}.
+	 */
+	@JsonIgnore
+	private Boolean sentOut;
 
 	/** Never null: a notification written before HIN-131 never waited. */
 	@JsonIgnore
