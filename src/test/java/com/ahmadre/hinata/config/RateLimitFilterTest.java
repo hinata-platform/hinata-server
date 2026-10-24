@@ -44,7 +44,7 @@ class RateLimitFilterTest {
 		SettingsService settings = Mockito.mock(SettingsService.class);
 		Mockito.when(settings.get()).thenReturn(new ServerSettings());
 		filter = new RateLimitFilter(properties, new SecurityPolicy(settings, properties),
-				new ClientIpResolver(properties), new StaticMessageSource());
+				new ClientIpResolver(), new StaticMessageSource());
 		passed = new AtomicInteger();
 		chain = (request, response) -> passed.incrementAndGet();
 	}

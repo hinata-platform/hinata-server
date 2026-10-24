@@ -72,6 +72,8 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 	private AttachmentStore attachments;
 	@Autowired
 	private SettingsService settings;
+	@Autowired
+	private com.ahmadre.hinata.moderation.rules.HouseRulesService houseRules;
 
 	private User mira;
 	private Issue issue;
@@ -136,6 +138,8 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(after.getDecision().responsibleId()).isEqualTo(author.getId());
 		assertThat(after.getDecision().basis()).isEqualTo(Decision.Basis.NOTICE);
 		assertThat(after.getDecision().quarantineId()).isNotNull();
+		// The version of the house rules in force, which the statement links to (HIN-175).
+		assertThat(after.getDecision().rulesVersion()).isEqualTo(houseRules.currentVersion()).isNotNull();
 		assertThat(after.getRemovalState()).isEqualTo(RemovalState.DONE);
 		assertThat(after.getCopiesScrubbedAt()).isNotNull();
 		assertThat(after.getStatementSentAt()).isNotNull();
@@ -364,7 +368,7 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 	void theRulesToRestADecisionOnAreNumbered() {
 		ModerationRules.RuleSet rules = moderation.rules();
 
-		assertThat(rules.version()).isNull();
+		assertThat(rules.builtIn()).isTrue();
 		assertThat(rules.rules()).hasSize(ModerationRules.BUILT_IN)
 				.extracting(ModerationRules.Rule::number).containsExactly(1, 2, 3, 4, 5, 6, 7);
 		assertThat(rules.rules().get(1).title()).isEqualTo("No belittling others");

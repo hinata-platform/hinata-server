@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.common.TestMongo;
+import com.ahmadre.hinata.common.TestRules;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -114,6 +115,7 @@ class McpSecurityIntegrationTest {
 		assertThat(res.statusCode()).as("login status").isEqualTo(200);
 		String token = parse(res.body()).path("accessToken").asText(null);
 		assertThat(token).as("access token").isNotBlank();
+		TestRules.accept(port, token);
 		return token;
 	}
 

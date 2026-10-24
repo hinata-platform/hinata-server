@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.user;
 
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.auth.AccountAdmission;
 import com.ahmadre.hinata.auth.AuthPolicy;
 import com.ahmadre.hinata.auth.SecurityPolicy;
 import com.ahmadre.hinata.auth.SignInRefusal;
@@ -45,6 +46,7 @@ class SsoAccountsTest {
 
 	private UserRepository users;
 	private MongoTemplate mongo;
+	private AccountAdmission admission;
 	private SsoAccounts accounts;
 
 	@BeforeEach
@@ -56,8 +58,29 @@ class SsoAccountsTest {
 				mock(AuditService.class), mock(NotificationService.class), mock(SecurityPolicy.class),
 				UserWordsFixture.real());
 		mongo = mock(MongoTemplate.class);
-		accounts = new SsoAccounts(users, mongo, userService, mock(AuthPolicy.class), mock(SettingsService.class),
-				mock(AuditService.class), mock(NotificationService.class), UserWordsFixture.real());
+		admission = mock(AccountAdmission.class);
+		accounts = new SsoAccounts(users, mongo, userService, mock(AuthPolicy.class), admission,
+				mock(SettingsService.class), mock(AuditService.class), mock(NotificationService.class),
+				UserWordsFixture.real());
+	}
+
+	/** A provider that asks for approval makes the first sign-in wait, as a registration does (HIN-175). */
+	@Test
+	void aFirstSignInWaitsForApprovalWhereTheProviderAsksForIt() {
+		when(users.findByEmailIgnoreCase(anyString())).thenReturn(Optional.empty());
+		when(users.existsByUsernameIgnoreCase(anyString())).thenReturn(false);
+		when(admission.firstSignInWaits("oidc", "grace@example.org")).thenReturn(true);
+
+		assertThatThrownBy(() -> accounts.signIn(GRACE, profile("grace@example.org", "Grace Hopper", null),
+				User.Origin.OIDC, true))
+				.isInstanceOfSatisfying(SignInRefusedException.class,
+						refused -> assertThat(refused.refusal()).isEqualTo(SignInRefusal.PENDING_APPROVAL));
+
+		ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+		verify(users).save(saved.capture());
+		assertThat(saved.getValue().isActive()).isFalse();
+		assertThat(saved.getValue().isAwaitingApproval()).isTrue();
+		verify(admission).requestApproval(saved.getValue());
 	}
 
 	@Test
