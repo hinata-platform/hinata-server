@@ -17,4 +17,11 @@ public final class ContentBoundaryProbes {
 	public static class KnowsAnIssue {
 		private Issue issue;
 	}
+
+	/** Looks at content without the sight check from outside the moderation module. */
+	public static class AsksForModeration {
+		Object look(ContentSurface surface) {
+			return surface.forModeration(TargetRef.of(ContentKind.COMMENT, "c1"));
+		}
+	}
 }

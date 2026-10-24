@@ -93,6 +93,11 @@ public class ApiException extends RuntimeException {
 		return new ApiException(HttpStatus.CONFLICT, messageKey, details, args);
 	}
 
+	/** 410: it was there and is not any more, such as content moderation removed (HIN-169). */
+	public static ApiException gone(String messageKey, Object... args) {
+		return new ApiException(HttpStatus.GONE, messageKey, args);
+	}
+
 	public static ApiException unauthorized(String messageKey, Object... args) {
 		return new ApiException(HttpStatus.UNAUTHORIZED, messageKey, args);
 	}

@@ -210,6 +210,38 @@ public class StorageService {
 	}
 
 	/**
+	 * Whether an object is there. For the few callers that must tell a missing object from a store
+	 * that refused, like the quarantine: it skips the first and stops on the second.
+	 */
+	public boolean exists(String objectKey) {
+		requireConfigured();
+		try {
+			return backend.exists(objectKey);
+		}
+		catch (Exception ex) {
+			log.error("Checking object {} failed: {}", objectKey, ex.getMessage());
+			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
+		}
+	}
+
+	/**
+	 * Deletes an object and confirms it is gone. {@link #delete} only logs a failure; a removal by
+	 * moderation has to know, so this answers false when the store refused or the object is still
+	 * there.
+	 */
+	public boolean deleteVerified(String objectKey) {
+		try {
+			requireConfigured();
+			backend.delete(objectKey);
+			return !backend.exists(objectKey);
+		}
+		catch (Exception ex) {
+			log.warn("Deleting object {} failed: {}", objectKey, ex.getMessage());
+			return false;
+		}
+	}
+
+	/**
 	 * Verifies the leading bytes of binary uploads against the declared content
 	 * type. Text-like types (text/*, application/json) have no fixed signature
 	 * and are stored as-is; all downloads are served with

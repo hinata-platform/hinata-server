@@ -42,6 +42,9 @@ public interface StorageBackend {
 	/** Deletes an object; deleting a missing object is not an error. */
 	void delete(String objectKey) throws Exception;
 
+	/** Whether an object is there, without reading it. */
+	boolean exists(String objectKey) throws Exception;
+
 	/** Lists every object under [keyPrefix], recursively. */
 	List<ObjectInfo> list(String keyPrefix) throws Exception;
 

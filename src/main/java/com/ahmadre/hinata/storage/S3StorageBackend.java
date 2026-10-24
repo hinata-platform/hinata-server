@@ -137,6 +137,21 @@ class S3StorageBackend implements StorageBackend {
 	}
 
 	@Override
+	public boolean exists(String objectKey) throws Exception {
+		try {
+			client.statObject(StatObjectArgs.builder().bucket(bucket).object(objectKey).build());
+			return true;
+		}
+		catch (ErrorResponseException ex) {
+			String code = ex.errorResponse().code();
+			if ("NoSuchKey".equals(code) || "NotFound".equals(code) || "NoSuchObject".equals(code)) {
+				return false;
+			}
+			throw ex;
+		}
+	}
+
+	@Override
 	public List<ObjectInfo> list(String keyPrefix) throws Exception {
 		List<ObjectInfo> objects = new ArrayList<>();
 		Iterable<Result<Item>> results = client.listObjects(ListObjectsArgs.builder()

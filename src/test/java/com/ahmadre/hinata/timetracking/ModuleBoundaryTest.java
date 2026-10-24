@@ -18,6 +18,10 @@ import java.util.List;
 import java.util.Set;
 
 import static com.tngtech.archunit.base.DescribedPredicate.not;
+import static com.tngtech.archunit.core.domain.JavaCall.Predicates.target;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.assignableTo;
+import static com.tngtech.archunit.core.domain.properties.HasName.Predicates.name;
+import static com.tngtech.archunit.core.domain.properties.HasOwner.Predicates.With.owner;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideOutsideOfPackages;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
@@ -675,6 +679,13 @@ class ModuleBoundaryTest {
 							"content, user or common"))))
 			.because("content is the vocabulary every surface implements; it may know none of them");
 
+	static final ArchRule FOR_MODERATION_ONLY_FROM_MODERATION = noClasses()
+			.that().resideOutsideOfPackages("..moderation..")
+			.should().callMethodWhere(target(name("forModeration"))
+					.and(target(owner(assignableTo(com.ahmadre.hinata.content.ContentSurface.class)))))
+			.because("forModeration skips the check of who may see the content; only the moderation "
+					+ "module, which checks who moderates, may ask it");
+
 	@Test
 	void nothingOutsideModerationReachesIn() {
 		NOTHING_OUTSIDE_MODERATION_REACHES_IN.check(PRODUCTION);
@@ -688,8 +699,13 @@ class ModuleBoundaryTest {
 
 	@Test
 	void contentKnowsNoSurface() {
-		// Empty until HIN-169 fills the package.
-		CONTENT_HAS_NO_UPWARD_DEPENDENCIES.allowEmptyShould(true).check(PRODUCTION);
+		assertThat(PRODUCTION.stream().map(JavaClass::getFullName)).contains(CONTENT + ".ContentSurface");
+		CONTENT_HAS_NO_UPWARD_DEPENDENCIES.check(PRODUCTION);
+	}
+
+	@Test
+	void onlyModerationSeesContentWithoutTheSightCheck() {
+		FOR_MODERATION_ONLY_FROM_MODERATION.check(PRODUCTION);
 	}
 
 	/** The moderation rules against classes written to break them; see the shift probes above. */
@@ -707,6 +723,10 @@ class ModuleBoundaryTest {
 				.importClasses(com.ahmadre.hinata.content.ContentBoundaryProbes.KnowsAnIssue.class)))
 				.isInstanceOf(AssertionError.class)
 				.hasMessageContaining("Issue");
+		assertThatThrownBy(() -> FOR_MODERATION_ONLY_FROM_MODERATION.check(new ClassFileImporter()
+				.importClasses(com.ahmadre.hinata.content.ContentBoundaryProbes.AsksForModeration.class)))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("forModeration");
 	}
 
 	/** A core class naming the module: what {@link #NOTHING_OUTSIDE_MODERATION_REACHES_IN} refuses. */

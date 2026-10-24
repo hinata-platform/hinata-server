@@ -159,6 +159,31 @@ public class RichTextService {
 		return fromRequest(doc, markdown, null, null);
 	}
 
+	/**
+	 * A document of one quiet line, for content moderation removed or its author deleted (HIN-169):
+	 * a paragraph with [text] in italics. Every reader shows it as it shows any other document.
+	 */
+	public RichText placeholder(String text) {
+		ObjectNode line = MAPPER.createObjectNode()
+				.put("detail", 0).put("format", ITALIC).put("mode", "normal").put("style", "")
+				.put("text", text).put("type", "text").put("version", 1);
+		ObjectNode paragraph = MAPPER.createObjectNode();
+		paragraph.putArray("children").add(line);
+		paragraph.putNull("direction");
+		paragraph.put("format", "").put("indent", 0).put("type", "paragraph").put("version", 1)
+				.put("textFormat", ITALIC).put("textStyle", "");
+		ObjectNode root = MAPPER.createObjectNode();
+		root.putArray("children").add(paragraph);
+		root.putNull("direction");
+		root.put("format", "").put("indent", 0).put("type", "root").put("version", 1);
+		ObjectNode document = MAPPER.createObjectNode();
+		document.set("root", root);
+		return new RichText(write(document), text, List.of());
+	}
+
+	/** Lexical's format bit for italic text. */
+	private static final int ITALIC = 2;
+
 	/** Plain text of a stored document, for consumers that only want words. */
 	public String plainText(String json) {
 		if (json == null || json.isBlank()) return "";
