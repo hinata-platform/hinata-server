@@ -188,12 +188,23 @@ public class ModerationCase {
 		return target.kind().name() + ":" + target.id();
 	}
 
+	/** What a decision did: content it removed, an account it suspended; either, both or neither. */
+	public record Measures(boolean removal, boolean suspension) {
+
+		/** Whether it restricted anything at all. */
+		public boolean any() {
+			return removal || suspension;
+		}
+	}
+
 	/**
-	 * Whether the decision restricted anything: content to remove, or a suspension that took effect.
-	 * An action whose suspension was refused restricted nothing and owes no statement (HIN-172).
+	 * What the decision did, as it took effect: the removal it decided, and a suspension only once
+	 * one runs or ran (HIN-172). An action whose suspension was refused did nothing, so it is
+	 * counted as nothing and owes no statement. The one answer for the figures, the notice and the
+	 * reporters.
 	 */
-	public boolean restricted() {
-		return decision != null && decision.outcome() == Decision.Outcome.ACTION
-				&& (decision.removal() != null || suspension != null);
+	public Measures measures() {
+		boolean acted = decision != null && decision.outcome() == Decision.Outcome.ACTION;
+		return new Measures(acted && decision.removal() != null, acted && suspension != null);
 	}
 }

@@ -174,7 +174,7 @@ public class AppealService {
 			}
 		}
 		stats.appealDecided(guarded.moderationCase().getDecision(), guarded.moderationCase().getAppeal(),
-				request.result().name(), now);
+				request.result(), now);
 		audit.event(AuditAction.MODERATION_APPEAL_DECIDED).actor(moderator).meta("case", id).log();
 		followUps.later(id);
 		return CaseService.summaryOf(decided, null, access.reported(decided, moderator.getId()));

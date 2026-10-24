@@ -9,13 +9,16 @@ package com.ahmadre.hinata.moderation;
 public enum StatMetric {
 	/** A notice: a report by a member or by somebody without an account. Key: its category. */
 	NOTICE,
-	/** An action decided on a case notices brought. Key: {@code CATEGORY:GROUND}. */
+	/** An action decided on a case notices brought. Key: {@code CATEGORY:GROUND}, see {@link StatKey}. */
 	NOTICE_ACTION,
 	/** Hours from a case's first notice to its action. Key: {@code CATEGORY:HOURS}, see {@link ModerationStats#hoursBucket}. */
 	NOTICE_HOURS,
-	/** A measure decided on moderation's own initiative, after its own look or the text check's. Key: {@code GROUND:CATEGORY}. */
+	/**
+	 * A measure decided on moderation's own initiative, after its own look or the text check's.
+	 * Key: {@code CATEGORY:GROUND:BASIS}, the basis telling a detection by automated means.
+	 */
 	OWN_MEASURE,
-	/** What those measures restricted. Key: {@code GROUND:CATEGORY:RESTRICTION}. */
+	/** What those measures restricted. Key: {@code CATEGORY:GROUND:RESTRICTION}. */
 	OWN_RESTRICTION,
 	/** An appeal filed. Key: what the decision restricted, see {@link ModerationStats.Complaint}. */
 	APPEAL_FILED,
@@ -25,8 +28,6 @@ public enum StatMetric {
 	APPEAL_HOURS,
 	/** A text the check refused to store, a measure by automated means alone. Key: its category. */
 	TEXT_REFUSED,
-	/** A text the check put before moderation. Key: its category. */
-	TEXT_FLAGGED,
-	/** An upload the gate refused, a measure by automated means alone. Key: why. */
+	/** An upload the gate refused, a measure by automated means alone. Key: the kind of upload. */
 	UPLOAD_REFUSED
 }
