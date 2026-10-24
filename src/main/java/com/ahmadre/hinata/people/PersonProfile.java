@@ -21,7 +21,7 @@ public record PersonProfile(
 		String avatarUrl,
 		String title,
 		String pronouns,
-		/** {@code ADMIN}, {@code ORG_ADMIN}, {@code MEMBER}, in that order, each at most once. */
+		/** {@code ADMIN}, {@code ORG_ADMIN}, {@code MODERATOR}, {@code MEMBER}, in that order, each at most once. */
 		List<String> roles,
 		/** The person's zone (IANA id): their own, else the organisation's, else {@code UTC}. */
 		String timezone,

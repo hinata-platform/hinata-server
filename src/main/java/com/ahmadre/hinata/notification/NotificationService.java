@@ -1265,15 +1265,39 @@ public class NotificationService {
 	}
 
 	/**
-	 * Tells somebody they became, or stopped being, an organisation admin. In-app and
-	 * push only: the role changes what they may manage, not how they sign in.
+	 * The words for a role an administrator hands out besides the admin role, and where a
+	 * person given it starts. [handedOver] is the one-time hand-over at an update, which
+	 * explains the role instead of only announcing it.
 	 */
-	public void notifyOrgRoleChanged(User user) {
+	private record RoleWords(String granted, String handedOver, String revoked, String othersGranted,
+			String othersRevoked, String link) {
+
+		static RoleWords of(com.ahmadre.hinata.user.Role role) {
+			return switch (role) {
+				case ORG_ADMIN -> new RoleWords("notify.orgRole.granted", "notify.orgRole.granted",
+						"notify.orgRole.revoked", "notify.orgRole.othersGranted", "notify.orgRole.othersRevoked",
+						"/organization");
+				case MODERATOR -> new RoleWords("notify.moderatorRole.granted", "notify.moderatorRole.handedOver",
+						"notify.moderatorRole.revoked", "notify.moderatorRole.othersGranted",
+						"notify.moderatorRole.othersRevoked", null);
+				case ADMIN, MEMBER -> throw new IllegalArgumentException("Not a delegated role: " + role);
+			};
+		}
+	}
+
+	/**
+	 * Tells somebody they were given, or lost, an organisation or moderation role. In-app and
+	 * push only: the role changes what they may do, not how they sign in.
+	 *
+	 * @param handedOver the one-time hand-over at an update rather than a person's decision
+	 */
+	public void notifyRoleChanged(User user, com.ahmadre.hinata.user.Role role, boolean handedOver) {
+		RoleWords roleWords = RoleWords.of(role);
+		boolean holds = user.getRoles() != null && user.getRoles().contains(role);
 		String title = words.of(user, "notify.rolesUpdated.title");
-		String body = words.of(user,
-				user.isOrgAdmin() ? "notify.orgRole.granted" : "notify.orgRole.revoked");
-		persist(user, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body,
-				user.isOrgAdmin() ? "/organization" : null);
+		String body = words.of(user, !holds ? roleWords.revoked()
+				: handedOver ? roleWords.handedOver() : roleWords.granted());
+		persist(user, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body, holds ? roleWords.link() : null);
 	}
 
 	/**
@@ -1297,16 +1321,19 @@ public class NotificationService {
 	}
 
 	/**
-	 * Tells the organisation admins that somebody joined or left their role. In-app
-	 * and push; the person concerned is told separately, and never twice.
+	 * Tells the people holding [role] that somebody joined or left it. In-app and push; the
+	 * person concerned is told separately, and never twice.
 	 */
-	public void notifyOrgAdminsOfRoleChange(java.util.Collection<User> orgAdmins, User changed) {
-		for (User admin : orgAdmins) {
-			if (admin == null || admin.getId().equals(changed.getId())) continue;
-			String title = words.of(admin, "notify.rolesUpdated.title");
-			String body = words.of(admin, changed.isOrgAdmin() ? "notify.orgRole.othersGranted"
-					: "notify.orgRole.othersRevoked", changed.getDisplayName());
-			persist(admin, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body, null);
+	public void notifyHoldersOfRoleChange(com.ahmadre.hinata.user.Role role, java.util.Collection<User> holders,
+			User changed) {
+		RoleWords roleWords = RoleWords.of(role);
+		boolean joined = changed.getRoles() != null && changed.getRoles().contains(role);
+		for (User holder : holders) {
+			if (holder == null || holder.getId().equals(changed.getId())) continue;
+			String title = words.of(holder, "notify.rolesUpdated.title");
+			String body = words.of(holder, joined ? roleWords.othersGranted() : roleWords.othersRevoked(),
+					changed.getDisplayName());
+			persist(holder, Notification.Type.ACCOUNT_ROLE_CHANGED, title, body, null);
 		}
 	}
 
@@ -1388,6 +1415,7 @@ public class NotificationService {
 				.map(role -> switch (role) {
 					case ADMIN -> "Administrator";
 					case ORG_ADMIN -> words.of(user, "notify.role.orgAdmin");
+					case MODERATOR -> words.of(user, "notify.role.moderator");
 					case MEMBER -> member;
 				})
 				.collect(Collectors.joining(", "));

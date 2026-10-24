@@ -84,6 +84,19 @@ public class HinataProperties {
 	private Availability availability = new Availability();
 	private ProjectTemplates projectTemplates = new ProjectTemplates();
 	private Shifts shifts = new Shifts();
+	private Moderation moderation = new Moderation();
+
+	/**
+	 * Moderation defaults (HIN-26). The contact an administrator stores in the admin area wins;
+	 * this one stands in until they do, so a deployment can publish one from the start.
+	 */
+	@Getter
+	@Setter
+	public static class Moderation {
+
+		/** Mailbox for reports and questions about moderation, as {@code HINATA_MODERATION_CONTACT_EMAIL}. */
+		private String contactEmail;
+	}
 
 	/** Tuning for the notification fan-out that is not a per-user preference. */
 	@Getter

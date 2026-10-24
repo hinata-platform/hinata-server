@@ -628,6 +628,93 @@ class ModuleBoundaryTest {
 		private com.ahmadre.hinata.shifts.ShiftSettings settings;
 	}
 
+	// --- moderation (HIN-26) ------------------------------------------------------
+
+	private static final String MODERATION = ROOT + ".moderation";
+	private static final String CONTENT = ROOT + ".content";
+
+	/** Who outside the module may name it: the wire contracts, for the names that travel. */
+	private static final Set<String> MODERATION_WIRE_CONTRACTS = Set.of(
+			ROOT + ".audit.AuditAction",
+			ROOT + ".notification.Notification");
+
+	/**
+	 * The packages {@code moderation} may read, whole: the core vocabulary of content, blocks,
+	 * people, projects and delivery. Time tracking, absences, billing, templates and shift
+	 * planning are absent on purpose.
+	 */
+	private static final List<String> MODERATION_READABLE_PACKAGES = List.of(
+			MODERATION, CONTENT, ROOT + ".block", ROOT + ".richtext", ROOT + ".storage", ROOT + ".user",
+			ROOT + ".project", ROOT + ".notification", ROOT + ".audit", ROOT + ".setup", ROOT + ".config",
+			ROOT + ".common");
+
+	/** Single classes of other packages, each for what it is: the signed-in person, the suspension, the export, MCP's errors. */
+	private static final Set<String> MODERATION_READABLE_CLASSES = Set.of(
+			ROOT + ".auth.CurrentUser", ROOT + ".admin.SuspensionService", ROOT + ".me.PersonalDataExport",
+			ROOT + ".mcp.McpErrors");
+
+	static final ArchRule NOTHING_OUTSIDE_MODERATION_REACHES_IN = noClasses()
+			.that(resideOutsideOfPackages("..moderation..")
+					.and(not(named(MODERATION_WIRE_CONTRACTS, "a wire contract"))))
+			.should().dependOnClassesThat().resideInAnyPackage("..moderation..")
+			.because("the core declares what it needs and the moderation module implements it; "
+					+ "no core package reaches in");
+
+	static final ArchRule MODERATION_READS_ONLY_WHAT_IT_IS_ALLOWED_TO = noClasses()
+			.that().resideInAPackage("..moderation..")
+			.should().dependOnClassesThat(resideInAnyPackage(ROOT + "..")
+					.and(not(inPackages(MODERATION_READABLE_PACKAGES, "a package moderation may read")))
+					.and(not(named(MODERATION_READABLE_CLASSES, "a class moderation may read"))))
+			.because("moderation stands on the core, never on time tracking, absences, billing, "
+					+ "templates or shift planning");
+
+	static final ArchRule CONTENT_HAS_NO_UPWARD_DEPENDENCIES = noClasses()
+			.that().resideInAPackage(CONTENT + "..")
+			.should().dependOnClassesThat(resideInAnyPackage(ROOT + "..")
+					.and(not(inPackages(List.of(CONTENT, ROOT + ".user", ROOT + ".common"),
+							"content, user or common"))))
+			.because("content is the vocabulary every surface implements; it may know none of them");
+
+	@Test
+	void nothingOutsideModerationReachesIn() {
+		NOTHING_OUTSIDE_MODERATION_REACHES_IN.check(PRODUCTION);
+	}
+
+	@Test
+	void moderationReadsOnlyItsNamedPackages() {
+		assertThat(PRODUCTION.stream().map(JavaClass::getFullName)).contains(MODERATION + ".ModerationAccess");
+		MODERATION_READS_ONLY_WHAT_IT_IS_ALLOWED_TO.check(PRODUCTION);
+	}
+
+	@Test
+	void contentKnowsNoSurface() {
+		// Empty until HIN-169 fills the package.
+		CONTENT_HAS_NO_UPWARD_DEPENDENCIES.allowEmptyShould(true).check(PRODUCTION);
+	}
+
+	/** The moderation rules against classes written to break them; see the shift probes above. */
+	@Test
+	void theModerationRulesCatchWhatTheyAreThereFor() {
+		assertThatThrownBy(() -> NOTHING_OUTSIDE_MODERATION_REACHES_IN.check(
+				new ClassFileImporter().importClasses(CoreReachingIntoModeration.class)))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("CoreReachingIntoModeration");
+		assertThatThrownBy(() -> MODERATION_READS_ONLY_WHAT_IT_IS_ALLOWED_TO.check(new ClassFileImporter()
+				.importClasses(com.ahmadre.hinata.moderation.ModerationBoundaryProbes.ReadsTimeTracking.class)))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("TimeTrackingSettings");
+		assertThatThrownBy(() -> CONTENT_HAS_NO_UPWARD_DEPENDENCIES.check(new ClassFileImporter()
+				.importClasses(com.ahmadre.hinata.content.ContentBoundaryProbes.KnowsAnIssue.class)))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("Issue");
+	}
+
+	/** A core class naming the module: what {@link #NOTHING_OUTSIDE_MODERATION_REACHES_IN} refuses. */
+	@SuppressWarnings("unused")
+	static class CoreReachingIntoModeration {
+		private com.ahmadre.hinata.moderation.ModerationAccess access;
+	}
+
 	@Test
 	void theWireContractsCarryNamesAndNothingElse() {
 		// AuditAction has TIME_ENTRY_*, Scopes has worklog:read/write, and

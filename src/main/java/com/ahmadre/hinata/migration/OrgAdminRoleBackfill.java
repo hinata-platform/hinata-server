@@ -52,7 +52,7 @@ public class OrgAdminRoleBackfill implements ApplicationRunner {
 				// The same grant as in Admin → Users: one record per person (reason
 				// "migration") and their own notice, findable by name rather than as a
 				// count in a log line.
-				adminUsers.changeOrgRole(user, true, null, "migration");
+				adminUsers.changeRole(user, Role.ORG_ADMIN, true, null, "migration");
 				granted++;
 			}
 			if (granted > 0) {

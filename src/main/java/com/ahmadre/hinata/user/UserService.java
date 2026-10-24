@@ -123,6 +123,28 @@ public class UserService {
 	}
 
 	/**
+	 * Refuses to take [user] out of action while they are the last active holder of a role
+	 * an instance cannot be without: organisation admins decide timesheets and absences,
+	 * moderators decide reports, and with nobody left those decisions would reach nobody.
+	 * For deactivating and deleting; administrators have their own check, with a message for
+	 * each way out.
+	 */
+	public void requireAnotherActiveHolderOfEachRole(User user) {
+		if (user.isOrgAdmin()) {
+			requireAnotherActiveHolder(Role.ORG_ADMIN, user, "error.user.cannotRemoveLastOrgAdmin");
+		}
+		if (user.isModerator()) {
+			requireAnotherActiveHolder(Role.MODERATOR, user, "error.user.cannotRemoveLastModerator");
+		}
+	}
+
+	private void requireAnotherActiveHolder(Role role, User user, String messageKey) {
+		if (users.countByRolesContainingAndActiveIsTrueAndIdNot(role, user.getId()) == 0) {
+			throw ApiException.conflict(messageKey);
+		}
+	}
+
+	/**
 	 * Permanently removes a user and scrubs the references that would otherwise
 	 * dangle: their in-app notifications are dropped, issues assigned to them are
 	 * unassigned, they are removed from every watcher list and the change mails

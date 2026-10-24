@@ -25,5 +25,11 @@ public enum AuditCategory {
 	 * External integrations acting on the workspace — Personal Access Token
 	 * lifecycle and writes performed by AI clients over the MCP endpoint.
 	 */
-	INTEGRATION
+	INTEGRATION,
+
+	/**
+	 * Reports, cases, decisions and suspensions (HIN-26). The platform feed names nothing
+	 * but the case, never the allegation or the people in it.
+	 */
+	MODERATION
 }

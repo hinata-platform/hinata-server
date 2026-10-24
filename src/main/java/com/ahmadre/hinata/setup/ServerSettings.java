@@ -1,12 +1,14 @@
 package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.common.ApprovalPeriodConsistent;
+import com.ahmadre.hinata.common.HttpsUrl;
 import com.ahmadre.hinata.common.TimePolicy;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -99,6 +101,13 @@ public class ServerSettings {
 	 * cleared the switch".
 	 */
 	private Shifts shifts;
+	/**
+	 * Moderation (HIN-26). Not initialised, for the reason {@link #timeTracking} is not:
+	 * an absent block has to arrive as null so the settings PUT can tell "the caller left
+	 * this section out" from "the caller cleared it".
+	 */
+	@Valid
+	private Moderation moderation;
 	/**
 	 * Where the platform's holidays come from. Not initialised, for the reason
 	 * {@link #timeTracking} is not.
@@ -887,6 +896,30 @@ public class ServerSettings {
 		@JsonProperty(access = JsonProperty.Access.READ_ONLY)
 		@JsonInclude(JsonInclude.Include.NON_NULL)
 		private Shifts effective;
+	}
+
+	/**
+	 * Moderation (HIN-26). In this block for now: who runs the instance and where reports and
+	 * questions about moderation go, which the app shows to everybody and the stores and the
+	 * DSA (Art. 11, 12) ask to be published. Read through {@code setup.OperatorContact}, never
+	 * directly.
+	 */
+	@Data
+	public static class Moderation {
+
+		/** Who runs the instance, as the imprint names them. */
+		@Size(max = 200)
+		private String operatorName;
+
+		/** Mailbox for reports and questions about moderation (DSA Art. 11, 12). */
+		@Email
+		@Size(max = 254)
+		private String contactEmail;
+
+		/** The operator's imprint (§ 5 DDG). */
+		@HttpsUrl
+		@Size(max = 500)
+		private String imprintUrl;
 	}
 
 	/**
