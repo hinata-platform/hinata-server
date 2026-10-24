@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -101,6 +102,11 @@ public class HouseRulesService implements HouseRules {
 		RulesVersion required = mongo.findOne(Query.query(Criteria.where("requiresReacceptance").is(true))
 				.with(Sort.by(Sort.Direction.DESC, "version")).limit(1), RulesVersion.class);
 		return new Snapshot(latest == null ? null : latest.getVersion(), required == null ? null : required.getVersion());
+	}
+
+	/** The titles of the built-in rules in [locale]'s language by number, as the published rules head them. */
+	public Map<Integer, String> builtInRules(Locale locale) {
+		return renderer.numberedRules(locale.getLanguage());
 	}
 
 	/** The current version; null before the first. */
