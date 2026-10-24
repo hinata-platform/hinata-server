@@ -289,17 +289,25 @@ public class ContentReportService {
 				.setOnInsert("location", target.location())
 				.setOnInsert("contributorIds", target.snapshot() == null ? Set.of() : target.snapshot().contributorIds())
 				.setOnInsert("evidence", target.snapshot())
-				.setOnInsert("evidenceWithheld", false)
 				.setOnInsert("firstReportedAt", now)
 				.setOnInsert("history", List.of(new CaseEvent(now, CaseEvent.Kind.REPORTED, null, category.name())))
 				.setOnInsert("pendingDeletes", List.of())
 				.setOnInsert("rev", 0L)
 				.setOnInsert("createdAt", now);
+		// Internal content named by somebody without an account shows only the report until a
+		// second person opens it (HIN-175): the form must not let a stranger have moderators read
+		// whatever they point at. A member who reports it as well could see it anyway.
+		switch (source) {
+			case PUBLIC -> update.setOnInsert("evidenceWithheld", true);
+			case MEMBER -> update.set("evidenceWithheld", false);
+			default -> update.setOnInsert("evidenceWithheld", false);
+		}
 		if (category.isSensitive()) {
 			// Nothing of sexual content or of children in the list, not even from an earlier report.
 			update.unset("listExcerpt");
 		}
-		else {
+		else if (source != ReportSource.PUBLIC) {
+			// Withheld content shows no excerpt either.
 			update.setOnInsert("listExcerpt", excerptOf(target));
 		}
 		String key = ModerationCase.keyOf(target.ref());

@@ -23,19 +23,32 @@ public class AuthPolicy {
 
 	/** Local email/password auth (sign-in, sign-up, forgot-password) is enabled. */
 	public boolean localAuthEnabled() {
-		Boolean override = app().getLocalAuthEnabled();
-		return override != null ? override : properties.getApp().isLocalAuthEnabled();
+		return localAuthEnabled(app());
 	}
 
 	/** Public self-registration is open (only meaningful when local auth is on). */
 	public boolean registrationEnabled() {
-		Boolean override = app().getRegistrationEnabled();
-		return override != null ? override : properties.getApp().isRegistrationEnabled();
+		return registrationEnabled(app());
 	}
 
 	/** A verified self-registration must be approved by an admin before sign-in. */
 	public boolean requireAdminApproval() {
-		Boolean override = app().getRequireAdminApproval();
+		return requireAdminApproval(app());
+	}
+
+	/** As {@link #localAuthEnabled()}, for [app] as it would be saved. */
+	boolean localAuthEnabled(ServerSettings.App app) {
+		Boolean override = app == null ? null : app.getLocalAuthEnabled();
+		return override != null ? override : properties.getApp().isLocalAuthEnabled();
+	}
+
+	boolean registrationEnabled(ServerSettings.App app) {
+		Boolean override = app == null ? null : app.getRegistrationEnabled();
+		return override != null ? override : properties.getApp().isRegistrationEnabled();
+	}
+
+	boolean requireAdminApproval(ServerSettings.App app) {
+		Boolean override = app == null ? null : app.getRequireAdminApproval();
 		return override != null ? override : properties.getApp().isRequireAdminApproval();
 	}
 

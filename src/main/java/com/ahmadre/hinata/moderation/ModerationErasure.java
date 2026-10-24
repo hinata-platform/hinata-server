@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.moderation.rules.RulesAcceptance;
 import com.ahmadre.hinata.user.UserService;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
@@ -16,7 +17,8 @@ import java.util.List;
 /**
  * What moderation keeps of a deleted account (HIN-170, Art. 17 DSGVO): nothing that names it. Its
  * reports stay as a member's, it leaves the cases about its content and those it held; the cases
- * themselves stay until their time is up.
+ * themselves stay until their time is up. Its acceptances of the house rules go (HIN-175): with no
+ * account left there is nothing they would have to prove.
  */
 @Slf4j
 @Component
@@ -40,6 +42,7 @@ class ModerationErasure {
 					new Update().pull("contributorIds", id), ModerationCase.class);
 			mongo.updateMulti(Query.query(Criteria.where("status").is(CaseStatus.OPEN).and("assigneeId").is(id)),
 					new Update().unset("assigneeId").unset("claimedAt"), ModerationCase.class);
+			mongo.remove(Query.query(Criteria.where("userId").is(id)), RulesAcceptance.class);
 		}
 		catch (RuntimeException ex) {
 			// The account is gone already; a failure here must not fail the deletion.

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.setup;
 
+import com.ahmadre.hinata.auth.AccountAdmission;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.user.Role;
@@ -26,6 +27,7 @@ public class SetupService {
 	private final SettingsService settings;
 	private final UserService userService;
 	private final HinataProperties properties;
+	private final AccountAdmission admission;
 
 	public record SetupRequest(String organizationName, String adminEmail, String adminUsername,
 			String adminDisplayName, String adminPassword) {
@@ -44,6 +46,9 @@ public class SetupService {
 				request.adminDisplayName(), request.adminPassword(), Set.of(Role.ADMIN, Role.ORG_ADMIN, Role.MODERATOR, Role.MEMBER));
 		current.setOrganizationName(request.organizationName());
 		current.setSetupCompleted(true);
+		// A new instance lets nobody in without approval until an administrator decides otherwise,
+		// on purpose (HIN-175).
+		admission.requireApprovalEverywhere(current);
 		settings.save(current);
 		log.info("Server setup completed for organization '{}'", request.organizationName());
 		return admin;

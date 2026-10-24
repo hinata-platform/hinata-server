@@ -86,8 +86,9 @@ class AttachmentContentSurface implements ContentSurface {
 		if (target == null || target.id() == null || target.parentId() == null) {
 			return Optional.empty();
 		}
-		return issues.findById(target.parentId()).flatMap(issue -> attachmentOf(issue, target.id())
-				.map(attachment -> new Found(attachment, issue)));
+		// The issue by id, or by the readable key an address carries (HIN-175).
+		return issues.findById(target.parentId()).or(() -> issues.findByReadableIdIgnoreCase(target.parentId()))
+				.flatMap(issue -> attachmentOf(issue, target.id()).map(attachment -> new Found(attachment, issue)));
 	}
 
 	private static Optional<Issue.Attachment> attachmentOf(Issue issue, String attachmentId) {

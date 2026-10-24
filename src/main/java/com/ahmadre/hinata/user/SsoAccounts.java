@@ -2,6 +2,7 @@ package com.ahmadre.hinata.user;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.auth.AccountAdmission;
 import com.ahmadre.hinata.auth.AuthPolicy;
 import com.ahmadre.hinata.auth.SignInRefusal;
 import com.ahmadre.hinata.auth.SignInRefusedException;
@@ -64,6 +65,7 @@ public class SsoAccounts {
 	private final MongoTemplate mongo;
 	private final UserService userService;
 	private final AuthPolicy authPolicy;
+	private final AccountAdmission admission;
 	private final SettingsService settings;
 	private final AuditService audit;
 	private final NotificationService notifications;
@@ -273,8 +275,19 @@ public class SsoAccounts {
 				.ssoLink(SsoLink.of(identity, Instant.now()));
 		String lang = LocaleContextHolder.getLocale().getLanguage();
 		if (SUPPORTED_LOCALES.contains(lang)) builder.locale(lang);
+		// Nobody decided about this person yet: unless the provider lets them in, the account
+		// waits for an administrator, as a registration does (HIN-175).
+		boolean waits = admission.firstSignInWaits(identity.provider(), email);
+		if (waits) {
+			builder.active(false).awaitingApproval(true);
+		}
 		try {
-			return entered(users.save(builder.build()));
+			User created = users.save(builder.build());
+			if (waits) {
+				admission.requestApproval(created);
+				throw new SignInRefusedException(SignInRefusal.PENDING_APPROVAL, created);
+			}
+			return entered(created);
 		}
 		catch (DuplicateKeyException createdMeanwhile) {
 			// A second arrival of the same first sign-in created the account a moment earlier.

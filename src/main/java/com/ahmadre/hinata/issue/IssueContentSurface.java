@@ -112,8 +112,10 @@ class IssueContentSurface implements ContentSurface {
 		return find(target).map(this::snapshotOf);
 	}
 
+	/** By id, or by the readable key an address carries, as a report without an account names it (HIN-175). */
 	private Optional<Issue> find(TargetRef target) {
-		return target == null || target.id() == null ? Optional.empty() : issues.findById(target.id());
+		return target == null || target.id() == null ? Optional.empty()
+				: issues.findById(target.id()).or(() -> issues.findByReadableIdIgnoreCase(target.id()));
 	}
 
 	private static ContentRef refOf(Issue issue) {
