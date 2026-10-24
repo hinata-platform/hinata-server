@@ -56,6 +56,14 @@ public class SsoController {
 	public static final String SESSION_INVITE = "hinata.sso.invite";
 	public static final String COOKIE_INVITE = "HINATA_SSO_INVITE";
 
+	/**
+	 * Session attribute holding the challenge the app that started the SSO flow sent, and the
+	 * cookie mirroring it for the same reason as {@link #COOKIE_RETURN_ORIGIN}. The handoff code of
+	 * the sign-in that comes back is bound to it (see {@link SsoHandoffService}).
+	 */
+	public static final String SESSION_CHALLENGE = "hinata.sso.challenge";
+	public static final String COOKIE_CHALLENGE = "HINATA_SSO_CHALLENGE";
+
 	/** How long the way back from the provider stays open. */
 	private static final Duration FLOW_LIFETIME = Duration.ofMinutes(10);
 
@@ -74,7 +82,11 @@ public class SsoController {
 	public record SsoProvider(String id, String displayName, String loginUrl) {
 	}
 
-	public record ExchangeRequest(@NotBlank String code) {
+	/**
+	 * [verifier] is the secret whose challenge the app sent to the start; an app from before the
+	 * binding sends none, and only redeems a code from a flow started without a challenge.
+	 */
+	public record ExchangeRequest(@NotBlank String code, String verifier) {
 	}
 
 	public record ExchangeResponse(String accessToken, String refreshToken, long expiresIn) {
@@ -83,17 +95,18 @@ public class SsoController {
 	/**
 	 * Redeems the single-use handoff code delivered to {@code /auth-callback?code=}
 	 * for the actual token pair. Unauthenticated by design (the user is mid-login);
-	 * security comes from the code being high-entropy, short-lived and single-use.
-	 * Keeps bearer tokens out of URLs / logs (they only ever travel in this POST
-	 * response body over TLS).
+	 * security comes from the code being high-entropy, short-lived, single-use and
+	 * bound to the app that started the sign-in. Keeps bearer tokens out of URLs /
+	 * logs (they only ever travel in this POST response body over TLS).
 	 */
 	@Operation(summary = "Exchange an SSO handoff code for tokens",
 			description = "Redeems the single-use code from the SSO callback redirect for the "
-					+ "access/refresh token pair. No authentication required.")
+					+ "access/refresh token pair. `verifier` is the secret whose S256 challenge the "
+					+ "app passed to the start. No authentication required.")
 	@SecurityRequirements
 	@PostMapping("/exchange")
 	public ExchangeResponse exchange(@RequestBody @Valid ExchangeRequest request) {
-		TokenService.TokenPair pair = handoff.redeem(request.code());
+		TokenService.TokenPair pair = handoff.redeem(request.code(), request.verifier());
 		if (pair == null) {
 			throw ApiException.badRequest("error.sso.invalidCode");
 		}
@@ -129,18 +142,23 @@ public class SsoController {
 	 * redirected to {@code <origin>/#/auth-callback} instead. The origin must
 	 * match one of the configured CORS origins (open-redirect protection).
 	 *
-	 * <p>{@code invite} is the token of an invitation the sign-in is to complete. A sign-in
-	 * started without one drops any invitation an earlier, abandoned flow in this browser left.
+	 * <p>{@code invite} is the token of an invitation the sign-in is to complete, and
+	 * {@code challenge} the S256 challenge of a secret only the starting app holds: the handoff
+	 * code of the sign-in is redeemed with that secret only, so a code passed around in a link
+	 * signs no one else in. A sign-in started without either drops what an earlier, abandoned
+	 * flow in this browser left.
 	 */
 	@Operation(summary = "Start an SSO login flow",
 			description = "Redirects to the identity provider. Web clients pass `return=<origin>` "
 					+ "(must be a configured CORS origin) to receive the tokens back in the browser. "
-					+ "`invite=<token>` completes that invitation with the sign-in.")
+					+ "`invite=<token>` completes that invitation with the sign-in. "
+					+ "`challenge=<S256 challenge>` binds the handoff code to the app's verifier.")
 	@SecurityRequirements
 	@GetMapping("/start/{registrationId}")
 	public void start(@PathVariable String registrationId,
 			@RequestParam(name = "return", required = false) String returnOrigin,
 			@RequestParam(name = "invite", required = false) String invite,
+			@RequestParam(name = "challenge", required = false) String challenge,
 			HttpServletRequest request, HttpServletResponse response) throws IOException {
 		if (!KNOWN_IDS.contains(registrationId)) {
 			throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND,
@@ -158,6 +176,16 @@ public class SsoController {
 		}
 		else {
 			clearInvite(request, response);
+		}
+		if (challenge != null && !challenge.isBlank()) {
+			if (!SsoHandoffService.isChallenge(challenge)) {
+				throw ApiException.badRequest("error.validationFailed");
+			}
+			request.getSession(true).setAttribute(SESSION_CHALLENGE, challenge);
+			response.addHeader(HttpHeaders.SET_COOKIE, flowCookie(request, COOKIE_CHALLENGE, challenge).toString());
+		}
+		else {
+			clearChallenge(request, response);
 		}
 		String path = DynamicRelyingPartyRegistrationRepository.SAML_ID.equals(registrationId)
 				? "/saml2/authenticate/" + registrationId
@@ -197,13 +225,35 @@ public class SsoController {
 	 * is decided; {@link #clearInvite} drops it on the way back, whatever the outcome.
 	 */
 	public static String inviteOf(HttpServletRequest request) {
+		return flowValue(request, SESSION_INVITE, COOKIE_INVITE);
+	}
+
+	/** Drops the invitation of the current SSO flow, from the session and the browser. */
+	public static void clearInvite(HttpServletRequest request, HttpServletResponse response) {
+		clearFlowValue(request, response, SESSION_INVITE, COOKIE_INVITE);
+	}
+
+	/**
+	 * The challenge the app that started the current SSO flow sent, or null. Read when the handoff
+	 * code is issued; {@link #clearChallenge} drops it on the way back, whatever the outcome.
+	 */
+	public static String challengeOf(HttpServletRequest request) {
+		return flowValue(request, SESSION_CHALLENGE, COOKIE_CHALLENGE);
+	}
+
+	/** Drops the challenge of the current SSO flow, from the session and the browser. */
+	public static void clearChallenge(HttpServletRequest request, HttpServletResponse response) {
+		clearFlowValue(request, response, SESSION_CHALLENGE, COOKIE_CHALLENGE);
+	}
+
+	private static String flowValue(HttpServletRequest request, String attribute, String cookieName) {
 		var session = request.getSession(false);
-		if (session != null && session.getAttribute(SESSION_INVITE) instanceof String token) {
-			return token;
+		if (session != null && session.getAttribute(attribute) instanceof String value) {
+			return value;
 		}
 		if (request.getCookies() != null) {
 			for (jakarta.servlet.http.Cookie cookie : request.getCookies()) {
-				if (COOKIE_INVITE.equals(cookie.getName()) && !cookie.getValue().isBlank()) {
+				if (cookieName.equals(cookie.getName()) && !cookie.getValue().isBlank()) {
 					return cookie.getValue();
 				}
 			}
@@ -211,13 +261,13 @@ public class SsoController {
 		return null;
 	}
 
-	/** Drops the invitation of the current SSO flow, from the session and the browser. */
-	public static void clearInvite(HttpServletRequest request, HttpServletResponse response) {
+	private static void clearFlowValue(HttpServletRequest request, HttpServletResponse response, String attribute,
+			String cookieName) {
 		var session = request.getSession(false);
 		if (session != null) {
-			session.removeAttribute(SESSION_INVITE);
+			session.removeAttribute(attribute);
 		}
-		ResponseCookie clear = ResponseCookie.from(COOKIE_INVITE, "")
+		ResponseCookie clear = ResponseCookie.from(cookieName, "")
 				.httpOnly(true).path("/").maxAge(0).sameSite("Lax").build();
 		response.addHeader(HttpHeaders.SET_COOKIE, clear.toString());
 	}

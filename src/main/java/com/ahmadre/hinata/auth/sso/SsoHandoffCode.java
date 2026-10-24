@@ -35,6 +35,9 @@ public class SsoHandoffCode {
 
 	private long expiresInSeconds;
 
+	/** The S256 challenge of the app that started the sign-in; null for an app from before the binding. */
+	private String challenge;
+
 	/**
 	 * Creation instant; a TTL index deletes the document a short while after, so a
 	 * code that is never redeemed cannot linger. The redemption path additionally

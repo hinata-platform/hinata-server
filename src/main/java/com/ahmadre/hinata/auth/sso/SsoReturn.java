@@ -52,6 +52,7 @@ public class SsoReturn {
 		String webOrigin = SsoController.consumeReturnOrigin(request, response,
 				properties.getCors().getAllowedOrigins());
 		SsoController.clearInvite(request, response);
+		SsoController.clearChallenge(request, response);
 		String target = webOrigin != null
 				? webOrigin + webPathAndQuery
 				: properties.getApp().getCallbackScheme() + "://" + nativePathAndQuery;

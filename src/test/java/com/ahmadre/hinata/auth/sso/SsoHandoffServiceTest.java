@@ -29,13 +29,17 @@ class SsoHandoffServiceTest {
 		service = new SsoHandoffService(mongo);
 	}
 
+	/** The S256 pair from RFC 7636, appendix B. */
+	private static final String VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+	private static final String CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
 	private TokenService.TokenPair pair() {
 		return new TokenService.TokenPair("access-abc", "refresh-xyz", 900L);
 	}
 
 	@Test
 	void issue_storesThePairBehindAnOpaqueCode() {
-		String code = service.issue(pair());
+		String code = service.issue(pair(), null);
 
 		ArgumentCaptor<SsoHandoffCode> stored = ArgumentCaptor.forClass(SsoHandoffCode.class);
 		org.mockito.Mockito.verify(mongo).insert(stored.capture());
@@ -51,7 +55,7 @@ class SsoHandoffServiceTest {
 
 	@Test
 	void issue_generatesADistinctCodeEachTime() {
-		assertThat(service.issue(pair())).isNotEqualTo(service.issue(pair()));
+		assertThat(service.issue(pair(), null)).isNotEqualTo(service.issue(pair(), null));
 	}
 
 	@Test
@@ -61,7 +65,7 @@ class SsoHandoffServiceTest {
 				.expiresInSeconds(900L).build();
 		when(mongo.findAndRemove(any(Query.class), eq(SsoHandoffCode.class))).thenReturn(doc);
 
-		TokenService.TokenPair redeemed = service.redeem("the-code");
+		TokenService.TokenPair redeemed = service.redeem("the-code", null);
 
 		assertThat(redeemed).isNotNull();
 		assertThat(redeemed.accessToken()).isEqualTo("access-abc");
@@ -74,13 +78,37 @@ class SsoHandoffServiceTest {
 	@Test
 	void redeem_returnsNullForAnUnknownOrAlreadyUsedCode() {
 		when(mongo.findAndRemove(any(Query.class), eq(SsoHandoffCode.class))).thenReturn(null);
-		assertThat(service.redeem("gone")).isNull();
+		assertThat(service.redeem("gone", null)).isNull();
 	}
 
 	@Test
 	void redeem_returnsNullForNullOrBlankWithoutTouchingMongo() {
-		assertThat(service.redeem(null)).isNull();
-		assertThat(service.redeem("  ")).isNull();
+		assertThat(service.redeem(null, null)).isNull();
+		assertThat(service.redeem("  ", null)).isNull();
+		org.mockito.Mockito.verifyNoInteractions(mongo);
+	}
+
+	@Test
+	void issue_bindsTheCodeToTheChallengeOfTheApp() {
+		service.issue(pair(), CHALLENGE);
+
+		ArgumentCaptor<SsoHandoffCode> stored = ArgumentCaptor.forClass(SsoHandoffCode.class);
+		org.mockito.Mockito.verify(mongo).insert(stored.capture());
+		assertThat(stored.getValue().getChallenge()).isEqualTo(CHALLENGE);
+	}
+
+	@Test
+	void theChallengeIsTheS256OfTheVerifier() {
+		assertThat(SsoHandoffService.challengeOf(VERIFIER)).isEqualTo(CHALLENGE);
+		assertThat(SsoHandoffService.isChallenge(CHALLENGE)).isTrue();
+		assertThat(SsoHandoffService.isChallenge("not-a-challenge")).isFalse();
+		assertThat(SsoHandoffService.isChallenge(CHALLENGE + "A")).isFalse();
+	}
+
+	@Test
+	void redeem_refusesAMalformedVerifierWithoutTouchingMongo() {
+		assertThat(service.redeem("the-code", "too-short")).isNull();
+		assertThat(service.redeem("the-code", "spaces are not allowed in a verifier at all, ever")).isNull();
 		org.mockito.Mockito.verifyNoInteractions(mongo);
 	}
 }

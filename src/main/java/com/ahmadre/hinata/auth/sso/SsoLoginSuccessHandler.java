@@ -117,10 +117,11 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 				.log();
 		// The token pair never travels in the URL: it is stashed behind a
 		// short-lived, single-use handoff code the app POSTs to
-		// /api/v1/auth/sso/exchange to redeem. A code in the query is safe to log
+		// /api/v1/auth/sso/exchange to redeem, with the verifier behind the
+		// challenge it started the flow with. A code in the query is safe to log
 		// (useless after one redemption, TTL-expired otherwise) whereas bearer
 		// tokens are not.
-		back.signedIn(request, response, handoff.issue(pair));
+		back.signedIn(request, response, handoff.issue(pair, SsoController.challengeOf(request)));
 	}
 
 	/**
