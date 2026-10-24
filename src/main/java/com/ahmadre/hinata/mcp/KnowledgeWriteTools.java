@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.article.Article;
+import com.ahmadre.hinata.article.ArticleController;
 import com.ahmadre.hinata.article.ArticleService;
 import com.ahmadre.hinata.richtext.LexicalToMarkdown;
 import com.ahmadre.hinata.richtext.RichText;
@@ -38,6 +39,7 @@ public class KnowledgeWriteTools {
 	// Shares the read tools' visibility rule so writes can never reach an
 	// article the caller could not even see.
 	private final KnowledgeReadTools knowledgeReadTools;
+	private final McpErrors errors;
 
 	/**
 	 * Lean projection of a knowledge-base article for MCP callers. {@code content}
@@ -73,6 +75,7 @@ public class KnowledgeWriteTools {
 			@McpToolParam(required = false, description = "Labels / tags") List<String> tags) {
 		scopeGuard.require(Scopes.KB_WRITE);
 		User me = currentUser.require();
+		requirePageBounds(title, space, tags, me);
 		// An agent writes markdown; storage is Lexical.
 		RichText body = richText.fromMarkdown(content);
 		Article saved = articles.create(me, new ArticleService.Draft(title, body, blankToNull(projectId),
@@ -99,6 +102,7 @@ public class KnowledgeWriteTools {
 			@McpToolParam(required = false, description = "Replacement list of labels / tags") List<String> tags) {
 		scopeGuard.require(Scopes.KB_WRITE);
 		User me = currentUser.require();
+		requirePageBounds(title, space, tags, me);
 		Article article = knowledgeReadTools.requireVisible(id, me);
 		if (title != null && !title.isBlank()) article.setTitle(title);
 		if (content != null) {
@@ -129,6 +133,13 @@ public class KnowledgeWriteTools {
 		audit.event(AuditAction.MCP_KB_DELETED).actor(me)
 				.meta("article", article.getId()).log();
 		return "deleted";
+	}
+
+	/** The bounds {@link ArticleController.ArticleRequest} holds for the app. */
+	private void requirePageBounds(String title, String space, List<String> tags, User me) {
+		errors.requireLength(title, ArticleController.MAX_TITLE, "title", me);
+		errors.requireLength(space, ArticleController.MAX_SPACE, "space", me);
+		errors.requireValues(tags, ArticleController.MAX_TAGS, ArticleController.MAX_TAG, "tags", me);
 	}
 
 	private static String blankToNull(String value) {

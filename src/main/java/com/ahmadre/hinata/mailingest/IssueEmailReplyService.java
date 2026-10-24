@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
@@ -28,6 +29,9 @@ public class IssueEmailReplyService {
 
 	/** Admin feature flag gating the whole reply-by-e-mail action. */
 	public static final String FEATURE_FLAG = "emailReply";
+
+	/** What the files of one reply may weigh together; mail servers commonly refuse more. */
+	static final long MAX_ATTACHMENT_BYTES = 25L * 1024 * 1024;
 
 	private final IssueService issues;
 	private final IngestConnectionRepository connections;
@@ -88,13 +92,19 @@ public class IssueEmailReplyService {
 		if (attachmentIds == null || attachmentIds.isEmpty()) {
 			return files;
 		}
-		for (String id : attachmentIds) {
+		long bytes = 0;
+		for (String id : new LinkedHashSet<>(attachmentIds)) {
 			Issue.Attachment attachment = issue.getAttachments().stream()
 					.filter(a -> a.getId().equals(id))
 					.findFirst()
 					.orElseThrow(() -> ApiException.notFound("attachment"));
 			StorageService.StoredObject object = storage.getObject(attachment.getObjectKey())
 					.orElseThrow(() -> ApiException.notFound("attachment"));
+			// Every file sits in memory until the mail is out; counted as read, not as recorded.
+			bytes += object.data().length;
+			if (bytes > MAX_ATTACHMENT_BYTES) {
+				throw ApiException.badRequest("errors.emailReply.attachmentsTooLarge");
+			}
 			String contentType = attachment.getContentType() != null
 					? attachment.getContentType() : object.contentType();
 			String fileName = attachment.getFileName() != null ? attachment.getFileName() : "attachment";

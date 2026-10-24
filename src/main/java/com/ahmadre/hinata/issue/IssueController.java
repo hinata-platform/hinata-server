@@ -32,6 +32,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class IssueController {
 
+	/** The longest title an issue takes, here and in the MCP tools. */
+	public static final int MAX_TITLE = 300;
+
 	private final IssueService issueService;
 	private final IssueWatchService issueWatchService;
 	private final IssueParticipantService issueParticipantService;
@@ -69,7 +72,7 @@ public class IssueController {
 
 	public record CreateIssueRequest(
 			@NotBlank String projectId,
-			@NotBlank @Size(max = 300) String title,
+			@NotBlank @Size(max = MAX_TITLE) String title,
 			/** Markdown. Accepted and converted; {@code descriptionDoc} wins. */
 			@Size(max = 30000) String description,
 			/** Lexical document — what the app sends. */
@@ -99,7 +102,7 @@ public class IssueController {
 	 * dialog shows.
 	 */
 	public record CloneIssueRequest(
-			@NotBlank @Size(max = 300) String title,
+			@NotBlank @Size(max = MAX_TITLE) String title,
 			List<String> assigneeIds,
 			Boolean includeAttachments,
 			Boolean includeLinks,
@@ -107,7 +110,7 @@ public class IssueController {
 	}
 
 	public record UpdateIssueRequest(
-			@Size(max = 300) String title,
+			@Size(max = MAX_TITLE) String title,
 			/** Markdown. Accepted and converted; {@code descriptionDoc} wins. */
 			@Size(max = 30000) String description,
 			/** Lexical document — what the app sends. */

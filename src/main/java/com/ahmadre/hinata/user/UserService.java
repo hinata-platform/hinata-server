@@ -13,6 +13,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
@@ -89,6 +90,9 @@ public class UserService {
 	 * {@link com.ahmadre.hinata.auth.SecurityPolicy}, which an admin can raise.
 	 */
 	public static final int MIN_PASSWORD_LENGTH = 10;
+
+	/** The longest password BCrypt hashes, in UTF-8 bytes; an umlaut takes two, an emoji four. */
+	static final int PASSWORD_MAX_BYTES = 72;
 
 	private final UserRepository users;
 	private final PasswordEncoder passwordEncoder;
@@ -298,6 +302,10 @@ public class UserService {
 		int min = securityPolicy.passwordMinLength();
 		if (rawPassword == null || rawPassword.length() < min) {
 			throw ApiException.badRequest("error.user.passwordTooShort", min);
+		}
+		// BCrypt reads this many bytes and refuses to hash a longer password.
+		if (rawPassword.getBytes(StandardCharsets.UTF_8).length > PASSWORD_MAX_BYTES) {
+			throw ApiException.badRequest("error.user.passwordTooLong");
 		}
 	}
 

@@ -52,7 +52,7 @@ public class BoardController {
 
 	/** Partial board update — every field is optional (null = no change). */
 	public record UpdateBoardRequest(@Size(max = 120) String name, AgileBoard.Type type,
-			String activeSprintId, List<String> projectIds, List<ColumnRequest> columns,
+			String activeSprintId, List<String> projectIds, @Valid List<ColumnRequest> columns,
 			Boolean resetColumns) {
 	}
 
@@ -61,7 +61,8 @@ public class BoardController {
 			Integer wipLimit) {
 	}
 
-	public record SprintRequest(@NotBlank @Size(max = 120) String name, String goal,
+	public record SprintRequest(@NotBlank @Size(max = SprintController.MAX_NAME) String name,
+			@Size(max = SprintController.MAX_GOAL) String goal,
 			LocalDate startDate, LocalDate endDate) {
 	}
 
@@ -207,7 +208,7 @@ public class BoardController {
 	}
 
 	@PatchMapping("/{id}")
-	public AgileBoard update(@PathVariable String id, @RequestBody UpdateBoardRequest req) {
+	public AgileBoard update(@PathVariable String id, @RequestBody @Valid UpdateBoardRequest req) {
 		User user = currentUser.require();
 		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
 		assertBoardAccess(board, user);

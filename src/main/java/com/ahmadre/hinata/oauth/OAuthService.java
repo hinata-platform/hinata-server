@@ -49,6 +49,9 @@ public class OAuthService {
 	private static final String CLIENT_SECRET_PREFIX = "hn_cs_";
 	private static final String REFRESH_TOKEN_PREFIX = "hn_rt_";
 	private static final int TOKEN_BYTES = 32;
+	private static final int CLIENT_NAME_MAX = 100;
+	private static final int REDIRECT_URIS_MAX = 10;
+	private static final int REDIRECT_URI_MAX = 2000;
 
 	private final OAuthClientRepository clients;
 	private final OAuthAuthorizationRequestRepository authRequests;
@@ -105,8 +108,16 @@ public class OAuthService {
 			throw new OAuthException("access_denied", "Dynamic client registration is disabled",
 					HttpStatus.FORBIDDEN);
 		}
+		// Anybody may register without signing in, and what they send is stored: kept bounded.
+		if (clientName != null && clientName.trim().length() > CLIENT_NAME_MAX) {
+			throw new OAuthException("invalid_client_metadata",
+					"client_name is longer than " + CLIENT_NAME_MAX + " characters");
+		}
 		if (redirectUris == null || redirectUris.isEmpty()) {
 			throw new OAuthException("invalid_redirect_uri", "At least one redirect_uri is required");
+		}
+		if (redirectUris.size() > REDIRECT_URIS_MAX) {
+			throw new OAuthException("invalid_redirect_uri", "At most " + REDIRECT_URIS_MAX + " redirect_uris");
 		}
 		for (String uri : redirectUris) {
 			validateRegisteredRedirectUri(uri);
@@ -151,6 +162,10 @@ public class OAuthService {
 
 	/** OAuth 2.1: redirect URIs must be absolute; only HTTPS or loopback HTTP. */
 	private void validateRegisteredRedirectUri(String uri) {
+		if (uri == null || uri.length() > REDIRECT_URI_MAX) {
+			throw new OAuthException("invalid_redirect_uri",
+					"redirect_uri is missing or longer than " + REDIRECT_URI_MAX + " characters");
+		}
 		URI parsed;
 		try {
 			parsed = URI.create(uri);

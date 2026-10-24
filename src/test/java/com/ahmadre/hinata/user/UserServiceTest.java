@@ -42,6 +42,19 @@ class UserServiceTest {
 	}
 
 	@Test
+	void rejectsPasswordsLongerThanBcryptReads() {
+		// BCrypt reads 72 bytes and refuses to hash more; a longer password was a 500.
+		assertThatThrownBy(() -> service.createLocal("a@b.de", "ada", "Ada", "x".repeat(73), Set.of(Role.MEMBER)))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("passwordTooLong");
+		// Bytes count, not characters: 37 umlauts are 74 bytes.
+		assertThatThrownBy(() -> service.validatePassword("ä".repeat(37)))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("passwordTooLong");
+		assertThat(service.createLocal("a@b.de", "ada", "Ada", "x".repeat(72), Set.of(Role.MEMBER))).isNotNull();
+	}
+
+	@Test
 	void rejectsDuplicateEmail() {
 		when(users.existsByEmailIgnoreCase("a@b.de")).thenReturn(true);
 		assertThatThrownBy(() -> service.createLocal("a@b.de", "ada", "Ada", "long-enough-pass",

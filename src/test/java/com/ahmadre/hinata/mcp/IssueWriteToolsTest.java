@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.UserWordsFixture;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.richtext.RichText;
@@ -36,7 +37,8 @@ class IssueWriteToolsTest {
 		CurrentUser currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(User.builder().id("u1").displayName("Agent").build());
 		tools = new IssueWriteTools(issueService, new RichTextService(), currentUser,
-				mock(ScopeGuard.class), mock(AuditService.class, RETURNS_DEEP_STUBS));
+				mock(ScopeGuard.class), mock(AuditService.class, RETURNS_DEEP_STUBS),
+				new McpErrors(UserWordsFixture.real()));
 	}
 
 	@Test
