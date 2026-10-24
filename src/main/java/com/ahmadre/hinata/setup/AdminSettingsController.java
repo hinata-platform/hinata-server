@@ -287,16 +287,15 @@ public class AdminSettingsController {
 		List<String> nowOpen = admission.openWays(updated).stream().map(AccountAdmission.OpenWay::way).toList();
 		List<String> opened = nowOpen.stream().filter(way -> !wasOpen.contains(way)).toList();
 		if (!opened.isEmpty() && !Boolean.TRUE.equals(updated.getOpenAccessConfirmed())) {
-			throw new ApiException(HttpStatus.CONFLICT, "error.moderation.openAccessUnconfirmed",
-					Map.of("code", "moderation.openAccess", "ways", String.join(",", opened)));
+			throw ApiException.refusal(HttpStatus.CONFLICT, "error.moderation.openAccessUnconfirmed",
+					Map.of("ways", String.join(",", opened)));
 		}
 		// Putting texts before moderation starts only once the administrator confirmed that the works
 		// council was involved and the impact assessment done (HIN-176).
 		ServerSettings.Filter filterBefore = filterOf(current);
 		ServerSettings.Filter filterAfter = filterOf(updated);
 		if (filterAfter.flags() && !filterBefore.flags() && !Boolean.TRUE.equals(updated.getFlagConfirmed())) {
-			throw new ApiException(HttpStatus.CONFLICT, "error.moderation.flagUnconfirmed",
-					Map.of("code", "moderation.flagConfirm"));
+			throw ApiException.refusal(HttpStatus.CONFLICT, "error.moderation.flagUnconfirmed");
 		}
 		// Before the audit record and before the write, so a refusal leaves no
 		// trace of a change that did not happen. A module guard throws on purpose

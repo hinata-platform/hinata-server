@@ -92,9 +92,9 @@ class CaseStepsIntegrationTest extends RemovalIntegrationSupport {
 
 		actingAs(rita);
 		assertThatThrownBy(() -> moderation.claim(c.getId(), at(0, false)))
-				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("changed"));
+				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("error.moderation.caseChanged"));
 		assertThatThrownBy(() -> moderation.claim(c.getId(), at(1, true)))
-				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("changed"));
+				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("error.moderation.caseChanged"));
 		assertThatThrownBy(() -> moderation.release(c.getId(), at(1, false))).isInstanceOf(ApiException.class);
 
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(c.getId())),
@@ -107,7 +107,7 @@ class CaseStepsIntegrationTest extends RemovalIntegrationSupport {
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(c.getId())),
 				new Update().set("status", CaseStatus.DECIDED), ModerationCase.class);
 		assertThatThrownBy(() -> moderation.claim(c.getId(), at(3, false)))
-				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("decided"));
+				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("error.moderation.caseDecided"));
 	}
 
 	@Test

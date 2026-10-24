@@ -1938,7 +1938,7 @@ public class IssueService {
 		}
 		// Moderation removed it: it may be deleted, never written again (HIN-169).
 		if (CommentContentSurface.isRemoved(comment)) {
-			throw ApiException.conflict("error.moderation.removed");
+			throw ApiException.conflict("error.moderation.removedNotWritable");
 		}
 		RichText content = resolver.apply(comment);
 		if (content == null) return withReplyCount(comment);

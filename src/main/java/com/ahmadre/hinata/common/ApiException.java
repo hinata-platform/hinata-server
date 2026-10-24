@@ -93,6 +93,23 @@ public class ApiException extends RuntimeException {
 		return new ApiException(HttpStatus.CONFLICT, messageKey, details, args);
 	}
 
+	/**
+	 * A refusal the app acts on: its message key travels as {@code details.code} beside the
+	 * sentence, with [details] for what the app needs to know more. The one convention for such
+	 * codes; the app matches the key, never the sentence.
+	 */
+	public static ApiException refusal(HttpStatus status, String messageKey, Map<String, String> details,
+			Object... args) {
+		Map<String, String> withCode = new java.util.LinkedHashMap<>(details == null ? Map.of() : details);
+		withCode.put("code", messageKey);
+		return new ApiException(status, messageKey, withCode, args);
+	}
+
+	/** As {@link #refusal(HttpStatus, String, Map, Object...)}, with nothing more than the code. */
+	public static ApiException refusal(HttpStatus status, String messageKey) {
+		return refusal(status, messageKey, Map.of());
+	}
+
 	/** 410: it was there and is not any more, such as content moderation removed (HIN-169). */
 	public static ApiException gone(String messageKey, Object... args) {
 		return new ApiException(HttpStatus.GONE, messageKey, args);

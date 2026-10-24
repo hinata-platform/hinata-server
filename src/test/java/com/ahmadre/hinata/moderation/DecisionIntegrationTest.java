@@ -309,7 +309,7 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 			pool.shutdownNow();
 		}
 
-		assertThat(results).containsExactlyInAnyOrder("won", "decided");
+		assertThat(results).containsExactlyInAnyOrder("won", "error.moderation.caseDecided");
 		assertThat(reload(c).getRev()).isEqualTo(1);
 	}
 
