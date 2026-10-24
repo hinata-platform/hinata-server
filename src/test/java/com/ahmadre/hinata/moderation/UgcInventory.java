@@ -344,6 +344,10 @@ final class UgcInventory {
 			entry("moderation_cases.id", system()),
 			entry("moderation_cases.listExcerpt", keptCopy("the case's evidence: what was reported, as it was, kept for the case and read only by moderation")),
 			entry("moderation_cases.location", keptCopy("the case's evidence: what was reported, as it was, kept for the case and read only by moderation")),
+			entry("moderation_cases.otherUses.id", system()),
+			// The key of an issue, never its title: where else a removed image stood (HIN-174).
+			entry("moderation_cases.otherUses.location", system()),
+			entry("moderation_cases.otherUses.parentId", system()),
 			entry("moderation_cases.pendingCopies.authorId", system()),
 			entry("moderation_cases.pendingCopies.issueKeys", system()),
 			entry("moderation_cases.pendingCopies.ref.id", system()),

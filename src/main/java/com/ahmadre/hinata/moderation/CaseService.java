@@ -96,7 +96,8 @@ public class CaseService {
 						Criteria.where("contributorIds").ne(viewer.getId())))
 				.with(sortOf(view)).with(request);
 		query.fields().exclude(HISTORY, "evidence", "decision.facts", "decision.internalNote",
-				"decision.messageToAuthor", "appeal.text", "appeal.note", "restoration.note", "pendingCopies");
+				"decision.messageToAuthor", "appeal.text", "appeal.note", "restoration.note", "pendingCopies",
+				"otherUses");
 		List<ModerationCase> cases = mongo.find(query, ModerationCase.class);
 		long total = mongo.count(Query.query(filter), ModerationCase.class) - mine(viewer, filter);
 		return new PageImpl<>(summaries(cases, viewer), request, Math.max(total, 0));
@@ -220,7 +221,8 @@ public class CaseService {
 		boolean reportedByMe = access.reported(c, moderator.getId());
 		return new CaseDetail(summaryOf(c, assignee, reportedByMe), withheld ? null : c.getEvidence(), current,
 				withheld, c.getEvidenceReveal(), views(c, found, 0), total, c.getHistory(), c.getClaimedAt(),
-				c.getDecision(), c.getAppeal(), c.getRestoration(), c.getRemovalState());
+				c.getDecision(), c.getAppeal(), c.getRestoration(), c.getRemovalState(),
+				c.getOtherUses() == null ? List.of() : c.getOtherUses());
 	}
 
 	/**
