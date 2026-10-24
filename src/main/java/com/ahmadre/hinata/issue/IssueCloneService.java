@@ -3,6 +3,11 @@ package com.ahmadre.hinata.issue;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.ContentKind;
+import com.ahmadre.hinata.content.ContentRef;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
+import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
@@ -122,6 +127,7 @@ public class IssueCloneService {
 	private final StorageService storage;
 	private final IssueLinkService links;
 	private final AuditService audit;
+	private final TextCheck textCheck;
 
 	/** What the clone dialog lets a caller decide. */
 	public record Options(String title, List<String> assigneeIds, boolean includeAttachments,
@@ -140,6 +146,10 @@ public class IssueCloneService {
 		// The copy is a new issue and holds to the label limits: asked before any file is copied.
 		IssueLabels.check(List.of(), original.getTags());
 		String title = requireTitle(options.title());
+		// The description is a copy of what was checked; the title is typed anew in the dialog, and
+		// asked about before a byte is copied (HIN-176).
+		TextVerdict titleVerdict = textCheck.require(TextCheck.Entry.ifChanged(TextField.ISSUE_TITLE, title,
+				original.getTitle())).of(TextField.ISSUE_TITLE);
 		// Both hoisted out of the builder below, and in this order. The files are
 		// duplicated before the issue is saved so the copy is never briefly visible
 		// with an empty attachment grid that then fills in — which means everything
@@ -186,6 +196,8 @@ public class IssueCloneService {
 			discardCopiedObjects(attachments);
 			throw failed;
 		}
+		textCheck.afterSave(new ContentRef(ContentKind.ISSUE, saved.getId(), null, saved.getProjectId()),
+				TextField.ISSUE_TITLE, titleVerdict);
 		// Written the moment the copy exists, before any of the link work below.
 		// From here on the issue is in the project whatever happens next, and an
 		// audit log that only records the clones whose links happened to save is

@@ -7,7 +7,6 @@ import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.TextCheck;
 import com.ahmadre.hinata.richtext.TextField;
-import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -19,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -147,7 +147,7 @@ public class ArticleService {
 			access.assertCanTarget(projectId, teamId, organization, author);
 		}
 		RichText body = draft.body() != null ? draft.body() : RichText.EMPTY;
-		List<TextVerdict> texts = textCheck.require(author,
+		TextCheck.Verdicts texts = textCheck.require(
 				new TextCheck.Entry(TextField.ARTICLE_TITLE, draft.title(), null),
 				new TextCheck.Entry(TextField.ARTICLE_BODY, body.text(), null));
 		Article created = articles.save(Article.builder()
@@ -167,18 +167,13 @@ public class ArticleService {
 				.lastEditorId(author.getId())
 				.build());
 		history.created(created, author.getId());
-		textFound(created, texts, author);
+		textFound(created, texts);
 		return created;
 	}
 
 	/** Hands what the text check found in [saved]'s title and text to moderation. */
-	private void textFound(Article saved, List<TextVerdict> texts, User author) {
-		if (texts.isEmpty()) {
-			return;
-		}
-		ContentRef ref = new ContentRef(ContentKind.ARTICLE, saved.getId(), null, saved.getProjectId());
-		textCheck.afterSave(ref, TextField.ARTICLE_TITLE, texts.get(0), author);
-		textCheck.afterSave(ref, TextField.ARTICLE_BODY, texts.get(1), author);
+	private void textFound(Article saved, TextCheck.Verdicts texts) {
+		textCheck.afterSave(new ContentRef(ContentKind.ARTICLE, saved.getId(), null, saved.getProjectId()), texts);
 	}
 
 	/**
@@ -208,22 +203,22 @@ public class ArticleService {
 		article.setTags(labels(article.getTags()));
 		Article before = storedForHistory(article.getId());
 		boolean edited = before != null && ArticleHistory.changed(before, article);
-		List<TextVerdict> texts = checkText && edited ? checkEdit(article, before, user) : List.of();
+		TextCheck.Verdicts texts = checkText && edited ? checkEdit(article, before) : new TextCheck.Verdicts(Map.of());
 		if (edited) article.setLastEditorId(user.getId());
 		// A removed title or text written anew shows the new words again (HIN-169).
 		if (edited) ArticleContentSurface.markRewritten(before, article);
 		Article saved = articles.save(article);
 		if (edited) history.saved(before, saved, user.getId());
-		textFound(saved, texts, user);
+		textFound(saved, texts);
 		if (!to.equals(from)) moved(saved, from, user);
 		return saved;
 	}
 
 	/** The verdicts on what an edit changed, against the stored title and text. */
-	private List<TextVerdict> checkEdit(Article article, Article before, User user) {
+	private TextCheck.Verdicts checkEdit(Article article, Article before) {
 		String storedText = Objects.equals(article.getContentDoc(), before.getContentDoc()) ? article.getContent()
 				: storedText(article.getId());
-		return textCheck.require(user,
+		return textCheck.require(
 				TextCheck.Entry.ifChanged(TextField.ARTICLE_TITLE, article.getTitle(), before.getTitle()),
 				TextCheck.Entry.ifChanged(TextField.ARTICLE_BODY, article.getContent(), storedText));
 	}

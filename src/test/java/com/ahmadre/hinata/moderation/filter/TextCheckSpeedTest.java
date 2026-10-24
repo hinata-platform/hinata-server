@@ -31,12 +31,12 @@ class TextCheckSpeedTest {
 		String text = text(10_000);
 
 		for (int i = 0; i < 200; i++) {
-			gate.check(text, TextField.COMMENT, null, null);
+			gate.check(text, TextField.COMMENT, null);
 		}
 		long[] nanos = new long[RUNS];
 		for (int i = 0; i < RUNS; i++) {
 			long start = System.nanoTime();
-			gate.check(text, TextField.COMMENT, null, null);
+			gate.check(text, TextField.COMMENT, null);
 			nanos[i] = System.nanoTime() - start;
 		}
 		Arrays.sort(nanos);

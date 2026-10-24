@@ -50,19 +50,23 @@ class LexiconTextGateTest {
 	}
 
 	@Test
-	void anUnambiguousTermIsRefusedAndCounted() {
-		TextVerdict verdict = gate.check("ich bringe dich um", TextField.COMMENT, null, null);
+	void anUnambiguousTermIsRefusedAndCountedOnceTheWriteIsRefused() {
+		TextVerdict verdict = gate.check("ich bringe dich um", TextField.COMMENT, null);
 
 		assertThat(verdict.verdict()).isEqualTo(TextVerdict.Verdict.BLOCK);
 		assertThat(verdict.category()).isEqualTo(ReportCategory.THREAT);
 		assertThat(verdict.terms()).containsExactly("ich bringe dich um");
+		// A look counts nothing: a name from a provider is looked at and replaced, not refused.
+		verify(stats, never()).count(eq(StatMetric.TEXT_REFUSED), anyString());
+
+		gate.refused(verdict);
 		// Counted by its category, the way the yearly figures report it.
 		verify(stats).count(StatMetric.TEXT_REFUSED, "THREAT");
 	}
 
 	@Test
 	void anUnclearTermPassesWhileFlaggingIsOffAsIsTheDefault() {
-		assertThat(gate.check("du arschloch", TextField.COMMENT, null, null)).isEqualTo(TextVerdict.ALLOW);
+		assertThat(gate.check("du arschloch", TextField.COMMENT, null)).isEqualTo(TextVerdict.ALLOW);
 	}
 
 	@Test
@@ -70,14 +74,14 @@ class LexiconTextGateTest {
 		filter.setFlagEnabled(true);
 		reload();
 
-		TextVerdict first = gate.check("du arschloch", TextField.COMMENT, null, null);
+		TextVerdict first = gate.check("du arschloch", TextField.COMMENT, null);
 		assertThat(first.verdict()).isEqualTo(TextVerdict.Verdict.FLAG);
 		assertThat(first.newFlagTerms()).containsExactly("arschloch");
 		// A typo fixed in a text already flagged: the term was there before, nothing new.
-		TextVerdict typo = gate.check("du arschloch!", TextField.COMMENT, null, "du arschloch");
+		TextVerdict typo = gate.check("du arschloch!", TextField.COMMENT, "du arschloch");
 		assertThat(typo.opensCase()).isFalse();
 		// A field with nothing to look at afterwards is never flagged.
-		assertThat(gate.check("du arschloch", TextField.OAUTH_CLIENT_NAME, null, null)).isEqualTo(TextVerdict.ALLOW);
+		assertThat(gate.check("du arschloch", TextField.OAUTH_CLIENT_NAME, null)).isEqualTo(TextVerdict.ALLOW);
 	}
 
 	@Test
@@ -86,11 +90,11 @@ class LexiconTextGateTest {
 		filter.setFlagEnabled(true);
 		reload();
 
-		TextVerdict verdict = gate.check("ich bringe dich um", TextField.COMMENT, null, null);
+		TextVerdict verdict = gate.check("ich bringe dich um", TextField.COMMENT, null);
 		assertThat(verdict.verdict()).isEqualTo(TextVerdict.Verdict.FLAG);
 		filter.setFlagEnabled(false);
 		reload();
-		assertThat(gate.check("ich bringe dich um", TextField.COMMENT, null, null)).isEqualTo(TextVerdict.ALLOW);
+		assertThat(gate.check("ich bringe dich um", TextField.COMMENT, null)).isEqualTo(TextVerdict.ALLOW);
 	}
 
 	@Test
@@ -100,7 +104,7 @@ class LexiconTextGateTest {
 		filter.setBlockTerms(List.of("Spast"));
 		reload();
 
-		TextVerdict verdict = gate.check("so ein Spast", TextField.COMMENT, null, null);
+		TextVerdict verdict = gate.check("so ein Spast", TextField.COMMENT, null);
 		assertThat(verdict.verdict()).isEqualTo(TextVerdict.Verdict.BLOCK);
 		assertThat(verdict.category()).isEqualTo(ReportCategory.OTHER);
 		assertThat(verdict.newFlagTerms()).isEmpty();
@@ -112,24 +116,24 @@ class LexiconTextGateTest {
 		reload();
 		String comment = "The build log:\n```\nERROR faggot detected in TestUser.java\n```\nany idea?";
 
-		TextVerdict verdict = gate.check(comment, TextField.COMMENT, null, null);
+		TextVerdict verdict = gate.check(comment, TextField.COMMENT, null);
 		assertThat(verdict.verdict()).isEqualTo(TextVerdict.Verdict.FLAG);
 		// The same word in a name is judged whole: a name is no place to hide.
-		assertThat(gate.check("faggot", TextField.DISPLAY_NAME, null, null).blocked()).isTrue();
+		assertThat(gate.check("faggot", TextField.DISPLAY_NAME, null).blocked()).isTrue();
 	}
 
 	@Test
 	void threatsAndTheSafetyOfChildrenAreNotSoftenedByCode() {
 		String inCode = "```\nchild porn\n```";
-		assertThat(gate.check(inCode, TextField.COMMENT, null, null).blocked()).isTrue();
-		assertThat(gate.check("`ich bringe dich um`", TextField.COMMENT, null, null).blocked()).isTrue();
+		assertThat(gate.check(inCode, TextField.COMMENT, null).blocked()).isTrue();
+		assertThat(gate.check("`ich bringe dich um`", TextField.COMMENT, null).blocked()).isTrue();
 	}
 
 	/** Code may excuse a slur in a log, never hide a threat: one word in backticks changes nothing. */
 	@Test
 	void aThreatSplitByBackticksIsStillAThreat() {
-		assertThat(gate.check("i will kill `you`", TextField.COMMENT, null, null).blocked()).isTrue();
-		assertThat(gate.check("selling child `porn`", TextField.COMMENT, null, null).blocked()).isTrue();
+		assertThat(gate.check("i will kill `you`", TextField.COMMENT, null).blocked()).isTrue();
+		assertThat(gate.check("selling child `porn`", TextField.COMMENT, null).blocked()).isTrue();
 	}
 
 	@Test
@@ -137,14 +141,14 @@ class LexiconTextGateTest {
 		for (String text : List.of("kill -9 1234", "Der Server kill -9 den Prozess", "master/slave replication",
 				"java.lang.IllegalStateException: fatal at com.acme.Killer.run(Killer.java:31)",
 				"POST /api/v1/execute returns 500")) {
-			assertThat(gate.check(text, TextField.COMMENT, null, null)).as(text).isEqualTo(TextVerdict.ALLOW);
+			assertThat(gate.check(text, TextField.COMMENT, null)).as(text).isEqualTo(TextVerdict.ALLOW);
 		}
 		verify(stats, never()).count(eq(StatMetric.TEXT_REFUSED), anyString());
 	}
 
 	@Test
 	void theHeavierCategoryLeads() {
-		TextVerdict verdict = gate.check("child porn, and kys", TextField.COMMENT, null, null);
+		TextVerdict verdict = gate.check("child porn, and kys", TextField.COMMENT, null);
 		assertThat(verdict.category()).isEqualTo(ReportCategory.CHILD_SAFETY);
 		assertThat(verdict.terms()).containsExactly("child porn", "kys");
 	}
