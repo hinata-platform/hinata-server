@@ -40,14 +40,14 @@ import java.util.Set;
 				partialFilter = "{'status': 'OPEN', 'targetKey': {$exists: true}}"),
 		// View OPEN: urgent first, then oldest; also the reminder's age range.
 		@CompoundIndex(name = "open_queue", def = "{'status': 1, 'urgent': -1, 'firstReportedAt': 1, '_id': 1}"),
-		// View DONE, the follow-up re-drive and retention.
+		// View DONE.
 		@CompoundIndex(name = "done_queue", def = "{'status': 1, 'decidedAt': -1, '_id': -1}"),
 		// View APPEAL (HIN-171).
 		@CompoundIndex(name = "appeal_queue", def = "{'appeal.state': 1, 'appeal.filedAt': 1, '_id': 1}"),
 		// Cases somebody wrote content for: taken out of counts, the export, erasure. The only array
 		// in any index.
 		@CompoundIndex(name = "contributor_status", def = "{'contributorIds': 1, 'status': 1}"),
-		// Content under a legal hold, asked by every way content is deleted; empty until HIN-171.
+		// Content under a legal hold, asked by every way content is deleted.
 		@CompoundIndex(name = "legal_hold", def = "{'target.id': 1, 'legalHoldUntil': 1}",
 				partialFilter = "{'legalHoldUntil': {$exists: true}}"),
 		// Decided cases that still owe a step, for the follow-up job (HIN-171); unset when settled.
