@@ -60,11 +60,12 @@ public final class CaseViews {
 	 *
 	 * @param removalState whether the decided removal is done; {@code INCOMPLETE} while the store
 	 *                     still holds originals or the removal is being tried again
+	 * @param otherUses    other content that showed an image the removal moved out of all of them
 	 */
 	public record CaseDetail(CaseSummary summary, ContentSnapshot evidence, ContentSnapshot current,
 			boolean evidenceWithheld, EvidenceReveal evidenceReveal, List<ReportView> reports, long reportTotal,
 			List<CaseEvent> history, Instant claimedAt, Decision decision, Appeal appeal, Restoration restoration,
-			RemovalState removalState) {
+			RemovalState removalState, List<OtherUse> otherUses) {
 	}
 
 	/** The numbers on the page's pills, each one a count of a list minus what the reader wrote. */

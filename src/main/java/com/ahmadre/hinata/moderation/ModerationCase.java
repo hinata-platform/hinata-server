@@ -142,6 +142,9 @@ public class ModerationCase {
 	 */
 	private List<CopySource> pendingCopies;
 
+	/** Other content that showed an image the removal moved out of all of them (HIN-169). */
+	private List<OtherUse> otherUses;
+
 	/** Since when the case owes a step of its follow-up; unset once it owes none (HIN-171). */
 	private Instant followUpDue;
 

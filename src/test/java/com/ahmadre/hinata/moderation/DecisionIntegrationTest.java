@@ -206,6 +206,29 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 	}
 
 	@Test
+	void aSensitiveImageTakenFromEveryIssueNamesItsOtherPlacesInTheCase() {
+		String shared = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+		store.put("media/" + shared, "jpeg");
+		Issue photo = issue("Foto", docWithImage("Vom Fest", shared));
+		Issue copy = issue("Foto, Kopie", docWithImage("Noch einmal", shared));
+		reports.submit(new ContentReportService.ReportRequest(new TargetRef(ContentKind.ISSUE, photo.getId(), null),
+				ReportCategory.SEXUAL, null, null, false), reader);
+		ModerationCase c = mongo.findOne(Query.query(Criteria.where("target.id").is(photo.getId())),
+				ModerationCase.class);
+
+		moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, Decision.Outcome.ACTION,
+				new DecisionService.RemovalChoice(RemovalScope.DESCRIPTION), Decision.Ground.RULES, ReportCategory.SEXUAL,
+				FACTS, "Hausregel 4: Keine sexuellen Inhalte", null, null, false, null, null, false));
+		followUpsDone();
+
+		assertThat(moderation.detail(c.getId()).otherUses()).singleElement().satisfies(use -> {
+			assertThat(use.kind()).isEqualTo(ContentKind.ISSUE);
+			assertThat(use.id()).isEqualTo(copy.getId());
+			assertThat(use.location()).isEqualTo(issues.get(copy.getId()).getReadableId());
+		});
+	}
+
+	@Test
 	void anActionNeedsFactsAndTheReferenceOfItsGround() {
 		ModerationCase c = reported(comment("Halt den Mund"));
 		DecisionService.DecisionRequest full = action(0, RemovalScope.WHOLE);

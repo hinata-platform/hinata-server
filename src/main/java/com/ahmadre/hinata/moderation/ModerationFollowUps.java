@@ -1,6 +1,9 @@
 package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.ContentKind;
+import com.ahmadre.hinata.content.ContentRef;
+import com.ahmadre.hinata.content.ContentSnapshot;
 import com.ahmadre.hinata.content.ContentSurface;
 import com.ahmadre.hinata.content.CopiesScrub;
 import com.ahmadre.hinata.content.CopySource;
@@ -138,8 +141,38 @@ public class ModerationFollowUps {
 		if (removal.copies() != null) {
 			update.set("pendingCopies", List.of(removal.copies()));
 		}
+		if (removal.otherUses() != null && !removal.otherUses().isEmpty()) {
+			update.set("otherUses", otherUsesOf(removal.otherUses()));
+		}
 		return mongo.findAndModify(byId(c.getId()), update, FindAndModifyOptions.options().returnNew(true),
 				ModerationCase.class);
+	}
+
+	/** [refs] with where each is found, at most {@link OtherUse#MAX}; one read per place. */
+	private List<OtherUse> otherUsesOf(List<ContentRef> refs) {
+		return refs.stream().distinct().limit(OtherUse.MAX)
+				.map(ref -> new OtherUse(ref.kind(), ref.id(), ref.parentId(), locationOf(ref)))
+				.toList();
+	}
+
+	/**
+	 * The key of the issue [ref] stands in, and nothing for a page or a person: a title would show
+	 * moderators words of content nobody reported. Null as well when it cannot be read, which must
+	 * not undo the removal.
+	 */
+	private String locationOf(ContentRef ref) {
+		if (ref.kind() != ContentKind.ISSUE && ref.kind() != ContentKind.COMMENT
+				&& ref.kind() != ContentKind.ATTACHMENT) {
+			return null;
+		}
+		try {
+			return surfaceOf(ref.kind()).forModeration(CaseService.targetOf(ref))
+					.map(ContentSnapshot::location).orElse(null);
+		}
+		catch (RuntimeException unresolved) {
+			log.warn("[moderation] could not name another use {}:{}", ref.kind(), ref.id());
+			return null;
+		}
 	}
 
 	/**
@@ -264,7 +297,11 @@ public class ModerationFollowUps {
 	}
 
 	private ContentSurface surface(ModerationCase c) {
-		return surfaces.stream().filter(surface -> surface.kind() == c.getTarget().kind()).findFirst()
+		return surfaceOf(c.getTarget().kind());
+	}
+
+	private ContentSurface surfaceOf(ContentKind kind) {
+		return surfaces.stream().filter(surface -> surface.kind() == kind).findFirst()
 				.orElseThrow(() -> ApiException.badRequest("error.moderation.scopeNotAllowed"));
 	}
 
