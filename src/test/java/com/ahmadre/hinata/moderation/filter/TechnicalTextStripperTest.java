@@ -182,6 +182,36 @@ class TechnicalTextStripperTest {
 		assertThat(Duration.ofNanos(timeOf(hostile))).isLessThan(Duration.ofSeconds(5));
 	}
 
+	/**
+	 * A line pattern whose start eats line breaks restarts at every line of a run of blank
+	 * lines: quadratic in the run, two minutes of a core for a comment of 200 000 newlines.
+	 */
+	@ParameterizedTest
+	@ValueSource(strings = { "\n", "a-", " \n" })
+	void staysLinearOnLongRunsOfLinesAndHyphens(String unit) {
+		String hostile = "Idiot" + unit.repeat(100_000) + "x";
+
+		assertThat(Duration.ofNanos(timeOf(hostile))).isLessThan(Duration.ofSeconds(1));
+	}
+
+	@Test
+	void movesAnExceptionLineOutOfTheProse() {
+		TechnicalTextStripper.Result result =
+				TechnicalTextStripper.strip("Seit heute:\njava.lang.IllegalStateException: kill them all\nHilfe?");
+
+		assertThat(result.prose()).doesNotContain("kill them");
+		assertThat(result.technical()).contains("IllegalStateException: kill them all");
+	}
+
+	@Test
+	void movesADiffHunkHeaderOutOfTheProse() {
+		TechnicalTextStripper.Result result =
+				TechnicalTextStripper.strip("Der Patch:\n@@ -1,4 +1,5 @@ kill switch\nPasst das?");
+
+		assertThat(result.prose()).doesNotContain("kill switch");
+		assertThat(result.technical()).contains("@@ -1,4 +1,5 @@ kill switch");
+	}
+
 	private static long timeOf(String input) {
 		long start = System.nanoTime();
 		TechnicalTextStripper.strip(input);
