@@ -46,6 +46,7 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Shared entries (HIN-95) against a real database: who may offer an entry to whom, what the
@@ -97,6 +98,8 @@ class TimeEntryShareIntegrationTest {
 	private TimeTrackingService timeTracking;
 	@Autowired
 	private TimeEntryShareService shares;
+	@Autowired
+	private com.ahmadre.hinata.block.BlockService blocks;
 
 	private User sender;
 	private User colleague;
@@ -106,7 +109,7 @@ class TimeEntryShareIntegrationTest {
 	@BeforeEach
 	void seed() {
 		for (String collection : List.of("projects", "users", "work_items", "time_entry_shares", "audit_log",
-				"notifications", "server_settings", "time_tags")) {
+				"notifications", "server_settings", "time_tags", "user_blocks")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		policy(null);
@@ -288,6 +291,32 @@ class TimeEntryShareIntegrationTest {
 		assertThat(notificationsOf(sender, Notification.Type.TIME_SHARE_ACCEPTED)).hasSize(1);
 		// The copy is the colleague's own from now on; the original is untouched.
 		assertThat(mongo.findById(entry.getId(), WorkItem.class).getUserId()).isEqualTo(sender.getId());
+	}
+
+	@Test
+	void somebodyWhoBlocksTheSenderIsRefusedLikeAnOutsider() {
+		WorkItem entry = entry(sender, project.getId());
+		blocks.block(colleague, sender.getId());
+
+		Throwable toColleague = catchThrowable(() -> shares.share(entry.getId(), List.of(colleague.getId()), sender));
+		Throwable toOutsider = catchThrowable(() -> shares.share(entry.getId(), List.of(outsider.getId()), sender));
+
+		// The same answer, so the route tells nobody who blocks whom (HIN-168).
+		assertThat(statusOf(toColleague)).isEqualTo(statusOf(toOutsider));
+		assertThat(toColleague).hasMessage(toOutsider.getMessage());
+		assertThat(mongo.count(new Query(), TimeEntryShare.class)).isZero();
+		assertThat(notificationsOf(colleague, Notification.Type.TIME_ENTRY_SHARED)).isEmpty();
+	}
+
+	@Test
+	void aSenderWhoBlockedTheRecipientSinceHearsNothingOfTheAnswer() {
+		WorkItem entry = entry(sender, project.getId());
+		shares.share(entry.getId(), List.of(colleague.getId()), sender);
+		blocks.block(sender, colleague.getId());
+
+		shares.accept(shareOf(entry, colleague).getId(), null, colleague);
+
+		assertThat(notificationsOf(sender, Notification.Type.TIME_SHARE_ACCEPTED)).isEmpty();
 	}
 
 	@Test

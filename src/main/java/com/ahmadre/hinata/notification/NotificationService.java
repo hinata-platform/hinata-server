@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.notification;
 
+import com.ahmadre.hinata.block.BlockService;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueReach;
@@ -50,6 +51,9 @@ public class NotificationService {
 	// Where the watchers' change mails go instead of the mail server; the bell and
 	// the push still fire from here, immediately.
 	private final IssueDigestService digests;
+	// Who blocks the person acting (HIN-168): asked once per notice an actor causes, and the
+	// answer is taken out of every recipient set built after it.
+	private final BlockService blocks;
 
 
 	/** Notify each given assignee (except the actor) that the issue is theirs. */
@@ -129,6 +133,9 @@ public class NotificationService {
 		}
 		Set<String> recipients = new HashSet<>(watchers);
 		recipients.addAll(stakeholders);
+		if (actor != null) {
+			recipients.removeAll(blocks.blockersOf(actor.getId()));
+		}
 		if (recipients.isEmpty()) return;
 		// Watchers were filtered for access by audienceFor; assignees and the
 		// reporter deliberately were not (see linkFor), so this set is not empty
@@ -239,13 +246,17 @@ public class NotificationService {
 	public void notifyComment(Issue issue, User author, IssueComment comment) {
 		String doc = comment == null ? null : comment.getTextDoc();
 		String preview = preview(doc);
+		// One question for the whole comment: who blocks its author hears of it on no path.
+		Set<String> blockers = blocks.blockersOf(author.getId());
 		Set<String> mentioned = new HashSet<>(richText.mentionedUsers(doc));
 		mentioned.remove(author.getId());
-		notifyMentions(issue, author, mentioned, preview);
+		mentioned.removeAll(blockers);
+		mentionAll(issue, author, mentioned, preview);
 		// Everyone already directly notified about this comment — start with the
 		// mentioned users, then add the reply target so the watcher notice below
-		// skips them too.
+		// skips them too. Who blocks the author counts as told.
 		Set<String> notified = new HashSet<>(mentioned);
+		notified.addAll(blockers);
 		notifyReply(issue, author, comment, preview, notified);
 		Set<String> watchers = watchersWithout(issue, author);
 		watchers.removeAll(notified);
@@ -312,6 +323,14 @@ public class NotificationService {
 		if (actor == null) return; // system/seed authored — no human to attribute
 		Set<String> recipients = new HashSet<>(mentionedIds);
 		recipients.remove(actor.getId());
+		if (recipients.isEmpty()) return;
+		recipients.removeAll(blocks.blockersOf(actor.getId()));
+		mentionAll(issue, actor, recipients, preview);
+	}
+
+	/** The mention notices for [mentionedIds], with the actor and their blockers already out. */
+	private void mentionAll(Issue issue, User actor, Set<String> mentionedIds, String preview) {
+		Set<String> recipients = new HashSet<>(mentionedIds);
 		if (recipients.isEmpty()) return;
 		// A mention of somebody who cannot open the issue stays silent: the notice quotes the
 		// text around it. The app offers to share the issue with them instead.
@@ -537,12 +556,16 @@ public class NotificationService {
 				SHARED_ENTRIES_LINK, LinkScope.NONE, Routing.of(Notification.Type.TIME_ENTRY_SHARED));
 	}
 
-	/** Tells the sender a colleague took the copy. A refusal is not reported, to anybody. */
-	public void notifyTimeShareAccepted(User sender, String recipient) {
+	/**
+	 * Tells the sender a colleague took the copy. A refusal is not reported, to anybody, and
+	 * neither is a colleague the sender has blocked since.
+	 */
+	public void notifyTimeShareAccepted(User sender, User recipient) {
 		if (sender == null || !sender.isActive()) return;
+		if (blocks.blocks(sender.getId(), recipient.getId())) return;
 		deliverGated(sender, Notification.Type.TIME_SHARE_ACCEPTED,
 				words.of(sender, "notify.timeShareAccepted.title"),
-				words.of(sender, "notify.timeShareAccepted.body", recipient),
+				words.of(sender, "notify.timeShareAccepted.body", recipient.getDisplayName()),
 				words.of(sender, "notify.timeShare.push"), SHARED_ENTRIES_LINK + "?box=sent");
 	}
 

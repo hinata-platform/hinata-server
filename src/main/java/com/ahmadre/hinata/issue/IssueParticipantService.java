@@ -2,6 +2,7 @@ package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.block.BlockService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.IssueDigestService;
 import com.ahmadre.hinata.notification.NotificationService;
@@ -57,6 +58,7 @@ public class IssueParticipantService {
 	private final IssueDigestService digests;
 	private final AuditService audit;
 	private final MongoTemplate mongo;
+	private final BlockService blocks;
 
 	/** A participant as the share dialog shows them. */
 	public record ParticipantView(String id, String displayName, String avatarUrl, String pronouns,
@@ -109,8 +111,10 @@ public class IssueParticipantService {
 		if (target == null) {
 			throw ApiException.badRequest("error.auth.unknownUser");
 		}
-		if (!target.isActive()) {
-			throw ApiException.badRequest("error.issue.participantInactive");
+		// Somebody who blocks the caller is refused in the very words of an account that cannot
+		// take part, so that the answer gives the block away to nobody (HIN-168).
+		if (!target.isActive() || blocks.blocks(target.getId(), caller.getId())) {
+			throw ApiException.badRequest("error.issue.participantUnavailable");
 		}
 		// Already there, or a member of the project anyway: sharing would change nothing.
 		if ((issue.getParticipantIds() != null && issue.getParticipantIds().contains(userId))
@@ -181,6 +185,8 @@ public class IssueParticipantService {
 	 * Which of {@code userIds} cannot open the issue, for the hint under a comment that mentions
 	 * them. Members only: who reaches a project is the project's business. Unknown ids are left
 	 * out rather than reported, so the answer names only real people who would miss the mention.
+	 * Blocked from the issue, that is: blocking a person ({@link BlockService}) has nothing to do
+	 * with it.
 	 */
 	public List<String> blocked(String idOrReadableId, Collection<String> userIds, User caller) {
 		Issue issue = editable(idOrReadableId, caller);
