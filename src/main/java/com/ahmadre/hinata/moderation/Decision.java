@@ -3,6 +3,7 @@ package com.ahmadre.hinata.moderation;
 import com.ahmadre.hinata.content.RemovalScope;
 import com.ahmadre.hinata.content.ReportCategory;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -53,7 +54,16 @@ public record Decision(
 	public enum SuspensionLength {
 		DAYS_7,
 		DAYS_30,
-		INDEFINITE
+		INDEFINITE;
+
+		/** When a suspension of this length from [from] ends; null for until further notice. */
+		public Instant until(Instant from) {
+			return switch (this) {
+				case DAYS_7 -> from.plus(Duration.ofDays(7));
+				case DAYS_30 -> from.plus(Duration.ofDays(30));
+				case INDEFINITE -> null;
+			};
+		}
 	}
 
 	public enum Basis {

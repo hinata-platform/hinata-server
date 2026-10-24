@@ -10,12 +10,10 @@ import com.ahmadre.hinata.content.ContentSurface;
 import com.ahmadre.hinata.content.RemovalScope;
 import com.ahmadre.hinata.content.ReportCategory;
 import com.ahmadre.hinata.moderation.rules.HouseRulesService;
-import com.ahmadre.hinata.content.RestoreOutcome;
 import com.ahmadre.hinata.moderation.CaseAccess.Guarded;
 import com.ahmadre.hinata.moderation.CaseAccess.Purpose;
 import com.ahmadre.hinata.moderation.CaseViews.CaseSummary;
 import com.ahmadre.hinata.moderation.CaseViews.PersonRef;
-import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -40,7 +38,6 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.function.Function;
 
 /**
  * Deciding a case (HIN-171), and what can be done to a decision afterwards without an appeal:
@@ -84,6 +81,7 @@ public class DecisionService {
 	private final ModerationRules rules;
 	private final SuspensionService suspensions;
 	private final HouseRulesService houseRules;
+	private final Restorations restorations;
 	private final Clock clock;
 
 	/** What a removal takes. */
@@ -247,7 +245,7 @@ public class DecisionService {
 		if (person == null) {
 			return c;
 		}
-		Instant until = untilOf(decision.suspension(), now);
+		Instant until = decision.suspension().until(now);
 		try {
 			suspensions.suspend(person, until, c.getId(), decider);
 		}
@@ -259,15 +257,6 @@ public class DecisionService {
 				null, null)), new CaseEvent(now, CaseEvent.Kind.SUSPENDED, decider.getId(), decision.suspension().name()));
 		return mongo.findAndModify(Query.query(Criteria.where("_id").is(c.getId())), update,
 				FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
-	}
-
-	/** When a suspension of [length] from [from] ends; null for until further notice. */
-	static Instant untilOf(Decision.SuspensionLength length, Instant from) {
-		return switch (length) {
-			case DAYS_7 -> from.plus(Duration.ofDays(7));
-			case DAYS_30 -> from.plus(Duration.ofDays(30));
-			case INDEFINITE -> null;
-		};
 	}
 
 	/**
@@ -448,7 +437,7 @@ public class DecisionService {
 		User moderator = guarded.moderator();
 		requireFacts(request.note());
 		Instant now = clock.instant();
-		Undone undone = undo(id, request.rev(), moderator, request.note().strip(), now,
+		Restorations.Undone undone = restorations.undo(id, request.rev(), moderator, request.note().strip(), now,
 				Criteria.where("appeal.state").ne(Appeal.State.PENDING), SuspensionService.LiftReason.MODERATION,
 				outcome -> CaseSteps.note(new Update(),
 						new CaseEvent(now, CaseEvent.Kind.RESTORED, moderator.getId(), outcome.name())));
@@ -458,53 +447,6 @@ public class DecisionService {
 				access.reported(undone.moderationCase(), moderator.getId()));
 	}
 
-	/** A removal undone, and what putting the content back came to. */
-	record Undone(ModerationCase moderationCase, RestoreOutcome outcome) {
-	}
-
-	/**
-	 * Undoes the removal of case [id] at [rev] when [condition] holds. The case is taken with a
-	 * restoration first, so a second click finds it taken; then the content goes back. When the
-	 * store will not give the files back, the restoration goes again and the error reaches whoever
-	 * asked, who can try once more. [after] adds the caller's own fields to the final write.
-	 */
-	Undone undo(String id, long rev, User moderator, String note, Instant now, Criteria condition,
-			SuspensionService.LiftReason liftReason, Function<RestoreOutcome, Update> after) {
-		Query query = Query.query(new Criteria().andOperator(Criteria.where("_id").is(id).and("rev").is(rev)
-				.and("status").is(CaseStatus.DECIDED).and("decision.outcome").is(Decision.Outcome.ACTION)
-				.and("restoration").is(null), new Criteria().orOperator(Criteria.where("decision.removal").exists(true),
-						Criteria.where("decision.suspension").exists(true)), condition));
-		Update claim = new Update().set("restoration", new Restoration(now, moderator.getId(), note, null))
-				.inc("rev", 1).set("updatedAt", now);
-		ModerationCase held = mongo.findAndModify(query, claim, FindAndModifyOptions.options().returnNew(true),
-				ModerationCase.class);
-		if (held == null) {
-			throw CaseSteps.stale(mongo, id);
-		}
-		RestoreOutcome outcome;
-		try {
-			// A decision that only suspended has no content to put back.
-			outcome = held.getDecision().removal() == null ? RestoreOutcome.RESTORED : followUps.restoreFor(held);
-		}
-		catch (RuntimeException failed) {
-			mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update().unset("restoration"),
-					ModerationCase.class);
-			throw failed;
-		}
-		Update done = CaseSteps.noticeChanged(after.apply(outcome).set("restoration.outcome", outcome), now,
-				retentionMonths());
-		ModerationCase undone = mongo.findAndModify(Query.query(Criteria.where("_id").is(id)), done,
-				FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
-		// The comment is back: what its reporters fold away is theirs to see again (HIN-173).
-		mongo.updateMulti(Query.query(Criteria.where("caseId").is(id)), new Update().set("removed", false),
-				ContentReport.class);
-		if (undone.getSuspension() != null && undone.getSuspension().running()) {
-			users.findById(undone.getSuspension().personId())
-					.ifPresent(person -> suspensions.lift(person, liftReason, moderator, note));
-			undone = mongo.findById(id, ModerationCase.class);
-		}
-		return new Undone(undone, outcome);
-	}
 
 	/** Lifts the suspension case [id] decided, with a reason; whatever it removed stays removed. */
 	public CaseSummary liftSuspension(String id, NoteRequest request) {
