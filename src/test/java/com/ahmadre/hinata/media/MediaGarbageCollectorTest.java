@@ -70,7 +70,7 @@ class MediaGarbageCollectorTest {
 		MongoTemplate mongo = mongoWith(
 				"issues", "descriptionDoc", "{\"src\":\"/api/v1/media/" + ID + "\"}");
 
-		new MediaGarbageCollector(storage, mongo, new HinataProperties()).sweep();
+		new MediaGarbageCollector(storage, new MediaReferences(mongo), new HinataProperties()).sweep();
 
 		verify(storage, never()).delete(any());
 	}
@@ -83,7 +83,7 @@ class MediaGarbageCollectorTest {
 		MongoTemplate mongo = mongoWith(
 				"issues", "description", "![shot](/api/v1/media/" + ID + ")");
 
-		new MediaGarbageCollector(storage, mongo, new HinataProperties()).sweep();
+		new MediaGarbageCollector(storage, new MediaReferences(mongo), new HinataProperties()).sweep();
 
 		verify(storage, never()).delete(any());
 	}
@@ -102,7 +102,7 @@ class MediaGarbageCollectorTest {
 		MongoTemplate mongo = mongoWith(
 				"issues", "descriptionDoc", "/api/v1/media/" + OTHER_ID);
 
-		new MediaGarbageCollector(storage, mongo, new HinataProperties()).sweep();
+		new MediaGarbageCollector(storage, new MediaReferences(mongo), new HinataProperties()).sweep();
 
 		verify(storage).delete(KEY);
 	}
@@ -116,7 +116,7 @@ class MediaGarbageCollectorTest {
 		StorageService storage = storageHolding(stale());
 		MongoTemplate mongo = mongoWith("issues", "descriptionDoc", "no media here");
 
-		new MediaGarbageCollector(storage, mongo, new HinataProperties()).sweep();
+		new MediaGarbageCollector(storage, new MediaReferences(mongo), new HinataProperties()).sweep();
 
 		verify(storage, never()).delete(any());
 	}
@@ -133,7 +133,7 @@ class MediaGarbageCollectorTest {
 			MongoTemplate mongo = mongoWith(
 					source[0], source[1], "\"/api/v1/media/" + ID + "\"");
 
-			new MediaGarbageCollector(storage, mongo, new HinataProperties()).sweep();
+			new MediaGarbageCollector(storage, new MediaReferences(mongo), new HinataProperties()).sweep();
 
 			List<String> deleted = new ArrayList<>();
 			verify(storage, never()).delete(any());

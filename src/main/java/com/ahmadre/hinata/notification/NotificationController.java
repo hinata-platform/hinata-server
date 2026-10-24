@@ -42,7 +42,7 @@ public class NotificationController {
 	@GetMapping
 	public Page<NotificationResponse> list(@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "25") int size) {
-		return notifications.findByUserIdOrderByCreatedAtDesc(
+		return notifications.findByUserIdOrderByCreatedAtDescIdDesc(
 				currentUser.requireId(), PageRequest.of(page, Math.min(size, 100)))
 				.map(NotificationResponse::from);
 	}

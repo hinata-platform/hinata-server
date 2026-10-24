@@ -98,6 +98,9 @@ public class IssueEmailReplyService {
 					.filter(a -> a.getId().equals(id))
 					.findFirst()
 					.orElseThrow(() -> ApiException.notFound("attachment"));
+			if (attachment.isRemoved()) {
+				throw ApiException.gone("error.moderation.removed");
+			}
 			StorageService.StoredObject object = storage.getObject(attachment.getObjectKey())
 					.orElseThrow(() -> ApiException.notFound("attachment"));
 			// Every file sits in memory until the mail is out; counted as read, not as recorded.

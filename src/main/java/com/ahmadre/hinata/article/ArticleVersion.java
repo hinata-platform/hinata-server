@@ -36,8 +36,11 @@ public class ArticleVersion {
 	/** The Lexical document of this state; {@code null} for an empty page. */
 	private String contentDoc;
 
-	/** Who saved this state. */
+	/** Who saved this state; null for one moderation wrote. */
 	private String editorId;
+
+	/** Why the state was written, when not by an edit: {@code Von der Moderation zurückgesetzt} (HIN-169). */
+	private String note;
 
 	/** When it was saved. Set by the writer, not by auditing: a backfilled first version keeps the page's date. */
 	private Instant createdAt;

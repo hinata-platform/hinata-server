@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.me;
 
+import com.ahmadre.hinata.content.ContentMark;
+import com.ahmadre.hinata.content.ContentSnapshot;
 import com.ahmadre.hinata.storage.AvatarImages;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
@@ -29,7 +31,7 @@ public class AvatarService {
 	private final ImagePreviewService previews;
 
 	/** Object key for a user's avatar, e.g. {@code avatars/{userId}.jpg}. */
-	private String objectKey(String userId) {
+	public static String objectKey(String userId) {
 		return AVATAR_PREFIX + userId + ".jpg";
 	}
 
@@ -45,6 +47,13 @@ public class AvatarService {
 		String url = AvatarImages.withBlurHash(urlFor(user.getId()),
 				AvatarImages.blurHashOf(previews, jpeg));
 		user.setAvatarUrl(url);
+		// A picture moderation removed, replaced by a new one, is the new one (HIN-169).
+		ContentMark mark = user.getModeration() == null ? null : user.getModeration().get("avatar");
+		if (mark != null && mark.isRemoved()) {
+			java.util.Map<String, ContentMark> marks = new java.util.LinkedHashMap<>(user.getModeration());
+			marks.put("avatar", mark.rewritten());
+			user.setModeration(marks);
+		}
 		users.save(user);
 		return url;
 	}
@@ -55,25 +64,36 @@ public class AvatarService {
 		users.save(user);
 	}
 
+	/** A person's picture as the public route serves it, with the version its tag names. */
+	public record Avatar(StorageService.StoredObject object, String etag) {
+	}
+
 	/**
-	 * The stored avatar bytes for [userId], or empty when none / unset.
+	 * The stored avatar of [userId], or empty when there is no such account, it is deactivated,
+	 * or it shows no picture (HIN-169): the route answers without a token, and a removed or
+	 * abandoned picture must not stay reachable by an old link.
 	 *
-	 * <p>Also fills in a missing BlurHash on the way out: pictures uploaded
-	 * before placeholders existed have no hash in their URL, and this is the one
-	 * moment the server holds their bytes anyway. The refreshed URL reaches
-	 * clients with the next response that mentions this user.
+	 * <p>Also fills in a missing BlurHash on the way out: pictures uploaded before placeholders
+	 * existed have no hash in their URL, and this is the one moment the server holds their bytes
+	 * anyway. The refreshed URL reaches clients with the next response that mentions this user.
 	 */
-	public Optional<StorageService.StoredObject> load(String userId) {
+	public Optional<Avatar> load(String userId) {
 		if (!storage.isConfigured()) {
 			return Optional.empty();
 		}
+		User user = users.findById(userId).orElse(null);
+		if (user == null || !user.isActive() || user.getAvatarUrl() == null) {
+			return Optional.empty();
+		}
 		Optional<StorageService.StoredObject> object = storage.getObject(objectKey(userId));
-		object.ifPresent(stored -> backfillBlurHash(userId, stored.data()));
-		return object;
+		object.ifPresent(stored -> backfillBlurHash(user, stored.data()));
+		// The URL carries the upload's time, so a new picture is a new tag.
+		String etag = "\"" + ContentSnapshot.hashOf(user.getAvatarUrl()).substring(0, 16) + "\"";
+		return object.map(stored -> new Avatar(stored, etag));
 	}
 
-	private void backfillBlurHash(String userId, byte[] jpeg) {
-		users.findById(userId)
+	private void backfillBlurHash(User owner, byte[] jpeg) {
+		Optional.of(owner)
 				.filter(user -> user.getAvatarUrl() != null
 						&& !AvatarImages.hasBlurHash(user.getAvatarUrl()))
 				.ifPresent(user -> {

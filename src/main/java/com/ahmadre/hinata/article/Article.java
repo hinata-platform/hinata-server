@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.article;
 
+import com.ahmadre.hinata.content.ContentMark;
 import lombok.Builder;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
@@ -12,6 +13,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Knowledge base article, organized as a tree per project, per team or privately. */
 @Data
@@ -94,6 +96,12 @@ public class Article {
 
 	@Builder.Default
 	private int sortOrder = 0;
+
+	/**
+	 * What moderation removed here, by field (HIN-169); absent on everything it never touched.
+	 * The removed field holds the placeholder itself, so a reader that ignores this still shows it.
+	 */
+	private Map<String, ContentMark> moderation;
 
 	@CreatedDate
 	private Instant createdAt;

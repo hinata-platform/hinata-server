@@ -79,7 +79,7 @@ class IssueUpdateSnapshotTest {
 				mock(UserRepository.class),
 				// Offsets are a module that can be switched off; this test is about
 				// everything else, so the policy answers nothing.
-				mock(IssueDeadlinePolicy.class), IssueReachStubs.everyoneSees());
+				mock(IssueDeadlinePolicy.class), IssueReachStubs.everyoneSees(), mock(DeletedContent.class));
 
 		when(issues.save(any(Issue.class))).thenAnswer(call -> call.getArgument(0));
 	}

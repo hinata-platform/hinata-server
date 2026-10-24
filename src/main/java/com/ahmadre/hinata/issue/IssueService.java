@@ -5,6 +5,9 @@ import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
+import com.ahmadre.hinata.content.ContentOrigin;
+import com.ahmadre.hinata.content.CopySource;
+import com.ahmadre.hinata.content.MarkState;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.FieldChange;
@@ -85,6 +88,9 @@ public class IssueService {
 
 	/** Who may see an issue: its project's people and those it is shared with. */
 	private final IssueReach reach;
+
+	/** What deleting takes along: stored objects and the copies of the words (HIN-169). */
+	private final DeletedContent deleted;
 
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
@@ -500,6 +506,10 @@ public class IssueService {
 	 */
 	public Issue replaceIngestedDescription(String id, RichText description) {
 		Issue issue = get(id);
+		// Parsing the mail again must not bring back what moderation removed (HIN-169).
+		if (IssueContentSurface.isRemoved(issue, IssueContentSurface.DESCRIPTION)) {
+			return issue;
+		}
 		issue.setDescription(description.text());
 		issue.setDescriptionDoc(description.doc());
 		return issues.save(issue);
@@ -589,6 +599,8 @@ public class IssueService {
 		// every save rather than computed by each reader. An issue whose date somebody typed has
 		// had its offset cleared by then and is left alone.
 		deadlines.resolveDates(issue, project);
+		// A removed title or description written anew shows the new words again (HIN-169).
+		IssueContentSurface.markRewritten(before, issue);
 		Issue saved = issues.save(issue);
 		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);
@@ -722,7 +734,9 @@ public class IssueService {
 		if (!projects.canDeleteIssues(project, user)) {
 			throw ApiException.forbidden("error.issue.deleteForbidden");
 		}
-		deleteChecked(issue, user);
+		List<CopySource> copies = new ArrayList<>();
+		deleteChecked(issue, user, copies);
+		deleted.scrubCopies(copies);
 	}
 
 	/**
@@ -742,18 +756,23 @@ public class IssueService {
 			}
 		}
 		java.util.Set<String> gone = new java.util.HashSet<>();
+		// One scrub for the whole request, however many issues it deletes.
+		List<CopySource> copies = new ArrayList<>();
 		for (Issue issue : found) {
 			if (gone.contains(issue.getId())) continue;
-			gone.addAll(deleteChecked(issue, user));
+			gone.addAll(deleteChecked(issue, user, copies));
 		}
+		deleted.scrubCopies(copies);
 		return found.size();
 	}
 
 	/**
-	 * Deletes an issue whose access is already settled, with what hangs off it.
-	 * Returns the ids it removed: the issue and any sub-tasks that went with it.
+	 * Deletes an issue whose access is already settled, with what hangs off it: comments,
+	 * history, links, the files of its attachments and the audio of its voice messages. Adds
+	 * what the copies of its words are found by to [copies]. Returns the ids it removed: the
+	 * issue and any sub-tasks that went with it.
 	 */
-	private java.util.Set<String> deleteChecked(Issue issue, User user) {
+	private java.util.Set<String> deleteChecked(Issue issue, User user, List<CopySource> copies) {
 		java.util.Set<String> removed = new java.util.HashSet<>();
 		if (issue.getType().isEpic()) {
 			// Standard children survive as top-level issues — just drop the epic link.
@@ -763,7 +782,9 @@ public class IssueService {
 		else if (issue.getType().isStandard()) {
 			// Sub-tasks can't exist without their parent → cascade-delete them.
 			for (Issue child : issues.findByParentId(issue.getId())) {
-				freeVoiceBlobs(child.getId());
+				freeVoiceBlobs(child);
+				deleted.attachmentsOf(child);
+				copies.add(DeletedContent.sourceOf(child));
 				comments.deleteByIssueId(child.getId());
 				activities.deleteByIssueId(child.getId());
 				workItems.detachFromIssue(child.getId());
@@ -772,7 +793,10 @@ public class IssueService {
 				removed.add(child.getId());
 			}
 		}
-		freeVoiceBlobs(issue.getId());
+		freeVoiceBlobs(issue);
+		// The files went nowhere before (HIN-169): the issue was deleted, its objects stayed.
+		deleted.attachmentsOf(issue);
+		copies.add(DeletedContent.sourceOf(issue));
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
 		// Logged time outlives the issue: the hours were worked and the project
@@ -862,18 +886,16 @@ public class IssueService {
 	 * {@code deleteByIssueId} drops those rows — otherwise the S3 objects
 	 * orphan forever. Best-effort (storage.delete logs on failure).
 	 */
-	private void freeVoiceBlobs(String issueId) {
+	private void freeVoiceBlobs(Issue issue) {
 		if (!storage.isConfigured()) {
 			return;
 		}
 		List<IssueComment> voice = mongo.find(
-				Query.query(Criteria.where("issueId").is(issueId)
+				Query.query(Criteria.where("issueId").is(issue.getId())
 						.and("voice.objectKey").exists(true).ne(null)),
 				IssueComment.class);
 		for (IssueComment c : voice) {
-			if (c.getVoice() != null && c.getVoice().getObjectKey() != null) {
-				storage.delete(c.getVoice().getObjectKey());
-			}
+			deleted.voiceOf(issue, c);
 		}
 	}
 
@@ -1645,11 +1667,22 @@ public class IssueService {
 	 * stored document.
 	 */
 	public IssueComment addComment(String issueId, RichText content, String replyToId, User author) {
+		return addComment(issueId, content, replyToId, author, null);
+	}
+
+	/**
+	 * As above, for content that did not come from its author's own hand: a smart commit stands
+	 * under whoever connected the repository ({@link ContentOrigin#GIT}), which moderation must not
+	 * mistake for that person writing it (HIN-169). Null is a member writing.
+	 */
+	public IssueComment addComment(String issueId, RichText content, String replyToId, User author,
+			ContentOrigin origin) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
 		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
+				.origin(origin)
 				.text(content.text())
 				.textDoc(content.doc());
 		applyReplyTo(builder, issue.getId(), replyToId);
@@ -1690,16 +1723,22 @@ public class IssueService {
 				? target.getReplyToId()
 				: target.getId();
 		builder.replyToId(rootId)
+				.replyToTargetId(target.getId())
 				.replyToAuthorId(target.getAuthorId())
 				.replyToPreview(previewOf(target));
 	}
 
 	/** Compact one-line quote preview ("🎤" for voice) for a reply snapshot. */
-	private String previewOf(IssueComment comment) {
+	static String previewOf(IssueComment comment) {
 		if (comment.resolvedType() == IssueComment.Type.VOICE) {
 			return "🎤";
 		}
-		String text = comment.getText() == null ? "" : comment.getText().strip();
+		return previewOf(comment.getText());
+	}
+
+	/** The quote preview of a text comment's plain [text]; how a scrub finds the quotes it left. */
+	static String previewOf(String plainText) {
+		String text = plainText == null ? "" : plainText.strip();
 		text = text.replaceAll("\\s+", " ");
 		return text.length() > 140 ? text.substring(0, 140) + "…" : text;
 	}
@@ -1862,6 +1901,10 @@ public class IssueService {
 		if (comment.resolvedType() == IssueComment.Type.VOICE) {
 			throw ApiException.badRequest("error.comment.voiceNotEditable");
 		}
+		// Moderation removed it: it may be deleted, never written again (HIN-169).
+		if (CommentContentSurface.isRemoved(comment)) {
+			throw ApiException.conflict("error.moderation.removed");
+		}
 		RichText content = resolver.apply(comment);
 		if (content == null) return withReplyCount(comment);
 		// Atomic field $set (not a whole-document save) so a concurrent
@@ -1870,7 +1913,8 @@ public class IssueService {
 		// observable out of step.
 		Instant editedAt = Instant.now();
 		IssueComment saved = mongo.findAndModify(
-				Query.query(Criteria.where("_id").is(commentId).and("authorId").is(editor.getId())),
+				Query.query(Criteria.where("_id").is(commentId).and("authorId").is(editor.getId())
+						.and(CommentContentSurface.MARK_STATE).ne(MarkState.REMOVED.name())),
 				new Update().set("text", content.text()).set("textDoc", content.doc())
 						.set("editedAt", editedAt),
 				org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
@@ -1889,25 +1933,28 @@ public class IssueService {
 	 */
 	public void deleteComment(String issueId, String commentId, User user) {
 		IssueComment comment = requireComment(issueId, commentId, user);
+		Issue issue = get(issueId);
 		if (!comment.getAuthorId().equals(user.getId())
-				&& !projects.canManage(projects.get(get(issueId).getProjectId()), user)) {
+				&& !projects.canManage(projects.get(issue.getProjectId()), user)) {
 			throw ApiException.forbidden("error.comment.deleteOwnOnly");
 		}
+		// Whatever quotes, the bell and the digests copied of it goes with it, the replies'
+		// words included, in one scrub (HIN-169).
+		List<CopySource> copies = new ArrayList<>();
+		copies.add(DeletedContent.sourceOf(comment, issue));
 		// A top-level comment owns a flat reply thread — remove it too so replies
 		// don't orphan, freeing any voice blobs they hold (best-effort).
 		if (comment.getReplyToId() == null) {
 			for (IssueComment reply : comments.findByReplyToId(comment.getId())) {
-				if (reply.resolvedType() == IssueComment.Type.VOICE && reply.getVoice() != null) {
-					storage.delete(reply.getVoice().getObjectKey());
-				}
+				deleted.voiceOf(issue, reply);
+				copies.add(DeletedContent.sourceOf(reply, issue));
 			}
 			comments.deleteByReplyToId(comment.getId());
 		}
 		comments.delete(comment);
 		// Free the audio blob backing a voice message (best-effort; delete() logs).
-		if (comment.resolvedType() == IssueComment.Type.VOICE && comment.getVoice() != null) {
-			storage.delete(comment.getVoice().getObjectKey());
-		}
+		deleted.voiceOf(issue, comment);
+		deleted.scrubCopies(copies);
 		commentEvents.publishChanged(comment.getIssueId());
 	}
 
