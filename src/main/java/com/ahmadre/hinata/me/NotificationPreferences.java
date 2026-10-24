@@ -160,6 +160,9 @@ public class NotificationPreferences {
 		// Shifts are appointments with other people: both channels on, so a changed or cancelled
 		// shift is not first noticed at the door.
 		events.put(SHIFTS, new Channel(true, true));
+		// A case has a day for its first answer, so both channels start on. Only moderators
+		// receive these; for everyone else the entry never fires.
+		events.put(MODERATION, new Channel(true, true));
 		events.put("security", new Channel(true, true)); // locked on
 		return new NotificationPreferences(true, true, events);
 	}
