@@ -14,9 +14,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
 
-/** What every member does with moderation (HIN-170): report. */
+/** What every member does with moderation (HIN-170): report, and read a notice about their content. */
 @Tag(name = "Moderation")
 @RestController
 @RequestMapping("/api/v1/me/moderation")
@@ -37,6 +38,16 @@ public class MemberModerationController {
 	public Map<String, Boolean> report(@Valid @RequestBody ContentReportService.ReportRequest request) {
 		reports.submit(request, currentUser.require());
 		return Map.of("received", true);
+	}
+
+	/**
+	 * The comments I reported that are still there, to keep them folded for me (HIN-173). A
+	 * bounded list of ids rather than a page: the app holds all of them at once.
+	 */
+	@Operation(summary = "Comments I reported, to fold them away for me")
+	@GetMapping("/reported-ids")
+	public List<String> reportedIds() {
+		return reports.reportedCommentIds(currentUser.require());
 	}
 
 	/** Only the person responsible reaches it; there is no list, the bell and the mail lead here. */

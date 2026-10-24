@@ -15,6 +15,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -31,6 +32,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -54,6 +56,10 @@ public class ContentReportService {
 	static final Set<ReportCategory> EXPLAINED = EnumSet.of(ReportCategory.ILLEGAL, ReportCategory.OTHER,
 			ReportCategory.CHILD_SAFETY);
 	static final int EXPLANATION_MIN = 10;
+
+	/** How many reported comments stay folded for the person who reported them, and for how long. */
+	static final int FOLDED_MAX = 500;
+	static final int FOLDED_MONTHS = 6;
 
 	private final List<ContentSurface> surfaces;
 	private final MongoTemplate mongo;
@@ -106,6 +112,26 @@ public class ContentReportService {
 				&& access.eligibleModerators(filed.moderationCase(), CaseAccess.Purpose.DECIDE).isEmpty()) {
 			notices.adminAlert(filed.moderationCase(), "moderation.alert.nobody");
 		}
+	}
+
+	/**
+	 * The comments [reporter] reported in the last six months that moderation has not removed,
+	 * newest first and at most {@link #FOLDED_MAX} (HIN-173). They stay folded for the person who
+	 * reported them, as Google Play asks of a report. Answered from {@code reporter_hidden} alone.
+	 */
+	public List<String> reportedCommentIds(User reporter) {
+		Query query = Query.query(Criteria.where("reporterId").is(reporter.getId())
+						.and("targetKind").is(ContentKind.COMMENT)
+						.and("removed").is(false)
+						.and("createdAt").gte(Retention.plusMonths(clock.instant(), -FOLDED_MONTHS)))
+				.with(Sort.by(Sort.Direction.DESC, "createdAt"))
+				.limit(FOLDED_MAX);
+		query.fields().include("targetId").exclude("_id");
+		return mongo.find(query, ContentReport.class).stream()
+				.map(ContentReport::getTargetId)
+				.filter(Objects::nonNull)
+				.distinct()
+				.toList();
 	}
 
 	/**
