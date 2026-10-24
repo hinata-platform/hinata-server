@@ -83,6 +83,15 @@ abstract class RemovalIntegrationSupport {
 	/** Watched, not replaced: counting how often a request scrubs is the point of some tests. */
 	@MockitoSpyBean
 	CopiesScrub copiesScrub;
+	/** Watched: what a notice mails, and where a reply goes (HIN-171). */
+	@MockitoSpyBean
+	com.ahmadre.hinata.notification.MailService mail;
+	@MockitoSpyBean
+	com.ahmadre.hinata.notification.PushService push;
+
+	@Autowired
+	@org.springframework.beans.factory.annotation.Qualifier(ModerationFollowUps.EXECUTOR)
+	java.util.concurrent.Executor followUpThread;
 
 	final MemoryObjects store = new MemoryObjects();
 
@@ -101,7 +110,10 @@ abstract class RemovalIntegrationSupport {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		store.installOn(storage);
-		org.mockito.Mockito.clearInvocations(copiesScrub);
+		SIGNED_IN.remove();
+		org.mockito.Mockito.when(currentUser.require()).thenAnswer(call -> SIGNED_IN.get());
+		org.mockito.Mockito.when(currentUser.requireId()).thenAnswer(call -> SIGNED_IN.get().getId());
+		org.mockito.Mockito.clearInvocations(copiesScrub, mail, push);
 		owner = user("owner");
 		author = user("jonas");
 		reader = user("lena");
@@ -122,10 +134,27 @@ abstract class RemovalIntegrationSupport {
 				.displayName(name).roles(held).active(true).build());
 	}
 
-	/** Signs [person] in for what follows. */
+	/** The instance's moderation contact is [email]: where a reply that is an appeal goes. */
+	void contactIs(com.ahmadre.hinata.setup.SettingsService settings, String email) {
+		mongo.getCollection("server_settings").deleteMany(new Document());
+		com.ahmadre.hinata.setup.ServerSettings stored = new com.ahmadre.hinata.setup.ServerSettings();
+		com.ahmadre.hinata.setup.ServerSettings.Moderation contact = new com.ahmadre.hinata.setup.ServerSettings.Moderation();
+		contact.setContactEmail(email);
+		stored.setModeration(contact);
+		settings.save(stored);
+	}
+
+	/** Waits for what the follow-up thread was handed: one thread, so a step queued now runs last. */
+	void followUpsDone() {
+		java.util.concurrent.CompletableFuture.runAsync(() -> { }, followUpThread).join();
+	}
+
+	/** Who is signed in, per thread: two moderators can click at once. */
+	private static final ThreadLocal<User> SIGNED_IN = new ThreadLocal<>();
+
+	/** Signs [person] in, on this thread, for what follows. */
 	void actingAs(User person) {
-		org.mockito.Mockito.when(currentUser.require()).thenReturn(person);
-		org.mockito.Mockito.when(currentUser.requireId()).thenReturn(person.getId());
+		SIGNED_IN.set(person);
 	}
 
 	private static Project.WorkflowState state(String name) {
