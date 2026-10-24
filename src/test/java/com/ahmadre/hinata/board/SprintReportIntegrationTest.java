@@ -130,11 +130,41 @@ class SprintReportIntegrationTest {
 				.doesNotContain("closingPoints").doesNotContain(hidden.getId());
 	}
 
+	@Test
+	void aScopeChangeKeepsItsPointsButNamesOnlyIssuesTheReaderSees() {
+		User other = users.save(User.builder().username("other").displayName("Other").email("other@example.test")
+				.roles(Set.of(Role.MEMBER)).active(true).locale("en").build());
+		hidden.setLeadIds(new ArrayList<>(List.of(other.getId())));
+		hidden.setMemberIds(new ArrayList<>(List.of(other.getId())));
+		mongo.save(hidden);
+		Sprint running = sprint("Sprint 1");
+		Issue ours = issue(project, running, 3, "Open");
+		Issue theirs = issue(hidden, running, 5, "Open");
+		java.time.Instant during = running.getStartDate().atStartOfDay().toInstant(java.time.ZoneOffset.UTC)
+				.plusSeconds(3600);
+		moved(ours, null, running, during);
+		moved(theirs, null, running, during);
+
+		List<SprintService.ScopeChange> forLead = sprints.report(running.getId(), lead).scope();
+		List<SprintService.ScopeChange> forOther = sprints.report(running.getId(), other).scope();
+
+		assertThat(forLead).extracting(SprintService.ScopeChange::delta).containsExactlyInAnyOrder(3, 5);
+		assertThat(forLead).extracting(SprintService.ScopeChange::label)
+				.containsExactlyInAnyOrder(ours.getReadableId() + " · x", "Issue you cannot open");
+		assertThat(forOther).extracting(SprintService.ScopeChange::label)
+				.containsExactlyInAnyOrder(theirs.getReadableId() + " · x", "Issue you cannot open");
+	}
+
 	/** A SPRINT move of [issue] out of [from] at [at]; dated after the insert, which stamps its own. */
 	private void moved(Issue issue, Sprint from, java.time.Instant at) {
+		moved(issue, from, null, at);
+	}
+
+	/** A SPRINT move of [issue] from [from] to [to], either of them none, at [at]. */
+	private void moved(Issue issue, Sprint from, Sprint to, java.time.Instant at) {
 		com.ahmadre.hinata.issue.IssueActivity activity = mongo.insert(com.ahmadre.hinata.issue.IssueActivity.builder()
 				.issueId(issue.getId()).field(com.ahmadre.hinata.issue.IssueActivity.Field.SPRINT)
-				.fromValue(from.getId()).toValue(null).build());
+				.fromValue(from == null ? null : from.getId()).toValue(to == null ? null : to.getId()).build());
 		mongo.updateFirst(Query.query(org.springframework.data.mongodb.core.query.Criteria.where("_id")
 				.is(activity.getId())), new org.springframework.data.mongodb.core.query.Update().set("createdAt", at),
 				com.ahmadre.hinata.issue.IssueActivity.class);
