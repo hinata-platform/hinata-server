@@ -6,9 +6,7 @@ import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.notification.PersonalNotice;
 import com.ahmadre.hinata.setup.OperatorContact;
 import com.ahmadre.hinata.setup.SettingsService;
-import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
-import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -31,7 +29,6 @@ public class ModerationNotices {
 
 	private final NotificationService notifications;
 	private final CaseAccess access;
-	private final UserRepository users;
 	private final UserWords words;
 	private final OperatorContact contact;
 	private final SettingsService settings;
@@ -40,12 +37,29 @@ public class ModerationNotices {
 		return "/moderation/cases/" + moderationCase.getId();
 	}
 
-	/** A new case, or one that just became urgent: to whoever may see it. */
-	void caseOpened(ModerationCase moderationCase) {
-		String key = moderationCase.isUrgent() ? "moderation.notice.urgent" : "moderation.notice.opened";
-		notifications.notifyPeople(Notification.Type.MODERATION_CASE_OPENED,
-				access.eligibleModerators(moderationCase, CaseAccess.Purpose.SEE), caseLink(moderationCase),
-				person -> notice(person, key), QUIET);
+	/**
+	 * What a filed report tells the team: a new case, or one that just became urgent, to whoever may
+	 * see it; the admins when nobody is left to decide it. Only a new case, or a moderator's report
+	 * ([byModerator]), can leave a case without anyone to decide it. The moderators are read once.
+	 */
+	void reportFiled(ContentReportService.Filed filed, boolean byModerator) {
+		boolean opened = filed.newCase() || filed.becameUrgent();
+		boolean mayLeaveNobody = filed.newCase() || filed.newReport() && byModerator;
+		if (!opened && !mayLeaveNobody) {
+			return;
+		}
+		ModerationCase moderationCase = filed.moderationCase();
+		List<User> moderators = access.moderators();
+		if (opened) {
+			String key = moderationCase.isUrgent() ? "moderation.notice.urgent" : "moderation.notice.opened";
+			notifications.notifyPeople(Notification.Type.MODERATION_CASE_OPENED,
+					access.eligibleModerators(moderationCase, CaseAccess.Purpose.SEE, moderators),
+					caseLink(moderationCase), person -> notice(person, key), QUIET);
+		}
+		if (mayLeaveNobody
+				&& access.eligibleModerators(moderationCase, CaseAccess.Purpose.DECIDE, moderators).isEmpty()) {
+			adminAlert(moderationCase, "moderation.alert.nobody");
+		}
 	}
 
 	/** One reminder per person and run, with how many of their cases wait. */
@@ -56,9 +70,14 @@ public class ModerationNotices {
 
 	/** A second pair of eyes asked for, in the words of [key]: to whoever may give it. */
 	void confirmRequested(ModerationCase moderationCase, String key) {
-		notifications.notifyPeople(Notification.Type.MODERATION_CONFIRM_REQUESTED,
-				access.eligibleModerators(moderationCase, CaseAccess.Purpose.SECOND_PERSON), caseLink(moderationCase),
-				person -> notice(person, key), QUIET);
+		confirmRequested(moderationCase, key,
+				access.eligibleModerators(moderationCase, CaseAccess.Purpose.SECOND_PERSON));
+	}
+
+	/** A second pair of eyes asked for, in the words of [key]: to [confirmers], already read. */
+	void confirmRequested(ModerationCase moderationCase, String key, List<User> confirmers) {
+		notifications.notifyPeople(Notification.Type.MODERATION_CONFIRM_REQUESTED, confirmers,
+				caseLink(moderationCase), person -> notice(person, key), QUIET);
 	}
 
 	/**
@@ -80,7 +99,7 @@ public class ModerationNotices {
 	 * to everybody who moderates.
 	 */
 	void teamNote(ModerationCase moderationCase, String key) {
-		List<User> team = moderationCase == null ? users.findByRolesContainingAndActiveIsTrue(Role.MODERATOR)
+		List<User> team = moderationCase == null ? access.moderators()
 				: access.eligibleModerators(moderationCase, CaseAccess.Purpose.SEE);
 		notifications.notifyPeople(Notification.Type.MODERATION_TEAM_NOTE, team,
 				moderationCase == null ? "/moderation" : caseLink(moderationCase), person -> notice(person, key), null);
@@ -92,13 +111,15 @@ public class ModerationNotices {
 	}
 
 	/**
-	 * One word to the admins, without content, so they can staff moderation: to every admin who
-	 * wrote nothing of [cases]. With no admin left, the instance's contact gets it by mail.
+	 * One word to the admins, without content, so they can staff moderation: to every admin outside
+	 * the content of at least one of [cases]. With no admin left, the instance's contact gets it by
+	 * mail. The admins are read once.
 	 */
 	void adminAlert(Collection<ModerationCase> cases, String key) {
+		List<User> everyAdmin = access.admins();
 		Map<String, User> admins = new LinkedHashMap<>();
 		for (ModerationCase moderationCase : cases) {
-			access.eligibleAdmins(moderationCase).forEach(admin -> admins.putIfAbsent(admin.getId(), admin));
+			access.eligibleAdmins(moderationCase, everyAdmin).forEach(admin -> admins.putIfAbsent(admin.getId(), admin));
 		}
 		notifyAdmins(admins.values(), key);
 	}

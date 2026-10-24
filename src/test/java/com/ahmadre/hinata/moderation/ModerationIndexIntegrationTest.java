@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The reads of moderation run off their indexes (HIN-170): the three lists without sorting in
  * memory, the one open case of a target, the limits per person, the cases somebody wrote content
- * for, and the legal hold every deletion asks about.
+ * for, the legal hold every deletion asks about, retention, and who moderates.
  */
 class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 
@@ -63,6 +63,21 @@ class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(plan("moderation_reports", new Document("caseId", "case-7"),
 				new Document("createdAt", 1).append("_id", 1)))
 				.contains("case_created").doesNotContain("\"SORT\"");
+		// The case page's count of a source's unfounded child-safety reports, from the index alone.
+		assertThat(plan("moderation_reports", new Document("reporterKey", new Document("$in", List.of("u-7", "u-14")))
+				.append("category", "CHILD_SAFETY"), null, new Document("reporterKey", 1).append("caseId", 1)
+				.append("_id", 0))).contains("child_safety_reporter").doesNotContain("FETCH");
+		// Retention takes the oldest due case first; the daily limit of revealing alone.
+		assertThat(plan("moderation_cases", new Document("status", "DECIDED")
+				.append("retainUntil", new Document("$lt", new Date())), new Document("retainUntil", 1)))
+				.contains("retention_due").doesNotContain("\"SORT\"");
+		assertThat(countPlan("moderation_cases", new Document("evidenceReveal.requestedBy", "u-3")
+				.append("evidenceReveal.revealedBy", "u-3").append("evidenceReveal.revealedAt",
+						new Document("$gte", Date.from(Instant.now().minusSeconds(86400))))))
+				.contains("solo_reveal").doesNotContain("FETCH");
+		// Who moderates and who administers, read for every notice.
+		assertThat(plan("users", new Document("roles", new Document("$in", List.of("MODERATOR")))
+				.append("active", true), null)).contains("roles_active");
 	}
 
 	private void seed() {
@@ -79,16 +94,21 @@ class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 					.appeal(i % 11 == 0 ? Appeal.filed(null, now.minusSeconds(i), Appeal.Via.APP) : null)
 					.legalHoldUntil(i % 97 == 0 ? now.plusSeconds(3600) : null)
 					.followUpDue(i % 13 == 0 ? now.minusSeconds(3600 + i) : null)
+					.retainUntil(open ? null : now.minusSeconds(i))
+					.evidenceReveal(i % 17 == 0 ? new EvidenceReveal("u-" + (i % 50), now.minusSeconds(i), "why",
+							"u-" + (i % 50), now.minusSeconds(i)) : null)
 					.build());
 			reports.add(ContentReport.builder().caseId("case-" + (i % 300)).reporterKey("u-" + i)
-					.reporterId("u-" + (i % 60)).category(ReportCategory.SPAM).createdAt(now.minusSeconds(i)).build());
+					.reporterId("u-" + (i % 60)).category(i % 29 == 0 ? ReportCategory.CHILD_SAFETY : ReportCategory.SPAM)
+					.createdAt(now.minusSeconds(i)).build());
 		}
 		mongo.insertAll(cases);
 		mongo.insertAll(reports);
 		List<Document> people = new ArrayList<>();
 		for (int i = 0; i < 2000; i++) {
 			Document person = new Document("username", "p-" + i).append("email", "p-" + i + "@example.org")
-					.append("active", i % 40 != 0);
+					.append("active", i % 40 != 0)
+					.append("roles", i % 25 == 0 ? List.of("MEMBER", "MODERATOR") : List.of("MEMBER"));
 			if (i % 40 == 0) {
 				person.append("active", false).append("suspension", new Document("caseId", "case-" + i)
 						.append("at", Date.from(now.minusSeconds(i)))
@@ -112,15 +132,26 @@ class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 	}
 
 	private String countPlan(Document filter) {
+		return countPlan("moderation_reports", filter);
+	}
+
+	private String countPlan(String collection, Document filter) {
 		Document explained = mongo.getDb().runCommand(new Document("explain",
-				new Document("count", "moderation_reports").append("query", filter)).append("verbosity", "queryPlanner"));
+				new Document("count", collection).append("query", filter)).append("verbosity", "queryPlanner"));
 		return explained.get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
 	}
 
 	private String plan(String collection, Document filter, Document sort) {
+		return plan(collection, filter, sort, null);
+	}
+
+	private String plan(String collection, Document filter, Document sort, Document projection) {
 		var find = mongo.getCollection(collection).find(filter).limit(25);
 		if (sort != null) {
 			find = find.sort(sort);
+		}
+		if (projection != null) {
+			find = find.projection(projection);
 		}
 		return find.explain().get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
 	}

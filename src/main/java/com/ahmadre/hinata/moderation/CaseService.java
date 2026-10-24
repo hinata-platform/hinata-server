@@ -286,7 +286,7 @@ public class CaseService {
 			return Map.of();
 		}
 		Query earlier = Query.query(Criteria.where("reporterKey").in(keys).and("category").is(ReportCategory.CHILD_SAFETY));
-		earlier.fields().include("reporterKey", "caseId");
+		earlier.fields().include("reporterKey", "caseId").exclude("_id");
 		List<ContentReport> childSafety = mongo.find(earlier, ContentReport.class);
 		if (childSafety.isEmpty()) {
 			return Map.of();
