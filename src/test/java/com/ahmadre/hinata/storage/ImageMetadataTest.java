@@ -71,20 +71,34 @@ class ImageMetadataTest {
 		assertThat(ImageIO.read(new ByteArrayInputStream(served))).isNotNull();
 	}
 
-	/** The EXIF said "turn it a quarter clockwise"; with the EXIF gone the pixels have to stand upright. */
+	/**
+	 * The EXIF said "turn it a quarter clockwise". That one fact stays, in an EXIF block of its own,
+	 * and the pixels are not touched: no decoding at full size, nothing encoded again (HIN-177).
+	 */
 	@Test
-	void aPhotoTakenUprightStaysUpright() throws Exception {
-		// Stored 64 wide and 32 high, red on the left: shown turned, red is on top.
+	void aTurnedPhotoKeepsOnlyItsTurn() throws Exception {
 		byte[] photo = TestImages.jpegWithExif(64, 32, 6);
 
 		byte[] stripped = ImageMetadata.strip(photo, "image/jpeg");
 
-		BufferedImage upright = ImageIO.read(new ByteArrayInputStream(stripped));
-		assertThat(upright.getWidth()).isEqualTo(32);
-		assertThat(upright.getHeight()).isEqualTo(64);
-		assertThat(dominant(upright.getRGB(16, 8))).isEqualTo(Color.RED);
-		assertThat(dominant(upright.getRGB(16, 56))).isEqualTo(Color.BLUE);
-		assertThat(indexOf(stripped, TestImages.EXIF_SIGNATURE)).isNegative();
+		assertThat(ImageMetadata.jpegOrientation(stripped)).isEqualTo(6);
+		assertThat(indexOf(stripped, TestImages.gpsIfd())).as("GPS IFD").isNegative();
+		assertThat(indexOf(stripped, "Hamburg")).as("XMP and IPTC").isNegative();
+		assertThat(stripped.length).as("the picture's bytes as they were, and the turn")
+				.isEqualTo(TestImages.jpeg(64, 32).length + ImageMetadata.ORIENTATION_SEGMENT_LENGTH);
+		assertThat(ImageIO.read(new ByteArrayInputStream(stripped))).isNotNull();
+	}
+
+	/** The preview, drawn by the server, stands the way the photo is shown. */
+	@Test
+	void thePreviewOfATurnedPhotoStandsUpright() throws Exception {
+		byte[] stripped = ImageMetadata.strip(TestImages.jpegWithExif(64, 32, 6), "image/jpeg");
+
+		BufferedImage preview = ImageIO.read(new ByteArrayInputStream(
+				new ImagePreviewService().create(stripped).orElseThrow().bytes()));
+
+		assertThat(preview.getWidth()).isLessThan(preview.getHeight());
+		assertThat(dominant(preview.getRGB(preview.getWidth() / 2, 2))).isEqualTo(Color.RED);
 	}
 
 	private static Color dominant(int rgb) {
