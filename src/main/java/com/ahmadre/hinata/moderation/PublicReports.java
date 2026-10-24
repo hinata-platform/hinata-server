@@ -50,12 +50,67 @@ class PublicReports {
 			"[^@\\s<>()\\[\\],;:\"\\\\]+@[^@\\s<>()\\[\\],;:\"\\\\]+\\.[^@\\s<>()\\[\\],;:\"\\\\]+");
 
 	private final ContentReportService reports;
+	private final PublicForms forms;
 	private final ContentSurfaces surfaces;
 	private final ModerationAlerts alerts;
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
 	private final HinataProperties properties;
 	private final Clock clock;
+
+	/** What became of a form that was sent: the page its sender sees next. */
+	sealed interface Sent {
+
+		/** The form again, with [token] to send it with and the line [problem] names. */
+		record Again(String token, String problem) implements Sent {
+		}
+
+		/** Too many reports from here for now. */
+		record Limited() implements Sent {
+		}
+
+		/** Taken in, or a trap filled in that only looks taken in. */
+		record Done() implements Sent {
+		}
+	}
+
+	/**
+	 * Files [submission], sent with [token] from [address]. In this order: a token this server
+	 * made for this address and not used, every field right; then the token is used, the limits
+	 * are counted with it, and the report filed. A filled-in [trap] looks done and files nothing.
+	 */
+	Sent submit(String token, String address, String trap, Submission submission, Locale locale) {
+		switch (forms.check(token, address)) {
+			case INVALID -> {
+				return new Sent.Again(forms.issue(address), "web.moderation.report.error.expired");
+			}
+			case TOO_YOUNG -> {
+				return new Sent.Again(forms.issue(address), "web.moderation.report.error.tooFast");
+			}
+			case GOOD -> {
+				// On to the rest.
+			}
+		}
+		if (trap != null && !trap.isEmpty()) {
+			forms.use(token, address);
+			return new Sent.Done();
+		}
+		Optional<String> problem = problemWith(submission);
+		if (problem.isPresent()) {
+			// The token stays good: nothing was sent yet.
+			return new Sent.Again(token, problem.get());
+		}
+		if (!forms.use(token, address)) {
+			return new Sent.Again(forms.issue(address), "web.moderation.report.error.expired");
+		}
+		// Counted after the token is used, and the mailbox in one step: forms sent at the same
+		// moment cannot all pass a limit each read before the others counted.
+		if (forms.overLimit(address) || !forms.reserveEmail(countedEmail(submission.email()), PER_EMAIL_PER_DAY)) {
+			return new Sent.Limited();
+		}
+		file(submission, locale);
+		return new Sent.Done();
+	}
 
 	/** What somebody sent. Blank strings count as nothing. */
 	record Submission(String location, ReportCategory category, String explanation, String name, String email,
