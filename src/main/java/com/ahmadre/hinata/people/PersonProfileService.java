@@ -6,6 +6,7 @@ import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.user.Role;
+import com.ahmadre.hinata.user.SuspensionCases;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserZones;
@@ -46,6 +47,7 @@ public class PersonProfileService {
 	private final MongoTemplate mongo;
 	private final SettingsService settings;
 	private final ObjectProvider<PersonAbsences> absences;
+	private final ObjectProvider<SuspensionCases> suspensionCases;
 	private final Clock clock;
 
 	public PersonProfile profile(User viewer, String personId) {
@@ -67,12 +69,14 @@ public class PersonProfileService {
 				admin ? person.getEmail() : null, person.isActive(), self, admin, suspensionOf(person, viewer));
 	}
 
-	private static PersonProfile.SuspensionView suspensionOf(User person, User viewer) {
+	private PersonProfile.SuspensionView suspensionOf(User person, User viewer) {
 		if (!person.isSuspended() || !viewer.isModerator() && !viewer.isAdmin()) {
 			return null;
 		}
-		return new PersonProfile.SuspensionView(person.getSuspension().until(),
-				viewer.isModerator() ? person.getSuspension().caseId() : null);
+		String caseId = person.getSuspension().caseId();
+		SuspensionCases cases = suspensionCases.getIfAvailable();
+		boolean opens = viewer.isModerator() && caseId != null && (cases == null || cases.mayOpen(caseId, viewer));
+		return new PersonProfile.SuspensionView(person.getSuspension().until(), opens ? caseId : null);
 	}
 
 	private static List<String> roles(User person) {
