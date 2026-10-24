@@ -5,7 +5,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.ContentSnapshot;
-import com.ahmadre.hinata.content.ContentSurface;
+import com.ahmadre.hinata.content.ContentSurfaces;
 import com.ahmadre.hinata.content.ReportCategory;
 import com.ahmadre.hinata.content.TargetRef;
 import com.ahmadre.hinata.notification.NotificationService;
@@ -61,7 +61,7 @@ public class ContentReportService {
 	static final int FOLDED_MAX = 500;
 	static final int FOLDED_MONTHS = 6;
 
-	private final List<ContentSurface> surfaces;
+	private final ContentSurfaces surfaces;
 	private final MongoTemplate mongo;
 	private final ModerationStats stats;
 	private final ModerationAlerts alerts;
@@ -133,12 +133,7 @@ public class ContentReportService {
 	 * from a mail nobody signed in to send. Gone content files nothing.
 	 */
 	public void fileAutomated(ContentRef ref, ReportCategory category, List<String> terms, String reporterKey) {
-		ContentSurface surface = surfaces.stream().filter(candidate -> candidate.kind() == ref.kind())
-				.findFirst().orElse(null);
-		if (surface == null) {
-			return;
-		}
-		ContentSnapshot snapshot = surface.forModeration(new TargetRef(ref.kind(), ref.id(), ref.parentId()))
+		ContentSnapshot snapshot = surfaces.find(ref.kind()).flatMap(surface -> surface.forModeration(TargetRef.of(ref)))
 				.orElse(null);
 		if (snapshot == null || snapshot.removed()) {
 			return;
@@ -159,9 +154,7 @@ public class ContentReportService {
 			}
 			return new Target(new ContentRef(ContentKind.OTHER, null, null, null), null, location.strip());
 		}
-		ContentSurface surface = surfaces.stream().filter(candidate -> candidate.kind() == target.kind())
-				.findFirst().orElseThrow(() -> ApiException.badRequest("error.moderation.scopeNotAllowed"));
-		ContentSnapshot snapshot = surface.snapshot(target, reporter)
+		ContentSnapshot snapshot = surfaces.require(target.kind()).snapshot(target, reporter)
 				.orElseThrow(() -> ApiException.notFound(entityOf(target.kind())));
 		if (snapshot.removed()) {
 			throw ApiException.gone("error.moderation.removed");

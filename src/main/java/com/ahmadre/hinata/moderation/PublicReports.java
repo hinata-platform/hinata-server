@@ -4,7 +4,7 @@ import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.ContentSnapshot;
-import com.ahmadre.hinata.content.ContentSurface;
+import com.ahmadre.hinata.content.ContentSurfaces;
 import com.ahmadre.hinata.content.ReportCategory;
 import com.ahmadre.hinata.content.TargetRef;
 import com.ahmadre.hinata.notification.NotificationService;
@@ -50,7 +50,7 @@ class PublicReports {
 			"[^@\\s<>()\\[\\],;:\"\\\\]+@[^@\\s<>()\\[\\],;:\"\\\\]+\\.[^@\\s<>()\\[\\],;:\"\\\\]+");
 
 	private final ContentReportService reports;
-	private final List<ContentSurface> surfaces;
+	private final ContentSurfaces surfaces;
 	private final ModerationAlerts alerts;
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
@@ -106,8 +106,7 @@ class PublicReports {
 	 */
 	ContentReportService.Target targetOf(String location) {
 		String place = clip(location, LOCATION_MAX);
-		Optional<ContentReportService.Target> found = refOf(place).flatMap(ref -> surfaces.stream()
-				.filter(surface -> surface.kind() == ref.kind()).findFirst()
+		Optional<ContentReportService.Target> found = refOf(place).flatMap(ref -> surfaces.find(ref.kind())
 				.flatMap(surface -> surface.forModeration(ref)))
 				.filter(snapshot -> !snapshot.removed())
 				// Where it is, in the reporter's words: the content's own title is part of what the

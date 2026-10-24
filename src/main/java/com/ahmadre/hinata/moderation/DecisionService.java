@@ -7,6 +7,7 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentSurface;
+import com.ahmadre.hinata.content.ContentSurfaces;
 import com.ahmadre.hinata.content.RemovalScope;
 import com.ahmadre.hinata.content.ReportCategory;
 import com.ahmadre.hinata.moderation.rules.HouseRulesService;
@@ -35,7 +36,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -68,7 +68,7 @@ public class DecisionService {
 
 	private final CaseAccess access;
 	private final MongoTemplate mongo;
-	private final List<ContentSurface> surfaces;
+	private final ContentSurfaces surfaces;
 	private final ModerationFollowUps followUps;
 	private final ModerationStats stats;
 	private final ModerationAlerts alerts;
@@ -515,8 +515,7 @@ public class DecisionService {
 	}
 
 	private ContentSurface surface(ContentKind kind) {
-		return surfaces.stream().filter(surface -> surface.kind() == kind).findFirst()
-				.orElseThrow(() -> ApiException.badRequest("error.moderation.scopeNotAllowed"));
+		return surfaces.require(kind);
 	}
 
 	private static boolean blank(String value) {
