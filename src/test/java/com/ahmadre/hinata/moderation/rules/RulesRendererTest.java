@@ -43,6 +43,18 @@ class RulesRendererTest {
 		});
 	}
 
+	/** What a decision cites is what the published rules head, in every language. */
+	@Test
+	void theRuleTitlesADecisionCitesAreTheHeadingsOfThePublishedRules() {
+		RulesRenderer renderer = renderer();
+		for (String language : com.ahmadre.hinata.common.Languages.SUPPORTED) {
+			Map<Integer, String> numbered = renderer.numberedRules(language);
+			assertThat(numbered.keySet()).as(language).containsExactly(1, 2, 3, 4, 5, 6, 7);
+			assertThat(numbered.values()).as(language).allSatisfy(title -> assertThat(title).isNotBlank());
+		}
+		assertThat(renderer.numberedRules("de").get(2)).isEqualTo("Niemanden herabsetzen");
+	}
+
 	@Test
 	void howModerationWorksFollowsOwnRulesAndRulesElsewhereToo() {
 		RulesRenderer renderer = renderer();

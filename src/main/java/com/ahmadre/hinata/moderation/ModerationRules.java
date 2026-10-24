@@ -5,7 +5,6 @@ import com.ahmadre.hinata.moderation.rules.HouseRulesService;
 import com.ahmadre.hinata.moderation.rules.RulesVersion;
 import com.ahmadre.hinata.setup.ServerSettings.RulesMode;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -21,10 +20,6 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class ModerationRules {
 
-	/** How many rules the built-in house rules have. */
-	static final int BUILT_IN = 7;
-
-	private final MessageSource messages;
 	private final HouseRulesService houseRules;
 
 	/** One rule as a decision names it. */
@@ -44,9 +39,7 @@ public class ModerationRules {
 
 	public RuleSet current(Locale locale) {
 		List<Rule> rules = new ArrayList<>();
-		for (int number = 1; number <= BUILT_IN; number++) {
-			rules.add(new Rule(number, messages.getMessage("moderation.rule." + number, null, locale)));
-		}
+		houseRules.builtInRules(locale).forEach((number, title) -> rules.add(new Rule(number, title)));
 		RulesVersion latest = houseRules.latest();
 		return new RuleSet(latest == null ? null : latest.getVersion(),
 				latest == null || latest.getMode() == RulesMode.BUILT_IN, rules,

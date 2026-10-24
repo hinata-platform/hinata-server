@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Writes the house rules out in every language (HIN-175): the instance's rules, built in or its
@@ -30,6 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
 class RulesRenderer {
 
 	private static final String TEMPLATE_DIR = "moderation-rules/";
+
+	/** A numbered rule's heading in the built-in rules: {@code ## 2. Don't put anyone down}. */
+	private static final Pattern NUMBERED = Pattern.compile("(?m)^## (\\d+)\\. (.+)$");
 
 	private final MessageSource messages;
 	private final Map<String, String> templates = new ConcurrentHashMap<>();
@@ -135,6 +140,19 @@ class RulesRenderer {
 
 	private static String mailto(String email) {
 		return "[" + email + "](mailto:" + email.replace(" ", "%20").replace(")", "%29") + ")";
+	}
+
+	/**
+	 * The titles of the built-in rules in [language], by number, as their headings name them: the
+	 * one source for the published rules and for the rule a decision cites (HIN-171).
+	 */
+	Map<Integer, String> numberedRules(String language) {
+		Map<Integer, String> rules = new LinkedHashMap<>();
+		Matcher heading = NUMBERED.matcher(template(language));
+		while (heading.find()) {
+			rules.put(Integer.parseInt(heading.group(1)), heading.group(2).strip());
+		}
+		return rules;
 	}
 
 	/** The built-in rules in [language], or the English ones for a language without them. */
