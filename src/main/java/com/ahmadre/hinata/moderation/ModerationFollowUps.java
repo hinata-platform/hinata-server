@@ -5,6 +5,7 @@ import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.ContentSnapshot;
 import com.ahmadre.hinata.content.ContentSurface;
+import com.ahmadre.hinata.content.ContentSurfaces;
 import com.ahmadre.hinata.content.CopiesScrub;
 import com.ahmadre.hinata.content.CopySource;
 import com.ahmadre.hinata.content.MediaRef;
@@ -13,6 +14,7 @@ import com.ahmadre.hinata.content.Quarantine;
 import com.ahmadre.hinata.content.Removal;
 import com.ahmadre.hinata.content.RestoreOutcome;
 import com.ahmadre.hinata.content.ScrubReason;
+import com.ahmadre.hinata.content.TargetRef;
 import com.ahmadre.hinata.moderation.quarantine.QuarantinedContent;
 import com.ahmadre.hinata.setup.SettingsService;
 import lombok.extern.slf4j.Slf4j;
@@ -59,13 +61,13 @@ public class ModerationFollowUps {
 	private final SettingsService settings;
 	private final Executor executor;
 	private final MongoTemplate mongo;
-	private final List<ContentSurface> surfaces;
+	private final ContentSurfaces surfaces;
 	private final Quarantine quarantine;
 	private final DecisionNotices notices;
 	private final Clock clock;
 
 	public ModerationFollowUps(CopiesScrub copies, MessageSource messages, SettingsService settings,
-			@Qualifier(EXECUTOR) Executor executor, MongoTemplate mongo, List<ContentSurface> surfaces,
+			@Qualifier(EXECUTOR) Executor executor, MongoTemplate mongo, ContentSurfaces surfaces,
 			Quarantine quarantine, DecisionNotices notices, Clock clock) {
 		this.copies = copies;
 		this.messages = messages;
@@ -117,7 +119,7 @@ public class ModerationFollowUps {
 		Decision decision = c.getDecision();
 		Removal removal;
 		try {
-			removal = surface(c).remove(CaseService.targetOf(c.getTarget()), decision.removal(), c.getId(),
+			removal = surface(c).remove(TargetRef.of(c.getTarget()), decision.removal(), c.getId(),
 					decision.category(), placeholders());
 		}
 		catch (ApiException gone) {
@@ -166,7 +168,7 @@ public class ModerationFollowUps {
 			return null;
 		}
 		try {
-			return surfaceOf(ref.kind()).forModeration(CaseService.targetOf(ref))
+			return surfaceOf(ref.kind()).forModeration(TargetRef.of(ref))
 					.map(ContentSnapshot::location).orElse(null);
 		}
 		catch (RuntimeException unresolved) {
@@ -301,8 +303,7 @@ public class ModerationFollowUps {
 	}
 
 	private ContentSurface surfaceOf(ContentKind kind) {
-		return surfaces.stream().filter(surface -> surface.kind() == kind).findFirst()
-				.orElseThrow(() -> ApiException.badRequest("error.moderation.scopeNotAllowed"));
+		return surfaces.require(kind);
 	}
 
 	private static Query byId(String id) {

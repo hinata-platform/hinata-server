@@ -7,6 +7,7 @@ import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.ContentSnapshot;
 import com.ahmadre.hinata.content.ContentSurface;
+import com.ahmadre.hinata.content.ContentSurfaces;
 import com.ahmadre.hinata.content.MediaRef;
 import com.ahmadre.hinata.content.Quarantine;
 import com.ahmadre.hinata.content.ReportCategory;
@@ -78,7 +79,7 @@ public class CaseService {
 	private final ModerationAccess moderators;
 	private final MongoTemplate mongo;
 	private final UserRepository users;
-	private final List<ContentSurface> surfaces;
+	private final ContentSurfaces surfaces;
 	private final StorageService storage;
 	private final AuditService audit;
 	private final ModerationAlerts alerts;
@@ -199,7 +200,7 @@ public class CaseService {
 		ContentSnapshot current = null;
 		if (c.getStatus() == CaseStatus.OPEN && !withheld && c.getTarget() != null
 				&& c.getTarget().kind() != ContentKind.OTHER) {
-			current = surface(c.getTarget().kind()).forModeration(targetOf(c.getTarget())).orElse(null);
+			current = surface(c.getTarget().kind()).forModeration(TargetRef.of(c.getTarget())).orElse(null);
 		}
 		Query first = Query.query(Criteria.where("caseId").is(c.getId()))
 				.with(Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("_id"))).limit(FIRST_REPORTS);
@@ -223,7 +224,7 @@ public class CaseService {
 		}
 		ContentRef target = c.getTarget();
 		return target == null || target.kind() == ContentKind.OTHER
-				|| surface(target.kind()).snapshot(targetOf(target), moderator).isEmpty();
+				|| surface(target.kind()).snapshot(TargetRef.of(target), moderator).isEmpty();
 	}
 
 	/** Further reports of case [id], a page at a time, in the order they came. */
@@ -500,11 +501,6 @@ public class CaseService {
 	// --- helpers ---------------------------------------------------------------------------------
 
 	private ContentSurface surface(ContentKind kind) {
-		return surfaces.stream().filter(surface -> surface.kind() == kind).findFirst()
-				.orElseThrow(() -> ApiException.badRequest("error.moderation.scopeNotAllowed"));
-	}
-
-	static TargetRef targetOf(ContentRef ref) {
-		return new TargetRef(ref.kind(), ref.id(), ref.parentId());
+		return surfaces.require(kind);
 	}
 }
