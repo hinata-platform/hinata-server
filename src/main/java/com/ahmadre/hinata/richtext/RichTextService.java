@@ -103,7 +103,8 @@ public class RichTextService {
 		if (json == null || json.isBlank()) return RichText.EMPTY;
 		JsonNode document = LexicalJson.parse(MAPPER, json);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
-		if (images != null && images.settle(document)) {
+		boolean linksChanged = LinkTargets.unwrapUnsafe(document);
+		if (images != null && images.settle(document) || linksChanged) {
 			json = write(document);
 			// A link is a little longer than the image it stands for; the read bound still holds.
 			if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
@@ -139,6 +140,7 @@ public class RichTextService {
 		if (source.length() > maxSourceChars) throw tooLarge();
 		ObjectNode document = MARKDOWN.convert(source);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
+		LinkTargets.unwrapUnsafe(document);
 		if (settle && images != null) {
 			images.settle(document);
 		}
@@ -184,6 +186,25 @@ public class RichTextService {
 	/** As {@link #fromRequest(String, String, String, String)}, for a new entity. */
 	public RichText fromRequest(String doc, String markdown) {
 		return fromRequest(doc, markdown, null, null);
+	}
+
+	/**
+	 * [json] with every link that may not lead where it leads replaced by its words (HIN-176), or
+	 * null when it has none: for texts stored before links were checked. Every conversion above
+	 * does the same on the way in.
+	 */
+	public String withSafeLinks(String json) {
+		if (json == null || json.isBlank()) {
+			return null;
+		}
+		JsonNode document;
+		try {
+			document = MAPPER.readTree(json);
+		}
+		catch (com.fasterxml.jackson.core.JsonProcessingException unreadable) {
+			return null;
+		}
+		return LinkTargets.unwrapUnsafe(document) ? write(document) : null;
 	}
 
 	/**
