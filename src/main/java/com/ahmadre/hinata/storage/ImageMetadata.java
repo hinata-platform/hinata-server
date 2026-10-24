@@ -12,15 +12,15 @@ import java.util.Set;
  * the blocks out rather than decoding and encoding the image again, so quality and animation stay
  * and a WebP the JVM cannot decode needs no detour. What stays is a short list of blocks an image
  * needs to be drawn right; everything else goes, so an unknown block never carries anything along.
- * Only a JPEG that its EXIF turns is drawn upright and encoded anew, or it would lie on its side
- * once the EXIF is gone. Anything after the image's end goes too.
+ * A JPEG that its EXIF turns keeps that one fact, in an EXIF block holding nothing else, so it is
+ * shown upright without being decoded or encoded anew. Anything after the image's end goes too.
  *
  * <p>Anything whose blocks do not read cleanly is refused, never stored as it came.
  */
 public final class ImageMetadata {
 
-	/** The quality a JPEG drawn upright is encoded with. */
-	static final float UPRIGHT_QUALITY = 0.9f;
+	/** Bytes of the EXIF block that keeps nothing but the orientation of a turned JPEG. */
+	static final int ORIENTATION_SEGMENT_LENGTH = 36;
 
 	private static final byte[] EXIF = "Exif\0\0".getBytes(StandardCharsets.ISO_8859_1);
 	private static final byte[] ICC = "ICC_PROFILE\0".getBytes(StandardCharsets.ISO_8859_1);
@@ -64,7 +64,7 @@ public final class ImageMetadata {
 
 	/**
 	 * With only JFIF, the colour profile and Adobe's colour transform of the application blocks, no
-	 * comment, and upright when the EXIF said it was turned. EXIF and XMP sit in APP1, IPTC in APP13.
+	 * comment, keeping only the turn when the EXIF said it was turned. EXIF and XMP sit in APP1, IPTC in APP13.
 	 */
 	static byte[] jpeg(byte[] in) throws UnreadableException {
 		if (in.length < 4 || u8(in, 0) != 0xFF || u8(in, 1) != 0xD8) {
@@ -116,7 +116,59 @@ public final class ImageMetadata {
 			throw new UnreadableException();
 		}
 		byte[] stripped = out.toByteArray();
-		return orientation >= 2 && orientation <= 8 ? upright(stripped, orientation) : stripped;
+		return orientation >= 2 && orientation <= 8 ? withOrientation(stripped, orientation) : stripped;
+	}
+
+	/**
+	 * [jpeg] with an EXIF block that says [orientation] and nothing else, after the start of image
+	 * and a JFIF block if one leads. Decoding a phone photo of 48 megapixels to turn it would take
+	 * hundreds of megabytes for a fact that fits in two bytes.
+	 */
+	private static byte[] withOrientation(byte[] jpeg, int orientation) {
+		byte[] segment = {
+				(byte) 0xFF, (byte) 0xE1, 0, (byte) (ORIENTATION_SEGMENT_LENGTH - 2),
+				'E', 'x', 'i', 'f', 0, 0,
+				'M', 'M', 0, 0x2A, 0, 0, 0, 8,
+				0, 1,
+				0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, (byte) orientation, 0, 0,
+				0, 0, 0, 0 };
+		int at = 2;
+		if (u8(jpeg, 2) == 0xFF && u8(jpeg, 3) == 0xE0) {
+			at = 4 + read16(jpeg, 4, false);
+		}
+		ByteArrayOutputStream out = new ByteArrayOutputStream(jpeg.length + segment.length);
+		out.write(jpeg, 0, at);
+		out.write(segment, 0, segment.length);
+		out.write(jpeg, at, jpeg.length - at);
+		return out.toByteArray();
+	}
+
+	/**
+	 * The orientation the EXIF of [jpeg] names, 1 when it names none, reads badly or is no JPEG:
+	 * for a picture the server draws itself, such as a preview, to stand the way it is shown.
+	 */
+	public static int jpegOrientation(byte[] jpeg) {
+		try {
+			if (jpeg == null || jpeg.length < 4 || u8(jpeg, 0) != 0xFF || u8(jpeg, 1) != 0xD8) {
+				return 1;
+			}
+			int i = 2;
+			while (i + 4 <= jpeg.length && u8(jpeg, i) == 0xFF) {
+				int marker = u8(jpeg, i + 1);
+				if (marker == 0xDA || marker == 0xD9) {
+					return 1;
+				}
+				int end = i + 2 + read16(jpeg, i + 2, false);
+				if (marker == 0xE1 && startsWith(jpeg, i + 4, EXIF)) {
+					return orientationOf(jpeg, i + 4 + EXIF.length, Math.min(end, jpeg.length));
+				}
+				i = end;
+			}
+			return 1;
+		}
+		catch (IndexOutOfBoundsException truncated) {
+			return 1;
+		}
 	}
 
 	private static boolean keepsJpegSegment(byte[] in, int at, int marker) {
@@ -169,24 +221,6 @@ public final class ImageMetadata {
 			}
 		}
 		return 1;
-	}
-
-	/**
-	 * [jpeg] drawn the way its orientation said. A JPEG the JVM cannot decode, such as one in CMYK,
-	 * stays as it is: lying on its side is better than not being stored, and its metadata is gone
-	 * either way.
-	 */
-	private static byte[] upright(byte[] jpeg, int orientation) {
-		BufferedImage image = ImageOps.read(jpeg);
-		if (image == null) {
-			return jpeg;
-		}
-		try {
-			return ImageOps.encodeJpeg(ImageOps.orient(image, orientation), UPRIGHT_QUALITY);
-		}
-		catch (IOException ex) {
-			return jpeg;
-		}
 	}
 
 	// --- PNG -------------------------------------------------------------------------------------
