@@ -37,8 +37,12 @@ public final class CaseViews {
 	public record PersonRef(String id, String displayName, String avatarUrl) {
 	}
 
-	/** One row of a list. Built from the case alone, never from the content it is about. */
-	public record CaseSummary(String id, CaseState state, boolean urgent, ContentKind kind,
+	/**
+	 * One row of a list. Built from the case alone, never from the content it is about.
+	 *
+	 * @param overdue open longer than {@link ResponseTimes#OVERDUE_AFTER}, on the server's clock
+	 */
+	public record CaseSummary(String id, CaseState state, boolean urgent, boolean overdue, ContentKind kind,
 			Set<ReportCategory> categories, Set<ReportSource> sources, int reportCount, Instant firstReportedAt,
 			String location, String listExcerpt, PersonRef assignee, boolean reportedByMe,
 			Decision.Outcome outcome, boolean removed, boolean suspended, long rev) {
@@ -58,14 +62,19 @@ public final class CaseViews {
 	/**
 	 * A case opened: what was reported, how it stands now while it is open, and what happened.
 	 *
-	 * @param removalState whether the decided removal is done; {@code INCOMPLETE} while the store
-	 *                     still holds originals or the removal is being tried again
-	 * @param otherUses    other content that showed an image the removal moved out of all of them
+	 * @param currentHash     the hash of the content as it stands while the case is open, to tell
+	 *                        whether it changed since it was reported; null when it is gone, the
+	 *                        case is decided or the reader may not see it
+	 * @param takeOverAllowed whether the reader may take over somebody else's claim, which is that
+	 *                        old ({@link CaseService#CLAIM_STALE}) on the server's clock
+	 * @param removalState    whether the decided removal is done; {@code INCOMPLETE} while the store
+	 *                        still holds originals or the removal is being tried again
+	 * @param otherUses       other content that showed an image the removal moved out of all of them
 	 */
-	public record CaseDetail(CaseSummary summary, ContentSnapshot evidence, ContentSnapshot current,
+	public record CaseDetail(CaseSummary summary, ContentSnapshot evidence, String currentHash,
 			boolean evidenceWithheld, EvidenceReveal evidenceReveal, List<ReportView> reports, long reportTotal,
-			List<CaseEvent> history, Instant claimedAt, Decision decision, Appeal appeal, Restoration restoration,
-			RemovalState removalState, List<OtherUse> otherUses) {
+			List<CaseEvent> history, Instant claimedAt, boolean takeOverAllowed, Decision decision, Appeal appeal,
+			Restoration restoration, RemovalState removalState, List<OtherUse> otherUses) {
 	}
 
 	/** The numbers on the page's pills, each one a count of a list minus what the reader wrote. */
