@@ -52,7 +52,6 @@ class PublicReports {
 	private final ContentReportService reports;
 	private final List<ContentSurface> surfaces;
 	private final ModerationNotices notices;
-	private final CaseAccess access;
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
 	private final HinataProperties properties;
@@ -89,17 +88,12 @@ class PublicReports {
 	void file(Submission submission, Locale locale) {
 		String email = blank(submission.email()) ? null : submission.email().strip();
 		Notifier notifier = email == null ? null
-				: new Notifier(clip(submission.name(), NAME_MAX), email, countedEmail(email));
+				: new Notifier(clip(submission.name(), NAME_MAX), email);
 		ContentReportService.Source source = new ContentReportService.Source(ReportSource.PUBLIC,
 				"public:" + UUID.randomUUID(), null, notifier);
 		ContentReportService.Filed filed = reports.file(targetOf(submission.location().strip()),
 				submission.category(), clip(submission.explanation(), ContentReport.EXPLANATION_MAX_PUBLIC), source);
-		if (filed.newCase() || filed.becameUrgent()) {
-			notices.caseOpened(filed.moderationCase());
-		}
-		if (filed.newCase() && access.eligibleModerators(filed.moderationCase(), CaseAccess.Purpose.DECIDE).isEmpty()) {
-			notices.adminAlert(filed.moderationCase(), "moderation.alert.nobody");
-		}
+		notices.reportFiled(filed, false);
 		if (email != null) {
 			// The receipt never repeats what was entered: the form would be a way to send mail otherwise.
 			notifications.mailAddress(email, locale, "moderation.receipt.title", "moderation.receipt.body");

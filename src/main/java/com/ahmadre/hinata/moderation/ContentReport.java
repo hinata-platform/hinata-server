@@ -36,9 +36,10 @@ import java.time.Instant;
 		@CompoundIndex(name = "reporter_hidden",
 				def = "{'reporterId': 1, 'targetKind': 1, 'removed': 1, 'createdAt': -1, 'targetId': 1}",
 				partialFilter = "{'reporterId': {$exists: true}}"),
-		// The per-address limit for reports without an account (HIN-175).
-		@CompoundIndex(name = "notifier_email", def = "{'notifier.countedEmail': 1, 'createdAt': -1}",
-				partialFilter = "{'notifier.countedEmail': {$exists: true}}")
+		// Each source's child-safety reports, for its count of unfounded ones on the case page;
+		// answered from the index alone, which holds those few reports and nothing else.
+		@CompoundIndex(name = "child_safety_reporter", def = "{'reporterKey': 1, 'caseId': 1}",
+				partialFilter = "{'category': 'CHILD_SAFETY'}")
 })
 public class ContentReport {
 

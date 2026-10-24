@@ -4,7 +4,6 @@ import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.setup.OperatorContact;
 import com.ahmadre.hinata.setup.SettingsService;
-import com.ahmadre.hinata.user.UserRepository;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -24,13 +23,14 @@ class ModerationNoticesTest {
 	private final CaseAccess access = mock(CaseAccess.class);
 	private final OperatorContact contact = mock(OperatorContact.class);
 	private final SettingsService settings = mock(SettingsService.class);
-	private final ModerationNotices notices = new ModerationNotices(notifications, access, mock(UserRepository.class),
-			mock(UserWords.class), contact, settings);
+	private final ModerationNotices notices = new ModerationNotices(notifications, access, mock(UserWords.class),
+			contact, settings);
 	private final ModerationCase moderationCase = ModerationCase.builder().id("case-1").build();
 
 	@Test
 	void withNoAdminLeftTheContactGetsAMailInTheInstancesLanguage() {
-		when(access.eligibleAdmins(moderationCase)).thenReturn(List.of());
+		when(access.admins()).thenReturn(List.of());
+		when(access.eligibleAdmins(moderationCase, List.of())).thenReturn(List.of());
 		when(contact.current()).thenReturn(new OperatorContact.Contact("Fachschaft", "moderation@example.org", null));
 		when(settings.instanceLocale()).thenReturn(Locale.GERMAN);
 
@@ -43,7 +43,8 @@ class ModerationNoticesTest {
 
 	@Test
 	void withNoAdminAndNoContactNobodyIsWritten() {
-		when(access.eligibleAdmins(moderationCase)).thenReturn(List.of());
+		when(access.admins()).thenReturn(List.of());
+		when(access.eligibleAdmins(moderationCase, List.of())).thenReturn(List.of());
 		when(contact.current()).thenReturn(new OperatorContact.Contact(null, null, null));
 
 		notices.adminAlert(moderationCase, "moderation.alert.nobody");

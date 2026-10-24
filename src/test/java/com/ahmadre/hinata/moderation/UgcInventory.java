@@ -393,7 +393,6 @@ final class UgcInventory {
 			entry("moderation_reports.caseId", system()),
 			entry("moderation_reports.explanation", privateTo("moderation")),
 			entry("moderation_reports.id", system()),
-			entry("moderation_reports.notifier.countedEmail", system()),
 			entry("moderation_reports.notifier.email", system()),
 			entry("moderation_reports.notifier.name", privateTo("moderation")),
 			entry("moderation_reports.reporterId", system()),

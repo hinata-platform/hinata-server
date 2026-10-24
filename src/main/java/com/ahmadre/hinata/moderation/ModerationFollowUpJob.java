@@ -62,13 +62,15 @@ public class ModerationFollowUpJob {
 	}
 
 	void remind(Instant now) {
+		List<ModerationCase> due = claim("remindedAt", now.minus(REMIND_AFTER), now);
+		if (due.isEmpty()) {
+			return;
+		}
+		List<User> moderators = access.moderators();
 		Map<User, Integer> waiting = new LinkedHashMap<>();
-		Map<String, User> byId = new LinkedHashMap<>();
-		for (ModerationCase due : claim("remindedAt", now.minus(REMIND_AFTER), now)) {
-			for (User moderator : access.eligibleModerators(due, CaseAccess.Purpose.SEE)) {
-				User person = byId.computeIfAbsent(moderator.getId(), id -> moderator);
-				waiting.merge(person, 1, Integer::sum);
-			}
+		for (ModerationCase moderationCase : due) {
+			access.eligibleModerators(moderationCase, CaseAccess.Purpose.SEE, moderators)
+					.forEach(moderator -> waiting.merge(moderator, 1, Integer::sum));
 		}
 		if (!waiting.isEmpty()) {
 			notices.overdue(waiting);
@@ -84,19 +86,23 @@ public class ModerationFollowUpJob {
 
 	/**
 	 * The open cases older than [before] without [mark], each marked first and only then handed
-	 * back: a second instance finds the mark and leaves the case alone.
+	 * back: a second instance finds the mark and leaves the case alone. One read finds the due
+	 * ids; each is then marked by its id and comes back with what the notices read of it.
 	 */
 	private List<ModerationCase> claim(String mark, Instant before, Instant now) {
-		List<ModerationCase> claimed = new ArrayList<>();
 		Query due = Query.query(Criteria.where("status").is(CaseStatus.OPEN).and("firstReportedAt").lt(before)
-				.and(mark).is(null));
-		for (int i = 0; i < BATCH; i++) {
-			ModerationCase next = mongo.findAndModify(due, new Update().set(mark, now),
+				.and(mark).is(null)).limit(BATCH);
+		due.fields().include("_id");
+		List<ModerationCase> claimed = new ArrayList<>();
+		for (ModerationCase candidate : mongo.find(due, ModerationCase.class)) {
+			Query unmarked = Query.query(Criteria.where("_id").is(candidate.getId())
+					.and("status").is(CaseStatus.OPEN).and(mark).is(null));
+			unmarked.fields().include("contributorIds");
+			ModerationCase next = mongo.findAndModify(unmarked, new Update().set(mark, now),
 					FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
-			if (next == null) {
-				break;
+			if (next != null) {
+				claimed.add(next);
 			}
-			claimed.add(next);
 		}
 		return claimed;
 	}

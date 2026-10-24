@@ -40,6 +40,8 @@ import java.util.Set;
 		partialFilter = "{'suspension.until': {$type: 'date'}}")
 @CompoundIndex(name = "suspended", def = "{'suspension.at': -1, '_id': -1}",
 		partialFilter = "{'suspension.at': {$exists: true}}")
+// The active moderators and admins, read for every notice moderation sends (HIN-170).
+@CompoundIndex(name = "roles_active", def = "{'roles': 1, 'active': 1}")
 // An SSO sign-in finds its account by the provider's key for the person (HIN-179). Unique, so
 // one identity can never hold two accounts; partial, so the accounts without one cost nothing.
 @CompoundIndex(name = "sso_link",

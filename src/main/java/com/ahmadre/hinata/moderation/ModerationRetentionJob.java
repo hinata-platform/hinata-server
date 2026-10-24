@@ -6,6 +6,7 @@ import com.ahmadre.hinata.moderation.quarantine.QuarantinedVersion;
 import com.ahmadre.hinata.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -71,7 +72,9 @@ public class ModerationRetentionJob {
 				new Criteria().orOperator(Criteria.where("suspension").is(null),
 						Criteria.where("suspension.liftedAt").exists(true)),
 				new Criteria().orOperator(Criteria.where("purgingAt").is(null),
-						Criteria.where("purgingAt").lt(now.minus(STALE_CLAIM)))));
+						Criteria.where("purgingAt").lt(now.minus(STALE_CLAIM)))))
+				.with(Sort.by("retainUntil"));
+		due.fields().include("_id");
 		return mongo.findAndModify(due, new Update().set("purgingAt", now),
 				FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
 	}
