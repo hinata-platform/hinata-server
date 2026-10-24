@@ -65,6 +65,10 @@ public class ModerationStats {
 		if (!decision.acted() || decision.category() == null || decision.ground() == null) {
 			return;
 		}
+		if (decision.outcome() == Decision.Outcome.ACTION && !c.restricted()) {
+			// An action whose suspension was refused restricted nothing.
+			return;
+		}
 		String category = decision.category().name();
 		String ground = decision.ground().name();
 		if (decision.basis() == Decision.Basis.NOTICE) {
@@ -73,7 +77,7 @@ public class ModerationStats {
 			return;
 		}
 		count(StatMetric.OWN_MEASURE, ground + ":" + category);
-		for (Restriction restriction : restrictionsOf(decision)) {
+		for (Restriction restriction : restrictionsOf(decision, c.getSuspension() != null)) {
 			count(StatMetric.OWN_RESTRICTION, ground + ":" + category + ":" + restriction);
 		}
 	}
@@ -90,13 +94,16 @@ public class ModerationStats {
 		count(StatMetric.APPEAL_HOURS, complaint + ":" + hoursBucket(appeal == null ? null : appeal.filedAt(), now));
 	}
 
-	/** What [decision] restricted; a removal and a suspension decided together are two. */
-	static List<Restriction> restrictionsOf(Decision decision) {
+	/**
+	 * What [decision] restricted, a suspension only when it took effect ([suspended]); a removal and
+	 * a suspension decided together are two.
+	 */
+	static List<Restriction> restrictionsOf(Decision decision, boolean suspended) {
 		List<Restriction> restrictions = new ArrayList<>();
 		if (decision.removal() != null) {
 			restrictions.add(Restriction.REMOVAL);
 		}
-		if (decision.suspension() != null) {
+		if (decision.suspension() != null && suspended) {
 			restrictions.add(decision.suspension() == Decision.SuspensionLength.INDEFINITE ? Restriction.TERMINATION
 					: Restriction.SUSPENSION);
 		}

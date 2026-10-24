@@ -86,8 +86,7 @@ public class AppealService {
 
 	private ModerationCase noticeOf(String caseId, User person) {
 		ModerationCase c = caseId == null ? null : mongo.findById(caseId, ModerationCase.class);
-		if (c == null || c.getDecision() == null || !DecisionNotices.owesStatement(c.getDecision())
-				|| !person.getId().equals(c.getDecision().responsibleId())) {
+		if (c == null || !DecisionNotices.owesStatement(c) || !person.getId().equals(c.getDecision().responsibleId())) {
 			throw ApiException.notFound("moderationNotice");
 		}
 		return c;
@@ -103,7 +102,7 @@ public class AppealService {
 		Guarded guarded = access.require(id, Purpose.SEE);
 		ModerationCase c = guarded.moderationCase();
 		User moderator = guarded.moderator();
-		if (c.getDecision() == null || !DecisionNotices.owesStatement(c.getDecision())) {
+		if (!DecisionNotices.owesStatement(c)) {
 			throw ApiException.badRequest("error.moderation.outcomeNotAllowed");
 		}
 		Instant now = clock.instant();

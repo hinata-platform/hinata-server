@@ -63,6 +63,11 @@ class DecisionNotices {
 		return decision.outcome() == Decision.Outcome.ACTION && !Boolean.TRUE.equals(decision.deceptiveCommercial());
 	}
 
+	/** Whether the decided [c] owes a statement: its decision does, and it restricted something. */
+	static boolean owesStatement(ModerationCase c) {
+		return c.getDecision() != null && owesStatement(c.getDecision()) && c.restricted();
+	}
+
 	/**
 	 * The statement of [c]: to the person responsible through the bell and a mail they get whatever
 	 * their account says; with nobody responsible, a neutral mail to the address the content came
@@ -167,7 +172,10 @@ class DecisionNotices {
 		Decision decision = c.getDecision();
 		boolean removed = decision.outcome() == Decision.Outcome.ACTION && decision.removal() != null
 				&& c.getRestoration() == null;
-		String key = "moderation.decision." + decision.outcome();
+		// An action that removed nothing says only that moderation acted: what it did to a person is
+		// not for whoever reported.
+		String key = "moderation.decision." + (decision.outcome() == Decision.Outcome.ACTION && !removed
+				? "ACTED" : decision.outcome().name());
 		for (int round = 0; round < ROUNDS; round++) {
 			Query untold = Query.query(Criteria.where("caseId").is(c.getId()).and("decisionNoticeSentAt").is(null))
 					.limit(BATCH);
