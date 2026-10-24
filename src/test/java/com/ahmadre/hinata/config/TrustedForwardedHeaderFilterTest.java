@@ -91,11 +91,37 @@ class TrustedForwardedHeaderFilterTest {
 		assertThat(filter.ignoredAt()).isNotNull();
 	}
 
+	/**
+	 * Removing {@code for=} by text joined what stood on either side of it into a new one: a
+	 * client wrote its own address into what Spring then took as the client's.
+	 */
 	@Test
-	void theForElementsOfForwardedGoAndTheRestStays() {
-		assertThat(TrustedForwardedHeaderFilter.withoutFor("for=6.6.6.6;proto=https;host=a.example"))
+	void noForwardedHeaderAssemblesAnAddress() throws Exception {
+		for (String forged : List.of("ffor=;or=203.0.113.7", "fofor=x;r=203.0.113.7", "forfor=;=203.0.113.7",
+				"for=\"6.6.6.6\";for=203.0.113.7")) {
+			assertThat(through(List.of(), "198.51.100.9", "Forwarded", forged).address()).as(forged)
+					.isEqualTo("198.51.100.9");
+			assertThat(through(List.of("10.0.0.0/8"), "10.0.0.1", "Forwarded", forged).address()).as(forged)
+					.isEqualTo("10.0.0.1");
+		}
+	}
+
+	@Test
+	void aTrustedProxyKeepsProtoAndHostOfForwarded() throws Exception {
+		Seen seen = through(List.of("10.0.0.0/8"), "10.0.0.1", "Forwarded",
+				"for=6.6.6.6;proto=https;host=track.example.org", "X-Forwarded-For", "198.51.100.7");
+		assertThat(seen.scheme()).isEqualTo("https");
+		assertThat(seen.host()).isEqualTo("track.example.org");
+		assertThat(seen.address()).isEqualTo("198.51.100.7");
+	}
+
+	@Test
+	void forwardedKeepsProtoAndHostAndNothingElse() {
+		assertThat(TrustedForwardedHeaderFilter.proxyFacts("for=6.6.6.6;proto=https;host=a.example"))
 				.isEqualTo("proto=https;host=a.example");
-		assertThat(TrustedForwardedHeaderFilter.withoutFor("proto=https;for=\"[2001:db8::1]:443\"")).isEqualTo("proto=https");
-		assertThat(TrustedForwardedHeaderFilter.withoutFor("for=1.1.1.1, for=2.2.2.2")).isNull();
+		assertThat(TrustedForwardedHeaderFilter.proxyFacts("proto=https;for=\"[2001:db8::1]:443\"")).isEqualTo("proto=https");
+		assertThat(TrustedForwardedHeaderFilter.proxyFacts("for=1.1.1.1, for=2.2.2.2")).isNull();
+		assertThat(TrustedForwardedHeaderFilter.proxyFacts("by=10.0.0.1;host=\"a;b.example\"")).isEqualTo("host=\"a;b.example\"");
+		assertThat(TrustedForwardedHeaderFilter.proxyFacts("ffor=;or=203.0.113.7")).isNull();
 	}
 }

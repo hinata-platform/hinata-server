@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.context.MessageSource;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.UrlPathHelper;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -86,7 +87,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
 			return;
 		}
 		String ip = clientIpResolver.resolve(request);
-		String uri = request.getRequestURI();
+		// The route, not the request URI: a forwarded prefix stands in front of the URI and would
+		// move a sign-in off the strict budget.
+		String uri = UrlPathHelper.defaultInstance.getPathWithinApplication(request);
 		// Long-lived SSE streams (…/stream) are opened once per view and then
 		// transparently reconnect; metering them like discrete API calls would let
 		// a single viewer's streams + reconnects drain the shared per-IP budget.
