@@ -11,7 +11,6 @@ import com.ahmadre.hinata.setup.SettingsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.time.Clock;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,8 +39,8 @@ class LexiconTextGateTest {
 		filter = new ServerSettings.Filter();
 		moderation.setFilter(filter);
 		stored.setModeration(moderation);
-		when(settings.get()).thenReturn(stored);
-		gate = new LexiconTextGate(settings, mock(ContentReportService.class), stats, Clock.systemUTC());
+		when(settings.current()).thenReturn(stored);
+		gate = new LexiconTextGate(settings, mock(ContentReportService.class), stats);
 	}
 
 	/** The gate reads its settings once and again after a change; a test changes them in between. */

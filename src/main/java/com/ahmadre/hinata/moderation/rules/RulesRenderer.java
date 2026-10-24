@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.moderation.rules;
 
+import com.ahmadre.hinata.common.Languages;
 import com.ahmadre.hinata.setup.ServerSettings.RulesMode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.MessageSource;
@@ -28,9 +29,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 class RulesRenderer {
 
-	/** Every language the server speaks, the order the bundles are kept in. */
-	static final List<String> LANGUAGES = List.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
-
 	private static final String TEMPLATE_DIR = "moderation-rules/";
 
 	private final MessageSource messages;
@@ -57,10 +55,10 @@ class RulesRenderer {
 		}
 	}
 
-	/** The rules in each language, by language tag, in {@link #LANGUAGES} order. */
+	/** The rules in each language, by language tag, in {@link Languages#SUPPORTED} order. */
 	Map<String, String> render(Inputs inputs) {
 		Map<String, String> rendered = new LinkedHashMap<>();
-		for (String language : LANGUAGES) {
+		for (String language : Languages.SUPPORTED) {
 			rendered.put(language, render(inputs, Locale.forLanguageTag(language)));
 		}
 		return rendered;

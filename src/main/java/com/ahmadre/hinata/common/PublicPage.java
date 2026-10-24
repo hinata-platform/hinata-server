@@ -19,9 +19,6 @@ public final class PublicPage {
 	private PublicPage() {
 	}
 
-	/** The languages these pages are translated into. */
-	public static final Set<String> LOCALES = Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
-
 	/** Languages written right to left. */
 	private static final Set<String> RIGHT_TO_LEFT = Set.of("ar");
 
@@ -60,7 +57,7 @@ public final class PublicPage {
 			return Locale.ENGLISH;
 		}
 		String tag = acceptLanguage.split(",")[0].trim().split("[-;]")[0].toLowerCase(Locale.ROOT);
-		return LOCALES.contains(tag) ? Locale.forLanguageTag(tag) : Locale.ENGLISH;
+		return Languages.SUPPORTED.contains(tag) ? Locale.forLanguageTag(tag) : Locale.ENGLISH;
 	}
 
 	/**

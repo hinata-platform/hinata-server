@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.config;
 
+import com.ahmadre.hinata.common.Languages;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.LocaleResolver;
@@ -25,10 +26,7 @@ public class LocaleConfig {
 	 * {@code email-messages_*} bundle pair. English stays the fallback for
 	 * anything else a browser asks for.
 	 */
-	private static final List<Locale> SUPPORTED = List.of(Locale.ENGLISH, Locale.GERMAN,
-			Locale.CHINESE, Locale.forLanguageTag("hi"), Locale.forLanguageTag("es"),
-			Locale.JAPANESE, Locale.FRENCH, Locale.forLanguageTag("ru"),
-			Locale.forLanguageTag("ar"));
+	private static final List<Locale> SUPPORTED = Languages.SUPPORTED.stream().map(Locale::forLanguageTag).toList();
 
 	/**
 	 * The same list as a {@code @Pattern} regex for the profile endpoints, which
@@ -41,7 +39,7 @@ public class LocaleConfig {
 
 	/** The language tags behind {@link #LANGUAGE_PATTERN}, for tests and callers that need the list. */
 	public static List<String> supportedLanguages() {
-		return SUPPORTED.stream().map(Locale::getLanguage).toList();
+		return Languages.SUPPORTED;
 	}
 
 	@Bean

@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.moderation.rules;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.Languages;
 import com.ahmadre.hinata.user.User;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.NotNull;
@@ -47,11 +48,11 @@ class RulesController {
 	private static String languageOf(String acceptLanguage, User user) {
 		if (acceptLanguage != null && !acceptLanguage.isBlank()) {
 			String tag = acceptLanguage.split(",")[0].strip().split("[-_;]")[0].toLowerCase(Locale.ROOT);
-			if (RulesRenderer.LANGUAGES.contains(tag)) {
+			if (Languages.SUPPORTED.contains(tag)) {
 				return tag;
 			}
 		}
 		String own = user.getLocale() == null ? "" : user.getLocale().split("[-_]")[0].toLowerCase(Locale.ROOT);
-		return RulesRenderer.LANGUAGES.contains(own) ? own : "en";
+		return Languages.SUPPORTED.contains(own) ? own : "en";
 	}
 }

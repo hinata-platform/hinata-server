@@ -16,7 +16,7 @@ class SettingsUploadPolicy implements UploadPolicy {
 
 	@Override
 	public Set<UploadGroup> disabledGroups() {
-		ServerSettings.Moderation moderation = settings.get().getModeration();
+		ServerSettings.Moderation moderation = settings.current().getModeration();
 		if (moderation == null || moderation.getUploads() == null
 				|| moderation.getUploads().getDisabledGroups() == null) {
 			return Set.of();

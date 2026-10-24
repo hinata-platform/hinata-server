@@ -66,6 +66,6 @@ public class AuthPolicy {
 	}
 
 	private ServerSettings.App app() {
-		return settings.get().getApp();
+		return settings.current().getApp();
 	}
 }

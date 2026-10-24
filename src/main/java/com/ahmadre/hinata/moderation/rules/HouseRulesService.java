@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.Expiring;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.setup.OperatorContact;
 import com.ahmadre.hinata.setup.ServerSettings;
@@ -65,9 +66,9 @@ public class HouseRulesService implements HouseRules {
 	private final CurrentUser currentUser;
 	private final Clock clock;
 
-	private volatile Snapshot cached;
+	private final Expiring<Snapshot> versions = new Expiring<>(MAX_AGE, this::readVersions);
 
-	private record Snapshot(Integer current, Integer required, Instant readAt) {
+	private record Snapshot(Integer current, Integer required) {
 	}
 
 	/** What a person sees of the rules: the current version in their language, and what they accepted. */
@@ -92,17 +93,14 @@ public class HouseRulesService implements HouseRules {
 	}
 
 	private Snapshot snapshot() {
-		Snapshot snapshot = cached;
-		Instant now = clock.instant();
-		if (snapshot == null || !snapshot.readAt().plus(MAX_AGE).isAfter(now)) {
-			RulesVersion latest = latest();
-			RulesVersion required = mongo.findOne(Query.query(Criteria.where("requiresReacceptance").is(true))
-					.with(Sort.by(Sort.Direction.DESC, "version")).limit(1), RulesVersion.class);
-			snapshot = new Snapshot(latest == null ? null : latest.getVersion(),
-					required == null ? null : required.getVersion(), now);
-			cached = snapshot;
-		}
-		return snapshot;
+		return versions.get(clock.instant());
+	}
+
+	private Snapshot readVersions() {
+		RulesVersion latest = latest();
+		RulesVersion required = mongo.findOne(Query.query(Criteria.where("requiresReacceptance").is(true))
+				.with(Sort.by(Sort.Direction.DESC, "version")).limit(1), RulesVersion.class);
+		return new Snapshot(latest == null ? null : latest.getVersion(), required == null ? null : required.getVersion());
 	}
 
 	/** The current version; null before the first. */
@@ -182,10 +180,10 @@ public class HouseRulesService implements HouseRules {
 		}
 		catch (DuplicateKeyException raced) {
 			// Another instance wrote this version a moment ago; it says the same.
-			cached = null;
+			versions.clear();
 			return latest();
 		}
-		cached = null;
+		versions.clear();
 		audit.event(AuditAction.MODERATION_RULES_VERSION_CREATED)
 				.actor(actor)
 				.meta("version", String.valueOf(next))
