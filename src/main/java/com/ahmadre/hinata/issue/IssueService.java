@@ -17,6 +17,8 @@ import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadCandidate;
+import com.ahmadre.hinata.storage.UploadKind;
 import com.ahmadre.hinata.timetracking.WorkItem;
 import com.ahmadre.hinata.timetracking.WorkItemRepository;
 import com.ahmadre.hinata.user.User;
@@ -94,12 +96,6 @@ public class IssueService {
 
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
-	/** Audio MIME types accepted for voice comments (per recording platform). */
-	private static final Set<String> VOICE_TYPES = Set.of(
-			"audio/mp4", "audio/aac", "audio/x-m4a", "audio/m4a", "audio/mpeg",
-			"audio/webm", "audio/ogg", "audio/wav", "audio/x-wav");
-	/** Hard cap on a single voice message (guards memory + storage). */
-	private static final long VOICE_MAX_BYTES = 16L * 1024 * 1024;
 	/** Waveform bar count bounds — a malformed client can't flood the document. */
 	private static final int VOICE_MAX_PEAKS = 96;
 
@@ -1813,23 +1809,6 @@ public class IssueService {
 			List<Integer> peaks, String replyToId, User author) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
-		if (file == null || file.isEmpty()) {
-			throw ApiException.badRequest("error.voice.empty");
-		}
-		String contentType = file.getContentType();
-		if (contentType == null || !VOICE_TYPES.contains(contentType.toLowerCase())) {
-			throw ApiException.badRequest("error.voice.notAudio");
-		}
-		if (file.getSize() > VOICE_MAX_BYTES) {
-			throw ApiException.badRequest("error.voice.tooLarge");
-		}
-		byte[] data;
-		try {
-			data = file.getBytes();
-		}
-		catch (java.io.IOException ex) {
-			throw ApiException.badRequest("error.storage.unreadableUpload");
-		}
 		// Clamp untrusted metadata: non-negative duration, at most VOICE_MAX_PEAKS
 		// bars, each normalised into 0–100.
 		int safeDuration = Math.max(0, durationMs);
@@ -1840,14 +1819,15 @@ public class IssueService {
 					.limit(VOICE_MAX_PEAKS)
 					.forEach(p -> safePeaks.add(Math.clamp(p, 0, 100)));
 		}
-		String objectKey = VOICE_PREFIX + java.util.UUID.randomUUID();
-		storage.putObject(objectKey, data, contentType);
+		// Types, size and the audio's signature are the gate's (per recording platform).
+		StorageService.Stored stored = storage.putUserObject(StorageService.newObjectKey(VOICE_PREFIX),
+				UploadCandidate.of(UploadKind.VOICE, file));
 		IssueComment.Voice voice = IssueComment.Voice.builder()
-				.objectKey(objectKey)
+				.objectKey(stored.objectKey())
 				.durationMs(safeDuration)
 				.peaks(safePeaks)
-				.size(file.getSize())
-				.contentType(contentType)
+				.size(stored.size())
+				.contentType(stored.contentType())
 				.build();
 		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())

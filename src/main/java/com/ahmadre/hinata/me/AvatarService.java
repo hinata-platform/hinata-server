@@ -5,6 +5,7 @@ import com.ahmadre.hinata.content.ContentSnapshot;
 import com.ahmadre.hinata.storage.AvatarImages;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadGate;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +30,7 @@ public class AvatarService {
 	private final StorageService storage;
 	private final UserRepository users;
 	private final ImagePreviewService previews;
+	private final UploadGate gate;
 
 	/** Object key for a user's avatar, e.g. {@code avatars/{userId}.jpg}. */
 	public static String objectKey(String userId) {
@@ -37,7 +39,7 @@ public class AvatarService {
 
 	/** Compresses + stores [file] as [user]'s avatar in S3 and returns the URL. */
 	public String store(User user, MultipartFile file) {
-		byte[] jpeg = AvatarImages.compress(file);
+		byte[] jpeg = AvatarImages.compress(gate, file);
 		// Deterministic key in the avatars/ folder: re-uploads overwrite cleanly,
 		// no orphaned objects. The bucket stays private; bytes are served back
 		// through the AvatarController proxy, so S3 credentials never leave the

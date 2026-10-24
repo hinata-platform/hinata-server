@@ -57,17 +57,18 @@ public class AttachmentController {
 		// Authorize against the issue's project before touching storage (A01).
 		Issue issue = issueService.getForUser(issueId, currentUser.require());
 		String userId = currentUser.requireId();
-		String objectKey = storage.upload(file);
+		// Byte for byte as sent, metadata and all: somebody attached this file on purpose.
+		StorageService.Stored stored = storage.upload(UploadCandidate.of(UploadKind.ATTACHMENT, file), "");
 		String attachmentId = UUID.randomUUID().toString();
 		Issue.Attachment attachment = Issue.Attachment.builder()
 				.id(attachmentId)
 				.fileName(file.getOriginalFilename())
-				.contentType(file.getContentType())
-				.size(file.getSize())
-				.objectKey(objectKey)
+				.contentType(stored.contentType())
+				.size(stored.size())
+				.objectKey(stored.objectKey())
 				.uploaderId(userId)
 				.uploadedAt(Instant.now())
-				.blurHash(storePreview(attachmentId, file))
+				.blurHash(storePreview(attachmentId, stored.contentType(), file))
 				.build();
 		// Atomic $push so parallel uploads to the same issue can't lose each other.
 		Issue saved = store.add(issue.getId(), attachment);
@@ -82,8 +83,8 @@ public class AttachmentController {
 	 * preview problem fail the upload: the file itself is already stored, and a
 	 * client without a preview simply falls back to the full image.
 	 */
-	private String storePreview(String attachmentId, MultipartFile file) {
-		if (!ImagePreviewService.isPreviewable(file.getContentType())) {
+	private String storePreview(String attachmentId, String contentType, MultipartFile file) {
+		if (!ImagePreviewService.isPreviewable(contentType)) {
 			return null;
 		}
 		try {

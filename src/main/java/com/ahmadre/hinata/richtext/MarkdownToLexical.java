@@ -485,9 +485,12 @@ public final class MarkdownToLexical {
 
 	private ObjectNode autoLink(AutoLink link, int format) {
 		String url = link.getUrl().toString();
-		ArrayNode children = mapper.createArrayNode();
-		children.add(text(url, format));
-		ObjectNode element = element("link", children, 0);
+		return linkTo(url, url, format);
+	}
+
+	/** A link to [url] showing [label], shaped as every link this package writes. */
+	ObjectNode linkTo(String url, String label, int format) {
+		ObjectNode element = element("link", textOnly(label, format), 0);
 		element.putNull("rel");
 		element.putNull("target");
 		element.putNull("title");
@@ -585,7 +588,7 @@ public final class MarkdownToLexical {
 		return node;
 	}
 
-	private ObjectNode text(String value, int format) {
+	ObjectNode text(String value, int format) {
 		ObjectNode node = mapper.createObjectNode();
 		node.put("detail", 0);
 		node.put("format", format);
