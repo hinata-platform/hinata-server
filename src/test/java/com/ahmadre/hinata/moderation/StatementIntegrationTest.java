@@ -84,7 +84,9 @@ class StatementIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(english.measure()).startsWith("Your comment of").contains("ACME-1").doesNotContain("Stand B12");
 		assertThat(english.facts()).isEqualTo(DecisionIntegrationTest.FACTS);
 		assertThat(english.automatedDecision()).isFalse();
-		assertThat(english.rulesUrl()).isEqualTo("/api/v1/public/rules");
+		// The version the decision applied, as it read then (HIN-175).
+		assertThat(decided.getDecision().rulesVersion()).isNotNull();
+		assertThat(english.rulesUrl()).isEqualTo("/api/v1/public/rules?version=" + decided.getDecision().rulesVersion());
 		assertThat(english.appealable()).isTrue();
 		assertThat(english.toString()).doesNotContain(reader.getId(), "lena");
 		for (String tag : LANGUAGES) {

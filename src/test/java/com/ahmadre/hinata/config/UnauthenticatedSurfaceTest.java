@@ -65,6 +65,12 @@ class UnauthenticatedSurfaceTest {
 			// What an app learns about a server before signing in: name, logo, contact for reports.
 			"GET /api/v1/meta",
 			"GET /api/v1/meta/logo",
+			// The house rules and the form for reports from people without an account (HIN-175, DSA
+			// Art. 14 and 16): a token per form, bound to the address, limits in the database, nothing
+			// echoed back.
+			"GET /api/v1/public/rules",
+			"GET /api/v1/public/report",
+			"POST /api/v1/public/report",
 			// Profile pictures for mails and pushes.
 			"GET /api/v1/users/{id}/avatar",
 			// The first start of a new server; refused once it is set up.
@@ -125,7 +131,7 @@ class UnauthenticatedSurfaceTest {
 	 * chains; Tomcat's WebSocket filter acts only on WebSocket endpoints, and the server registers none.
 	 */
 	static final Set<String> SERVLET_FILTERS = Set.of("Tomcat WebSocket (JSR356) Filter", "characterEncodingFilter",
-			"formContentFilter", "forwardedHeaderFilter", "rateLimitFilter", "requestContextFilter",
+			"formContentFilter", "rateLimitFilter", "requestContextFilter", "trustedForwardedHeaderFilter",
 			"springSecurityFilterChain", "webMvcObservationFilter");
 
 	private static final String REVIEW = "Whatever answers without a token can reach people outside the "

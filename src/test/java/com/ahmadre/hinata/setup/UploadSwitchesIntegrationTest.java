@@ -86,6 +86,8 @@ class UploadSwitchesIntegrationTest {
 		settings.save(current);
 
 		assertThat(gate.refusalOf(pdf())).contains(UploadRefusal.DISABLED);
+		// What the app is told before somebody picks a file says the same.
+		assertThat(gate.attachmentTypes()).doesNotContain("application/pdf").contains("image/png");
 
 		User admin = users.save(User.builder().username("admin").email("admin@example.org").displayName("Admin")
 				.roles(Set.of(Role.ADMIN, Role.MEMBER)).build());
