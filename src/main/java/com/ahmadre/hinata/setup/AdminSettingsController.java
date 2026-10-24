@@ -2,9 +2,7 @@ package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
-import com.ahmadre.hinata.auth.AccountAdmission;
 import com.ahmadre.hinata.auth.CurrentUser;
-import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
@@ -52,7 +50,6 @@ public class AdminSettingsController {
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final OrganizationLogoService logoService;
 	private final BrandLogoService brandLogo;
-	private final AccountAdmission admission;
 
 	@GetMapping
 	public ServerSettings get() {
@@ -281,22 +278,6 @@ public class AdminSettingsController {
 		boolean droppingUpload = OrganizationLogoService.isInternal(current.getGeneral().getLogoUrl())
 				&& (updated.getGeneral() == null
 						|| !OrganizationLogoService.isInternal(updated.getGeneral().getLogoUrl()));
-		// A way in that lets new accounts in without approval opens only when the administrator
-		// confirmed what that makes of the instance (HIN-175).
-		List<String> wasOpen = admission.openWays(current).stream().map(AccountAdmission.OpenWay::way).toList();
-		List<String> nowOpen = admission.openWays(updated).stream().map(AccountAdmission.OpenWay::way).toList();
-		List<String> opened = nowOpen.stream().filter(way -> !wasOpen.contains(way)).toList();
-		if (!opened.isEmpty() && !Boolean.TRUE.equals(updated.getOpenAccessConfirmed())) {
-			throw ApiException.refusal(HttpStatus.CONFLICT, "error.moderation.openAccessUnconfirmed",
-					Map.of("ways", String.join(",", opened)));
-		}
-		// Putting texts before moderation starts only once the administrator confirmed that the works
-		// council was involved and the impact assessment done (HIN-176).
-		ServerSettings.Filter filterBefore = filterOf(current);
-		ServerSettings.Filter filterAfter = filterOf(updated);
-		if (filterAfter.flags() && !filterBefore.flags() && !Boolean.TRUE.equals(updated.getFlagConfirmed())) {
-			throw ApiException.refusal(HttpStatus.CONFLICT, "error.moderation.flagUnconfirmed");
-		}
 		// Before the audit record and before the write, so a refusal leaves no
 		// trace of a change that did not happen. A module guard throws on purpose
 		// — unlike the audit hooks below, which must never fail a save.
@@ -324,39 +305,12 @@ public class AdminSettingsController {
 			writes.carryOrganisationalAuditEvents(updated, writes.organisationalAuditEvents(current));
 		}
 		ServerSettings saved = settings.save(updated);
-		for (String way : opened) {
-			audit.event(AuditAction.ACCOUNT_APPROVAL_CHANGED).actor(actor).meta("way", way).meta("open", "true").log();
-		}
-		for (String way : wasOpen) {
-			if (!nowOpen.contains(way)) {
-				audit.event(AuditAction.ACCOUNT_APPROVAL_CHANGED).actor(actor).meta("way", way).meta("open", "false")
-						.log();
-			}
-		}
-		if (!sameFilter(filterBefore, filterAfter)) {
-			audit.event(AuditAction.MODERATION_FILTER_CHANGED).actor(actor)
-					.meta("block", String.valueOf(filterAfter.blocks()))
-					.meta("flag", String.valueOf(filterAfter.flags()))
-					.meta("blockTerms", String.valueOf(filterAfter.ownBlockTerms().size()))
-					.meta("allowTerms", String.valueOf(filterAfter.ownAllowTerms().size()))
-					.log();
-		}
 		// After the save: a failed write must not leave the settings pointing at an
 		// object that is already gone.
 		if (droppingUpload) {
 			logoService.deleteStoredObject();
 		}
 		return saved;
-	}
-
-	private static ServerSettings.Filter filterOf(ServerSettings stored) {
-		return stored.moderationOrDefault().filterOrDefault();
-	}
-
-	/** Whether the text check does the same with [a] as with [b]; the terms compared as lists. */
-	private static boolean sameFilter(ServerSettings.Filter a, ServerSettings.Filter b) {
-		return a.blocks() == b.blocks() && a.flags() == b.flags() && a.ownBlockTerms().equals(b.ownBlockTerms())
-				&& a.ownAllowTerms().equals(b.ownAllowTerms());
 	}
 
 	/** WRITE_ONLY secrets are not echoed back; keep stored values when omitted. */
