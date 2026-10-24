@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.board.Sprint;
+import com.ahmadre.hinata.board.SprintController;
 import com.ahmadre.hinata.board.SprintService;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.user.User;
@@ -29,6 +30,7 @@ public class SprintWriteTools {
 	private final CurrentUser currentUser;
 	private final SprintService sprintService;
 	private final AuditService audit;
+	private final McpErrors errors;
 
 	@McpTool(name = "create_sprint", title = "Create sprint",
 			annotations = @McpTool.McpAnnotations(destructiveHint = false, openWorldHint = false),
@@ -43,6 +45,7 @@ public class SprintWriteTools {
 			@McpToolParam(required = false, description = "Capacity in story points") Integer capacityPoints) {
 		scopeGuard.require(Scopes.SPRINTS_WRITE);
 		User me = currentUser.require();
+		requireSprintBounds(name, goal, me);
 		Sprint saved = sprintService.create(boardId, name, goal, startDate, endDate, capacityPoints, me);
 		audit.event(AuditAction.MCP_SPRINT_CREATED).actor(me)
 				.meta("sprint", saved.getId()).meta("board", boardId).log();
@@ -62,6 +65,7 @@ public class SprintWriteTools {
 			@McpToolParam(required = false, description = "New capacity in story points") Integer capacityPoints) {
 		scopeGuard.require(Scopes.SPRINTS_WRITE);
 		User me = currentUser.require();
+		requireSprintBounds(name, goal, me);
 		Sprint saved = sprintService.update(sprintId, name, goal, startDate, endDate, capacityPoints, me);
 		audit.event(AuditAction.MCP_SPRINT_UPDATED).actor(me)
 				.meta("sprint", saved.getId()).log();
@@ -78,6 +82,7 @@ public class SprintWriteTools {
 			@McpToolParam(required = false, description = "Last day of the sprint (yyyy-MM-dd)") LocalDate endDate) {
 		scopeGuard.require(Scopes.SPRINTS_WRITE);
 		User me = currentUser.require();
+		requireSprintBounds(null, goal, me);
 		Sprint saved = sprintService.start(sprintId, goal, endDate, me);
 		audit.event(AuditAction.MCP_SPRINT_STARTED).actor(me)
 				.meta("sprint", saved.getId()).log();
@@ -98,5 +103,11 @@ public class SprintWriteTools {
 		audit.event(AuditAction.MCP_SPRINT_COMPLETED).actor(me)
 				.meta("sprint", sprintId).log();
 		return "completed";
+	}
+
+	/** The bounds {@link SprintController} holds for the app. */
+	private void requireSprintBounds(String name, String goal, User me) {
+		errors.requireLength(name, SprintController.MAX_NAME, "name", me);
+		errors.requireLength(goal, SprintController.MAX_GOAL, "goal", me);
 	}
 }

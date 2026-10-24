@@ -23,19 +23,23 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SprintController {
 
+	/** Bounds of a sprint, here, on the board route and in the MCP tools. */
+	public static final int MAX_NAME = 120;
+	public static final int MAX_GOAL = 2000;
+
 	private final SprintService sprintService;
 	private final CurrentUser currentUser;
 
 	public record CreateSprintRequest(@NotBlank String boardId,
-			@NotBlank @Size(max = 120) String name, @Size(max = 2000) String goal,
+			@NotBlank @Size(max = MAX_NAME) String name, @Size(max = MAX_GOAL) String goal,
 			LocalDate startDate, LocalDate endDate, Integer capacityPoints) {
 	}
 
-	public record UpdateSprintRequest(@Size(max = 120) String name, @Size(max = 2000) String goal,
+	public record UpdateSprintRequest(@Size(max = MAX_NAME) String name, @Size(max = MAX_GOAL) String goal,
 			LocalDate startDate, LocalDate endDate, Integer capacityPoints) {
 	}
 
-	public record StartSprintRequest(@Size(max = 2000) String goal, LocalDate endDate) {
+	public record StartSprintRequest(@Size(max = MAX_GOAL) String goal, LocalDate endDate) {
 	}
 
 	public record CompleteSprintRequest(String moveOpenTo) {
