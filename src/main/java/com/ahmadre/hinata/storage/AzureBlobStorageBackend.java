@@ -120,6 +120,11 @@ class AzureBlobStorageBackend implements StorageBackend {
 	}
 
 	@Override
+	public boolean exists(String objectKey) throws Exception {
+		return container.getBlobClient(objectKey).exists();
+	}
+
+	@Override
 	public List<ObjectInfo> list(String keyPrefix) throws Exception {
 		List<ObjectInfo> objects = new ArrayList<>();
 		try {
