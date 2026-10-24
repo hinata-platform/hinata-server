@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -84,6 +85,17 @@ class IssueLabelChecksTest {
 		Issue issue = Issue.builder().projectId("p1").title("Repeated").tags(repeated).build();
 
 		assertThat(service.create(issue, user).getTags()).containsExactly("api");
+	}
+
+	/** Who writes an issue is checked once, against the project read once. */
+	@Test
+	void readsTheProjectOnceAndChecksTheMemberOnce() {
+		when(issues.save(any(Issue.class))).thenAnswer(saved -> saved.getArgument(0));
+
+		service.create(Issue.builder().projectId("p1").title("Stand").build(), user);
+
+		verify(projects, times(1)).get("p1");
+		verify(projects, times(1)).assertMember(any(), eq(user));
 	}
 
 	@Test
