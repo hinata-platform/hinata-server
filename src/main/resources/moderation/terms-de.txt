@@ -1,0 +1,114 @@
+# German terms the text check knows (HIN-176).
+#
+# Format: CATEGORY<TAB>WEIGHT<TAB>TERM, one rule per line.
+#
+#   CATEGORY  a value of content.ReportCategory
+#   WEIGHT    1 to 100, how sure the term alone makes the category. From 85 the
+#             server refuses the text (when refusing is on); from 55 it can put
+#             it before moderation (only when an administrator switched that on).
+#             Keep 85 and above for terms with no innocent reading at all.
+#   TERM      a word or a phrase. Matched on whole normalised words, never as a
+#             part of a word, so "Analyse" is safe next to a rule for "anal".
+#             Phrases win over the exceptions: "kill yourself" fires although
+#             "kill" alone is a technical word.
+#
+# Before adding a term, ask whether it can appear in an ordinary work message,
+# an issue, a log or a shell command ("I'll shoot you an email", "ich schlage
+# dich vor", "cp video.mp4"). If it can, do not add it, or add it below 85.
+
+# --- sexueller Missbrauch von Kindern -------------------------------------
+CHILD_SAFETY	95	kinderporno
+CHILD_SAFETY	95	kinderpornografie
+CHILD_SAFETY	95	kinderpornographie
+CHILD_SAFETY	90	kinderpornos
+CHILD_SAFETY	90	minderjaehrige nackt
+CHILD_SAFETY	90	minderjährige nackt
+CHILD_SAFETY	90	kinder nackt
+CHILD_SAFETY	85	kinderschaender
+CHILD_SAFETY	85	kinderschänder
+
+# --- sexuell / pornografisch ----------------------------------------------
+SEXUAL	70	porno
+SEXUAL	70	pornos
+SEXUAL	70	pornografie
+SEXUAL	70	pornographie
+SEXUAL	65	nacktbilder
+SEXUAL	65	nacktfotos
+SEXUAL	60	schwanzbild
+SEXUAL	70	blasen lutschen
+SEXUAL	60	onanieren
+SEXUAL	65	tittenbilder
+
+# --- Hassrede -------------------------------------------------------------
+HARASSMENT	90	untermensch
+HARASSMENT	90	untermenschen
+HARASSMENT	85	kanake
+HARASSMENT	85	kanaken
+HARASSMENT	85	neger
+HARASSMENT	90	judensau
+HARASSMENT	85	zigeuner
+HARASSMENT	85	schwuchtel
+HARASSMENT	85	schwuchteln
+HARASSMENT	80	spasti
+# "mongo" is left out on purpose: in a tool that runs on MongoDB it is a database first.
+HARASSMENT	85	volksschaedling
+HARASSMENT	85	volksschädling
+HARASSMENT	80	rassenschande
+
+# --- Extremismus ----------------------------------------------------------
+ILLEGAL	90	heil hitler
+ILLEGAL	90	sieg heil
+ILLEGAL	80	endloesung
+ILLEGAL	80	endlösung
+ILLEGAL	80	blut und boden
+ILLEGAL	80	auslaender raus
+ILLEGAL	80	ausländer raus
+
+# --- Gewaltandrohung ------------------------------------------------------
+THREAT	90	ich bringe dich um
+THREAT	90	ich toete dich
+THREAT	90	ich töte dich
+THREAT	90	bring dich um
+THREAT	85	du sollst sterben
+THREAT	90	ich schlage dich tot
+THREAT	85	ich weiss wo du wohnst
+THREAT	85	ich weiß wo du wohnst
+THREAT	90	ich vergewaltige dich
+
+# --- Gewalt / Gore --------------------------------------------------------
+THREAT	70	enthauptung
+THREAT	70	enthauptungsvideo
+THREAT	65	folterviedeo
+THREAT	65	foltervideo
+THREAT	60	verstuemmelung
+THREAT	60	verstümmelung
+
+# --- Selbstverletzung -----------------------------------------------------
+THREAT	80	bring mich um
+THREAT	80	will mich umbringen
+THREAT	80	selbstmord anleitung
+THREAT	75	ritzen anleitung
+
+# --- Belaestigung ---------------------------------------------------------
+HARASSMENT	70	hurensohn
+HARASSMENT	70	hurensoehne
+HARASSMENT	70	hurensöhne
+HARASSMENT	70	wichser
+HARASSMENT	65	arschloch
+HARASSMENT	65	fick dich
+HARASSMENT	65	verpiss dich
+HARASSMENT	60	halt die fresse
+HARASSMENT	60	du bist wertlos
+HARASSMENT	60	miststueck
+HARASSMENT	60	miststück
+HARASSMENT	60	schlampe
+HARASSMENT	60	missgeburt
+
+# --- Illegales ------------------------------------------------------------
+ILLEGAL	70	kokain kaufen
+ILLEGAL	70	heroin verkaufen
+ILLEGAL	65	gestohlene kreditkarten
+ILLEGAL	70	gefaelschter reisepass
+ILLEGAL	70	gefälschter reisepass
+ILLEGAL	70	auftragsmoerder
+ILLEGAL	70	auftragsmörder

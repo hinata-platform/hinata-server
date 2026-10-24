@@ -1,0 +1,130 @@
+# English terms the text check knows (HIN-176).
+#
+# Format: CATEGORY<TAB>WEIGHT<TAB>TERM, one rule per line.
+#
+#   CATEGORY  a value of content.ReportCategory
+#   WEIGHT    1 to 100, how sure the term alone makes the category. From 85 the
+#             server refuses the text (when refusing is on); from 55 it can put
+#             it before moderation (only when an administrator switched that on).
+#             Keep 85 and above for terms with no innocent reading at all.
+#   TERM      a word or a phrase. Matched on whole normalised words, never as a
+#             part of a word, so "Analyse" is safe next to a rule for "anal".
+#             Phrases win over the exceptions: "kill yourself" fires although
+#             "kill" alone is a technical word.
+#
+# Before adding a term, ask whether it can appear in an ordinary work message,
+# an issue, a log or a shell command ("I'll shoot you an email", "ich schlage
+# dich vor", "cp video.mp4"). If it can, do not add it, or add it below 85.
+
+# --- child sexual content -------------------------------------------------
+CHILD_SAFETY	95	child porn
+CHILD_SAFETY	95	child pornography
+CHILD_SAFETY	95	childporn
+CHILD_SAFETY	90	underage porn
+CHILD_SAFETY	90	underage nudes
+CHILD_SAFETY	90	preteen nude
+CHILD_SAFETY	90	loli porn
+CHILD_SAFETY	90	lolicon
+CHILD_SAFETY	90	shotacon
+CHILD_SAFETY	90	jailbait
+CHILD_SAFETY	95	minor nudes
+CHILD_SAFETY	90	kids nude
+CHILD_SAFETY	85	pedo content
+
+# --- sexual / pornographic ------------------------------------------------
+SEXUAL	70	porn
+SEXUAL	70	porno
+SEXUAL	70	pornography
+SEXUAL	65	xxx video
+SEXUAL	60	nudes
+SEXUAL	70	blowjob
+SEXUAL	70	handjob
+SEXUAL	70	creampie
+SEXUAL	65	cumshot
+SEXUAL	60	masturbate
+SEXUAL	60	masturbation
+SEXUAL	65	dickpic
+SEXUAL	65	dick pic
+SEXUAL	70	camgirl
+SEXUAL	60	escort service
+SEXUAL	70	hardcore porn
+SEXUAL	60	sex tape
+
+# --- hate speech ----------------------------------------------------------
+HARASSMENT	90	nigger
+HARASSMENT	90	niggers
+HARASSMENT	85	nigga
+HARASSMENT	90	faggot
+HARASSMENT	90	faggots
+HARASSMENT	75	fag
+HARASSMENT	90	kike
+HARASSMENT	90	spic
+HARASSMENT	75	chink
+HARASSMENT	90	gook
+HARASSMENT	90	wetback
+HARASSMENT	85	tranny
+HARASSMENT	85	retard
+HARASSMENT	85	retarded
+HARASSMENT	90	subhuman
+HARASSMENT	85	untermensch
+HARASSMENT	80	white power
+HARASSMENT	85	racial purity
+HARASSMENT	95	gas the jews
+HARASSMENT	80	race traitor
+
+# --- extremism ------------------------------------------------------------
+ILLEGAL	85	heil hitler
+ILLEGAL	85	sieg heil
+ILLEGAL	80	white genocide
+ILLEGAL	75	ethnic cleansing
+ILLEGAL	80	holocaust denial
+
+# --- violent threats ------------------------------------------------------
+THREAT	90	i will kill you
+THREAT	90	kill yourself
+THREAT	90	kys
+THREAT	75	i will find you
+THREAT	90	i will murder you
+THREAT	85	you should die
+THREAT	85	hope you die
+THREAT	80	beat you up
+THREAT	85	rape you
+THREAT	85	i know where you live
+
+# --- violence / gore ------------------------------------------------------
+THREAT	70	beheading
+THREAT	70	decapitation
+THREAT	65	gore video
+THREAT	70	snuff film
+THREAT	65	torture video
+THREAT	60	mutilation
+
+# --- self-harm ------------------------------------------------------------
+THREAT	80	how to hang myself
+THREAT	80	suicide method
+THREAT	80	kill myself
+THREAT	75	self harm tips
+THREAT	75	cut myself
+
+# --- harassment -----------------------------------------------------------
+HARASSMENT	70	you are worthless
+HARASSMENT	70	nobody likes you
+HARASSMENT	65	you are pathetic
+HARASSMENT	70	shut the fuck up
+HARASSMENT	65	fuck you
+HARASSMENT	65	fuck off
+HARASSMENT	60	piece of shit
+HARASSMENT	60	dumbass
+HARASSMENT	60	asshole
+HARASSMENT	65	bitch
+HARASSMENT	65	whore
+HARASSMENT	65	slut
+HARASSMENT	60	moron
+
+# --- illegal --------------------------------------------------------------
+ILLEGAL	70	buy cocaine
+ILLEGAL	70	sell heroin
+ILLEGAL	65	stolen credit cards
+ILLEGAL	70	counterfeit passport
+ILLEGAL	70	hitman for hire
+ILLEGAL	65	buy a gun illegally
