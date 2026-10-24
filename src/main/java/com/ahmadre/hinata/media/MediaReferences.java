@@ -14,12 +14,14 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -114,46 +116,62 @@ public class MediaReferences {
 	}
 
 	public Split split(Collection<String> ids, Map<String, Criteria> excluded, boolean sensitive) {
+		if (ids.isEmpty()) {
+			return Split.NONE;
+		}
+		Map<String, Set<ContentRef>> uses = usesOf(ids, excluded, sensitive ? USES_MAX : 1);
 		List<MediaRef> move = new ArrayList<>();
 		List<MediaRef> copy = new ArrayList<>();
 		List<ContentRef> otherUses = new ArrayList<>();
 		for (String id : ids) {
 			MediaRef image = MediaRef.of(objectKey(id));
+			Set<ContentRef> elsewhere = uses.getOrDefault(id, Set.of());
 			if (sensitive) {
 				move.add(image);
-				otherUses.addAll(usesOf(id, excluded));
+				otherUses.addAll(elsewhere);
 			}
-			else if (usedElsewhere(id, excluded)) {
+			else if (!elsewhere.isEmpty()) {
 				copy.add(image);
 			}
 			else {
 				move.add(image);
 			}
 		}
-		return new Split(List.copyOf(move), List.copyOf(copy), List.copyOf(otherUses));
+		return new Split(List.copyOf(move), List.copyOf(copy), otherUses.stream().distinct().limit(USES_MAX).toList());
 	}
 
 	/** At most this many other uses are named per image; enough for moderation to follow up. */
 	static final int USES_MAX = 50;
 
-	/** The content outside [excluded] that shows image [id]. */
-	List<ContentRef> usesOf(String id, Map<String, Criteria> excluded) {
-		String path = Pattern.quote("/api/v1/media/" + id);
-		Set<ContentRef> uses = new LinkedHashSet<>();
+	/**
+	 * For each of [ids], at most [perImage] pieces of content outside [excluded] that show it. One
+	 * read per collection and field for all images together: no index serves a search inside a
+	 * text, so a read per image would scan the content once for every picture of a removal.
+	 */
+	Map<String, Set<ContentRef>> usesOf(Collection<String> ids, Map<String, Criteria> excluded, int perImage) {
+		Set<String> wanted = new LinkedHashSet<>(ids);
+		String any = "/api/v1/media/(?:" + wanted.stream().map(Pattern::quote).collect(Collectors.joining("|")) + ")";
+		Map<String, Set<ContentRef>> uses = new LinkedHashMap<>();
 		for (Source source : SOURCES) {
 			List<Criteria> all = new ArrayList<>();
-			all.add(Criteria.where(source.field()).regex(path));
+			all.add(Criteria.where(source.field()).regex(any));
 			Criteria skip = excluded.get(source.collection());
 			if (skip != null) {
 				all.add(new Criteria().norOperator(skip));
 			}
-			Query query = new Query(new Criteria().andOperator(all)).limit(USES_MAX);
-			query.fields().include("_id", "projectId", "issueId", "articleId");
+			Query query = new Query(new Criteria().andOperator(all)).limit(wanted.size() * perImage);
+			query.fields().include("_id", "projectId", "issueId", "articleId", source.field());
 			for (Document found : mongo.find(query, Document.class, source.collection())) {
-				uses.add(refOf(source.collection(), found));
+				ContentRef ref = refOf(source.collection(), found);
+				for (String id : idsIn(found.getString(source.field()))) {
+					Set<ContentRef> of = wanted.contains(id) ? uses.computeIfAbsent(id, key -> new LinkedHashSet<>()) : null;
+					if (of != null && of.size() < perImage) {
+						of.add(ref);
+					}
+				}
 			}
 		}
-		return uses.stream().limit(USES_MAX).toList();
+		return uses;
 	}
 
 	private static ContentRef refOf(String collection, Document found) {
@@ -164,28 +182,5 @@ public class MediaReferences {
 			case "article_versions" -> new ContentRef(ContentKind.ARTICLE, found.getString("articleId"), null, null);
 			default -> new ContentRef(ContentKind.ARTICLE, id, null, found.getString("projectId"));
 		};
-	}
-
-	/**
-	 * Whether a document other than those [excluded] names still shows image [id]. [excluded] maps a
-	 * collection to the documents of it that do not count: the content being removed, and the
-	 * versions of a page that go with it.
-	 */
-	public boolean usedElsewhere(String id, Map<String, Criteria> excluded) {
-		String path = Pattern.quote("/api/v1/media/" + id);
-		for (Source source : SOURCES) {
-			List<Criteria> all = new ArrayList<>();
-			all.add(Criteria.where(source.field()).regex(path));
-			Criteria skip = excluded.get(source.collection());
-			if (skip != null) {
-				all.add(new Criteria().norOperator(skip));
-			}
-			Query query = new Query(new Criteria().andOperator(all));
-			query.fields().include("_id");
-			if (mongo.exists(query, source.collection())) {
-				return true;
-			}
-		}
-		return false;
 	}
 }
