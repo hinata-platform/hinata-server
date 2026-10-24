@@ -168,13 +168,13 @@ class AnnualFiguresIntegrationTest extends RemovalIntegrationSupport {
 	}
 
 	private static String cell(List<List<String>> part, String key, String column) {
-		int index = AnnualFigures.column(part, column);
+		int index = TransparencyTemplate.column(part, column);
 		return part.stream().filter(row -> row.size() > 3 && row.get(3).strip().equals(key)).findFirst()
 				.orElseThrow().get(index);
 	}
 
 	private static String indicator(List<List<String>> part, String indicator, String scope) {
-		int value = AnnualFigures.column(part, "Value");
+		int value = TransparencyTemplate.column(part, "Value");
 		return part.stream().filter(row -> row.get(4).strip().equals(indicator) && row.get(5).strip().equals(scope))
 				.findFirst().orElseThrow().get(value);
 	}

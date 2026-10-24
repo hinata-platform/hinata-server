@@ -39,7 +39,7 @@ public class AppealService {
 	private final CaseAccess access;
 	private final MongoTemplate mongo;
 	private final Statements statements;
-	private final DecisionService decisions;
+	private final Restorations restorations;
 	private final ModerationFollowUps followUps;
 	private final ModerationAlerts alerts;
 	private final ModerationStats stats;
@@ -154,7 +154,7 @@ public class AppealService {
 		ModerationCase decided;
 		if (reverse) {
 			// The restoring claim moved the revision already.
-			decided = decisions.undo(id, request.rev(), moderator, note, now,
+			decided = restorations.undo(id, request.rev(), moderator, note, now,
 					Criteria.where("appeal.state").is(Appeal.State.PENDING), SuspensionService.LiftReason.APPEAL,
 					outcome -> CaseSteps.note(appealDecided(Appeal.State.REVERSED, moderator, note, now, outcome),
 							appealEvent(Appeal.State.REVERSED, moderator, now))).moderationCase();

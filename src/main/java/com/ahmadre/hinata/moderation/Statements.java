@@ -113,7 +113,7 @@ public class Statements {
 			return suspension.running() ? suspension.until() : null;
 		}
 		return decision.suspension() == null || c.getStatus() == CaseStatus.DECIDED ? null
-				: DecisionService.untilOf(decision.suspension(), decision.decidedAt());
+				: decision.suspension().until(decision.decidedAt());
 	}
 
 	private String removalMeasure(ModerationCase c, Decision decision, Locale locale, ZoneId zone) {
