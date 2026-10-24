@@ -350,8 +350,7 @@ public class AdminSettingsController {
 	}
 
 	private static ServerSettings.Filter filterOf(ServerSettings stored) {
-		return stored.getModeration() == null || stored.getModeration().getFilter() == null
-				? new ServerSettings.Filter() : stored.getModeration().getFilter();
+		return stored.moderationOrDefault().filterOrDefault();
 	}
 
 	/** Whether the text check does the same with [a] as with [b]; the terms compared as lists. */

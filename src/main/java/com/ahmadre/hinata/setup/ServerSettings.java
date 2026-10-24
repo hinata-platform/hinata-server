@@ -127,6 +127,13 @@ public class ServerSettings {
 	 */
 	@Valid
 	private Moderation moderation;
+
+	/** The moderation block, or one with every default while none is stored. */
+	@JsonIgnore
+	public Moderation moderationOrDefault() {
+		return moderation != null ? moderation : new Moderation();
+	}
+
 	/**
 	 * Where the platform's holidays come from. Not initialised, for the reason
 	 * {@link #timeTracking} is not.
@@ -959,13 +966,17 @@ public class ServerSettings {
 	}
 
 	/**
-	 * Moderation (HIN-26). In this block for now: who runs the instance and where reports and
-	 * questions about moderation go, which the app shows to everybody and the stores and the
-	 * DSA (Art. 11, 12) ask to be published. Read through {@code setup.OperatorContact}, never
-	 * directly.
+	 * Moderation (HIN-26): who runs the instance and where reports and questions about moderation
+	 * go, which the app shows to everybody and the stores and the DSA (Art. 11, 12) ask to be
+	 * published (read through {@code setup.OperatorContact}); how long decided cases are kept; the
+	 * file types switched off; the house rules; the text check. Read through
+	 * {@link ServerSettings#moderationOrDefault()}, whose defaults are the ones written here.
 	 */
 	@Data
 	public static class Moderation {
+
+		/** How long a decided case is kept unless an administrator chose otherwise. */
+		public static final int DEFAULT_RETENTION_MONTHS = 6;
 
 		/** Who runs the instance, as the imprint names them. */
 		@Size(max = 200)
@@ -989,10 +1000,10 @@ public class ServerSettings {
 		@Max(12)
 		private Integer retentionMonths;
 
-		/** Six unless set. */
+		/** {@link #DEFAULT_RETENTION_MONTHS} unless set. */
 		@JsonIgnore
 		public int retentionMonthsOrDefault() {
-			return retentionMonths == null ? 6 : retentionMonths;
+			return retentionMonths == null ? DEFAULT_RETENTION_MONTHS : retentionMonths;
 		}
 
 		/**
@@ -1015,6 +1026,12 @@ public class ServerSettings {
 		 */
 		@Valid
 		private Filter filter;
+
+		/** The text check as set, or its defaults: refusing on, flagging off, no own terms. */
+		@JsonIgnore
+		public Filter filterOrDefault() {
+			return filter != null ? filter : new Filter();
+		}
 	}
 
 	/**
