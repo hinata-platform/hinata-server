@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.CopiesScrub;
@@ -34,8 +35,9 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * What every removal test needs (HIN-169): a real MongoDB, an object store in memory, people, a
- * project, and the surfaces as moderation reaches them. The removal tests share one context.
+ * What every moderation test needs (HIN-169, HIN-170): a real MongoDB, an object store in memory,
+ * people, a project, the surfaces as moderation reaches them, and somebody signed in. All of them
+ * share one context.
  */
 @SpringBootTest(properties = {
 		"hinata.mongodb.tls.enabled=false",
@@ -75,6 +77,8 @@ abstract class RemovalIntegrationSupport {
 
 	@MockitoBean
 	StorageService storage;
+	@MockitoBean
+	CurrentUser currentUser;
 
 	/** Watched, not replaced: counting how often a request scrubs is the point of some tests. */
 	@MockitoSpyBean
@@ -92,7 +96,8 @@ abstract class RemovalIntegrationSupport {
 	void seedPeopleAndProject() {
 		for (String collection : List.of("issues", "issue_comments", "issue_activities", "issue_mail_digests",
 				"notifications", "projects", "users", "articles", "article_versions", "moderation_quarantine",
-				"moderation_quarantine_items", "audit_log")) {
+				"moderation_quarantine_items", "audit_log", "moderation_cases", "moderation_reports",
+				"moderation_stats", "user_blocks")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		store.installOn(storage);
@@ -110,9 +115,17 @@ abstract class RemovalIntegrationSupport {
 		placeholders = followUps.placeholders();
 	}
 
-	User user(String name) {
+	User user(String name, Role... roles) {
+		Set<Role> held = new java.util.HashSet<>(Set.of(Role.MEMBER));
+		held.addAll(List.of(roles));
 		return users.save(User.builder().email(name + "@example.org").username(name)
-				.displayName(name).roles(Set.of(Role.MEMBER)).active(true).build());
+				.displayName(name).roles(held).active(true).build());
+	}
+
+	/** Signs [person] in for what follows. */
+	void actingAs(User person) {
+		org.mockito.Mockito.when(currentUser.require()).thenReturn(person);
+		org.mockito.Mockito.when(currentUser.requireId()).thenReturn(person.getId());
 	}
 
 	private static Project.WorkflowState state(String name) {
@@ -130,6 +143,13 @@ abstract class RemovalIntegrationSupport {
 
 	Removal remove(ContentKind kind, String id, String parentId, RemovalScope scope, ReportCategory category) {
 		return surface(kind).remove(new TargetRef(kind, id, parentId), scope, CASE, category, placeholders);
+	}
+
+	/** A decision as HIN-171 writes it: whole, with [outcome] on [ground] by [decidedBy]. */
+	static Decision decision(Decision.Outcome outcome, Decision.Ground ground, String decidedBy) {
+		return new Decision(outcome, null, ground, ReportCategory.HARASSMENT, "Beleidigung im Kommentar", null, null,
+				null, false, null, null, false, Decision.Basis.NOTICE, false, null, decidedBy,
+				java.time.Instant.now(), null);
 	}
 
 	/** A Lexical document of one paragraph. */
