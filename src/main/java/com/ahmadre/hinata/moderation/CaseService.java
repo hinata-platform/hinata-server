@@ -416,8 +416,7 @@ public class CaseService {
 				.and("evidenceReveal.revealedBy").is(moderator.getId())
 				.and("evidenceReveal.revealedAt").gte(now.minus(Duration.ofDays(1)))), ModerationCase.class);
 		if (alone >= SOLO_REVEALS_PER_DAY) {
-			throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "error.moderation.tooManyReveals",
-					Map.of("code", "moderation.tooManyReveals"));
+			throw ApiException.refusal(HttpStatus.TOO_MANY_REQUESTS, "error.moderation.tooManyReveals");
 		}
 		CaseDetail opened = reveal(c, moderator, c.getEvidenceReveal(), reason, now);
 		alerts.adminAlert(c, "moderation.alert.alone");

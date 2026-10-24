@@ -12,7 +12,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -182,13 +181,11 @@ public final class ShiftRules {
 
 	/** A refusal the app acts on: the key travels as {@code details.code} beside the sentence. */
 	public static ApiException refusal(HttpStatus status, String key, Map<String, String> details) {
-		Map<String, String> withCode = new LinkedHashMap<>(details == null ? Map.of() : details);
-		withCode.put("code", key);
-		return new ApiException(status, key, withCode, new Object[0]);
+		return ApiException.refusal(status, key, details);
 	}
 
 	public static ApiException refusal(HttpStatus status, String key) {
-		return refusal(status, key, Map.of());
+		return ApiException.refusal(status, key);
 	}
 
 	private static String trimmed(String text) {

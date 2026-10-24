@@ -87,7 +87,7 @@ class TextGateIntegrationTest extends RemovalIntegrationSupport {
 	private static void refused(ThrowingCallable write, String terms) {
 		assertThatThrownBy(write).isInstanceOfSatisfying(ApiException.class, ex -> {
 			assertThat(ex.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-			assertThat(ex.getDetails()).containsEntry("code", "moderation.refused").containsEntry("terms", terms);
+			assertThat(ex.getDetails()).containsEntry("code", "error.moderation.refused").containsEntry("terms", terms);
 		});
 	}
 
@@ -186,7 +186,7 @@ class TextGateIntegrationTest extends RemovalIntegrationSupport {
 		stored.setModeration(moderation);
 
 		assertThatThrownBy(() -> adminSettings.update(stored)).isInstanceOfSatisfying(ApiException.class,
-				ex -> assertThat(ex.getDetails()).containsEntry("code", "moderation.flagConfirm"));
+				ex -> assertThat(ex.getDetails()).containsEntry("code", "error.moderation.flagUnconfirmed"));
 		stored.setFlagConfirmed(true);
 		adminSettings.update(stored);
 

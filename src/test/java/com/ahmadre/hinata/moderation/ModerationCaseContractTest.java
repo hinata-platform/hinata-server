@@ -3,10 +3,16 @@ package com.ahmadre.hinata.moderation;
 import com.ahmadre.hinata.content.ContentOrigin;
 import com.ahmadre.hinata.content.RemovalScope;
 import com.ahmadre.hinata.content.RestoreOutcome;
+import com.ahmadre.hinata.richtext.TextCheck;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,6 +44,20 @@ class ModerationCaseContractTest {
 		assertThat(names(RemovalScope.values())).isEqualTo(List.of(
 				"WHOLE", "TITLE", "DESCRIPTION", "REVERT", "AVATAR", "PROFILE_TEXT"));
 		assertThat(names(AppealService.AppealDecisionRequest.Result.values())).isEqualTo(List.of("UPHOLD", "REVERSE"));
+	}
+
+	/** What the app acts on in a refusal is its message key, sent as {@code details.code}. */
+	@Test
+	void theRefusalsTheAppActsOnAreNamedByTheirKeys() throws IOException {
+		List<String> codes = List.of("error.moderation.refused", "error.moderation.tooManyReports",
+				"error.moderation.tooManyReveals", "error.moderation.openAccessUnconfirmed",
+				"error.moderation.flagUnconfirmed", "error.moderation.caseDecided", "error.moderation.caseChanged");
+		Properties messages = new Properties();
+		try (InputStream in = getClass().getResourceAsStream("/messages.properties")) {
+			messages.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+		}
+		assertThat(codes).allSatisfy(code -> assertThat(messages).containsKey(code));
+		assertThat(TextCheck.REFUSED).isIn(codes);
 	}
 
 	@Test
