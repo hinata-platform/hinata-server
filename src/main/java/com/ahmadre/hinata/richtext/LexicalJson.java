@@ -194,6 +194,19 @@ public final class LexicalJson {
 	 * the search index instead of putting them in as today's markdown does.
 	 */
 	public static String plainText(JsonNode document, NodeText override) {
+		return plainText(document, override, false);
+	}
+
+	/**
+	 * Plain text of a document being written: judged by the text check whole, so a text longer than
+	 * {@link #MAX_TEXT_CHARS} is refused ({@code error.richtext.tooLarge}) instead of cut, and
+	 * nothing past the bound is stored unread.
+	 */
+	public static String writtenText(JsonNode document) {
+		return plainText(document, DEFAULTS, true);
+	}
+
+	private static String plainText(JsonNode document, NodeText override, boolean whole) {
 		JsonNode root = document == null ? null : document.get("root");
 		if (root == null) return "";
 		StringBuilder out = new StringBuilder();
@@ -219,8 +232,18 @@ public final class LexicalJson {
 			String own = override.textFor(type, node);
 			if (own == null) own = defaultText(type, node);
 			if (!own.isEmpty()) {
-				if (out.length() >= MAX_TEXT_CHARS) break;
+				if (out.length() >= MAX_TEXT_CHARS) {
+					if (whole) throw tooLarge();
+					break;
+				}
 				out.append(own);
+			}
+
+			// An image's caption is a document of its own; its words are the text's too.
+			JsonNode caption = node.path("caption").path("editorState").path("root");
+			if (caption.isObject()) {
+				work.push(BLOCK_END);
+				work.push(new Frame(caption, frame.depth() + 1));
 			}
 
 			JsonNode children = node.get("children");
@@ -231,6 +254,7 @@ public final class LexicalJson {
 			}
 		}
 		String text = out.toString().strip();
+		if (text.length() > MAX_TEXT_CHARS && whole) throw tooLarge();
 		return text.length() > MAX_TEXT_CHARS ? text.substring(0, MAX_TEXT_CHARS).strip() : text;
 	}
 

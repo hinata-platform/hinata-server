@@ -49,10 +49,14 @@ final class LinkTargets {
 	}
 
 	private static boolean unwrap(JsonNode node) {
-		if (node == null || !(node.get("children") instanceof ArrayNode children)) {
+		if (node == null) {
 			return false;
 		}
-		boolean changed = false;
+		// An image's caption is a document of its own, with links of its own.
+		boolean changed = unwrap(node.path("caption").path("editorState").get("root"));
+		if (!(node.get("children") instanceof ArrayNode children)) {
+			return changed;
+		}
 		for (int i = 0; i < children.size(); i++) {
 			JsonNode child = children.get(i);
 			if (isLink(child) && !isSafe(child.path("url").asText(null))) {
