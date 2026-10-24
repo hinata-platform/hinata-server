@@ -3,8 +3,8 @@ package com.ahmadre.hinata.moderation;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.content.ContentKind;
-import com.ahmadre.hinata.content.CopiesScrub;
 import com.ahmadre.hinata.content.ContentSurface;
+import com.ahmadre.hinata.content.CopiesScrub;
 import com.ahmadre.hinata.content.Placeholders;
 import com.ahmadre.hinata.content.Removal;
 import com.ahmadre.hinata.content.RemovalScope;
@@ -15,6 +15,7 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadGate;
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -22,7 +23,11 @@ import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -47,7 +52,22 @@ import java.util.Set;
 		"management.health.mail.enabled=false"
 })
 @Testcontainers(disabledWithoutDocker = true)
+@Import(RemovalIntegrationSupport.InMemoryStore.class)
 abstract class RemovalIntegrationSupport {
+
+	/** The objects of the one store every context of these tests runs against; cleared per test. */
+	static final MemoryObjects STORE = new MemoryObjects();
+
+	/** The real store, over objects in memory. */
+	@TestConfiguration
+	static class InMemoryStore {
+
+		@Bean
+		@Primary
+		StorageService memoryStorage(UploadGate gate) {
+			return STORE.storage(gate);
+		}
+	}
 
 	/**
 	 * Started once and never stopped by a test class: the removal tests share one context, and a
@@ -75,7 +95,7 @@ abstract class RemovalIntegrationSupport {
 	@Autowired
 	UserRepository users;
 
-	@MockitoBean
+	@Autowired
 	StorageService storage;
 	@MockitoBean
 	CurrentUser currentUser;
@@ -93,7 +113,7 @@ abstract class RemovalIntegrationSupport {
 	@org.springframework.beans.factory.annotation.Qualifier(ModerationFollowUps.EXECUTOR)
 	java.util.concurrent.Executor followUpThread;
 
-	final MemoryObjects store = new MemoryObjects();
+	final MemoryObjects store = STORE;
 
 	User owner;
 	User author;
@@ -109,7 +129,7 @@ abstract class RemovalIntegrationSupport {
 				"moderation_stats", "user_blocks")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
-		store.installOn(storage);
+		store.clear();
 		SIGNED_IN.remove();
 		org.mockito.Mockito.when(currentUser.require()).thenAnswer(call -> SIGNED_IN.get());
 		org.mockito.Mockito.when(currentUser.requireId()).thenAnswer(call -> SIGNED_IN.get().getId());
