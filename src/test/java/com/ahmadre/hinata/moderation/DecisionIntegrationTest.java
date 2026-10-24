@@ -393,8 +393,8 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 		ModerationRules.RuleSet rules = moderation.rules();
 
 		assertThat(rules.builtIn()).isTrue();
-		assertThat(rules.rules()).hasSize(ModerationRules.BUILT_IN)
-				.extracting(ModerationRules.Rule::number).containsExactly(1, 2, 3, 4, 5, 6, 7);
-		assertThat(rules.rules().get(1).title()).isEqualTo("No belittling others");
+		assertThat(rules.rules()).extracting(ModerationRules.Rule::number).containsExactly(1, 2, 3, 4, 5, 6, 7);
+		// As the published rules head it, so a statement cites what the rules page shows.
+		assertThat(rules.rules().get(1).title()).isEqualTo("Don't put anyone down");
 	}
 }
