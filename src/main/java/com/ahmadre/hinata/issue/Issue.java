@@ -238,6 +238,18 @@ public class Issue {
 	/** The {@link com.ahmadre.hinata.mailingest.IngestConnection} that ingested this issue; resolves the Reply-To mailbox. */
 	private String ingestConnectionId;
 
+	/**
+	 * The attachments of the mail this issue came from that the upload gate refused (HIN-177), by
+	 * the sender's name and the gate's reason. The description's lines about them are rebuilt from
+	 * here, so reading the mailbox again needs none of the attachments' bytes.
+	 */
+	@JsonIgnore
+	private List<RefusedAttachment> refusedAttachments;
+
+	/** One attachment of an ingested mail the gate refused: its name and {@code UploadRefusal} code. */
+	public record RefusedAttachment(String fileName, String reason) {
+	}
+
 	@Builder.Default
 	@TextIndexed(weight = 5)
 	private List<String> tags = new ArrayList<>();

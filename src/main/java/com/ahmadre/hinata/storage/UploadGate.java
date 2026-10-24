@@ -100,8 +100,8 @@ public class UploadGate {
 	}
 
 	/**
-	 * Why [candidate] would be refused, or empty when it would pass. Counts nothing: for looking
-	 * again at what was already checked once, as rebuilding the description of a mail does.
+	 * Why [candidate] would be refused, or empty when it would pass. Counts nothing: for asking
+	 * what the gate would say without anybody uploading anything.
 	 */
 	public Optional<UploadRefusal> refusalOf(UploadCandidate candidate) {
 		try {

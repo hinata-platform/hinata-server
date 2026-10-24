@@ -292,6 +292,8 @@ final class UgcInventory {
 			entry("issues.ingestConnectionId", system()),
 			entry("issues.moderation", system()),
 			entry("issues.parentId", system()),
+			entry("issues.refusedAttachments.fileName", keptCopy("the names of a mail's attachments the gate refused, kept to rebuild the description's lines about them; shown only there")),
+			entry("issues.refusedAttachments.reason", system()),
 			entry("issues.participantIds", system()),
 			entry("issues.participantMeta.addedById", system()),
 			entry("issues.participantMeta.userId", system()),
