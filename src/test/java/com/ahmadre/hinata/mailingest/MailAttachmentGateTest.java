@@ -5,6 +5,7 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.AttachmentStore;
@@ -40,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -56,7 +58,13 @@ class MailAttachmentGateTest {
 	private final List<UploadRefusedEvent> refused = new ArrayList<>();
 	private IssueService issues;
 	private AttachmentStore attachments;
+	private ProjectService projects;
+	private UserService users;
+	private SettingsService settings;
+	private ResourceBundleMessageSource messages;
 	private EmailIngestService service;
+	/** The ticket the service created last. */
+	private Issue ticket;
 
 	@BeforeEach
 	void setUp() {
@@ -64,25 +72,35 @@ class MailAttachmentGateTest {
 		attachments = mock(AttachmentStore.class);
 		when(issues.findByInboundMessageId(anyString())).thenReturn(Optional.empty());
 		when(issues.create(any(), isNull())).thenAnswer(call -> {
-			Issue issue = call.getArgument(0);
-			issue.setId("i1");
-			return issue;
+			ticket = call.getArgument(0);
+			ticket.setId("i1");
+			return ticket;
 		});
-		ProjectService projects = mock(ProjectService.class);
+		// What the service notes after the ticket exists lands on the ticket, as the real one does.
+		doAnswer(call -> {
+			ticket.setRefusedAttachments(call.getArgument(1));
+			RichText description = call.getArgument(2);
+			ticket.setDescription(description.text());
+			return null;
+		}).when(issues).noteRefusedAttachments(anyString(), any(), any());
+		projects = mock(ProjectService.class);
 		when(projects.get("p1")).thenReturn(Project.builder().id("p1").memberIds(new ArrayList<>()).build());
-		UserService users = mock(UserService.class);
+		users = mock(UserService.class);
 		when(users.findActiveByEmail(anyString())).thenReturn(Optional.empty());
-		SettingsService settings = mock(SettingsService.class);
+		settings = mock(SettingsService.class);
 		when(settings.instanceLocale()).thenReturn(Locale.GERMAN);
-		ResourceBundleMessageSource messages = new ResourceBundleMessageSource();
+		messages = new ResourceBundleMessageSource();
 		messages.setBasenames("messages");
 		messages.setDefaultEncoding("UTF-8");
 		messages.setFallbackToSystemLocale(false);
-		service = new EmailIngestService(mock(IngestConnectionRepository.class), issues, new RichTextService(),
+		service = service(com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
+	}
+
+	private EmailIngestService service(com.ahmadre.hinata.richtext.TextCheck textCheck) {
+		return new EmailIngestService(mock(IngestConnectionRepository.class), issues, new RichTextService(),
 				projects, mock(NotificationService.class),
 				TestStorage.inMemory(TestUploadGates.counting(refused), objects), attachments, users,
-				TestUploadGates.counting(refused), settings, messages, com.ahmadre.hinata.richtext.TestTextChecks.allowAll(),
-				mock(IngestConnectionService.class));
+				TestUploadGates.counting(refused), settings, messages, textCheck, mock(IngestConnectionService.class));
 	}
 
 	private static IngestConnection connection() {
@@ -133,6 +151,8 @@ class MailAttachmentGateTest {
 				.contains("Anbei die Rechnung.")
 				.contains("Anhang rechnung.pdf abgelehnt: Dieser Dateityp ist hier nicht erlaubt");
 		assertThat(issue.getDescription()).doesNotContain("angebot.pdf");
+		assertThat(issue.getRefusedAttachments())
+				.containsExactly(new Issue.RefusedAttachment("rechnung.pdf", "type"));
 		assertThat(refused).containsExactly(new UploadRefusedEvent(UploadKind.MAIL_ATTACHMENT, "type"));
 
 		ArgumentCaptor<Issue.Attachment> stored = ArgumentCaptor.forClass(Issue.Attachment.class);
@@ -143,7 +163,20 @@ class MailAttachmentGateTest {
 		assertThat(objects.values().iterator().next().data()).isEqualTo(TestImages.pdf());
 	}
 
-	/** Rebuilding the description writes the same line again, so the ticket reads as current, and counts nothing. */
+	/** Spam the text check refuses costs no download: not one of its attachments is read. */
+	@Test
+	void aMailTheTextCheckRefusesReadsNoAttachment() throws Exception {
+		service(com.ahmadre.hinata.richtext.TestTextChecks.refusing("rechnung")).createIssueFrom(mail(), connection());
+
+		verify(issues, never()).create(any(), any());
+		assertThat(refused).isEmpty();
+		assertThat(objects).isEmpty();
+	}
+
+	/**
+	 * Rebuilding the description writes the same line again from what was noted at ingest, so the
+	 * ticket reads as current; no attachment is checked again, and nothing is counted.
+	 */
 	@Test
 	void rebuildingTheDescriptionKeepsTheLineAndCountsNothing() throws Exception {
 		service.createIssueFrom(mail(), connection());

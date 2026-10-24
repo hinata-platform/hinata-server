@@ -539,6 +539,17 @@ public class IssueService {
 		return issues.save(issue);
 	}
 
+	/**
+	 * Notes the attachments of an ingested mail that the gate refused on issue [id], and gives it
+	 * [description], which says so, unless the text check refuses that (see
+	 * {@link #replaceIngestedDescription}).
+	 */
+	public void noteRefusedAttachments(String id, List<Issue.RefusedAttachment> refused, RichText description) {
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), Update.update("refusedAttachments", refused),
+				Issue.class);
+		replaceIngestedDescription(id, description);
+	}
+
 	/** Reserves the next project-scoped number and sets the readable id. */
 	private void assignIssueNumber(Issue issue, Project project) {
 		long number = projects.nextIssueNumber(project.getId());
