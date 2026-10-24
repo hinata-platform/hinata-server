@@ -2,6 +2,9 @@ package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadCandidate;
+import com.ahmadre.hinata.storage.UploadGate;
+import com.ahmadre.hinata.storage.UploadKind;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -14,7 +17,6 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * Organization-logo pipeline. The admin can either point {@code General.logoUrl}
@@ -47,21 +49,12 @@ public class OrganizationLogoService {
 	 */
 	static final long MAX_PIXELS = 50L * 1000 * 1000;
 
-	/** Max accepted upload before normalization. */
-	private static final long MAX_UPLOAD_BYTES = 8L * 1024 * 1024;
-
-	/**
-	 * Formats the JDK's ImageIO decodes natively. WebP/SVG are intentionally
-	 * excluded (no built-in decoder) — those stay available via the URL field.
-	 */
-	private static final Set<String> ACCEPTED =
-			Set.of("image/png", "image/jpeg", "image/jpg", "image/gif", "image/bmp");
-
 	/** The relative proxy path an uploaded logo's {@code logoUrl} points at. */
 	public static final String INTERNAL_URL_PREFIX = "/api/v1/meta/logo";
 
 	private final StorageService storage;
 	private final SettingsService settings;
+	private final UploadGate gate;
 
 	/**
 	 * Whether {@code logoUrl} refers to an uploaded logo (an internal proxy path)
@@ -75,19 +68,14 @@ public class OrganizationLogoService {
 		return !u.startsWith("http://") && !u.startsWith("https://");
 	}
 
-	/** Normalizes + stores [file] as the org logo and returns its internal URL. */
+	/**
+	 * Normalizes + stores [file] as the org logo and returns its internal URL. The
+	 * file passes {@link UploadGate} as a {@link UploadKind#LOGO} first, which allows
+	 * the formats the JDK's ImageIO decodes natively; WebP and SVG stay available
+	 * via the URL field.
+	 */
 	public String store(MultipartFile file) {
-		if (file == null || file.isEmpty()) {
-			throw ApiException.badRequest("error.logo.empty");
-		}
-		if (file.getSize() > MAX_UPLOAD_BYTES) {
-			throw ApiException.badRequest("error.logo.tooLarge");
-		}
-		String contentType = file.getContentType();
-		if (contentType == null || !ACCEPTED.contains(contentType.toLowerCase())) {
-			throw ApiException.badRequest("error.logo.unsupportedType");
-		}
-
+		gate.check(UploadCandidate.of(UploadKind.LOGO, file));
 		byte[] png = normalize(file);
 		// The bucket stays private; bytes are served back through the /meta/logo
 		// proxy, so storage credentials never leave the server.

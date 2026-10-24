@@ -8,8 +8,13 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.AttachmentStore;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadCandidate;
+import com.ahmadre.hinata.storage.UploadGate;
+import com.ahmadre.hinata.storage.UploadKind;
+import com.ahmadre.hinata.storage.UploadRefusal;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserService;
 import jakarta.mail.Flags;
@@ -24,6 +29,7 @@ import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeUtility;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.MessageSource;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -31,6 +37,7 @@ import java.io.InputStream;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
@@ -53,6 +60,9 @@ public class EmailIngestService {
 	private final StorageService storage;
 	private final AttachmentStore attachments;
 	private final UserService users;
+	private final UploadGate gate;
+	private final SettingsService settings;
+	private final MessageSource messages;
 
 	/** Per-connection epoch seconds of the last poll (the 15s tick is the beat). */
 	private final Map<String, Long> lastRun = new ConcurrentHashMap<>();
@@ -129,8 +139,10 @@ public class EmailIngestService {
 			log.info("Skipping already-ingested message {}", messageId);
 			return; // caller still sets SEEN
 		}
+		// Before the issue exists, so a refused attachment can say so in its description.
+		List<MailFile> files = filesOf(message, true);
 		// An e-mail body arrives as markdown (HtmlToMarkdown); storage is Lexical.
-		RichText ingested = richText.fromMarkdown(buildDescription(from, message));
+		RichText ingested = richText.fromMarkdown(buildDescription(from, message, files));
 		String reporterId = resolveReporterId(from);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
@@ -152,7 +164,7 @@ public class EmailIngestService {
 		log.info("Created {} from e-mail by {}{}", created.getReadableId(), from,
 				reporterId != null ? " (author resolved to user " + reporterId + ")" : "");
 		notifyMembers(created, projectId, from, reporterId);
-		attachFiles(message, created.getId());
+		attachFiles(files, created.getId());
 	}
 
 	/**
@@ -173,10 +185,39 @@ public class EmailIngestService {
 		return users.findActiveByEmail(from).map(User::getId).orElse(null);
 	}
 
-	/** The description body written for an ingested message: an attribution header
-	 * plus the parsed (plain or HTML→Markdown) mail body. */
-	private String buildDescription(String from, Message message) throws Exception {
-		return DESCRIPTION_HEADER + "**" + from + "**\n\n---\n\n" + truncate(textOf(message), 20000);
+	/** The description body written for an ingested message: an attribution header,
+	 * the parsed (plain or HTML→Markdown) mail body, and a line for every attachment
+	 * the upload gate refused. */
+	private String buildDescription(String from, Message message, List<MailFile> files) throws Exception {
+		StringBuilder description = new StringBuilder(DESCRIPTION_HEADER).append("**").append(from)
+				.append("**\n\n---\n\n").append(truncate(textOf(message), 20000));
+		Locale locale = settings.instanceLocale();
+		for (MailFile file : files) {
+			if (file.refusal() != null) {
+				String reason = messages.getMessage(file.refusal().messageKey(),
+						gate.argumentsOf(file.refusal(), UploadKind.MAIL_ATTACHMENT), locale);
+				description.append("\n\n").append(messages.getMessage("ingest.attachmentRefused",
+						new Object[] { codeSpan(file.candidate().fileName()), reason }, locale));
+			}
+		}
+		return description.toString();
+	}
+
+	/**
+	 * [name] as an inline code span: a sender chose it, and nothing in it may read as
+	 * Markdown, a link least of all. The fence is one backtick longer than the longest
+	 * run inside, as CommonMark wants.
+	 */
+	static String codeSpan(String name) {
+		int longest = 0;
+		int run = 0;
+		for (int i = 0; i < name.length(); i++) {
+			run = name.charAt(i) == '`' ? run + 1 : 0;
+			longest = Math.max(longest, run);
+		}
+		String fence = "`".repeat(longest + 1);
+		String pad = name.startsWith("`") || name.endsWith("`") ? " " : "";
+		return fence + pad + name + pad + fence;
 	}
 
 	/** Stand-in for a message with no usable {@code From} header. */
@@ -249,15 +290,16 @@ public class EmailIngestService {
 		return new ReprocessResult(scanned, updated, created);
 	}
 
-	private enum Outcome { UPDATED, CREATED, SKIPPED }
+	enum Outcome { UPDATED, CREATED, SKIPPED }
 
 	/**
 	 * Reconciles a single message against the tickets. Rebuilds the matching ticket's
 	 * description when it still exists (and is still auto-generated), or creates a new
 	 * ticket when none exists and {@code createMissing} is set. Best-effort: a broken
-	 * message is skipped, not fatal.
+	 * message is skipped, not fatal. Package-private for the same reason as
+	 * {@link #createIssueFrom}.
 	 */
-	private Outcome reprocessOne(Message message, IngestConnection config, boolean createMissing) {
+	Outcome reprocessOne(Message message, IngestConnection config, boolean createMissing) {
 		try {
 			String messageId = messageIdOf(message);
 			Issue issue = messageId != null
@@ -269,7 +311,8 @@ public class EmailIngestService {
 						|| !issue.getDescription().startsWith(DESCRIPTION_HEADER)) {
 					return Outcome.SKIPPED; // foreign project or a manually edited body
 				}
-				RichText rebuilt = richText.fromMarkdown(buildDescription(senderOf(message), message));
+				RichText rebuilt = richText.fromMarkdown(
+						buildDescription(senderOf(message), message, filesOf(message, false)));
 				// Compare the derived plain text, not the document: re-converting the
 				// same body must read as "already current" even if the converter's
 				// output shifts between releases.
@@ -320,23 +363,50 @@ public class EmailIngestService {
 	}
 
 	/**
-	 * Walks the message's MIME tree and stores every attachment part as an issue
-	 * attachment. Runs after the issue exists so a single bad part can never abort
-	 * ticket creation; failures are logged and skipped.
+	 * One attachment of a mail as it was read, and the reason the upload gate refused
+	 * it; null when it passed.
 	 */
-	private void attachFiles(Message message, String issueId) {
+	private record MailFile(UploadCandidate candidate, UploadRefusal refusal) {
+	}
+
+	/**
+	 * The attachments of [message], each checked at the upload gate. The header's type is
+	 * a sender's word, so the gate takes the type from the content. A refusal is counted
+	 * when [count] is set, as it is when the mail is taken in, and not when only its
+	 * description is rebuilt. Best-effort: a part that cannot be read is left out, and so
+	 * is an empty one; without object storage there is nothing to store and so nothing to
+	 * check.
+	 */
+	private List<MailFile> filesOf(Message message, boolean count) {
+		List<MailFile> files = new ArrayList<>();
 		if (!storage.isConfigured()) {
-			return;
+			return files;
 		}
+		List<UploadCandidate> candidates = new ArrayList<>();
 		try {
-			attachFrom(message, issueId);
+			collectFiles(message, candidates);
 		}
 		catch (Exception ex) {
-			log.warn("Extracting e-mail attachments for {} failed: {}", issueId, ex.getMessage());
+			log.warn("Extracting e-mail attachments failed: {}", ex.getMessage());
+		}
+		for (UploadCandidate candidate : candidates) {
+			files.add(new MailFile(candidate, count ? refusalCounted(candidate)
+					: gate.refusalOf(candidate).orElse(null)));
+		}
+		return files;
+	}
+
+	private UploadRefusal refusalCounted(UploadCandidate candidate) {
+		try {
+			gate.check(candidate);
+			return null;
+		}
+		catch (ApiException refused) {
+			return UploadRefusal.of(refused.getDetails().get("reason"));
 		}
 	}
 
-	private void attachFrom(Part part, String issueId) throws Exception {
+	private void collectFiles(Part part, List<UploadCandidate> out) throws Exception {
 		Object content;
 		try {
 			content = part.getContent();
@@ -347,37 +417,77 @@ public class EmailIngestService {
 		}
 		if (content instanceof Multipart multipart) {
 			for (int i = 0; i < multipart.getCount(); i++) {
-				attachFrom(multipart.getBodyPart(i), issueId);
+				collectFiles(multipart.getBodyPart(i), out);
 			}
 			return;
 		}
 		if (!isAttachment(part)) {
 			return;
 		}
+		// One byte past the limit is enough to know it is too large; no more is held.
+		long limit = gate.maxBytes(UploadKind.MAIL_ATTACHMENT);
 		byte[] data;
 		try (InputStream in = part.getInputStream()) {
-			data = in.readAllBytes();
+			data = in.readNBytes((int) Math.min(Integer.MAX_VALUE - 8L, limit + 1));
 		}
 		if (data.length == 0) {
 			return;
 		}
-		if (data.length > storage.maxUploadBytes()) {
-			log.warn("Skipping oversized e-mail attachment ({} bytes) for {}", data.length, issueId);
-			return;
+		out.add(UploadCandidate.of(UploadKind.MAIL_ATTACHMENT, data, baseContentType(part),
+				safeFileName(attachmentName(part))));
+	}
+
+	/**
+	 * Stores every attachment the gate let through as an issue attachment, and logs the
+	 * ones it refused with the reason. Runs after the issue exists so a single bad part
+	 * can never abort ticket creation; failures are logged and skipped.
+	 */
+	private void attachFiles(List<MailFile> files, String issueId) {
+		for (MailFile file : files) {
+			UploadCandidate candidate = file.candidate();
+			if (file.refusal() != null) {
+				log.info("Refused e-mail attachment {} ({} bytes) for {}: {}", candidate.fileName(),
+						candidate.size(), issueId, file.refusal().code());
+				continue;
+			}
+			try {
+				StorageService.Stored stored = storage.putUserObject(StorageService.newObjectKey(), candidate);
+				attachments.add(issueId, Issue.Attachment.builder()
+						.id(UUID.randomUUID().toString())
+						.fileName(candidate.fileName())
+						.contentType(stored.contentType())
+						.size(stored.size())
+						.objectKey(stored.objectKey())
+						.uploadedAt(Instant.now())
+						.build());
+				log.info("Attached {} ({} bytes) from e-mail to {}", candidate.fileName(), stored.size(), issueId);
+			}
+			catch (RuntimeException ex) {
+				log.warn("Storing e-mail attachment {} for {} failed: {}", candidate.fileName(), issueId,
+						ex.getMessage());
+			}
 		}
-		String fileName = attachmentName(part);
-		String contentType = baseContentType(part);
-		String objectKey = UUID.randomUUID().toString();
-		storage.putObject(objectKey, data, contentType);
-		attachments.add(issueId, Issue.Attachment.builder()
-				.id(UUID.randomUUID().toString())
-				.fileName(fileName)
-				.contentType(contentType)
-				.size(data.length)
-				.objectKey(objectKey)
-				.uploadedAt(Instant.now())
-				.build());
-		log.info("Attached {} ({} bytes) from e-mail to {}", fileName, data.length, issueId);
+	}
+
+	/**
+	 * [name] as the gate takes it: no control character and no path separator, which a
+	 * sender may well put in, and no longer than the gate allows.
+	 */
+	static String safeFileName(String name) {
+		StringBuilder safe = new StringBuilder(name.length());
+		name.codePoints().forEach(c -> safe.appendCodePoint(
+				Character.isISOControl(c) || c == '/' || c == '\\' ? '_' : c));
+		String cleaned = safe.toString().strip();
+		if (cleaned.isEmpty()) {
+			return "attachment";
+		}
+		if (cleaned.length() <= UploadGate.FILE_NAME_MAX) {
+			return cleaned;
+		}
+		// Never half a character: a cut between the two halves of a surrogate pair is no text.
+		int end = Character.isHighSurrogate(cleaned.charAt(UploadGate.FILE_NAME_MAX - 1))
+				? UploadGate.FILE_NAME_MAX - 1 : UploadGate.FILE_NAME_MAX;
+		return cleaned.substring(0, end);
 	}
 
 	/**

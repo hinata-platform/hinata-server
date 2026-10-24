@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -74,6 +75,23 @@ public class RichTextService {
 	 */
 	public static final int MAX_MARKDOWN_CHARS = 30_000;
 
+	/** How the images of a text are settled before it is stored; null when nothing is stored. */
+	private final ImagesInText images;
+
+	/**
+	 * Converting only: images are left as they are, because there is nowhere to keep one. For a
+	 * caller that stores no text.
+	 */
+	public RichTextService() {
+		this.images = null;
+	}
+
+	/** Every text stored through here has its images settled first ({@link ImagesInText}). */
+	@Autowired
+	public RichTextService(EmbeddedImages images) {
+		this.images = new ImagesInText(MARKDOWN, images);
+	}
+
 	/**
 	 * Accepts a Lexical document from a client: validates it against the bounds in
 	 * {@link LexicalJson} and derives its plain text.
@@ -85,6 +103,11 @@ public class RichTextService {
 		if (json == null || json.isBlank()) return RichText.EMPTY;
 		JsonNode document = LexicalJson.parse(MAPPER, json);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
+		if (images != null && images.settle(document)) {
+			json = write(document);
+			// A link is a little longer than the image it stands for; the read bound still holds.
+			if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
+		}
 		return new RichText(json, LexicalJson.plainText(document), issueKeys(document));
 	}
 
@@ -96,7 +119,7 @@ public class RichTextService {
 	 * @throws com.ahmadre.hinata.common.ApiException 400 {@code error.richtext.tooLarge}
 	 */
 	public RichText fromMarkdown(String source) {
-		return convert(source, MAX_MARKDOWN_CHARS);
+		return convert(source, MAX_MARKDOWN_CHARS, true);
 	}
 
 	/**
@@ -107,14 +130,18 @@ public class RichTextService {
 	 * is reported rather than written.
 	 */
 	public RichText fromStoredMarkdown(String source) {
-		return convert(source, LexicalJson.MAX_JSON_CHARS);
+		return convert(source, LexicalJson.MAX_JSON_CHARS, false);
 	}
 
-	private RichText convert(String source, int maxSourceChars) {
+	/** [settle] says whether the images are settled: only for text that arrives now. */
+	private RichText convert(String source, int maxSourceChars, boolean settle) {
 		if (source == null || source.isBlank()) return RichText.EMPTY;
 		if (source.length() > maxSourceChars) throw tooLarge();
 		ObjectNode document = MARKDOWN.convert(source);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
+		if (settle && images != null) {
+			images.settle(document);
+		}
 		String json = write(document);
 		// The read side refuses a document past this bound. Storing one anyway
 		// produces content that loads and can never be saved again.
@@ -258,7 +285,7 @@ public class RichTextService {
 				.toList();
 	}
 
-	private String write(ObjectNode document) {
+	private String write(JsonNode document) {
 		try {
 			return MAPPER.writeValueAsString(document);
 		} catch (JsonProcessingException e) {

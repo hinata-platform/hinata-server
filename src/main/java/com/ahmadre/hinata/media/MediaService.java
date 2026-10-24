@@ -3,14 +3,14 @@ package com.ahmadre.hinata.media;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadCandidate;
+import com.ahmadre.hinata.storage.UploadKind;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -33,10 +33,6 @@ public class MediaService {
 	/** Bucket "folder" that isolates inline media from attachments/avatars. */
 	static final String PREFIX = "media/";
 
-	/** Raster images only; {@code image/svg+xml} is excluded (stored-XSS risk). */
-	private static final Set<String> ALLOWED_TYPES =
-			Set.of("image/png", "image/jpeg", "image/gif", "image/webp");
-
 	/** The random object id (a bare UUID); guards the read path traversal-free. */
 	private static final Pattern ID = Pattern.compile("[0-9a-fA-F-]{36}");
 
@@ -52,30 +48,40 @@ public class MediaService {
 			String blurHash) {
 	}
 
-	/** Validates + stores an inline image, returning its app-relative URL. */
+	/**
+	 * Stores an inline image, returning its app-relative URL. Raster images only, as
+	 * {@link UploadKind#MEDIA} allows them; {@code image/svg+xml} is not among them
+	 * (stored-XSS risk). The gate checks it and takes its metadata out before it is
+	 * stored, so a photo's GPS position never reaches the people reading the page.
+	 */
 	public MediaUpload store(MultipartFile file) {
-		if (file == null || file.isEmpty()) {
-			throw ApiException.badRequest("error.media.empty");
-		}
-		String contentType = file.getContentType();
-		if (contentType == null || !ALLOWED_TYPES.contains(contentType.toLowerCase())) {
-			throw ApiException.badRequest("error.media.notAnImage");
-		}
-		// StorageService re-checks size + magic bytes against the declared type.
-		String objectKey = storage.upload(file, PREFIX);
-		String id = objectKey.substring(PREFIX.length());
-		return new MediaUpload("/api/v1/media/" + id, file.getOriginalFilename(), contentType,
-				file.getSize(), storePreview(id, file));
+		return store(UploadCandidate.of(UploadKind.MEDIA, file));
 	}
 
 	/**
-	 * Generates + stores the thumbnail for a freshly uploaded inline image and
-	 * returns its BlurHash. A preview failure is never an upload failure — the
-	 * image itself is already stored and renders as it always did.
+	 * Stores an image that arrived inside a text as {@code data:} bytes, exactly as an
+	 * upload is stored: through the gate, without its metadata (HIN-177).
 	 */
-	private String storePreview(String id, MultipartFile file) {
+	public MediaUpload store(byte[] data, String declaredType) {
+		return store(UploadCandidate.of(UploadKind.MEDIA, data, declaredType, null));
+	}
+
+	private MediaUpload store(UploadCandidate candidate) {
+		StorageService.Stored stored = storage.upload(candidate, PREFIX);
+		String id = stored.objectKey().substring(PREFIX.length());
+		return new MediaUpload("/api/v1/media/" + id, candidate.fileName(), stored.contentType(),
+				stored.size(), storePreview(id, stored.data()));
+	}
+
+	/**
+	 * Generates + stores the thumbnail for a freshly stored inline image from the
+	 * bytes as stored and returns its BlurHash. A preview failure is never an
+	 * upload failure — the image itself is already stored and renders as it
+	 * always did.
+	 */
+	private String storePreview(String id, byte[] stored) {
 		try {
-			Optional<ImagePreviewService.Preview> preview = previews.create(file.getBytes());
+			Optional<ImagePreviewService.Preview> preview = previews.create(stored);
 			if (preview.isEmpty()) {
 				return null;
 			}
@@ -83,7 +89,7 @@ public class MediaService {
 					preview.get().contentType());
 			return preview.get().blurHash();
 		}
-		catch (IOException | RuntimeException ex) {
+		catch (RuntimeException ex) {
 			log.warn("Preview for media {} failed: {}", id, ex.toString());
 			return null;
 		}

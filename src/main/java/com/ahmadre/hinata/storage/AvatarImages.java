@@ -7,7 +7,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.awt.image.BufferedImage;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.Set;
 
 /**
  * The one avatar pipeline, shared by every round picture the server stores — a
@@ -41,40 +40,22 @@ public final class AvatarImages {
 
 	public static final float JPEG_QUALITY = 0.85f;
 
-	/** Max accepted upload before compression (the photo straight off a phone). */
-	public static final long MAX_UPLOAD_BYTES = 12L * 1024 * 1024;
-
 	/** What {@link #compress} always produces, whatever went in. */
 	public static final String CONTENT_TYPE = "image/jpeg";
-
-	/**
-	 * Formats the JDK's ImageIO decodes natively. WebP/SVG are excluded because
-	 * there is no built-in reader — an upload the server cannot decode is also
-	 * one it cannot strip metadata from.
-	 */
-	private static final Set<String> ACCEPTED =
-			Set.of("image/jpeg", "image/jpg", "image/png", "image/gif", "image/bmp");
 
 	/** Query parameter carrying the avatar's BlurHash. */
 	private static final String BLUR_PARAM = "bh=";
 
 	/**
-	 * Validates [file] and returns the square, downscaled, metadata-free JPEG to
-	 * store. The declared content type is only a first gate: the payload still has
-	 * to decode as a real raster image, so a script renamed to {@code .png} is
-	 * rejected here rather than served back to a browser later.
+	 * Checks [file] at [gate] as an {@link UploadKind#AVATAR} and returns the square,
+	 * downscaled, metadata-free JPEG to store. The gate decides the types (those
+	 * the JDK's ImageIO decodes natively: an upload the server cannot decode is
+	 * also one it cannot strip metadata from), the size and the signature; the
+	 * payload still has to decode as a real raster image, so a script renamed to
+	 * {@code .png} is rejected here rather than served back to a browser later.
 	 */
-	public static byte[] compress(MultipartFile file) {
-		if (file == null || file.isEmpty()) {
-			throw ApiException.badRequest("error.avatar.empty");
-		}
-		if (file.getSize() > MAX_UPLOAD_BYTES) {
-			throw ApiException.badRequest("error.avatar.tooLarge");
-		}
-		String contentType = file.getContentType();
-		if (contentType == null || !ACCEPTED.contains(contentType.toLowerCase())) {
-			throw ApiException.badRequest("error.avatar.unsupportedType");
-		}
+	public static byte[] compress(UploadGate gate, MultipartFile file) {
+		gate.check(UploadCandidate.of(UploadKind.AVATAR, file));
 		try {
 			// Bounded decode: a small file can declare enormous dimensions, and an
 			// avatar is not worth the heap that would take (see ImageOps.read).
