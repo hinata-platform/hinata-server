@@ -58,5 +58,8 @@ final class MemoryObjects {
 				.map(bytes -> new StorageService.StoredObject(bytes, "application/octet-stream")));
 		doAnswer(call -> objects.put(call.getArgument(0), call.getArgument(1))).when(storage)
 				.putObject(anyString(), any(byte[].class), anyString());
+		when(storage.list(anyString())).thenAnswer(call -> objects.keySet().stream()
+				.filter(key -> key.startsWith(call.<String>getArgument(0)))
+				.map(key -> new StorageService.ObjectInfo(key, java.time.Instant.now())).toList());
 	}
 }
