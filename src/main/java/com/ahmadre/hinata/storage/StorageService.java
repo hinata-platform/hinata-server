@@ -79,7 +79,7 @@ public class StorageService {
 	public Stored putUserObject(String objectKey, UploadCandidate candidate) {
 		requireConfigured();
 		UploadGate.Accepted accepted = gate.check(candidate);
-		if (candidate.kind() == UploadKind.MEDIA) {
+		if (candidate.kind().shownInText()) {
 			byte[] clean = gate.withoutMetadata(candidate, accepted);
 			putObject(objectKey, clean, accepted.contentType());
 			return new Stored(objectKey, accepted.contentType(), clean.length, clean);

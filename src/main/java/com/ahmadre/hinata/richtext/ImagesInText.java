@@ -25,6 +25,9 @@ final class ImagesInText {
 	/** Most {@code data:} images one save turns into media. */
 	static final int MAX_DATA_IMAGES = 20;
 
+	/** Most images one document shows; more are refused before a single one is looked at. */
+	static final int MAX_IMAGES = 200;
+
 	/** The address of an image in this server's media, as the app writes it. */
 	private static final Pattern MEDIA_PATH = Pattern.compile("/api/v1/media/[0-9a-fA-F-]{36}(/thumbnail)?");
 
@@ -45,7 +48,8 @@ final class ImagesInText {
 
 	/**
 	 * Settles the images of [document] in place and says whether anything changed. Refuses more
-	 * than {@link #MAX_DATA_IMAGES} {@code data:} images before it stores a single one.
+	 * than {@link #MAX_IMAGES} images, or more than {@link #MAX_DATA_IMAGES} {@code data:} ones,
+	 * before it stores a single one.
 	 */
 	boolean settle(JsonNode document) {
 		List<Found> found = new ArrayList<>();
@@ -53,16 +57,41 @@ final class ImagesInText {
 		if (found.isEmpty()) {
 			return false;
 		}
+		if (found.size() > MAX_IMAGES) {
+			throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "error.richtext.tooManyImages", MAX_IMAGES);
+		}
 		long data = found.stream().filter(f -> isData(sourceOf(f.image()))).count();
 		if (data > MAX_DATA_IMAGES) {
 			throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "error.moderation.tooManyImages",
 					MAX_DATA_IMAGES);
 		}
+		Words words = new Words();
 		boolean changed = false;
 		for (Found image : found) {
-			changed |= settle(image);
+			changed |= settle(image, words);
 		}
 		return changed;
+	}
+
+	/** The words an image gives way to, looked up once per document and only when needed. */
+	private final class Words {
+
+		private String externalImage;
+		private String notKept;
+
+		String externalImage() {
+			if (externalImage == null) {
+				externalImage = images.externalImageLabel();
+			}
+			return externalImage;
+		}
+
+		ObjectNode notKept() {
+			if (notKept == null) {
+				notKept = images.imageNotKeptText();
+			}
+			return nodes.text(notKept, ITALIC);
+		}
 	}
 
 	private void collect(JsonNode node, boolean insideLink, List<Found> out) {
@@ -83,7 +112,7 @@ final class ImagesInText {
 		}
 	}
 
-	private boolean settle(Found found) {
+	private boolean settle(Found found, Words words) {
 		String source = sourceOf(found.image());
 		if (MEDIA_PATH.matcher(source).matches()) {
 			return false;
@@ -94,7 +123,7 @@ final class ImagesInText {
 				found.image().put("src", stored.get());
 				return true;
 			}
-			return replace(found, notKept());
+			return replace(found, words.notKept());
 		}
 		String lower = source.toLowerCase(Locale.ROOT);
 		if (lower.startsWith("https://") || lower.startsWith("http://")) {
@@ -104,10 +133,10 @@ final class ImagesInText {
 				return true;
 			}
 			// A link inside a link is no link; the outer one stays and this says what was here.
-			return replace(found, found.insideLink() ? nodes.text(images.externalImageLabel(), 0)
-					: nodes.linkTo(source, images.externalImageLabel(), 0));
+			return replace(found, found.insideLink() ? nodes.text(words.externalImage(), 0)
+					: nodes.linkTo(source, words.externalImage(), 0));
 		}
-		return replace(found, notKept());
+		return replace(found, words.notKept());
 	}
 
 	/** The path of an image in this server's media that [url] names absolutely; null for anything else. */
@@ -119,10 +148,6 @@ final class ImagesInText {
 		catch (IllegalArgumentException malformed) {
 			return null;
 		}
-	}
-
-	private ObjectNode notKept() {
-		return nodes.text(images.imageNotKeptText(), ITALIC);
 	}
 
 	private static boolean replace(Found found, ObjectNode replacement) {

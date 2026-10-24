@@ -39,7 +39,7 @@ class MediaEmbeddedImages implements EmbeddedImages {
 			return Optional.empty();
 		}
 		try {
-			return Optional.of(media.store(data, contentType).url());
+			return Optional.of(media.storePasted(data, contentType));
 		}
 		catch (ApiException ex) {
 			if ("upload.refused".equals(ex.getDetails().get("code"))) {

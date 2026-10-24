@@ -32,6 +32,7 @@ class RichTextImagesTest {
 	private static final class Images implements EmbeddedImages {
 
 		private final List<byte[]> stored = new ArrayList<>();
+		private int labelsAsked;
 
 		@Override
 		public Optional<String> store(byte[] data, String contentType) {
@@ -49,6 +50,7 @@ class RichTextImagesTest {
 
 		@Override
 		public String externalImageLabel() {
+			labelsAsked++;
 			return "Externes Bild";
 		}
 
@@ -128,6 +130,29 @@ class RichTextImagesTest {
 					assertThat(ex.getMessageKey()).isEqualTo("error.moderation.tooManyImages");
 				});
 		assertThat(images.stored).isEmpty();
+	}
+
+	@Test
+	void manyExternalImagesAskForTheirLabelOnce() throws Exception {
+		String three = String.join(" ", java.util.Collections.nCopies(3, "![x](https://tracker.example/p.png)"));
+
+		RichText text = service.fromMarkdown(three);
+
+		assertThat(nodes(text.doc(), "link")).hasSize(3);
+		assertThat(images.labelsAsked).isEqualTo(1);
+	}
+
+	@Test
+	void aDocumentShowingTooManyImagesIsRefusedBeforeAnyIsLookedAt() {
+		String many = String.join(" ", java.util.Collections.nCopies(ImagesInText.MAX_IMAGES + 1,
+				"![x](https://tracker.example/p.png)"));
+
+		assertThatThrownBy(() -> service.fromMarkdown(many))
+				.isInstanceOfSatisfying(ApiException.class, ex -> {
+					assertThat(ex.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
+					assertThat(ex.getMessageKey()).isEqualTo("error.richtext.tooManyImages");
+				});
+		assertThat(images.labelsAsked).isZero();
 	}
 
 	@Test
