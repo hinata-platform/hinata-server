@@ -53,7 +53,9 @@ final class EmailFixtures {
 			"email/account-deactivated",
 			"email/account-deleted",
 			"email/issue-changes",
-			"email/weekly-summary");
+			"email/weekly-summary",
+			"email/moderation-notice",
+			"email/moderation-notice#reply");
 
 	private static final String BASE = "https://track.asta.hn";
 
@@ -123,6 +125,29 @@ final class EmailFixtures {
 	static String templateOf(String sample) {
 		int variant = sample.indexOf('#');
 		return variant < 0 ? sample : sample.substring(0, variant);
+	}
+
+	/** The statement of reasons, worded as moderation.Statements words it (HIN-171). */
+	private static void moderationNotice(Map<String, Object> m, boolean de) {
+		m.put("eyebrowKey", "email.eyebrow.MODERATION_NOTICE");
+		m.put("headline", de ? "Die Moderation hat einen Inhalt von dir entfernt" : "Moderation removed content of yours");
+		m.put("measure", de ? "Dein Kommentar vom 21.10.2026, 18:02 in HIN-142 wurde entfernt."
+				: "Your comment of 21 Oct 2026, 18:02 in HIN-142 was removed.");
+		m.put("basisLabel", de ? "Wie es dazu kam" : "How it came up");
+		m.put("basis", de ? "Die Moderation hat es sich nach einer Meldung angesehen." : "Moderation looked at it after a report.");
+		m.put("factsLabel", de ? "Was die Moderation festgestellt hat" : "What moderation found");
+		m.put("facts", de ? "Der Kommentar bezeichnet eine Kollegin als zu blöd für den Job, ohne jeden Bezug zur Sache."
+				: "The comment calls a colleague too stupid for the job, with nothing to do with the matter.");
+		m.put("groundLabel", de ? "Grund" : "Ground");
+		m.put("ground", de ? "Verstoß gegen die Hausregeln: Hausregel 2, kein Herabsetzen anderer"
+				: "Against the house rules: House rule 2, no belittling others");
+		m.put("automationLabel", de ? "Automatisierte Mittel" : "Automated means");
+		m.put("automation", de ? "Von einer Person geprüft und entschieden, ohne automatisierte Mittel."
+				: "Reviewed and decided by a person, without automated means.");
+		m.put("messageLabel", de ? "Ein Wort der Moderation" : "A word from moderation");
+		m.put("rules", (de ? "Hausregeln: " : "House rules: ") + BASE + "/api/v1/public/rules");
+		m.put("courts", de ? "Unabhängig davon steht dir der Weg zu den Gerichten offen."
+				: "Independently of this, you can go to court.");
 	}
 
 	/** Sample model for {@code template} in {@code locale} ("de" / "en"). */
@@ -198,6 +223,21 @@ final class EmailFixtures {
 				m.put("roles", de ? "Administrator, Mitglied" : "Administrator, Member");
 			}
 			case "email/account-deactivated", "email/account-deleted" -> m.put("ctaLink", null);
+			case "email/moderation-notice" -> {
+				moderationNotice(m, de);
+				m.put("ctaLink", BASE + "/notices/case-7");
+				m.put("ctaLabel", de ? "Hinweis öffnen" : "Open the notice");
+				m.put("message", de ? "Bitte bleib sachlich, auch wenn es eilt." : "Please stay factual, even in a hurry.");
+				m.put("appeal", de ? "Du kannst bis zum 24. April 2027 widersprechen."
+						: "You can appeal until 24 April 2027.");
+			}
+			case "email/moderation-notice#reply" -> {
+				// Somebody who cannot sign in: no button, the reply is the appeal.
+				moderationNotice(m, de);
+				m.put("ctaLink", null);
+				m.put("appeal", de ? "Du kannst bis zum 24. April 2027 widersprechen, indem du auf diese Mail antwortest."
+						: "You can appeal until 24 April 2027 by replying to this mail.");
+			}
 			case "email/issue-changes" -> {
 				m.put("headline", de
 						? "HIN-142 · Kalenderansicht: Woche beginnt am falschen Tag"
