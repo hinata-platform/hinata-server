@@ -351,7 +351,7 @@ class ParticipantAccessIntegrationTest {
 		users.save(outsider);
 
 		assertThatThrownBy(() -> participants.add(issue.getId(), outsider.getId(), member))
-				.isInstanceOf(ApiException.class).hasMessageContaining("participantInactive");
+				.isInstanceOf(ApiException.class).hasMessageContaining("participantUnavailable");
 	}
 
 	@Test

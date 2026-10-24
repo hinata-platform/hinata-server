@@ -79,7 +79,8 @@ class NotificationServiceTest {
 mock(IssueRepository.class), mock(ProjectRepository.class),
 com.ahmadre.hinata.common.UserWordsFixture.real()),
 				com.ahmadre.hinata.common.UserWordsFixture.real(),
-				days, mock(IssueDigestService.class));
+				days, mock(IssueDigestService.class),
+				mock(com.ahmadre.hinata.block.BlockService.class));
 	}
 
 	// --- notification window (HIN-131) -----------------------------------------

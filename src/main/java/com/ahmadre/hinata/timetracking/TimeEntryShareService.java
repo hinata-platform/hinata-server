@@ -2,6 +2,7 @@ package com.ahmadre.hinata.timetracking;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.block.BlockService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
@@ -74,6 +75,7 @@ public class TimeEntryShareService {
 	private final AuditService audit;
 	private final MongoTemplate mongo;
 	private final Clock clock;
+	private final BlockService blocks;
 
 	/** Which side of the invitations a reader asks for. */
 	public enum Box {
@@ -175,10 +177,12 @@ public class TimeEntryShareService {
 		if (!projectReach.canSee(entry.getProjectId(), sender)) {
 			throw ApiException.forbidden("error.project.notMember");
 		}
-		// One answer for a person who is not in the project, is deactivated, or does not exist:
-		// the route is no way to find out which accounts there are.
+		// One answer for a person who is not in the project, is deactivated, does not exist or
+		// blocks the sender (HIN-168): the route is no way to find out which accounts there are,
+		// nor who blocks whom.
 		Map<String, User> active = users.findAllById(wanted).stream().filter(User::isActive)
 				.collect(Collectors.toMap(User::getId, Function.identity()));
+		active.keySet().removeAll(blocks.blockersOf(sender.getId()));
 		Set<String> reachable = projectReach.whoCanSee(entry.getProjectId(), active.keySet());
 		if (!reachable.containsAll(wanted)) {
 			throw ApiException.forbidden("error.time.share.notMember");
@@ -314,7 +318,7 @@ public class TimeEntryShareService {
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(claimed.getId())),
 				new Update().set("copyId", copy.getId()), TimeEntryShare.class);
 		User sender = users.findById(claimed.getFromUserId()).orElse(null);
-		notifications.notifyTimeShareAccepted(sender, recipient.getDisplayName());
+		notifications.notifyTimeShareAccepted(sender, recipient);
 		audit.event(AuditAction.TIME_SHARE_ACCEPTED).actor(recipient).target(sender)
 				.meta("workItem", copy.getId()).meta("sharedFrom", claimed.getEntryId())
 				.meta("project", copy.getProjectId()).log();

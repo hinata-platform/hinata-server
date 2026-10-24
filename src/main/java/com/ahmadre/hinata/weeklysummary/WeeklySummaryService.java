@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.weeklysummary;
 
+import com.ahmadre.hinata.block.BlockService;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.issue.Issue;
@@ -53,6 +54,7 @@ public class WeeklySummaryService {
 
 	private final ProjectService projects;
 	private final UserRepository users;
+	private final BlockService blocks;
 	private final MongoTemplate mongo;
 
 	// ─────────────────────────── DTOs ───────────────────────────
@@ -134,7 +136,7 @@ public class WeeklySummaryService {
 				Criteria.where("archived").ne(true),
 				Criteria.where("resolvedAt").gte(since))), Issue.class);
 
-		List<Contributor> contributors = contributors(resolvedThisWeek);
+		List<Contributor> contributors = contributors(resolvedThisWeek, Set.copyOf(blocks.blockedIds(user)));
 		long myCompleted = resolvedThisWeek.stream()
 				.filter(i -> i.getAssigneeIds() != null && i.getAssigneeIds().contains(user.getId()))
 				.count();
@@ -154,16 +156,21 @@ public class WeeklySummaryService {
 
 	// ─────────────────────────── the week behind ───────────────────────────
 
-	/** Scores resolved issues per (primary) assignee, richest first. */
-	private List<Contributor> contributors(List<Issue> resolved) {
+	/**
+	 * Scores resolved issues per (primary) assignee, richest first. People the reader blocks
+	 * ([blocked]) are left off their board; the issues themselves stay in the counts.
+	 */
+	private List<Contributor> contributors(List<Issue> resolved, Set<String> blocked) {
 		Map<String, Long> points = resolved.stream()
 				.map(Issue::getAssigneeId)
-				.filter(id -> id != null && !id.isBlank())
+				.filter(id -> id != null && !id.isBlank() && !blocked.contains(id))
 				.collect(Collectors.groupingBy(id -> id, Collectors.counting()));
 		List<Contributor> entries = new ArrayList<>();
-		points.forEach((userId, count) -> users.findById(userId).ifPresent(u ->
-				entries.add(new Contributor(u.getId(), u.getDisplayName(), u.getTitle(),
-						u.getAvatarUrl(), u.getPronouns(), count))));
+		// One read for the whole board, not one per person on it.
+		for (User u : users.findAllById(points.keySet())) {
+			entries.add(new Contributor(u.getId(), u.getDisplayName(), u.getTitle(),
+					u.getAvatarUrl(), u.getPronouns(), points.get(u.getId())));
+		}
 		entries.sort(Comparator.comparingLong(Contributor::completed).reversed()
 				.thenComparing(Contributor::displayName));
 		return entries.size() > CONTRIBUTORS ? entries.subList(0, CONTRIBUTORS) : entries;
