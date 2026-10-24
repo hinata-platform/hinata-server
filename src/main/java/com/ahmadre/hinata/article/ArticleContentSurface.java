@@ -154,7 +154,8 @@ class ArticleContentSurface implements ContentSurface {
 						.toList(),
 				page.getCreatedAt(),
 				page.getUpdatedAt(),
-				ContentSnapshot.hashOf(page.getTitle(), page.getContentDoc()));
+				ContentSnapshot.hashOf(page.getTitle(), page.getContentDoc()),
+				isRemoved(page, TITLE) && isRemoved(page, CONTENT));
 	}
 
 	@Override

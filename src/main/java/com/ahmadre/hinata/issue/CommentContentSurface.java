@@ -117,11 +117,13 @@ class CommentContentSurface implements ContentSurface {
 		}
 		MediaReferences.idsIn(comment.getTextDoc())
 				.forEach(id -> objects.add(MediaRef.of(MediaReferences.objectKey(id))));
+		ContentOrigin origin = comment.getOrigin() == null ? ContentOrigin.MEMBER : comment.getOrigin();
 		return new ContentSnapshot(
 				refOf(comment, issue),
-				comment.getOrigin() == null ? ContentOrigin.MEMBER : comment.getOrigin(),
+				origin,
 				null,
-				Set.of(comment.getAuthorId()),
+				// A smart commit stands under whoever connected the repository; they did not write it.
+				origin == ContentOrigin.GIT ? Set.of() : Set.of(comment.getAuthorId()),
 				comment.getAuthorId(),
 				null,
 				ContentSnapshot.clip(comment.getText(), ContentSnapshot.EXCERPT_MAX),
@@ -131,7 +133,8 @@ class CommentContentSurface implements ContentSurface {
 				comment.getCreatedAt(),
 				comment.getEditedAt(),
 				ContentSnapshot.hashOf(comment.getTextDoc(), comment.getText(),
-						voice == null ? null : voice.getObjectKey()));
+						voice == null ? null : voice.getObjectKey()),
+				isRemoved(comment));
 	}
 
 	private static MediaRef voiceRef(IssueComment.Voice voice) {

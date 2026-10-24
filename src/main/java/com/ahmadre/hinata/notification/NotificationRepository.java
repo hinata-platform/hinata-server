@@ -17,6 +17,10 @@ public interface NotificationRepository extends MongoRepository<Notification, St
 
 	long countByUserIdAndReadFalse(String userId);
 
+	/** Whether a notice of [type] went out to [userId] by mail or push since [since]; off {@code user_created}. */
+	boolean existsByUserIdAndTypeAndSentOutTrueAndCreatedAtAfter(String userId, Notification.Type type,
+			java.time.Instant since);
+
 	long deleteByUserIdAndType(String userId, Notification.Type type);
 
 	List<Notification> findByUserIdInAndLink(java.util.Collection<String> userIds, String link);
