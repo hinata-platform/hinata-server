@@ -41,6 +41,16 @@ public class UploadGate {
 	/** Longest file name kept. */
 	public static final int FILE_NAME_MAX = 200;
 
+	/**
+	 * Endings a system runs or renders when the file is opened: programs, scripts, shortcuts and web
+	 * pages. Refused for every kind, whatever the content, so a download never becomes one.
+	 */
+	private static final Set<String> RUNNABLE = Set.of("exe", "com", "scr", "pif", "cpl", "msi", "msp", "mst",
+			"dll", "sys", "drv", "ocx", "bat", "cmd", "ps1", "psm1", "psd1", "vbs", "vbe", "js", "jse", "mjs",
+			"wsf", "wsh", "wsc", "sct", "hta", "lnk", "url", "scf", "reg", "inf", "jar", "jnlp", "appref-ms",
+			"application", "gadget", "msc", "chm", "hlp", "command", "tool", "app", "pkg", "mpkg", "sh", "csh",
+			"ksh", "html", "htm", "xhtml", "shtml", "mht", "mhtml", "svg", "svgz", "xml", "xsl", "xslt");
+
 	/** The kinds whose types an instance can switch off by group. */
 	private static final Set<UploadKind> SWITCHABLE = EnumSet.of(UploadKind.ATTACHMENT, UploadKind.MAIL_ATTACHMENT,
 			UploadKind.MEDIA, UploadKind.VOICE);
@@ -120,6 +130,9 @@ public class UploadGate {
 		if (!fileNameIsSafe(candidate.fileName())) {
 			throw new Refused(UploadRefusal.FILE_NAME);
 		}
+		if (runsWhenOpened(candidate.fileName())) {
+			throw new Refused(UploadRefusal.TYPE);
+		}
 		if (candidate.size() <= 0) {
 			throw new Refused(UploadRefusal.EMPTY);
 		}
@@ -128,7 +141,7 @@ public class UploadGate {
 		}
 		byte[] head;
 		try {
-			head = candidate.head(FileSignature.HEAD);
+			head = candidate.head(FileSignature.TEXT_SAMPLE);
 		}
 		catch (IOException ex) {
 			throw new Refused(UploadRefusal.UNREADABLE);
@@ -297,6 +310,23 @@ public class UploadGate {
 			type = type.substring(0, parameters).strip();
 		}
 		return "image/jpg".equals(type) ? "image/jpeg" : type;
+	}
+
+	/**
+	 * Whether [name] ends like a program, a script, a shortcut or a web page. Trailing dots and
+	 * spaces count for nothing, as Windows drops them; only the last ending counts, so
+	 * {@code Rechnung.pdf.hta} is the page it would open as.
+	 */
+	static boolean runsWhenOpened(String name) {
+		if (name == null) {
+			return false;
+		}
+		String trimmed = name.strip();
+		while (trimmed.endsWith(".")) {
+			trimmed = trimmed.substring(0, trimmed.length() - 1).strip();
+		}
+		int dot = trimmed.lastIndexOf('.');
+		return dot >= 0 && RUNNABLE.contains(trimmed.substring(dot + 1).toLowerCase(Locale.ROOT));
 	}
 
 	/** No control character, no path, not too long; no name at all is fine, the store names it. */

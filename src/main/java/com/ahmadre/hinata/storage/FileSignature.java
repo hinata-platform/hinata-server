@@ -1,5 +1,9 @@
 package com.ahmadre.hinata.storage;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Locale;
+
 /**
  * What a payload actually is, read from its own leading bytes rather than from
  * the content type somebody declared for it. The declared type is the one thing
@@ -11,6 +15,13 @@ final class FileSignature {
 
 	/** How many leading bytes every signature here needs at most. */
 	static final int HEAD = 16;
+
+	/** How far text is read to tell it from a binary: as far as git looks for the same question. */
+	static final int TEXT_SAMPLE = 8192;
+
+	/** Markup a browser or a desktop would run when the file is opened, as it starts a "text". */
+	private static final List<String> ACTIVE_MARKUP = List.of("<svg", "<html", "<!doctype", "<script", "<hta:",
+			"<?xml", "<xml", "<body", "<head", "<iframe", "<object", "<embed");
 
 	/** The families of files that can be told by their first bytes. */
 	enum Family {
@@ -49,14 +60,37 @@ final class FileSignature {
 		return null;
 	}
 
-	/** Whether [head] reads like text: no NUL byte, which no text format has and every binary one does. */
-	static boolean looksLikeText(byte[] head) {
-		for (byte b : head) {
+	/**
+	 * Whether [sample] reads like text: no NUL byte, which no text format has and every binary one
+	 * does, and no start of a program, a script or a web page, which would run when opened however
+	 * it was declared. The encoding is not checked: a spreadsheet's CSV in Windows-1252 is text too.
+	 */
+	static boolean looksLikeText(byte[] sample) {
+		for (byte b : sample) {
 			if (b == 0) {
 				return false;
 			}
 		}
-		return true;
+		return !startsLikeProgram(sample) && !startsLikeMarkup(sample);
+	}
+
+	/** A Windows or Unix program, a Java class or a script with an interpreter line. */
+	private static boolean startsLikeProgram(byte[] head) {
+		return startsWith(head, 'M', 'Z') || startsWith(head, 0x7F, 'E', 'L', 'F')
+				|| startsWith(head, 0xFE, 0xED, 0xFA, 0xCE) || startsWith(head, 0xFE, 0xED, 0xFA, 0xCF)
+				|| startsWith(head, 0xCE, 0xFA, 0xED, 0xFE) || startsWith(head, 0xCF, 0xFA, 0xED, 0xFE)
+				|| startsWith(head, 0xCA, 0xFE, 0xBA, 0xBE) || startsWith(head, '#', '!');
+	}
+
+	/** Active markup after a byte order mark and white space, in any case. */
+	private static boolean startsLikeMarkup(byte[] head) {
+		int at = startsWith(head, 0xEF, 0xBB, 0xBF) ? 3 : 0;
+		while (at < head.length && (head[at] == ' ' || head[at] == '\t' || head[at] == '\r' || head[at] == '\n')) {
+			at++;
+		}
+		int length = Math.min(head.length - at, 16);
+		String start = new String(head, at, Math.max(length, 0), StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT);
+		return ACTIVE_MARKUP.stream().anyMatch(start::startsWith);
 	}
 
 	private static boolean riff(byte[] head, String form) {
