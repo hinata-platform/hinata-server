@@ -25,7 +25,7 @@ class SuspensionEnds {
 
 	private final MongoTemplate mongo;
 	private final ModerationFollowUps followUps;
-	private final ModerationNotices notices;
+	private final ModerationAlerts alerts;
 	private final DecisionService decisions;
 	private final Clock clock;
 
@@ -52,7 +52,7 @@ class SuspensionEnds {
 			return;
 		}
 		if (event.reason() == LiftReason.ADMIN || event.reason() == LiftReason.DEACTIVATED) {
-			notices.teamNote(ended, "moderation.notice.liftedByAdmin");
+			alerts.teamNote(ended, "moderation.notice.liftedByAdmin");
 		}
 		followUps.later(ended.getId());
 	}

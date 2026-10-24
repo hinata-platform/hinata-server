@@ -19,12 +19,15 @@ import java.util.Map;
 /**
  * What moderation tells moderators and admins (HIN-170), and in which words. None of it carries
  * content, a category or a name: a push is read on a lock screen, and a bell entry outlives the case.
+ *
+ * <p>Alerts, not notices: a notice is a report (DSA Art. 16), and what the person responsible gets
+ * is the statement of reasons ({@link DecisionNotices}).
  */
 @Component
 @RequiredArgsConstructor
-public class ModerationNotices {
+public class ModerationAlerts {
 
-	/** One ping per person and type within this window; the bell records every notice. */
+	/** One ping per person and type within this window; the bell records every alert. */
 	static final Duration QUIET = Duration.ofMinutes(15);
 
 	private final NotificationService notifications;

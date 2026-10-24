@@ -51,10 +51,10 @@ public class MemberModerationController {
 	}
 
 	/** Only the person responsible reaches it; there is no list, the bell and the mail lead here. */
-	@Operation(summary = "A notice of moderation about my content, with its appeal")
+	@Operation(summary = "The statement of reasons about my content, with its appeal")
 	@GetMapping("/notices/{caseId}")
-	public Statement notice(@PathVariable String caseId) {
-		return appeals.notice(caseId, currentUser.require());
+	public Statement statement(@PathVariable String caseId) {
+		return appeals.statement(caseId, currentUser.require());
 	}
 
 	@Operation(summary = "Appeal a decision of moderation")

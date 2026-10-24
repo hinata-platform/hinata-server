@@ -17,13 +17,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /** With no admin left to tell, the instance's contact gets the word by mail (HIN-170). */
-class ModerationNoticesTest {
+class ModerationAlertsTest {
 
 	private final NotificationService notifications = mock(NotificationService.class);
 	private final CaseAccess access = mock(CaseAccess.class);
 	private final OperatorContact contact = mock(OperatorContact.class);
 	private final SettingsService settings = mock(SettingsService.class);
-	private final ModerationNotices notices = new ModerationNotices(notifications, access, mock(UserWords.class),
+	private final ModerationAlerts alerts = new ModerationAlerts(notifications, access, mock(UserWords.class),
 			contact, settings);
 	private final ModerationCase moderationCase = ModerationCase.builder().id("case-1").build();
 
@@ -34,7 +34,7 @@ class ModerationNoticesTest {
 		when(contact.current()).thenReturn(new OperatorContact.Contact("Fachschaft", "moderation@example.org", null));
 		when(settings.instanceLocale()).thenReturn(Locale.GERMAN);
 
-		notices.adminAlert(moderationCase, "moderation.alert.nobody");
+		alerts.adminAlert(moderationCase, "moderation.alert.nobody");
 
 		verify(notifications).mailAddress("moderation@example.org", Locale.GERMAN, "moderation.alert.nobody.title",
 				"moderation.alert.nobody.body");
@@ -47,7 +47,7 @@ class ModerationNoticesTest {
 		when(access.eligibleAdmins(moderationCase, List.of())).thenReturn(List.of());
 		when(contact.current()).thenReturn(new OperatorContact.Contact(null, null, null));
 
-		notices.adminAlert(moderationCase, "moderation.alert.nobody");
+		alerts.adminAlert(moderationCase, "moderation.alert.nobody");
 
 		verifyNoInteractions(notifications);
 	}

@@ -64,7 +64,7 @@ public class ContentReportService {
 	private final List<ContentSurface> surfaces;
 	private final MongoTemplate mongo;
 	private final ModerationStats stats;
-	private final ModerationNotices notices;
+	private final ModerationAlerts alerts;
 	private final NotificationService notifications;
 	private final BlockService blocks;
 	private final Clock clock;
@@ -103,7 +103,7 @@ public class ContentReportService {
 			blocks.block(reporter, blockId);
 		}
 		notifications.noteInBell(List.of(reporter), "moderation.receipt.title", "moderation.receipt.body", null);
-		notices.reportFiled(filed, reporter.isModerator());
+		alerts.reportFiled(filed, reporter.isModerator());
 	}
 
 	/**
@@ -145,7 +145,7 @@ public class ContentReportService {
 		}
 		Filed filed = file(new Target(snapshot.ref(), snapshot, locationOf(snapshot)), category,
 				String.join(", ", terms), new Source(ReportSource.AUTOMATED, reporterKey, null, null));
-		notices.reportFiled(filed, false);
+		alerts.reportFiled(filed, false);
 	}
 
 	/** Content resolved for a report: where it lives and what it was; no snapshot for {@code OTHER}. */

@@ -127,7 +127,7 @@ class AppealIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(mongo.count(Query.query(Criteria.where("action").is(AuditAction.MODERATION_APPEAL_DECIDED)),
 				AuditLog.class)).isEqualTo(1);
 		actingAs(author);
-		assertThat(member.notice(decided.getId()).appeal()).isEqualTo("Your appeal was successful. The content is back.");
+		assertThat(member.statement(decided.getId()).appeal()).isEqualTo("Your appeal was successful. The content is back.");
 	}
 
 	@Test
@@ -151,20 +151,20 @@ class AppealIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(commentText()).doesNotContain(DecisionIntegrationTest.INSULT);
 		assertThat(notices(author, Notification.Type.MODERATION_NOTICE_UPDATED)).hasSize(1);
 		actingAs(author);
-		assertThat(member.notice(decided.getId()).appeal()).contains("The decision stands");
+		assertThat(member.statement(decided.getId()).appeal()).contains("The decision stands");
 	}
 
 	@Test
 	void anAppealIsOnlyForThePersonResponsibleAndOnlyForSixMonths() {
 		actingAs(reader);
-		assertThatThrownBy(() -> member.notice(decided.getId())).isInstanceOf(ApiException.class)
+		assertThatThrownBy(() -> member.statement(decided.getId())).isInstanceOf(ApiException.class)
 				.satisfies(refused -> assertThat(((ApiException) refused).getStatus().value()).isEqualTo(404));
 
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(decided.getId())), new Update()
 				.set("decision.decidedAt", Instant.now().minus(Duration.ofDays(200))), ModerationCase.class);
 		actingAs(author);
-		assertThat(member.notice(decided.getId()).appealable()).isFalse();
-		assertThat(member.notice(decided.getId()).appeal()).startsWith("The time for an appeal ended on");
+		assertThat(member.statement(decided.getId()).appealable()).isFalse();
+		assertThat(member.statement(decided.getId()).appeal()).startsWith("The time for an appeal ended on");
 		assertThatThrownBy(() -> member.appeal(decided.getId(), new AppealService.AppealRequest(APPEAL)))
 				.satisfies(refused -> assertThat(keyOf(refused)).isEqualTo("error.moderation.appealClosed"));
 	}
@@ -190,7 +190,7 @@ class AppealIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(mongo.count(Query.query(Criteria.where("action").is(AuditAction.MODERATION_RESTORED)),
 				AuditLog.class)).isEqualTo(1);
 		actingAs(owner);
-		assertThat(member.notice(onIssue.getId()).appeal()).contains("written anew");
+		assertThat(member.statement(onIssue.getId()).appeal()).contains("written anew");
 		assertThatThrownBy(() -> member.appeal(onIssue.getId(), new AppealService.AppealRequest(APPEAL)))
 				.satisfies(refused -> assertThat(keyOf(refused)).isEqualTo("error.moderation.appealClosed"));
 	}
@@ -203,6 +203,6 @@ class AppealIntegrationTest extends RemovalIntegrationSupport {
 
 		assertThat(reload().getRestoration().outcome()).isEqualTo(RestoreOutcome.GONE);
 		actingAs(author);
-		assertThat(member.notice(decided.getId()).appeal()).contains("no longer exists");
+		assertThat(member.statement(decided.getId()).appeal()).contains("no longer exists");
 	}
 }
