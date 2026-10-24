@@ -248,7 +248,7 @@ public class ModerationFollowUps {
 		if (c.getStatementSentAt() != null || !taken(c)) {
 			return;
 		}
-		if (DecisionNotices.owesStatement(c.getDecision()) && c.getRestoration() == null) {
+		if (DecisionNotices.owesStatement(c) && c.getRestoration() == null) {
 			notices.statement(c);
 		}
 		mark(c, new Update().set("statementSentAt", now));

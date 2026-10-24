@@ -217,7 +217,6 @@ public class DecisionService {
 		if (decided == null) {
 			throw CaseSteps.stale(mongo, id);
 		}
-		stats.decided(decided, decision, now);
 		audit.event(AuditAction.MODERATION_DECIDED).actor(actor).meta("case", id).log();
 		if (Boolean.TRUE.equals(decision.lawEnforcementNotified())) {
 			audit.event(AuditAction.MODERATION_LEGAL_HOLD_CHANGED).actor(actor).meta("case", id).log();
@@ -228,6 +227,8 @@ public class DecisionService {
 		if (decision.suspension() != null) {
 			decided = suspendFor(decided, decider, now);
 		}
+		// Counted once the measures are what they are: a suspension refused meanwhile is none.
+		stats.decided(decided, decision, now);
 		if (removing || decision.suspension() != null) {
 			alertOnManyRemovals(decided, decider, now);
 		}
