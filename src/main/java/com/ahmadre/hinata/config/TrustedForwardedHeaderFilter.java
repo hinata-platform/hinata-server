@@ -15,7 +15,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.regex.Pattern;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * Applies a reverse proxy's forwarded headers, but takes the client's address from them only when
@@ -26,7 +27,10 @@ import java.util.regex.Pattern;
  * a new address and every limit per address, sign-in and reports without an account among them,
  * would count nothing. This one is that filter, but the header reaches it only from a trusted
  * proxy, cut down to the closest hop that is not one; from anybody else the address stays the
- * socket's. Scheme, host and port pass on as before. Being a {@link ForwardedHeaderFilter} also
+ * socket's. {@code Forwarded} passes only from a trusted proxy, and only its {@code proto} and
+ * {@code host}; the address the request goes on with is fixed whatever Spring reads. Scheme, host
+ * and port of {@code X-Forwarded-*} pass on as before, so a server behind a proxy that is not
+ * entered yet still builds its own addresses right. Being a {@link ForwardedHeaderFilter} also
  * keeps out the one springdoc's Scalar page registers when none is there.
  *
  * <p>When a request brings the header from a peer that is not trusted, which is what a proxy in
@@ -39,8 +43,8 @@ public class TrustedForwardedHeaderFilter extends ForwardedHeaderFilter {
 	static final String X_FORWARDED_FOR = "X-Forwarded-For";
 	static final String FORWARDED = "Forwarded";
 
-	/** A {@code for=} element of RFC 7239 and the separator that follows it. */
-	private static final Pattern FOR_ELEMENT = Pattern.compile("(?i)for\\s*=\\s*(\"[^\"]*\"|[^;,]*)\\s*;?\\s*");
+	/** The parameters of RFC 7239 a trusted proxy may pass on; {@code for} and {@code by} never. */
+	private static final Set<String> PROXY_FACTS = Set.of("proto", "host");
 
 	private final List<IpAddressMatcher> trustedProxies;
 	private volatile Instant ignoredAt;
@@ -58,7 +62,12 @@ public class TrustedForwardedHeaderFilter extends ForwardedHeaderFilter {
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
-		super.doFilterInternal(new Guarded(request, clientBehindProxies(request)), response, chain);
+		String client = clientBehindProxies(request);
+		boolean trustedPeer = isTrusted(request.getRemoteAddr());
+		String address = client != null ? client : request.getRemoteAddr();
+		// Whatever Spring makes of the headers, the address downstream is the one decided here.
+		super.doFilterInternal(new Guarded(request, client, trustedPeer), response,
+				(req, res) -> chain.doFilter(new Pinned((HttpServletRequest) req, address), res));
 	}
 
 	/**
@@ -103,32 +112,73 @@ public class TrustedForwardedHeaderFilter extends ForwardedHeaderFilter {
 		return false;
 	}
 
-	/** [header] without its {@code for=} elements; null when nothing else was in it. */
-	static String withoutFor(String header) {
+	/**
+	 * The {@code proto} and {@code host} parameters of a {@code Forwarded} header, parsed as RFC 7239
+	 * writes them, quoted values included; null when it carries neither. Rebuilt from what was parsed,
+	 * never cut out of the text: removing a parameter by text joins its neighbours into a new one.
+	 */
+	static String proxyFacts(String header) {
 		if (header == null) {
 			return null;
 		}
 		List<String> kept = new ArrayList<>();
-		for (String element : header.split(",")) {
-			String rest = FOR_ELEMENT.matcher(element).replaceAll("").strip();
-			while (rest.endsWith(";")) {
-				rest = rest.substring(0, rest.length() - 1).strip();
+		for (String element : split(header, ',')) {
+			List<String> facts = new ArrayList<>();
+			for (String pair : split(element, ';')) {
+				int equals = pair.indexOf('=');
+				if (equals <= 0) {
+					continue;
+				}
+				String name = pair.substring(0, equals).strip().toLowerCase(Locale.ROOT);
+				String value = pair.substring(equals + 1).strip();
+				if (PROXY_FACTS.contains(name) && !value.isEmpty()) {
+					facts.add(name + "=" + value);
+				}
 			}
-			if (!rest.isEmpty()) {
-				kept.add(rest);
+			if (!facts.isEmpty()) {
+				kept.add(String.join(";", facts));
 			}
 		}
 		return kept.isEmpty() ? null : String.join(", ", kept);
+	}
+
+	/** [value] split at [separator] outside double quotes. */
+	private static List<String> split(String value, char separator) {
+		List<String> parts = new ArrayList<>();
+		StringBuilder part = new StringBuilder();
+		boolean quoted = false;
+		for (int i = 0; i < value.length(); i++) {
+			char c = value.charAt(i);
+			if (c == '"') {
+				quoted = !quoted;
+			}
+			if (c == separator && !quoted) {
+				parts.add(part.toString());
+				part.setLength(0);
+			}
+			else {
+				part.append(c);
+			}
+		}
+		parts.add(part.toString());
+		return parts;
 	}
 
 	/** The request as the forwarded headers may tell it: the client's address only from trusted proxies. */
 	private static final class Guarded extends HttpServletRequestWrapper {
 
 		private final String client;
+		private final boolean trustedPeer;
 
-		Guarded(HttpServletRequest request, String client) {
+		Guarded(HttpServletRequest request, String client, boolean trustedPeer) {
 			super(request);
 			this.client = client;
+			this.trustedPeer = trustedPeer;
+		}
+
+		/** A {@code Forwarded} value as it may pass on: only from a trusted proxy, only its facts. */
+		private String forwarded(String value) {
+			return trustedPeer ? proxyFacts(value) : null;
 		}
 
 		@Override
@@ -137,7 +187,7 @@ public class TrustedForwardedHeaderFilter extends ForwardedHeaderFilter {
 				return client;
 			}
 			if (FORWARDED.equalsIgnoreCase(name)) {
-				return withoutFor(super.getHeader(name));
+				return forwarded(super.getHeader(name));
 			}
 			return super.getHeader(name);
 		}
@@ -150,7 +200,7 @@ public class TrustedForwardedHeaderFilter extends ForwardedHeaderFilter {
 			if (FORWARDED.equalsIgnoreCase(name)) {
 				List<String> kept = new ArrayList<>();
 				for (String value : Collections.list(super.getHeaders(name))) {
-					String rest = withoutFor(value);
+					String rest = forwarded(value);
 					if (rest != null) {
 						kept.add(rest);
 					}
@@ -170,6 +220,27 @@ public class TrustedForwardedHeaderFilter extends ForwardedHeaderFilter {
 				}
 			}
 			return Collections.enumeration(names);
+		}
+	}
+
+	/** A request whose address is fixed, whatever a wrapper in between made of the headers. */
+	private static final class Pinned extends HttpServletRequestWrapper {
+
+		private final String address;
+
+		Pinned(HttpServletRequest request, String address) {
+			super(request);
+			this.address = address;
+		}
+
+		@Override
+		public String getRemoteAddr() {
+			return address;
+		}
+
+		@Override
+		public String getRemoteHost() {
+			return address;
 		}
 	}
 }

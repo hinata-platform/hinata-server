@@ -129,6 +129,23 @@ class RateLimitFilterTest {
 		}
 	}
 
+	/**
+	 * A forwarded prefix moves the request URI but not the route: a sign-in sent with
+	 * {@code X-Forwarded-Prefix} is still a sign-in, and stays on the strict budget.
+	 */
+	@Test
+	void aPrefixDoesNotMoveASignInToTheGeneralBudget() throws Exception {
+		for (int i = 0; i < 4; i++) {
+			MockHttpServletRequest request = new MockHttpServletRequest("POST", "/a" + LOGIN);
+			request.setContextPath("/a");
+			request.setRemoteAddr("203.0.113.7");
+			MockHttpServletResponse response = new MockHttpServletResponse();
+			filter.doFilter(request, response, chain);
+			assertThat(response.getStatus()).as("request %d", i + 1)
+					.isEqualTo(i < 3 ? HttpStatus.OK.value() : HttpStatus.TOO_MANY_REQUESTS.value());
+		}
+	}
+
 	@Test
 	void theMasterSwitchTurnsEverythingOff() throws Exception {
 		properties.getRateLimit().setEnabled(false);
