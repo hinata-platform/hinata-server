@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.mcp;
 
 import com.ahmadre.hinata.common.TestMongo;
+import com.ahmadre.hinata.common.TestRules;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.storage.AttachmentContentService;
 import com.ahmadre.hinata.storage.ImageOps;
@@ -441,7 +442,9 @@ class McpAttachmentIntegrationTest {
 		HttpResponse<String> res = postJson("/api/v1/auth/login",
 				"{\"identifier\":\"" + ADMIN_USER + "\",\"password\":\"" + ADMIN_PASS + "\"}", null);
 		assertThat(res.statusCode()).as("login").isEqualTo(200);
-		return parse(res.body()).path("accessToken").asText(null);
+		String token = parse(res.body()).path("accessToken").asText(null);
+		TestRules.accept(port, token);
+		return token;
 	}
 
 	private String createPat(String name, String... scopes) {

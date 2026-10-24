@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.oauth;
 
 import com.ahmadre.hinata.common.TestMongo;
+import com.ahmadre.hinata.common.TestRules;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -124,7 +125,9 @@ class McpOAuthIntegrationTest {
 	private String login() {
 		JsonNode body = parse(postJson("/api/v1/auth/login",
 				"{\"identifier\":\"" + ADMIN_USER + "\",\"password\":\"" + ADMIN_PASS + "\"}", null).body());
-		return body.path("accessToken").asText();
+		String token = body.path("accessToken").asText();
+		TestRules.accept(port, token);
+		return token;
 	}
 
 	private static String queryParam(String url, String key) {
