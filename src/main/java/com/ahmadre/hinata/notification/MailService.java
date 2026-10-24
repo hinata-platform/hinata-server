@@ -151,11 +151,26 @@ public class MailService {
 	}
 
 	/**
+	 * As {@link #sendTemplate(String, String, String, Map)}, with a {@code Reply-To}: the
+	 * instance's contact for a moderation notice to somebody who cannot sign in, whose reply is
+	 * their appeal (HIN-171). A null [replyTo] sends without one.
+	 */
+	@Async
+	public void sendTemplate(String to, String subject, String template, Map<String, Object> model, String replyTo) {
+		sendTemplateSync(to, subject, template, model, replyTo);
+	}
+
+	/**
 	 * Synchronous templated send for admin flows (invite / resend) that must
 	 * report a real per-recipient outcome instead of fire-and-forget. Returns
 	 * {@code true} only if the message was handed to the SMTP server.
 	 */
 	public boolean sendTemplateSync(String to, String subject, String template, Map<String, Object> model) {
+		return sendTemplateSync(to, subject, template, model, null);
+	}
+
+	private boolean sendTemplateSync(String to, String subject, String template, Map<String, Object> model,
+			String replyTo) {
 		SpringTemplateEngine engine = templateEngine.getIfAvailable();
 		if (engine == null) {
 			log.warn("No template engine available; cannot send mail");
@@ -170,7 +185,7 @@ public class MailService {
 				.orElse(null);
 		String html = render(engine, template, model);
 		return dispatch(to, subject, html,
-				List.of(new InlinePart(MASTHEAD_CID, band, MailBandComposer.CONTENT_TYPE)));
+				List.of(new InlinePart(MASTHEAD_CID, band, MailBandComposer.CONTENT_TYPE)), replyTo);
 	}
 
 	/**
@@ -266,7 +281,7 @@ public class MailService {
 		organization = null;
 	}
 
-	private boolean dispatch(String to, String subject, String html, List<InlinePart> parts) {
+	private boolean dispatch(String to, String subject, String html, List<InlinePart> parts, String replyTo) {
 		// Prefer the admin-area SMTP (configured at runtime), falling back to a
 		// Spring-autoconfigured sender if present.
 		JavaMailSender sender = smtp.sender();
@@ -286,6 +301,9 @@ public class MailService {
 					? new InternetAddress(fromAddress, fromName)
 					: new InternetAddress(fromAddress));
 			helper.setTo(to);
+			if (replyTo != null && !replyTo.isBlank()) {
+				helper.setReplyTo(replyTo);
+			}
 			helper.setSubject(subject);
 			helper.setText(html, true);
 			// Must follow setText: MimeMessageHelper builds the related part around

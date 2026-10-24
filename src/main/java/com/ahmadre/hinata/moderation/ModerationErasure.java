@@ -35,7 +35,7 @@ class ModerationErasure {
 							new Document("$concat", List.of("deleted:", new Document("$toString", "$_id"))))),
 					new Document("$unset", "reporterId")));
 			mongo.updateMulti(Query.query(Criteria.where("contributorIds").is(id).and("responsibleId").is(id)),
-					new Update().unset("responsibleId"), ModerationCase.class);
+					new Update().unset("responsibleId").unset("decision.responsibleId"), ModerationCase.class);
 			mongo.updateMulti(Query.query(Criteria.where("contributorIds").is(id)),
 					new Update().pull("contributorIds", id), ModerationCase.class);
 			mongo.updateMulti(Query.query(Criteria.where("status").is(CaseStatus.OPEN).and("assigneeId").is(id)),

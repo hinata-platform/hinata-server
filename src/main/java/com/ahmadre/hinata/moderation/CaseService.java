@@ -96,7 +96,7 @@ public class CaseService {
 						Criteria.where("contributorIds").ne(viewer.getId())))
 				.with(sortOf(view)).with(request);
 		query.fields().exclude(HISTORY, "evidence", "decision.facts", "decision.internalNote",
-				"decision.messageToAuthor", "appeal.text");
+				"decision.messageToAuthor", "appeal.text", "appeal.note", "restoration.note", "pendingCopies");
 		List<ModerationCase> cases = mongo.find(query, ModerationCase.class);
 		long total = mongo.count(Query.query(filter), ModerationCase.class) - mine(viewer, filter);
 		return new PageImpl<>(summaries(cases, viewer), request, Math.max(total, 0));
@@ -176,7 +176,8 @@ public class CaseService {
 		return new CaseSummary(c.getId(), stateOf(c), c.isUrgent(), c.getTarget() == null ? null : c.getTarget().kind(),
 				c.getCategories(), c.getSources(), c.getReportCount(), c.getFirstReportedAt(), c.getLocation(),
 				c.getListExcerpt(), assignee, reportedByMe, decision == null ? null : decision.outcome(),
-				decision != null && decision.outcome() == Decision.Outcome.ACTION && decision.removal() != null,
+				decision != null && decision.outcome() == Decision.Outcome.ACTION && decision.removal() != null
+						&& c.getRestoration() == null,
 				false, c.getRev());
 	}
 
@@ -189,8 +190,8 @@ public class CaseService {
 		if (c.getStatus() == CaseStatus.OPEN) {
 			return c.getAssigneeId() != null ? CaseState.IN_REVIEW : c.isUrgent() ? CaseState.URGENT : CaseState.OPEN;
 		}
-		boolean reversed = appeal != null && appeal.state() == Appeal.State.REVERSED;
-		return c.getDecision() != null && c.getDecision().acted() && !reversed ? CaseState.ACTED : CaseState.NO_ACTION;
+		boolean undone = appeal != null && appeal.state() == Appeal.State.REVERSED || c.getRestoration() != null;
+		return c.getDecision() != null && c.getDecision().acted() && !undone ? CaseState.ACTED : CaseState.NO_ACTION;
 	}
 
 	// --- one case --------------------------------------------------------------------------------
@@ -216,7 +217,7 @@ public class CaseService {
 		boolean reportedByMe = access.reported(c, moderator.getId());
 		return new CaseDetail(summaryOf(c, assignee, reportedByMe), withheld ? null : c.getEvidence(), current,
 				withheld, c.getEvidenceReveal(), views(c, found, 0), total, c.getHistory(), c.getClaimedAt(),
-				c.getDecision(), c.getAppeal());
+				c.getDecision(), c.getAppeal(), c.getRestoration(), c.getRemovalState());
 	}
 
 	/**
@@ -316,12 +317,12 @@ public class CaseService {
 		}
 		Query query = Query.query(new Criteria().andOperator(Criteria.where("_id").is(id).and("rev").is(rev)
 				.and("status").is(CaseStatus.OPEN), new Criteria().orOperator(free)));
-		Update update = step(new Update().set("assigneeId", moderator.getId()).set("claimedAt", now),
+		Update update = CaseSteps.step(new Update().set("assigneeId", moderator.getId()).set("claimedAt", now),
 				new CaseEvent(now, CaseEvent.Kind.CLAIMED, moderator.getId(), null));
 		ModerationCase claimed = mongo.findAndModify(query, update, FindAndModifyOptions.options().returnNew(true),
 				ModerationCase.class);
 		if (claimed == null) {
-			throw stale(id);
+			throw CaseSteps.stale(mongo, id);
 		}
 		audit.event(AuditAction.MODERATION_CASE_CLAIMED).actor(moderator).meta("case", id).log();
 		return summaryOf(claimed, new PersonRef(moderator.getId(), moderator.getDisplayName(), moderator.getAvatarUrl()),
@@ -335,29 +336,16 @@ public class CaseService {
 		Instant now = clock.instant();
 		Query query = Query.query(Criteria.where("_id").is(id).and("rev").is(rev).and("status").is(CaseStatus.OPEN)
 				.and("assigneeId").is(moderator.getId()));
-		Update update = step(new Update().unset("assigneeId").unset("claimedAt"),
+		Update update = CaseSteps.step(new Update().unset("assigneeId").unset("claimedAt"),
 				new CaseEvent(now, CaseEvent.Kind.RELEASED, moderator.getId(), null));
 		ModerationCase released = mongo.findAndModify(query, update, FindAndModifyOptions.options().returnNew(true),
 				ModerationCase.class);
 		if (released == null) {
-			throw stale(id);
+			throw CaseSteps.stale(mongo, id);
 		}
 		return summaryOf(released, null, access.reported(released, moderator.getId()));
 	}
 
-	/** A moderator's step: one more in the history, and the revision every later step must match. */
-	private static Update step(Update update, CaseEvent event) {
-		update.inc("rev", 1).set("updatedAt", event.at());
-		update.push(HISTORY).slice(-ModerationCase.HISTORY_MAX).each(event);
-		return update;
-	}
-
-	/** 409 for a step on a case that moved: decided meanwhile, or changed by somebody else. */
-	private ApiException stale(String id) {
-		ModerationCase now = mongo.findById(id, ModerationCase.class);
-		String code = now != null && now.getStatus() == CaseStatus.DECIDED ? "decided" : "changed";
-		return ApiException.conflict("error.moderation.caseChanged", Map.of("code", code));
-	}
 
 	// --- uncovering ------------------------------------------------------------------------------
 

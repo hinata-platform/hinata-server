@@ -61,6 +61,20 @@ public class ModerationNotices {
 				person -> notice(person, "moderation.notice.confirm"), QUIET);
 	}
 
+	/**
+	 * An appeal filed (HIN-171): to whoever may review it, which is not who decided the case. With
+	 * nobody left to review it, the admins are asked to appoint somebody.
+	 */
+	void appealFiled(ModerationCase moderationCase) {
+		List<User> reviewers = access.eligibleModerators(moderationCase, CaseAccess.Purpose.REVIEW_APPEAL);
+		if (reviewers.isEmpty()) {
+			adminAlert(moderationCase, "moderation.alert.nobody");
+			return;
+		}
+		notifications.notifyPeople(Notification.Type.MODERATION_APPEAL_FILED, reviewers, caseLink(moderationCase),
+				person -> notice(person, "moderation.notice.appeal"), QUIET);
+	}
+
 	/** A note to everybody who moderates, about [moderationCase] or the page when null. */
 	void teamNote(ModerationCase moderationCase, String key) {
 		notifications.notifyPeople(Notification.Type.MODERATION_TEAM_NOTE, users.findByRolesContainingAndActiveIsTrue(
