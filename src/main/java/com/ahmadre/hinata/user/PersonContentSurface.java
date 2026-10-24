@@ -30,6 +30,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.ahmadre.hinata.content.RemovedFields.putPresent;
+import static com.ahmadre.hinata.content.RemovedFields.setOrUnset;
+
 /**
  * People as moderation reaches them (HIN-169): the picture, the words on the profile, or both.
  *
@@ -141,7 +144,7 @@ class PersonContentSurface implements ContentSurface {
 		}
 		List<MediaRef> move = avatar ? List.of(MediaRef.of(AvatarService.objectKey(person.getId()))) : List.of();
 		Quarantine.Held held = quarantine.hold(caseId, ref, scope, fields, move, List.of());
-		try {
+		List<String> pending = quarantine.rewriteHeld(held, () -> {
 			Update update = new Update();
 			ContentMark mark = ContentMark.removed(caseId);
 			if (avatar) {
@@ -155,12 +158,7 @@ class PersonContentSurface implements ContentSurface {
 						.set("moderation." + PROFILE, mark);
 			}
 			mongo.updateFirst(Query.query(Criteria.where("_id").is(person.getId())), update, User.class);
-		}
-		catch (RuntimeException ex) {
-			quarantine.discard(held);
-			throw ex;
-		}
-		List<String> pending = quarantine.deleteOriginals(held);
+		});
 		return new Removal(ref, scope, fields, held.media(), held.id(), pending, List.of(), null);
 	}
 
@@ -218,18 +216,5 @@ class PersonContentSurface implements ContentSurface {
 		return RestoreOutcome.RESTORED;
 	}
 
-	private static void putPresent(Map<String, Object> fields, String name, Object value) {
-		if (value != null) {
-			fields.put(name, value);
-		}
-	}
 
-	private static void setOrUnset(Update update, String name, Object value) {
-		if (value == null) {
-			update.unset(name);
-		}
-		else {
-			update.set(name, value);
-		}
-	}
 }

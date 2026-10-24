@@ -19,7 +19,6 @@ import com.ahmadre.hinata.content.TargetRef;
 import com.ahmadre.hinata.media.MediaReferences;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
-import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -35,6 +34,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+
+import static com.ahmadre.hinata.content.RemovedFields.putPresent;
+import static com.ahmadre.hinata.content.RemovedFields.setOrUnset;
 
 /**
  * Comments as moderation reaches them (HIN-169).
@@ -60,7 +62,6 @@ class CommentContentSurface implements ContentSurface {
 	private final RichTextService richText;
 	private final MediaReferences media;
 	private final Quarantine quarantine;
-	private final StorageService storage;
 	private final MongoTemplate mongo;
 	private final CommentEvents commentEvents;
 
@@ -164,15 +165,8 @@ class CommentContentSurface implements ContentSurface {
 				Map.of("issue_comments", Criteria.where("_id").is(comment.getId())), category.isSensitive());
 		move.addAll(images.move());
 		Quarantine.Held held = quarantine.hold(caseId, ref, scope, fields, move, images.copy());
-		try {
-			rewrite(comment, caseId, placeholders);
-		}
-		catch (RuntimeException ex) {
-			quarantine.discard(held);
-			throw ex;
-		}
-		List<String> pending = quarantine.deleteOriginals(held);
-		dropThumbnails(images);
+		List<String> pending = quarantine.rewriteHeld(held, () -> rewrite(comment, caseId, placeholders));
+		media.dropThumbnails(images);
 		commentEvents.publishChanged(comment.getIssueId());
 		return new Removal(ref, scope, fields, held.media(), held.id(), pending, images.otherUses(),
 				DeletedContent.sourceOf(comment, found.issue()));
@@ -190,13 +184,6 @@ class CommentContentSurface implements ContentSurface {
 				IssueComment.class);
 	}
 
-	/** The previews of images that left: derived from the original, nothing to keep. */
-	private void dropThumbnails(MediaReferences.Split images) {
-		if (!storage.isConfigured()) {
-			return;
-		}
-		images.move().forEach(image -> storage.delete(MediaReferences.thumbnailKeyOf(image.objectKey())));
-	}
 
 	@Override
 	public RestoreOutcome restore(Removal removal) {
@@ -225,20 +212,7 @@ class CommentContentSurface implements ContentSurface {
 		return RestoreOutcome.RESTORED;
 	}
 
-	private static void putPresent(Map<String, Object> fields, String name, Object value) {
-		if (value != null) {
-			fields.put(name, value);
-		}
-	}
 
-	private static void setOrUnset(Update update, String name, Object value) {
-		if (value == null) {
-			update.unset(name);
-		}
-		else {
-			update.set(name, value);
-		}
-	}
 
 	private static Map<String, Object> voiceFields(IssueComment.Voice voice) {
 		Map<String, Object> fields = new LinkedHashMap<>();

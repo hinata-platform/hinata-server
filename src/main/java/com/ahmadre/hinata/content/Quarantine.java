@@ -55,6 +55,23 @@ public interface Quarantine {
 	/** Undoes {@link #hold} when the rewrite failed: the copies and the record go, the originals stay. */
 	void discard(Held held);
 
+	/**
+	 * The steps after {@link #hold}, in the order that never loses an original: [rewrite] the
+	 * content, and only then delete what moved. When the rewrite fails, the hold is undone, the
+	 * originals stay and the failure goes on. Answers the keys still there, as
+	 * {@link #deleteOriginals(Held)} does.
+	 */
+	default List<String> rewriteHeld(Held held, Runnable rewrite) {
+		try {
+			rewrite.run();
+		}
+		catch (RuntimeException ex) {
+			discard(held);
+			throw ex;
+		}
+		return deleteOriginals(held);
+	}
+
 	/** Deletes the moved originals of [held] and checks they are gone; answers the keys still there. */
 	List<String> deleteOriginals(Held held);
 
