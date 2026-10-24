@@ -25,6 +25,8 @@ USER hinata:hinata
 WORKDIR /app
 COPY --from=build /workspace/build/libs/hinata-server-*.jar app.jar
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s \
+# The first start after an update builds the indexes it brought; on a large instance that takes
+# minutes, so the start period leaves room for it. A healthy answer ends it at once.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s \
   CMD wget -qO- http://127.0.0.1:8080/actuator/health | grep -q '"status":"UP"' || exit 1
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]

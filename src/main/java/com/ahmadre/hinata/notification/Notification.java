@@ -61,7 +61,7 @@ public class Notification {
 	@Id
 	private String id;
 
-	@Indexed
+	/** No index of its own: {@code user_created} starts with it ({@link NotificationIndexCleanup}). */
 	private String userId;
 
 	private Type type;
