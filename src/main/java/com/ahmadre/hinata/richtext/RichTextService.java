@@ -109,7 +109,7 @@ public class RichTextService {
 			// A link is a little longer than the image it stands for; the read bound still holds.
 			if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
 		}
-		return new RichText(json, LexicalJson.plainText(document), issueKeys(document));
+		return new RichText(json, LexicalJson.writtenText(document), issueKeys(document));
 	}
 
 	/**
@@ -148,7 +148,7 @@ public class RichTextService {
 		// The read side refuses a document past this bound. Storing one anyway
 		// produces content that loads and can never be saved again.
 		if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
-		return new RichText(json, LexicalJson.plainText(document), issueKeys(document));
+		return new RichText(json, LexicalJson.writtenText(document), issueKeys(document));
 	}
 
 	/**
