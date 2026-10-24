@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -68,7 +69,8 @@ public class ModerationAlerts {
 	/** One reminder per person and run, with how many of their cases wait. */
 	void overdue(Map<User, Integer> waiting) {
 		waiting.forEach((person, count) -> notifications.notifyPeople(Notification.Type.MODERATION_CASE_OVERDUE,
-				List.of(person), "/moderation", reader -> notice(reader, "moderation.notice.overdue", count), null));
+				List.of(person), "/moderation", reader -> notice(reader, "moderation.notice.overdue", count,
+						ResponseTimes.hours(ResponseTimes.REMIND_AFTER)), null));
 	}
 
 	/** A second pair of eyes asked for, in the words of [key]: to whoever may give it. */
@@ -108,35 +110,37 @@ public class ModerationAlerts {
 				moderationCase == null ? "/moderation" : caseLink(moderationCase), person -> notice(person, key), null);
 	}
 
-	/** A word to the admins about one case; see {@link #adminAlert(Collection, String)}. */
+	/** A word to the admins about one case; see {@link #adminAlert(Collection, String, Object...)}. */
 	void adminAlert(ModerationCase moderationCase, String key) {
 		adminAlert(List.of(moderationCase), key);
 	}
 
 	/**
-	 * One word to the admins, without content, so they can staff moderation: to every admin outside
-	 * the content of at least one of [cases]. With no admin left, the instance's contact gets it by
-	 * mail. The admins are read once.
+	 * One word to the admins, without content, so they can staff moderation, in the words of [key]
+	 * with [args]: to every admin outside the content of at least one of [cases]. With no admin
+	 * left, the instance's contact gets it by mail. The admins are read once.
 	 */
-	void adminAlert(Collection<ModerationCase> cases, String key) {
+	void adminAlert(Collection<ModerationCase> cases, String key, Object... args) {
 		List<User> everyAdmin = access.admins();
 		Map<String, User> admins = new LinkedHashMap<>();
 		for (ModerationCase moderationCase : cases) {
 			access.eligibleAdmins(moderationCase, everyAdmin).forEach(admin -> admins.putIfAbsent(admin.getId(), admin));
 		}
-		notifyAdmins(admins.values(), key);
+		notifyAdmins(admins.values(), key, args);
 	}
 
-	private void notifyAdmins(Collection<User> admins, String key) {
+	private void notifyAdmins(Collection<User> admins, String key, Object... args) {
 		if (admins.isEmpty()) {
 			String address = contact.current().contactEmail();
 			if (address != null) {
-				notifications.mailAddress(address, settings.instanceLocale(), key + ".title", key + ".body");
+				Locale locale = settings.instanceLocale();
+				notifications.mailWorded(address, locale, words.in(locale, key + ".title", args),
+						words.in(locale, key + ".body", args));
 			}
 			return;
 		}
 		notifications.notifyPeople(Notification.Type.MODERATION_ADMIN_ALERT, admins, "/admin/users",
-				person -> notice(person, key), QUIET);
+				person -> notice(person, key, args), QUIET);
 	}
 
 	private PersonalNotice notice(User person, String key, Object... args) {

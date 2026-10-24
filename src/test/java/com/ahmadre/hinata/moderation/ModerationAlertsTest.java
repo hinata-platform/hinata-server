@@ -23,8 +23,8 @@ class ModerationAlertsTest {
 	private final CaseAccess access = mock(CaseAccess.class);
 	private final OperatorContact contact = mock(OperatorContact.class);
 	private final SettingsService settings = mock(SettingsService.class);
-	private final ModerationAlerts alerts = new ModerationAlerts(notifications, access, mock(UserWords.class),
-			contact, settings);
+	private final UserWords words = mock(UserWords.class);
+	private final ModerationAlerts alerts = new ModerationAlerts(notifications, access, words, contact, settings);
 	private final ModerationCase moderationCase = ModerationCase.builder().id("case-1").build();
 
 	@Test
@@ -33,11 +33,13 @@ class ModerationAlertsTest {
 		when(access.eligibleAdmins(moderationCase, List.of())).thenReturn(List.of());
 		when(contact.current()).thenReturn(new OperatorContact.Contact("Fachschaft", "moderation@example.org", null));
 		when(settings.instanceLocale()).thenReturn(Locale.GERMAN);
+		when(words.in(Locale.GERMAN, "moderation.alert.nobody.title")).thenReturn("Niemand moderiert");
+		when(words.in(Locale.GERMAN, "moderation.alert.nobody.body")).thenReturn("Bitte jemanden einsetzen.");
 
 		alerts.adminAlert(moderationCase, "moderation.alert.nobody");
 
-		verify(notifications).mailAddress("moderation@example.org", Locale.GERMAN, "moderation.alert.nobody.title",
-				"moderation.alert.nobody.body");
+		verify(notifications).mailWorded("moderation@example.org", Locale.GERMAN, "Niemand moderiert",
+				"Bitte jemanden einsetzen.");
 		verify(notifications, never()).notifyPeople(any(), any(), any(), any(), any());
 	}
 

@@ -25,8 +25,10 @@ import java.util.Map;
  * reminded of, escalated or worked on once.
  *
  * <ol>
- *   <li>Open cases older than 20 hours: one reminder per moderator with the number of their cases.</li>
- *   <li>Older than 24 hours: one word to the admins, without content, so they can staff moderation.</li>
+ *   <li>Open cases older than {@link ResponseTimes#REMIND_AFTER}: one reminder per moderator with the
+ *       number of their cases.</li>
+ *   <li>Older than {@link ResponseTimes#OVERDUE_AFTER}: one word to the admins, without content, so they
+ *       can staff moderation.</li>
  *   <li>Decided cases due a step for at most seven days: the removal, its originals, the copies,
  *       the statement, the reporters, a changed notice ({@link ModerationFollowUps#complete}).
  *       Each case is held for a while first, so a second instance leaves it alone.</li>
@@ -37,8 +39,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ModerationFollowUpJob {
 
-	static final Duration REMIND_AFTER = Duration.ofHours(20);
-	static final Duration ESCALATE_AFTER = Duration.ofHours(24);
 	static final Duration REDRIVE_WINDOW = Duration.ofDays(7);
 	static final Duration REDRIVE_GRACE = Duration.ofMinutes(5);
 	/** How long a run holds a case it works on. */
@@ -62,7 +62,7 @@ public class ModerationFollowUpJob {
 	}
 
 	void remind(Instant now) {
-		List<ModerationCase> due = claim("remindedAt", now.minus(REMIND_AFTER), now);
+		List<ModerationCase> due = claim("remindedAt", now.minus(ResponseTimes.REMIND_AFTER), now);
 		if (due.isEmpty()) {
 			return;
 		}
@@ -78,9 +78,9 @@ public class ModerationFollowUpJob {
 	}
 
 	void escalate(Instant now) {
-		List<ModerationCase> escalated = claim("escalatedAt", now.minus(ESCALATE_AFTER), now);
+		List<ModerationCase> escalated = claim("escalatedAt", now.minus(ResponseTimes.OVERDUE_AFTER), now);
 		if (!escalated.isEmpty()) {
-			alerts.adminAlert(escalated, "moderation.alert.overdue");
+			alerts.adminAlert(escalated, "moderation.alert.overdue", ResponseTimes.hours(ResponseTimes.OVERDUE_AFTER));
 		}
 	}
 
