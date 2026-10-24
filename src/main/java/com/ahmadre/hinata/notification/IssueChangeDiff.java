@@ -99,7 +99,9 @@ public final class IssueChangeDiff {
 			"subtaskCount", "subtaskDoneCount", "searchText",
 			"startOffset", "dueOffset",
 			// Moderation's marks: what it removed is never announced to watchers (HIN-169).
-			"moderation");
+			"moderation",
+			// What the gate refused of a mail is told in the description, which watchers hear about.
+			"refusedAttachments");
 
 	/**
 	 * One whitelisted field and how a change to it is read off two snapshots.
