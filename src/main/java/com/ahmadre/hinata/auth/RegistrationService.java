@@ -4,12 +4,12 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.notification.GatewayService;
-import com.ahmadre.hinata.notification.NotificationService;
-import com.ahmadre.hinata.user.Role;
+import com.ahmadre.hinata.user.HouseRules;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -17,7 +17,6 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
-import java.util.List;
 import java.util.Locale;
 
 /**
@@ -43,8 +42,9 @@ public class RegistrationService {
 	private final AuthService authService;
 	private final AuthMailService authMail;
 	private final GatewayService gateway;
-	private final NotificationService notifications;
 	private final AuditService audit;
+	private final ObjectProvider<HouseRules> houseRules;
+	private final AccountAdmission accountAdmission;
 
 	/** Verify-email outcome: a token pair (signed in) or a pending-approval marker. */
 	public record VerifyResult(boolean pendingApproval, String accessToken, String refreshToken,
@@ -99,7 +99,7 @@ public class RegistrationService {
 			user.setAwaitingApproval(true);
 			user.setActive(false);
 			users.save(user);
-			notifyAdmins(user);
+			accountAdmission.requestApproval(user);
 			return new VerifyResult(true, null, null, null, null);
 		}
 
@@ -111,7 +111,7 @@ public class RegistrationService {
 		User saved = users.save(user);
 		TokenService.TokenPair pair = authService.issueWithSession(saved, ip, userAgent);
 		return new VerifyResult(false, pair.accessToken(), pair.refreshToken(),
-				pair.expiresInSeconds(), AuthController.UserResponse.from(saved));
+				pair.expiresInSeconds(), AuthController.UserResponse.from(saved, houseRules.getIfAvailable()));
 	}
 
 	// --- Internals ------------------------------------------------------------
@@ -124,20 +124,6 @@ public class RegistrationService {
 		// Deep link straight into the app's verify-email screen (no backend page).
 		authMail.sendVerification(user,
 				gateway.relayLink("/verify-email", user.getId() + "." + secret));
-	}
-
-	private void notifyAdmins(User newUser) {
-		List<User> admins = users.findByRolesContainingAndActiveIsTrue(Role.ADMIN);
-		notifications.notifyAdminsPendingApproval(admins, newUser);
-		// Route the review link through the Connect gateway so it opens the native
-		// app (the app only verifies the neutral connect domain, path /l/). The
-		// new user's id travels as the relay "token"; the app forwards it to
-		// /admin/users?token=<id> and the board opens that user's detail drawer.
-		// (The id isn't secret — like every other id in an in-app URL.)
-		String reviewUrl = gateway.relayLink("/admin/users", newUser.getId());
-		for (User admin : admins) {
-			authMail.sendApprovalRequest(admin, newUser, reviewUrl);
-		}
 	}
 
 	/** Resolves a {@code userId.secret} verification token to its user, or 400s. */

@@ -3,6 +3,8 @@ package com.ahmadre.hinata.moderation;
 import com.ahmadre.hinata.block.BlockService;
 import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.me.PersonalDataExport;
+import com.ahmadre.hinata.moderation.rules.HouseRulesService;
+import com.ahmadre.hinata.moderation.rules.RulesAcceptance;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -22,7 +24,8 @@ import java.util.stream.Collectors;
 
 /**
  * What moderation holds about a person, for their data export (Art. 15 and 20 DSGVO): whom they
- * block (HIN-168), what they reported, and the cases about their own content (HIN-170).
+ * block (HIN-168), what they reported, the cases about their own content (HIN-170), and which
+ * versions of the house rules they accepted when (HIN-175).
  *
  * <p>Never who blocks them, and never who reported them or why (Art. 15 Abs. 4 DSGVO, § 29 Abs. 1
  * BDSG): a case about their content shows when, which categories, and how it was decided.
@@ -34,6 +37,7 @@ public class ModerationPersonalData implements PersonalDataExport {
 	private final BlockService blocks;
 	private final UserWords words;
 	private final MongoTemplate mongo;
+	private final HouseRulesService houseRules;
 
 	@Override
 	public String key() {
@@ -66,6 +70,12 @@ public class ModerationPersonalData implements PersonalDataExport {
 			row.put("categories", about.getCategories());
 			row.put("outcome", outcomeOf(about));
 			row.put("ground", about.getDecision() == null ? null : about.getDecision().ground());
+			return row;
+		}).toList());
+		out.put("rulesAccepted", houseRules.acceptancesOf(user.getId()).stream().map(acceptance -> {
+			Map<String, Object> row = new LinkedHashMap<>();
+			row.put("version", acceptance.getVersion());
+			row.put("acceptedAt", acceptance.getAcceptedAt());
 			return row;
 		}).toList());
 		return out;
@@ -112,6 +122,15 @@ public class ModerationPersonalData implements PersonalDataExport {
 							words.in(locale, "moderation.outcome." + outcomeOf(c)),
 							c.getDecision() == null || c.getDecision().ground() == null ? "—"
 									: words.in(locale, "moderation.ground." + c.getDecision().ground()))).toList(),
+					null));
+		}
+		List<RulesAcceptance> accepted = houseRules.acceptancesOf(user.getId());
+		if (!accepted.isEmpty()) {
+			tables.add(new Table(words.in(locale, "export.pdf.rules.title"),
+					List.of(words.in(locale, "export.pdf.rules.version"), words.in(locale, "export.pdf.rules.date")),
+					new float[]{2, 4},
+					accepted.stream().map(acceptance -> List.of(String.valueOf(acceptance.getVersion()),
+							PersonalDataExport.instant(acceptance.getAcceptedAt()))).toList(),
 					null));
 		}
 		return tables;

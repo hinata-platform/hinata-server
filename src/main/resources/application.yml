@@ -71,7 +71,10 @@ spring:
 
 server:
   port: ${HINATA_PORT:8080}
-  forward-headers-strategy: framework
+  # The forwarded headers of a reverse proxy are applied by TrustedForwardedHeaderFilter, which takes
+  # the client's address from them only behind hinata.security.trusted-proxies. Spring's own filter
+  # (strategy "framework") believes any X-Forwarded-For a client sends.
+  forward-headers-strategy: none
   tomcat:
     # Keep-alive tuning so the SERVER never closes a pooled socket out from under
     # a client mid-burst. A single view fires ~12–15 GETs and every comment

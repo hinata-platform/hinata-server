@@ -53,6 +53,10 @@ public final class Scopes {
 	public static final String SHIFTS_PLAN = "shifts:plan";
 
 	/** Every scope a token may be granted. */
+	/** The scopes that change something; a tool asking for one writes (HIN-175). */
+	public static final Set<String> WRITES = Set.of(ISSUES_WRITE, PROJECTS_WRITE, SPRINTS_WRITE, KB_WRITE,
+			WORKLOG_WRITE, SHIFTS_WRITE, SHIFTS_PLAN);
+
 	public static final Set<String> ALL = Set.of(
 			ISSUES_READ, ISSUES_WRITE, PROJECTS_READ, PROJECTS_WRITE,
 			BOARDS_READ, SPRINTS_WRITE, TEAMS_READ, USERS_READ,

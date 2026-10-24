@@ -5,10 +5,12 @@ import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.setup.BrandLogoService;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.user.HouseRules;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.CacheControl;
@@ -35,6 +37,8 @@ public class MetaController {
 	private final com.ahmadre.hinata.project.ProjectTemplatePolicy templatePolicy;
 	private final BrandLogoService brandLogo;
 	private final com.ahmadre.hinata.setup.OperatorContact operatorContact;
+	private final ObjectProvider<HouseRules> houseRules;
+	private final com.ahmadre.hinata.storage.UploadGate uploadGate;
 
 	/**
 	 * What the server's moderation can do, for the app to offer reporting and blocking (HIN-26):
@@ -72,10 +76,12 @@ public class MetaController {
 	/**
 	 * What the app needs before anybody signs in: whether reporting and blocking exist
 	 * ({@code version} 1 and up), and whom the operator names for reports and questions. A
-	 * missing contact is said as such rather than filled in.
+	 * missing contact is said as such rather than filled in. Since HIN-175 also the current
+	 * version of the house rules, their public page and the form for reports without an account;
+	 * all three null on a server without them.
 	 */
 	public record ModerationMeta(int version, String operatorName, String contactEmail, String imprintUrl,
-			boolean contactMissing) {
+			boolean contactMissing, Integer rulesVersion, String rulesUrl, String reportUrl) {
 	}
 
 	/** The flag whose availability {@link Meta#shiftPlanningAvailable()} reports. */
@@ -115,7 +121,7 @@ public class MetaController {
 				authPolicy.registrationEnabled(),
 				authPolicy.requireAdminApproval(),
 				new UploadLimits(storage.getMaxUploadMb(), storage.getMaxFilesPerRequest(),
-						storage.getMaxRequestMb(), storage.getAllowedContentTypes()),
+						storage.getMaxRequestMb(), uploadGate.attachmentTypes()),
 				securityPolicy.passwordMinLength(),
 				templatePolicy.defaultBasis().name(),
 				// By flag name rather than by class: meta is core and knows no module.
@@ -125,8 +131,12 @@ public class MetaController {
 
 	private ModerationMeta moderationMeta() {
 		com.ahmadre.hinata.setup.OperatorContact.Contact contact = operatorContact.current();
+		HouseRules rules = houseRules.getIfAvailable();
+		Integer rulesVersion = rules == null ? null : rules.currentVersion();
 		return new ModerationMeta(MODERATION_VERSION, contact.operatorName(), contact.contactEmail(),
-				contact.imprintUrl(), contact.missing());
+				contact.imprintUrl(), contact.missing(), rulesVersion,
+				rulesVersion == null ? null : rules.publicRulesUrl(),
+				rulesVersion == null ? null : rules.publicReportUrl());
 	}
 
 	@Operation(summary = "Organization logo", description = "Serves the organization logo same-origin so clients (incl. the web app and the PDF export) load it without CORS restrictions. An uploaded logo is streamed from object storage; a configured external URL is fetched server-side through the SSRF-hardened image fetcher and cached.")

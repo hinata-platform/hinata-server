@@ -3,11 +3,13 @@ package com.ahmadre.hinata.pat;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.user.HouseRules;
 import com.ahmadre.hinata.user.User;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,6 +39,7 @@ public class PatController {
 	private final PatService patService;
 	private final CurrentUser currentUser;
 	private final AuditService audit;
+	private final ObjectProvider<HouseRules> houseRules;
 
 	/** Safe projection of a token — never carries the hash or the plaintext. */
 	public record PatView(String id, String name, String prefix, Set<String> scopes,
@@ -70,6 +73,9 @@ public class PatController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public CreatedPatView create(@Valid @RequestBody CreatePatRequest request) {
 		User me = currentUser.require();
+		// A token writes on its owner's behalf for as long as it lives: only once they accepted the
+		// house rules (HIN-175).
+		houseRules.ifAvailable(rules -> rules.requireAccepted(me));
 		Duration ttl = request.ttlDays() == null
 				? null
 				: (request.ttlDays() <= 0 ? Duration.ZERO : Duration.ofDays(request.ttlDays()));

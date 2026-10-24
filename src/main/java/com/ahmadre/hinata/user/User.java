@@ -122,6 +122,12 @@ public class User {
 	 */
 	private Map<String, ContentMark> moderation;
 
+	/**
+	 * The newest version of the house rules this person accepted (HIN-175); null before the first.
+	 * Boxed, because every account stored before the rules has none.
+	 */
+	private Integer rulesAcceptedVersion;
+
 	@CreatedDate
 	private Instant createdAt;
 

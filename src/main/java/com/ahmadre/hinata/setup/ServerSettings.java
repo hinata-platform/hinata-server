@@ -46,6 +46,14 @@ public class ServerSettings {
 
 	private boolean setupCompleted = false;
 
+	/**
+	 * Sent with a save that opens a way in without approval (HIN-175): the administrator confirmed
+	 * the sentence about what that makes of the instance. Never stored, never sent back.
+	 */
+	@Transient
+	@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+	private Boolean openAccessConfirmed;
+
 	private String organizationName;
 
 	/**
@@ -143,6 +151,27 @@ public class ServerSettings {
 		 * attribute the IdP omits never clears a stored value.
 		 */
 		boolean isSyncProfileOnLogin();
+	}
+
+	/**
+	 * Who a provider lets in on a first sign-in (HIN-175). With {@code requireApproval} the new
+	 * account waits for an administrator, as a registration does; with allowed domains only those
+	 * addresses come in straight away and every other one waits. With neither, anybody the
+	 * provider knows gets an active account, which the admin area shows as an open way in.
+	 */
+	public interface ProviderAdmission {
+		boolean isEnabled();
+
+		Boolean getRequireApproval();
+
+		List<String> getAllowedDomains();
+
+		/** Whether a first sign-in creates an active account without anybody deciding. */
+		@JsonIgnore
+		default boolean isOpen() {
+			return isEnabled() && !Boolean.TRUE.equals(getRequireApproval())
+					&& (getAllowedDomains() == null || getAllowedDomains().stream().allMatch(String::isBlank));
+		}
 	}
 
 	/** General organization settings. */
@@ -256,7 +285,7 @@ public class ServerSettings {
 
 	/** OpenID Connect (e.g. Synology SSO, Keycloak, Authentik). */
 	@Data
-	public static class Oidc implements AttributeMapping {
+	public static class Oidc implements AttributeMapping, ProviderAdmission {
 		private boolean enabled = false;
 		private String displayName = "OpenID Connect";
 		private String issuerUri;
@@ -271,11 +300,16 @@ public class ServerSettings {
 		private String displayNameAttribute = "name,preferred_username,given_name family_name,nickname";
 		private String titleAttribute = "title,job_title,jobTitle,position";
 		private boolean syncProfileOnLogin = true;
+		/** First sign-ins wait for an administrator (HIN-175). Null: they do not. */
+		private Boolean requireApproval;
+		/** Domains whose addresses need no approval on a first sign-in; the rest wait. */
+		@Size(max = 50)
+		private List<@Size(max = 253) String> allowedDomains;
 	}
 
 	/** Plain OAuth2 provider without OIDC discovery. */
 	@Data
-	public static class OAuth2 implements AttributeMapping {
+	public static class OAuth2 implements AttributeMapping, ProviderAdmission {
 		private boolean enabled = false;
 		private String displayName = "OAuth 2.0";
 		private String clientId;
@@ -290,10 +324,15 @@ public class ServerSettings {
 		private String displayNameAttribute = "name,preferred_username,given_name family_name,nickname";
 		private String titleAttribute = "title,job_title,jobTitle,position";
 		private boolean syncProfileOnLogin = true;
+		/** First sign-ins wait for an administrator (HIN-175). Null: they do not. */
+		private Boolean requireApproval;
+		/** Domains whose addresses need no approval on a first sign-in; the rest wait. */
+		@Size(max = 50)
+		private List<@Size(max = 253) String> allowedDomains;
 	}
 
 	@Data
-	public static class Saml implements AttributeMapping {
+	public static class Saml implements AttributeMapping, ProviderAdmission {
 		private boolean enabled = false;
 		private String displayName = "SAML";
 		/** IdP metadata URL (preferred) – e.g. Synology SSO metadata endpoint. */
@@ -305,10 +344,15 @@ public class ServerSettings {
 				"displayName,cn,name,urn:oid:2.16.840.1.113730.3.1.241,givenName sn";
 		private String titleAttribute = "title,jobTitle,urn:oid:2.5.4.12";
 		private boolean syncProfileOnLogin = true;
+		/** First sign-ins wait for an administrator (HIN-175). Null: they do not. */
+		private Boolean requireApproval;
+		/** Domains whose addresses need no approval on a first sign-in; the rest wait. */
+		@Size(max = 50)
+		private List<@Size(max = 253) String> allowedDomains;
 	}
 
 	@Data
-	public static class Ldap implements AttributeMapping {
+	public static class Ldap implements AttributeMapping, ProviderAdmission {
 		private boolean enabled = false;
 		private String url; // ldap(s)://host:389
 		private String baseDn;
@@ -322,6 +366,11 @@ public class ServerSettings {
 		/** {@code description} carries the position in Synology/DSM directories. */
 		private String titleAttribute = "title,description";
 		private boolean syncProfileOnLogin = true;
+		/** First sign-ins wait for an administrator (HIN-175). Null: they do not. */
+		private Boolean requireApproval;
+		/** Domains whose addresses need no approval on a first sign-in; the rest wait. */
+		@Size(max = 50)
+		private List<@Size(max = 253) String> allowedDomains;
 	}
 
 	/** Kerberos/SPNEGO – configuration only; see docs for the required keytab. */
@@ -943,6 +992,54 @@ public class ServerSettings {
 		 */
 		@Valid
 		private Uploads uploads;
+
+		/**
+		 * The house rules (HIN-175). Null in settings stored before them and from a client that
+		 * does not send them: the built-in rules apply, and a PUT keeps what is stored.
+		 */
+		@Valid
+		private Rules rules;
+	}
+
+	/** Where the house rules come from. */
+	public enum RulesMode {
+		/** The rules that come with Hinata, in nine languages, with the operator and contact filled in. */
+		BUILT_IN,
+		/** The instance's own text in Markdown. */
+		TEXT,
+		/** A page of the instance's own, linked from every place the rules are shown. */
+		URL
+	}
+
+	/**
+	 * The house rules of the instance (HIN-175). Every change saved here becomes a version of its
+	 * own that is never changed again; the section on how moderation works is always added to it.
+	 */
+	@Data
+	public static class Rules {
+
+		/** Null: the built-in rules. */
+		private RulesMode mode;
+
+		/** The rules in Markdown, for {@code TEXT}. */
+		@Size(max = 20_000)
+		private String text;
+
+		/** Where the rules are published, for {@code URL}. */
+		@HttpsUrl
+		@Size(max = 500)
+		private String url;
+
+		/** Own rules need their text, rules elsewhere their address. */
+		@AssertTrue(message = "error.rules.incomplete")
+		@JsonIgnore
+		public boolean isComplete() {
+			return switch (mode == null ? RulesMode.BUILT_IN : mode) {
+				case BUILT_IN -> true;
+				case TEXT -> text != null && !text.isBlank();
+				case URL -> url != null && !url.isBlank();
+			};
+		}
 	}
 
 	/**

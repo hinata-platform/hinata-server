@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.auth;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.user.HouseRules;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -10,6 +11,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
@@ -35,6 +37,7 @@ public class AuthController {
 	private final JwtDecoder jwtDecoder;
 	private final com.ahmadre.hinata.user.UserRepository users;
 	private final com.ahmadre.hinata.config.ClientIpResolver clientIpResolver;
+	private final ObjectProvider<HouseRules> houseRules;
 
 	public record LoginRequest(@NotBlank String identifier, @NotBlank String password) {
 	}
@@ -53,16 +56,27 @@ public class AuthController {
 			String refreshToken, Long expiresIn, UserResponse user) {
 	}
 
+	/**
+	 * The signed-in person. [rulesPending] says whether they still have to accept the house rules
+	 * and [rulesVersion] which version is current (HIN-175); both null on an instance without the
+	 * rules, which an app built before them never reads.
+	 */
 	public record UserResponse(String id, String email, String username, String displayName,
 			Set<String> roles, String avatarUrl, String title, String pronouns, String locale,
-			String origin) {
+			String origin, Boolean rulesPending, Integer rulesVersion) {
 
 		static UserResponse from(User user) {
+			return from(user, null);
+		}
+
+		static UserResponse from(User user, HouseRules rules) {
 			return new UserResponse(user.getId(), user.getEmail(), user.getUsername(),
 					user.getDisplayName(),
 					user.getRoles().stream().map(Enum::name).collect(Collectors.toSet()),
 					user.getAvatarUrl(), user.getTitle(), user.getPronouns(), user.getLocale(),
-					user.getOrigin().name());
+					user.getOrigin().name(),
+					rules == null ? null : rules.pending(user),
+					rules == null ? null : rules.currentVersion());
 		}
 	}
 
@@ -115,7 +129,7 @@ public class AuthController {
 	@Operation(summary = "Return the currently authenticated user")
 	@GetMapping("/me")
 	public UserResponse me() {
-		return UserResponse.from(currentUser.require());
+		return UserResponse.from(currentUser.require(), houseRules.getIfAvailable());
 	}
 
 	@PostMapping("/password")
@@ -128,6 +142,6 @@ public class AuthController {
 
 	private LoginResponse toLoginResponse(User user, TokenService.TokenPair pair) {
 		return new LoginResponse(false, null, pair.accessToken(), pair.refreshToken(),
-				pair.expiresInSeconds(), UserResponse.from(user));
+				pair.expiresInSeconds(), UserResponse.from(user, houseRules.getIfAvailable()));
 	}
 }
