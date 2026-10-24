@@ -266,12 +266,12 @@ public class User {
 		return roles != null && roles.contains(Role.ORG_ADMIN);
 	}
 
-	/** Whether this person reviews reported content and decides on it. See {@link Role}. */
 	/** Whether moderation keeps the account out right now (HIN-172). */
 	public boolean isSuspended() {
 		return suspension != null;
 	}
 
+	/** Whether this person reviews reported content and decides on it. See {@link Role}. */
 	public boolean isModerator() {
 		return roles != null && roles.contains(Role.MODERATOR);
 	}

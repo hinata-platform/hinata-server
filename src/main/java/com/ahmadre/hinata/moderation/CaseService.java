@@ -55,7 +55,7 @@ import java.util.Set;
 /**
  * Cases as moderators work them (HIN-170): the lists and their numbers, one case opened, taking it,
  * uncovering a reporter, opening withheld content, looking at a file, and a case of one's own.
- * Deciding comes in HIN-171.
+ * Deciding is {@link DecisionService}'s.
  */
 @Service
 @RequiredArgsConstructor
