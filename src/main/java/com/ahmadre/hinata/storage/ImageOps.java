@@ -12,6 +12,7 @@ import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -147,6 +148,36 @@ public final class ImageOps {
 		g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		g.drawImage(src, 0, 0, w, h, null);
+		g.dispose();
+		return out;
+	}
+
+	/**
+	 * [src] turned and mirrored the way EXIF orientation [orientation] (1 to 8) says it is shown, so
+	 * its pixels stand upright without the tag. Quarter turns map pixel to pixel, so nothing is
+	 * interpolated. 1 and any value outside the range come back unchanged.
+	 */
+	public static BufferedImage orient(BufferedImage src, int orientation) {
+		int w = src.getWidth();
+		int h = src.getHeight();
+		AffineTransform turn = switch (orientation) {
+			case 2 -> new AffineTransform(-1, 0, 0, 1, w, 0);
+			case 3 -> new AffineTransform(-1, 0, 0, -1, w, h);
+			case 4 -> new AffineTransform(1, 0, 0, -1, 0, h);
+			case 5 -> new AffineTransform(0, 1, 1, 0, 0, 0);
+			case 6 -> new AffineTransform(0, 1, -1, 0, h, 0);
+			case 7 -> new AffineTransform(0, -1, -1, 0, h, w);
+			case 8 -> new AffineTransform(0, -1, 1, 0, 0, w);
+			default -> null;
+		};
+		if (turn == null) {
+			return src;
+		}
+		boolean quarter = orientation >= 5;
+		BufferedImage out = new BufferedImage(quarter ? h : w, quarter ? w : h,
+				hasAlpha(src) ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
+		Graphics2D g = out.createGraphics();
+		g.drawImage(src, turn, null);
 		g.dispose();
 		return out;
 	}

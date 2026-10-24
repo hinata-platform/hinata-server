@@ -3,10 +3,10 @@ package com.ahmadre.hinata.storage;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
-
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -17,19 +17,26 @@ import java.util.UUID;
  * store (SeaweedFS bundled, MinIO, AWS S3, Google Cloud Storage interop, R2, Spaces, …) or
  * Azure Blob Storage, selected by {@code hivora.storage.provider}. Object keys
  * are random UUIDs – user-supplied file names never reach the file system or
- * bucket layout. This service owns all validation and error mapping; backends
- * only move bytes.
+ * bucket layout. Bytes a person sent pass {@link UploadGate} on the way in;
+ * backends only move bytes.
  */
 @Slf4j
 @Service
 public class StorageService {
 
-	private final HinataProperties properties;
+	private final UploadGate gate;
 	private final StorageBackend backend;
 
-	public StorageService(HinataProperties properties) {
-		this.properties = properties;
+	@Autowired
+	public StorageService(HinataProperties properties, UploadGate gate) {
+		this.gate = gate;
 		this.backend = createBackend(properties.getStorage());
+	}
+
+	/** With a backend made elsewhere; null for one that is not configured. */
+	StorageService(UploadGate gate, StorageBackend backend) {
+		this.gate = gate;
+		this.backend = backend;
 	}
 
 	private static StorageBackend createBackend(HinataProperties.Storage storage) {
@@ -47,49 +54,49 @@ public class StorageService {
 		return backend != null;
 	}
 
-	/** Maximum accepted upload size in bytes (mirrors the multipart limit). */
-	public long maxUploadBytes() {
-		return (long) properties.getStorage().getMaxUploadMb() * 1024 * 1024;
-	}
-
-	public String upload(MultipartFile file) {
-		return upload(file, "");
+	/**
+	 * What an upload became in the store. [data] holds the stored bytes when they went through
+	 * memory, as an embedded image does to lose its metadata; null when they were streamed.
+	 */
+	public record Stored(String objectKey, String contentType, long size, byte[] data) {
 	}
 
 	/**
-	 * Uploads [file] under an optional [keyPrefix] "folder" (e.g. {@code media/})
-	 * so different concerns stay isolated in the bucket and can't be read across
-	 * endpoints by guessing a bare UUID. The object name is still a random UUID;
-	 * user-supplied file names never reach the bucket layout.
+	 * Stores [candidate] under a fresh key below an optional [keyPrefix] "folder" (e.g.
+	 * {@code media/}) so different concerns stay isolated in the bucket and can't be read across
+	 * endpoints by guessing a bare UUID. The object name is a random UUID; user-supplied file names
+	 * never reach the bucket layout.
 	 */
-	public String upload(MultipartFile file, String keyPrefix) {
+	public Stored upload(UploadCandidate candidate, String keyPrefix) {
+		return putUserObject(newObjectKey(keyPrefix), candidate);
+	}
+
+	/**
+	 * Stores bytes a person sent at [objectKey], once {@link UploadGate} let them through; refused,
+	 * nothing is stored. An embedded image loses its metadata on the way (HIN-177) and is held in
+	 * memory for that; everything else streams to the store byte for byte, as it was sent.
+	 */
+	public Stored putUserObject(String objectKey, UploadCandidate candidate) {
 		requireConfigured();
-		HinataProperties.Storage storage = properties.getStorage();
-		String contentType = file.getContentType();
-		if (contentType == null || !storage.getAllowedContentTypes().contains(contentType)) {
-			throw ApiException.badRequest("error.storage.fileTypeNotAllowed");
+		UploadGate.Accepted accepted = gate.check(candidate);
+		if (candidate.kind() == UploadKind.MEDIA) {
+			byte[] clean = gate.withoutMetadata(candidate, accepted);
+			putObject(objectKey, clean, accepted.contentType());
+			return new Stored(objectKey, accepted.contentType(), clean.length, clean);
 		}
-		if (file.getSize() > (long) storage.getMaxUploadMb() * 1024 * 1024) {
-			throw ApiException.badRequest("error.storage.fileTooLarge", storage.getMaxUploadMb());
-		}
-		// The client-declared content type is not trusted on its own: verify the
-		// magic bytes for binary types so a file cannot masquerade as e.g. an
-		// image (defends against polyglot / content-sniffing attacks, A03/A05).
-		verifyMagicBytes(file, contentType);
-		String objectKey = newObjectKey(keyPrefix);
-		try (var stream = file.getInputStream()) {
-			backend.put(objectKey, stream, file.getSize(), contentType);
-			return objectKey;
+		try (InputStream stream = candidate.content().open()) {
+			backend.put(objectKey, stream, candidate.size(), accepted.contentType());
 		}
 		catch (Exception ex) {
 			log.error("Upload failed: {}", ex.getMessage());
 			throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY, "error.storage.unavailable");
 		}
+		return new Stored(objectKey, accepted.contentType(), candidate.size(), null);
 	}
 
 	/**
 	 * A fresh object key under an optional [keyPrefix] "folder", minted exactly
-	 * the way {@link #upload(MultipartFile, String)} mints one: a random UUID,
+	 * the way {@link #upload(UploadCandidate, String)} mints one: a random UUID,
 	 * never a name a client chose.
 	 *
 	 * <p>Here rather than at the call site because the bucket layout needs one
@@ -112,10 +119,11 @@ public class StorageService {
 	}
 
 	/**
-	 * Stores already-prepared bytes at an explicit (deterministic) object key —
-	 * e.g. {@code avatars/{userId}.jpg}. Unlike {@link #upload(MultipartFile)}
-	 * this trusts the caller (used for server-generated, already-validated and
-	 * compressed content), so it does no content-type allow-listing.
+	 * Stores bytes the server made itself at an explicit (deterministic) object key —
+	 * e.g. {@code avatars/{userId}.jpg}: a preview, or a picture re-encoded from an
+	 * input that went through {@link UploadGate}. Unlike {@link #putUserObject} this
+	 * trusts the caller, so it checks nothing; which classes may call it is pinned
+	 * down by a test ({@code putObjectOnlyForServerBytes}).
 	 */
 	public void putObject(String objectKey, byte[] data, String contentType) {
 		requireConfigured();
@@ -239,54 +247,6 @@ public class StorageService {
 			log.warn("Deleting object {} failed: {}", objectKey, ex.getMessage());
 			return false;
 		}
-	}
-
-	/**
-	 * Verifies the leading bytes of binary uploads against the declared content
-	 * type. Text-like types (text/*, application/json) have no fixed signature
-	 * and are stored as-is; all downloads are served with
-	 * {@code Content-Disposition: attachment}, so they are never rendered inline.
-	 */
-	private void verifyMagicBytes(MultipartFile file, String contentType) {
-		byte[] head = new byte[12];
-		int read;
-		try (var stream = file.getInputStream()) {
-			read = stream.readNBytes(head, 0, head.length);
-		}
-		catch (Exception ex) {
-			throw ApiException.badRequest("error.storage.unreadableUpload");
-		}
-		boolean ok = switch (contentType) {
-			case "image/png" -> startsWith(head, read, 0x89, 0x50, 0x4E, 0x47);
-			case "image/jpeg" -> startsWith(head, read, 0xFF, 0xD8, 0xFF);
-			case "image/gif" -> startsWith(head, read, 0x47, 0x49, 0x46, 0x38);
-			case "image/webp" -> read >= 12
-					&& startsWith(head, read, 0x52, 0x49, 0x46, 0x46)
-					&& head[8] == 0x57 && head[9] == 0x45 && head[10] == 0x42 && head[11] == 0x50;
-			case "application/pdf" -> startsWith(head, read, 0x25, 0x50, 0x44, 0x46);
-			// ZIP-based: application/zip and the OOXML office documents (docx/xlsx).
-			case "application/zip",
-					"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-					"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ->
-					startsWith(head, read, 0x50, 0x4B);
-			// No reliable signature; stored as-is (downloaded, never rendered).
-			default -> true;
-		};
-		if (!ok) {
-			throw ApiException.badRequest("error.storage.contentMismatch");
-		}
-	}
-
-	private static boolean startsWith(byte[] data, int len, int... prefix) {
-		if (len < prefix.length) {
-			return false;
-		}
-		for (int i = 0; i < prefix.length; i++) {
-			if ((data[i] & 0xFF) != prefix[i]) {
-				return false;
-			}
-		}
-		return true;
 	}
 
 	private void requireConfigured() {

@@ -3,6 +3,7 @@ package com.ahmadre.hinata.team;
 import com.ahmadre.hinata.storage.AvatarImages;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadGate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,7 @@ public class TeamAvatarService {
 	private final StorageService storage;
 	private final TeamRepository teams;
 	private final ImagePreviewService previews;
+	private final UploadGate gate;
 
 	/**
 	 * Object key for a team's avatar, e.g. {@code teams/{teamId}.jpg}. Always
@@ -43,7 +45,7 @@ public class TeamAvatarService {
 
 	/** Compresses + stores [file] as [team]'s avatar and returns its URL. */
 	public String store(Team team, MultipartFile file) {
-		byte[] jpeg = AvatarImages.compress(file);
+		byte[] jpeg = AvatarImages.compress(gate, file);
 		// Deterministic key: re-uploads overwrite cleanly, no orphans accrue. The
 		// bucket stays private; bytes are served back through the controller's
 		// proxy, so storage credentials never leave the server.

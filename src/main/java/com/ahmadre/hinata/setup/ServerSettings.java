@@ -3,6 +3,7 @@ package com.ahmadre.hinata.setup;
 import com.ahmadre.hinata.common.ApprovalPeriodConsistent;
 import com.ahmadre.hinata.common.HttpsUrl;
 import com.ahmadre.hinata.common.TimePolicy;
+import com.ahmadre.hinata.storage.UploadGroup;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -27,6 +28,7 @@ import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Singleton document (id = "server") holding everything an administrator can
@@ -934,6 +936,25 @@ public class ServerSettings {
 		public int retentionMonthsOrDefault() {
 			return retentionMonths == null ? 6 : retentionMonths;
 		}
+
+		/**
+		 * The file types switched off for uploads (HIN-177). Null in settings stored before it
+		 * existed, and from a client that does not send it: a PUT then keeps what is stored.
+		 */
+		@Valid
+		private Uploads uploads;
+	}
+
+	/**
+	 * Which groups of file types people may not upload on this instance (HIN-177): attachments,
+	 * embedded images and voice messages. Switching a group off only ever narrows the safe list;
+	 * nothing here can widen it.
+	 */
+	@Data
+	public static class Uploads {
+
+		/** Null or empty: every group of the safe list is open. */
+		private Set<UploadGroup> disabledGroups;
 	}
 
 	/**

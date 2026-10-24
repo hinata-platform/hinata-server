@@ -3,6 +3,7 @@ package com.ahmadre.hinata.project;
 import com.ahmadre.hinata.storage.AvatarImages;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.UploadGate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,7 @@ public class ProjectAvatarService {
 	private final StorageService storage;
 	private final ProjectRepository projects;
 	private final ImagePreviewService previews;
+	private final UploadGate gate;
 
 	/**
 	 * Object key for a project's avatar, e.g. {@code projects/{projectId}.jpg}.
@@ -43,7 +45,7 @@ public class ProjectAvatarService {
 
 	/** Compresses + stores [file] as [project]'s avatar and returns its URL. */
 	public String store(Project project, MultipartFile file) {
-		byte[] jpeg = AvatarImages.compress(file);
+		byte[] jpeg = AvatarImages.compress(gate, file);
 		// Deterministic key: re-uploads overwrite cleanly, no orphans accrue. The
 		// bucket stays private; bytes are served back through the controller's
 		// proxy, so storage credentials never leave the server.

@@ -249,6 +249,10 @@ public class AdminSettingsController {
 		if (updated.getModeration() == null) {
 			updated.setModeration(current.getModeration());
 		}
+		else if (updated.getModeration().getUploads() == null && current.getModeration() != null) {
+			// A client from before HIN-177 sends the block without the file types: they stay.
+			updated.getModeration().setUploads(current.getModeration().getUploads());
+		}
 		if (updated.getProjectTemplates() == null) {
 			updated.setProjectTemplates(current.getProjectTemplates());
 		} else if (updated.getProjectTemplates() != current.getProjectTemplates()) {
