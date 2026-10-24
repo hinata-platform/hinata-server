@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 
 import java.time.Instant;
@@ -240,6 +241,25 @@ class ReportFlowIntegrationTest extends RemovalIntegrationSupport {
 				"Der Name des Teams beleidigt Mitglieder", " ", false), reader))
 				.isInstanceOfSatisfying(ApiException.class, refused -> assertThat(refused.getMessageKey())
 						.isEqualTo("error.moderation.locationRequired"));
+	}
+
+	@Test
+	void theCommentsAPersonReportedStayFoldedForThemUntilRemoved() {
+		IssueComment other = issues.addComment(issue.getId(), richText.fromLexical(doc("Noch einer")), null,
+				author);
+		reports.submit(onComment(ReportCategory.HARASSMENT, null, false), reader);
+		reports.submit(new ContentReportService.ReportRequest(new TargetRef(ContentKind.COMMENT, other.getId(),
+				null), ReportCategory.SPAM, null, null, false), reader);
+		reports.submit(new ContentReportService.ReportRequest(new TargetRef(ContentKind.ISSUE, issue.getId(),
+				null), ReportCategory.SPAM, null, null, false), reader);
+
+		// Comments only, and nobody else's.
+		assertThat(reports.reportedCommentIds(reader)).containsExactlyInAnyOrder(other.getId(), insult.getId());
+		assertThat(reports.reportedCommentIds(moderator)).isEmpty();
+
+		mongo.updateFirst(Query.query(Criteria.where("targetId").is(insult.getId())),
+				new Update().set("removed", true), ContentReport.class);
+		assertThat(reports.reportedCommentIds(reader)).containsExactly(other.getId());
 	}
 
 	@Test
