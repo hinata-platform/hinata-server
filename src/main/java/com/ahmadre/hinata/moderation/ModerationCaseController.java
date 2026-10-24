@@ -35,6 +35,8 @@ import java.util.Map;
 public class ModerationCaseController {
 
 	private final CaseService cases;
+	private final DecisionService decisions;
+	private final AppealService appeals;
 
 	/** A step on a case at the revision the moderator saw. */
 	public record ClaimRequest(@NotNull Long rev, boolean takeOver) {
@@ -106,6 +108,51 @@ public class ModerationCaseController {
 				.contentType(file.contentType() == null ? MediaType.APPLICATION_OCTET_STREAM
 						: MediaType.parseMediaType(file.contentType()))
 				.body(file.data());
+	}
+
+	@Operation(summary = "Decide a case")
+	@PostMapping("/cases/{id}/decision")
+	public CaseViews.CaseSummary decide(@PathVariable String id, @Valid @RequestBody DecisionService.DecisionRequest request) {
+		return decisions.decide(id, request);
+	}
+
+	@Operation(summary = "The statement a decision would send, without deciding")
+	@PostMapping("/cases/{id}/statement-preview")
+	public Statement preview(@PathVariable String id, @Valid @RequestBody DecisionService.DecisionRequest request) {
+		return decisions.preview(id, request);
+	}
+
+	@Operation(summary = "Undo the removal of a decided case without an appeal")
+	@PostMapping("/cases/{id}/restore")
+	public CaseViews.CaseSummary restore(@PathVariable String id, @Valid @RequestBody DecisionService.RestoreRequest request) {
+		return decisions.restore(id, request);
+	}
+
+	@Operation(summary = "Enter an appeal that came by a reply to the mail")
+	@PostMapping("/cases/{id}/appeal")
+	public CaseViews.CaseSummary recordAppeal(@PathVariable String id,
+			@Valid @RequestBody AppealService.RecordedAppealRequest request) {
+		return appeals.record(id, request);
+	}
+
+	@Operation(summary = "Decide an appeal")
+	@PostMapping("/cases/{id}/appeal-decision")
+	public CaseViews.CaseSummary decideAppeal(@PathVariable String id,
+			@Valid @RequestBody AppealService.AppealDecisionRequest request) {
+		return appeals.decide(id, request);
+	}
+
+	@Operation(summary = "Hold a decided case beyond its time, with a reason")
+	@PostMapping("/cases/{id}/legal-hold")
+	public CaseViews.CaseSummary legalHold(@PathVariable String id,
+			@Valid @RequestBody DecisionService.LegalHoldRequest request) {
+		return decisions.legalHold(id, request);
+	}
+
+	@Operation(summary = "The house rules a decision can rest on")
+	@GetMapping("/rules")
+	public ModerationRules.RuleSet rules() {
+		return decisions.rules();
 	}
 
 	@Operation(summary = "Open a case on moderation's own initiative")

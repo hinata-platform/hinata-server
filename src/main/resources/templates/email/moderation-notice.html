@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<!--/*
+  The statement of reasons of a moderation decision and its changes (DSA Art. 17, HIN-171), and
+  the neutral mail to an address content came in from. Every sentence arrives worded by
+  moderation.Statements in the reader's language; this template only lays them out. For somebody
+  who cannot sign in there is no button: a reply goes to the instance's contact and is their
+  appeal, which the appeal sentence says.
+
+  th:if sits on its own element around each th:replace: fragment inclusion runs before the
+  condition, so the two on one tag would include the fragment whatever the condition says.
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{email/_layout :: page(
+          #{__${eyebrowKey}__},
+          ${headline},
+          ${measure},
+          #{email.footer.automated(${organizationName})},
+          ~{::content})}">
+<body>
+<th:block th:fragment="content">
+  <th:block th:replace="~{email/_layout :: copy(${measure})}"/>
+
+  <th:block th:if="${basis != null}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(${basisLabel})}"/>
+    <th:block th:replace="~{email/_layout :: copy(${basis})}"/>
+  </th:block>
+  <th:block th:if="${facts != null}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(${factsLabel})}"/>
+    <th:block th:replace="~{email/_layout :: copy(${facts})}"/>
+  </th:block>
+  <th:block th:if="${ground != null}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(${groundLabel})}"/>
+    <th:block th:replace="~{email/_layout :: copy(${ground})}"/>
+  </th:block>
+  <th:block th:if="${automation != null}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(${automationLabel})}"/>
+    <th:block th:replace="~{email/_layout :: copy(${automation})}"/>
+  </th:block>
+  <th:block th:if="${message != null}">
+    <th:block th:replace="~{email/_layout :: sectionLabel(${messageLabel})}"/>
+    <th:block th:replace="~{email/_layout :: copy(${message})}"/>
+  </th:block>
+
+  <th:block th:if="${appeal != null}">
+    <th:block th:replace="~{email/_layout :: note(${appeal})}"/>
+  </th:block>
+
+  <th:block th:if="${ctaLink != null}">
+    <th:block th:replace="~{email/_layout :: cta(${ctaLink}, ${ctaLabel})}"/>
+    <th:block th:replace="~{email/_layout :: fallback(${ctaLink})}"/>
+  </th:block>
+
+  <th:block th:replace="~{email/_layout :: rule}"/>
+  <th:block th:if="${rules != null}">
+    <th:block th:replace="~{email/_layout :: fineprint(${rules})}"/>
+  </th:block>
+  <th:block th:replace="~{email/_layout :: fineprint(${courts})}"/>
+</th:block>
+</body>
+</html>
