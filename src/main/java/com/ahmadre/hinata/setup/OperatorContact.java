@@ -63,6 +63,14 @@ public class OperatorContact {
 		return snapshot.contact();
 	}
 
+	/**
+	 * The contact [stored] settings publish, read now: for a reader that must not wait for the
+	 * cache, such as the house rules, which become a new version the moment the contact changes.
+	 */
+	public Contact of(ServerSettings stored) {
+		return from(stored);
+	}
+
 	private Contact from(ServerSettings stored) {
 		ServerSettings.Moderation block = stored.getModeration();
 		String email = block == null ? null : trimToNull(block.getContactEmail());

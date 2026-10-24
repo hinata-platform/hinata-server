@@ -2,7 +2,9 @@ package com.ahmadre.hinata.setup;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.auth.AccountAdmission;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.git.GitIntegrationSettings;
@@ -50,6 +52,7 @@ public class AdminSettingsController {
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final OrganizationLogoService logoService;
 	private final BrandLogoService brandLogo;
+	private final AccountAdmission admission;
 
 	@GetMapping
 	public ServerSettings get() {
@@ -249,9 +252,15 @@ public class AdminSettingsController {
 		if (updated.getModeration() == null) {
 			updated.setModeration(current.getModeration());
 		}
-		else if (updated.getModeration().getUploads() == null && current.getModeration() != null) {
-			// A client from before HIN-177 sends the block without the file types: they stay.
-			updated.getModeration().setUploads(current.getModeration().getUploads());
+		else if (current.getModeration() != null) {
+			// A client from before HIN-177 or HIN-175 sends the block without the file types or the
+			// house rules: they stay.
+			if (updated.getModeration().getUploads() == null) {
+				updated.getModeration().setUploads(current.getModeration().getUploads());
+			}
+			if (updated.getModeration().getRules() == null) {
+				updated.getModeration().setRules(current.getModeration().getRules());
+			}
 		}
 		if (updated.getProjectTemplates() == null) {
 			updated.setProjectTemplates(current.getProjectTemplates());
@@ -269,6 +278,15 @@ public class AdminSettingsController {
 		boolean droppingUpload = OrganizationLogoService.isInternal(current.getGeneral().getLogoUrl())
 				&& (updated.getGeneral() == null
 						|| !OrganizationLogoService.isInternal(updated.getGeneral().getLogoUrl()));
+		// A way in that lets new accounts in without approval opens only when the administrator
+		// confirmed what that makes of the instance (HIN-175).
+		List<String> wasOpen = admission.openWays(current).stream().map(AccountAdmission.OpenWay::way).toList();
+		List<String> nowOpen = admission.openWays(updated).stream().map(AccountAdmission.OpenWay::way).toList();
+		List<String> opened = nowOpen.stream().filter(way -> !wasOpen.contains(way)).toList();
+		if (!opened.isEmpty() && !Boolean.TRUE.equals(updated.getOpenAccessConfirmed())) {
+			throw new ApiException(HttpStatus.CONFLICT, "error.moderation.openAccessUnconfirmed",
+					Map.of("code", "moderation.openAccess", "ways", String.join(",", opened)));
+		}
 		// Before the audit record and before the write, so a refusal leaves no
 		// trace of a change that did not happen. A module guard throws on purpose
 		// — unlike the audit hooks below, which must never fail a save.
@@ -296,6 +314,15 @@ public class AdminSettingsController {
 			writes.carryOrganisationalAuditEvents(updated, writes.organisationalAuditEvents(current));
 		}
 		ServerSettings saved = settings.save(updated);
+		for (String way : opened) {
+			audit.event(AuditAction.ACCOUNT_APPROVAL_CHANGED).actor(actor).meta("way", way).meta("open", "true").log();
+		}
+		for (String way : wasOpen) {
+			if (!nowOpen.contains(way)) {
+				audit.event(AuditAction.ACCOUNT_APPROVAL_CHANGED).actor(actor).meta("way", way).meta("open", "false")
+						.log();
+			}
+		}
 		// After the save: a failed write must not leave the settings pointing at an
 		// object that is already gone.
 		if (droppingUpload) {

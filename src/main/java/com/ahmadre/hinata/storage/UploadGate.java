@@ -18,6 +18,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -183,6 +184,17 @@ public class UploadGate {
 			case VOICE -> VOICE;
 			case AVATAR, LOGO -> PICTURES;
 		};
+	}
+
+	/**
+	 * The types an attachment may have right now: the safe list, narrowed by the configuration and
+	 * by the groups switched off. What the app is told before it lets somebody pick a file.
+	 */
+	public List<String> attachmentTypes() {
+		UploadPolicy instance = policy.getIfAvailable();
+		Set<UploadGroup> off = instance == null ? Set.of() : instance.disabledGroups();
+		return allowed(UploadKind.ATTACHMENT).stream()
+				.filter(type -> UploadGroup.of(type) == null || !off.contains(UploadGroup.of(type))).toList();
 	}
 
 	/** The most bytes [kind] may have. */

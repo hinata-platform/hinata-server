@@ -9,6 +9,7 @@ import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentSurface;
 import com.ahmadre.hinata.content.RemovalScope;
 import com.ahmadre.hinata.content.ReportCategory;
+import com.ahmadre.hinata.moderation.rules.HouseRulesService;
 import com.ahmadre.hinata.content.RestoreOutcome;
 import com.ahmadre.hinata.moderation.CaseAccess.Guarded;
 import com.ahmadre.hinata.moderation.CaseAccess.Purpose;
@@ -85,6 +86,7 @@ public class DecisionService {
 	private final ModerationAccess moderators;
 	private final ModerationRules rules;
 	private final SuspensionService suspensions;
+	private final HouseRulesService houseRules;
 	private final Clock clock;
 
 	/** What a removal takes. */
@@ -397,7 +399,7 @@ public class DecisionService {
 				request.lawEnforcementNotified(),
 				basisOf(sources),
 				sources.contains(ReportSource.AUTOMATED),
-				null,
+				houseRules.currentVersion(),
 				moderator.getId(),
 				now,
 				null,

@@ -1,0 +1,119 @@
+package com.ahmadre.hinata.moderation.rules;
+
+import com.ahmadre.hinata.setup.ServerSettings.RulesMode;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.MessageSource;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StreamUtils;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Writes the house rules out in every language (HIN-175): the instance's rules, built in or its
+ * own, followed by the section on how moderation works, which the server always writes itself
+ * from the settings as they are, so that it can neither go missing nor say something that is no
+ * longer true (DSA Art. 14).
+ */
+@Component
+@RequiredArgsConstructor
+class RulesRenderer {
+
+	/** Every language the server speaks, the order the bundles are kept in. */
+	static final List<String> LANGUAGES = List.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
+
+	private static final String TEMPLATE_DIR = "moderation-rules/";
+
+	private final MessageSource messages;
+	private final Map<String, String> templates = new ConcurrentHashMap<>();
+
+	/**
+	 * Everything the rules depend on. [operator] is never null: without a name of its own the
+	 * instance is called by its organisation's.
+	 */
+	record Inputs(RulesMode mode, String text, String url, String operator, String contactEmail,
+			String imprintUrl, int retentionMonths, String reportUrl) {
+	}
+
+	/** The rules in each language, by language tag, in {@link #LANGUAGES} order. */
+	Map<String, String> render(Inputs inputs) {
+		Map<String, String> rendered = new LinkedHashMap<>();
+		for (String language : LANGUAGES) {
+			rendered.put(language, render(inputs, Locale.forLanguageTag(language)));
+		}
+		return rendered;
+	}
+
+	private String render(Inputs in, Locale locale) {
+		String rules = switch (in.mode()) {
+			case BUILT_IN -> template(locale.getLanguage()).strip()
+					.replace("{operator}", in.operator())
+					.replace("{contact}", in.contactEmail() != null ? mailto(in.contactEmail()) : link(in.reportUrl()));
+			case TEXT -> in.text().strip();
+			case URL -> t("moderation.rules.atUrl", locale, in.operator(), link(in.url()));
+		};
+		return rules + "\n\n" + howWeModerate(in, locale) + "\n";
+	}
+
+	private String howWeModerate(Inputs in, Locale locale) {
+		List<String> parts = new ArrayList<>();
+		parts.add("## " + t("moderation.how.title", locale));
+		parts.add(t("moderation.how.report", locale, link(in.reportUrl())));
+		parts.add(t("moderation.how.review", locale, in.operator()));
+		parts.add(t("moderation.how.text", locale));
+		parts.add(t("moderation.how.images", locale));
+		parts.add(t("moderation.how.consequences", locale));
+		parts.add(t("moderation.how.retention", locale, in.retentionMonths()));
+		if (in.contactEmail() != null) {
+			parts.add(t("moderation.how.contact", locale, mailto(in.contactEmail())));
+		}
+		if (in.imprintUrl() != null) {
+			parts.add(t("moderation.how.imprint", locale, link(in.imprintUrl())));
+		}
+		return String.join("\n\n", parts);
+	}
+
+	private String t(String key, Locale locale, Object... args) {
+		return messages.getMessage(key, args.length == 0 ? null : args, locale);
+	}
+
+	/** [url] as a Markdown link to itself; brackets and spaces would end it early. */
+	static String link(String url) {
+		String safe = url.replace(" ", "%20").replace("(", "%28").replace(")", "%29");
+		return "[" + safe.replace("[", "%5B").replace("]", "%5D") + "](" + safe + ")";
+	}
+
+	private static String mailto(String email) {
+		return "[" + email + "](mailto:" + email.replace(" ", "%20").replace(")", "%29") + ")";
+	}
+
+	/** The built-in rules in [language], or the English ones for a language without them. */
+	private String template(String language) {
+		return templates.computeIfAbsent(language, lang -> {
+			String text = read(TEMPLATE_DIR + "rules_" + lang + ".md");
+			return text != null ? text : read(TEMPLATE_DIR + "rules_en.md");
+		});
+	}
+
+	private static String read(String path) {
+		ClassPathResource resource = new ClassPathResource(path);
+		if (!resource.exists()) {
+			return null;
+		}
+		try (InputStream in = resource.getInputStream()) {
+			return StreamUtils.copyToString(in, StandardCharsets.UTF_8);
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+}

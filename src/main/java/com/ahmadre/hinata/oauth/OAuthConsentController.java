@@ -3,8 +3,10 @@ package com.ahmadre.hinata.oauth;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.user.HouseRules;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,6 +30,7 @@ public class OAuthConsentController {
 	private final OAuthService oauth;
 	private final CurrentUser currentUser;
 	private final AuditService audit;
+	private final ObjectProvider<HouseRules> houseRules;
 
 	public record ConsentDecision(String requestId, boolean approved, List<String> grantedScopes) {
 	}
@@ -44,6 +47,11 @@ public class OAuthConsentController {
 	@PostMapping("/consent")
 	public ConsentResult decide(@RequestBody ConsentDecision decision) {
 		User me = currentUser.require();
+		if (decision.approved()) {
+			// The client then writes on the person's behalf: only once they accepted the house
+			// rules (HIN-175). Saying no needs nothing.
+			houseRules.ifAvailable(rules -> rules.requireAccepted(me));
+		}
 		String redirectUri = oauth.decide(decision.requestId(), me.getId(),
 				decision.approved(), decision.grantedScopes());
 		if (decision.approved()) {

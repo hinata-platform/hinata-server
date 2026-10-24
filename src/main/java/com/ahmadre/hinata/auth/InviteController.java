@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.auth;
 
 import com.ahmadre.hinata.config.ClientIpResolver;
+import com.ahmadre.hinata.user.HouseRules;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
@@ -11,6 +12,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,6 +49,7 @@ public class InviteController {
 	private final AuthPolicy authPolicy;
 	private final Invitations invitations;
 	private final ClientIpResolver clientIpResolver;
+	private final ObjectProvider<HouseRules> houseRules;
 
 	public record InviteInfo(String email, String displayName) {
 	}
@@ -87,6 +90,6 @@ public class InviteController {
 		TokenService.TokenPair pair = authService.issueWithSession(saved,
 				clientIpResolver.resolve(http), http.getHeader("User-Agent"));
 		return new AuthController.LoginResponse(false, null, pair.accessToken(), pair.refreshToken(),
-				pair.expiresInSeconds(), AuthController.UserResponse.from(saved));
+				pair.expiresInSeconds(), AuthController.UserResponse.from(saved, houseRules.getIfAvailable()));
 	}
 }

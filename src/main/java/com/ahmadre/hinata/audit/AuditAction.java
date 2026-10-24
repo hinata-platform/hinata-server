@@ -372,7 +372,11 @@ public enum AuditAction {
 	MODERATION_RESTORED(MODERATION, WARNING, true),
 	MODERATION_APPEAL_RECORDED(MODERATION, INFO, true),
 	MODERATION_APPEAL_DECIDED(MODERATION, NOTICE, true),
-	MODERATION_LEGAL_HOLD_CHANGED(MODERATION, WARNING, true);
+	MODERATION_LEGAL_HOLD_CHANGED(MODERATION, WARNING, true),
+	// HIN-175: a version of the house rules, which acceptances and decisions point at, and the
+	// switch that lets new accounts in without anybody approving them.
+	MODERATION_RULES_VERSION_CREATED(MODERATION, NOTICE, true),
+	ACCOUNT_APPROVAL_CHANGED(MODERATION, WARNING, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of an act that opens a way into
@@ -383,14 +387,16 @@ public enum AuditAction {
 	 * administrator must not be able to switch off the record of either. And, since HIN-170,
 	 * every step of moderation: who opened, took, uncovered or looked at a case is what a person
 	 * affected by it may ask about, so its record cannot depend on a setting. Since HIN-172 also
-	 * every suspension, its lifting and its end.
+	 * every suspension, its lifting and its end. Since HIN-175 every version of the house rules,
+	 * which a person's acceptance proves, and every change to who gets in without approval.
 	 */
 	public static final java.util.Set<AuditAction> ALWAYS_RECORDED =
 			java.util.EnumSet.of(USER_ROLE_CHANGED, USER_EMAIL_CHANGED, SSO_LINKED, USER_SSO_LINK_REMOVED,
 					MODERATION_CASE_CREATED, MODERATION_CASE_CLAIMED, MODERATION_REPORTER_REVEALED,
 					MODERATION_EVIDENCE_REVEALED, MODERATION_EVIDENCE_VIEWED, MODERATION_DECIDED,
 					MODERATION_RESTORED, MODERATION_APPEAL_RECORDED, MODERATION_APPEAL_DECIDED,
-					MODERATION_LEGAL_HOLD_CHANGED, USER_SUSPENDED, USER_SUSPENSION_LIFTED, USER_SUSPENSION_ENDED);
+					MODERATION_LEGAL_HOLD_CHANGED, USER_SUSPENDED, USER_SUSPENSION_LIFTED, USER_SUSPENSION_ENDED,
+					MODERATION_RULES_VERSION_CREATED, ACCOUNT_APPROVAL_CHANGED);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;
