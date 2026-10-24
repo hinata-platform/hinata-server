@@ -5,7 +5,9 @@ import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
+import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentOrigin;
+import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.CopySource;
 import com.ahmadre.hinata.content.MarkState;
 import com.ahmadre.hinata.board.SprintRepository;
@@ -14,6 +16,9 @@ import com.ahmadre.hinata.notification.FieldChange;
 import com.ahmadre.hinata.notification.IssueChangeDiff;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
+import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.storage.StorageService;
@@ -93,6 +98,9 @@ public class IssueService {
 
 	/** What deleting takes along: stored objects and the copies of the words (HIN-169). */
 	private final DeletedContent deleted;
+
+	/** Titles, descriptions and comments are checked before they are stored (HIN-176). */
+	private final TextCheck textCheck;
 
 	/** Bucket "folder" isolating voice-message audio from other stored objects. */
 	private static final String VOICE_PREFIX = "voice/";
@@ -424,10 +432,31 @@ public class IssueService {
 	 * {@link #create(Issue, User, Mentions)}, which leaves them out quietly.
 	 */
 	public Issue create(Issue issue, User author) {
-		if (author != null && issue.getAssigneeIds() != null && !issue.getAssigneeIds().isEmpty()) {
-			assertAssignable(projects.get(issue.getProjectId()), issue.getAssigneeIds());
+		if (author == null) {
+			return create(issue, null, Mentions.NOTIFY);
 		}
-		return create(issue, author, Mentions.NOTIFY);
+		Project project = projects.get(issue.getProjectId());
+		projects.assertMember(project, author);
+		if (issue.getAssigneeIds() != null && !issue.getAssigneeIds().isEmpty()) {
+			assertAssignable(project, issue.getAssigneeIds());
+		}
+		// What somebody wrote is checked; a copy is a copy of what was checked already.
+		List<TextVerdict> texts = textCheck.require(author,
+				new TextCheck.Entry(TextField.ISSUE_TITLE, issue.getTitle(), null),
+				new TextCheck.Entry(TextField.ISSUE_DESCRIPTION, issue.getDescription(), null));
+		Issue saved = create(issue, author, Mentions.NOTIFY);
+		textFound(saved, texts, author);
+		return saved;
+	}
+
+	/** Hands what the text check found in [saved]'s title and description to moderation. */
+	private void textFound(Issue saved, List<TextVerdict> texts, User author) {
+		if (texts.isEmpty()) {
+			return;
+		}
+		ContentRef ref = new ContentRef(ContentKind.ISSUE, saved.getId(), null, saved.getProjectId());
+		textCheck.afterSave(ref, TextField.ISSUE_TITLE, texts.get(0), author);
+		textCheck.afterSave(ref, TextField.ISSUE_DESCRIPTION, texts.get(1), author);
 	}
 
 	/**
@@ -506,6 +535,13 @@ public class IssueService {
 		if (IssueContentSurface.isRemoved(issue, IssueContentSurface.DESCRIPTION)) {
 			return issue;
 		}
+		// Nor what the text check refuses now (HIN-176): the description stays as it was.
+		if (textCheck.verdict(description.text(), TextField.ISSUE_DESCRIPTION, null, issue.getDescription())
+				.blocked()) {
+			LOGGER.info("Reprocessed description of issue {} is refused by the text check and was not replaced",
+					issue.getId());
+			return issue;
+		}
 		issue.setDescription(description.text());
 		issue.setDescriptionDoc(description.doc());
 		return issues.save(issue);
@@ -562,6 +598,12 @@ public class IssueService {
 				issue.getAssigneeIds() != null ? issue.getAssigneeIds() : List.of());
 		String previousSprint = issue.getSprintId();
 		mutator.accept(issue);
+		// Only what changed is judged, against what was stored (HIN-176). A write of the server's
+		// own, without an editor, is not.
+		List<TextVerdict> texts = editor == null ? List.of() : textCheck.require(editor,
+				TextCheck.Entry.ifChanged(TextField.ISSUE_TITLE, issue.getTitle(), before.getTitle()),
+				TextCheck.Entry.ifChanged(TextField.ISSUE_DESCRIPTION, issue.getDescription(),
+						before.getDescription()));
 		IssueLabels.check(before.getTags(), issue.getTags());
 		// Only people who can open the project may be handed one of its issues. The
 		// bulk path checked its one assignee per project already.
@@ -598,6 +640,7 @@ public class IssueService {
 		// A removed title or description written anew shows the new words again (HIN-169).
 		IssueContentSurface.markRewritten(before, issue);
 		Issue saved = issues.save(issue);
+		textFound(saved, texts, editor);
 		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);
 		// Ping anyone newly @-mentioned in the description (existing mentions on an
@@ -1675,6 +1718,7 @@ public class IssueService {
 			ContentOrigin origin) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
+		TextVerdict text = textCheck.require(content.text(), TextField.COMMENT, author, null);
 		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
@@ -1683,6 +1727,8 @@ public class IssueService {
 				.textDoc(content.doc());
 		applyReplyTo(builder, issue.getId(), replyToId);
 		IssueComment saved = comments.save(builder.build());
+		textCheck.afterSave(new ContentRef(ContentKind.COMMENT, saved.getId(), issue.getId(), issue.getProjectId()),
+				TextField.COMMENT, text, author);
 		// Notifications are best-effort: a failure in the mail/push fan-out (e.g.
 		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
 		// the already-saved comment by bubbling a 500 back to the author.
@@ -1887,6 +1933,8 @@ public class IssueService {
 		}
 		RichText content = resolver.apply(comment);
 		if (content == null) return withReplyCount(comment);
+		TextVerdict text = textCheck.require(editor,
+				TextCheck.Entry.ifChanged(TextField.COMMENT, content.text(), comment.getText())).get(0);
 		// Atomic field $set (not a whole-document save) so a concurrent
 		// reaction/pin on the same comment isn't clobbered by a stale edit copy.
 		// The document and its derived text are set together — they must never be
@@ -1902,8 +1950,17 @@ public class IssueService {
 		if (saved == null) {
 			saved = comment;
 		}
+		else {
+			textCheck.afterSave(new ContentRef(ContentKind.COMMENT, saved.getId(), saved.getIssueId(),
+					projectOf(saved.getIssueId())), TextField.COMMENT, text, editor);
+		}
 		commentEvents.publishChanged(comment.getIssueId());
 		return withReplyCount(saved);
+	}
+
+	/** The project of issue [issueId], for a find in one of its comments; null when it is gone. */
+	private String projectOf(String issueId) {
+		return issues.findById(issueId).map(Issue::getProjectId).orElse(null);
 	}
 
 	/**
@@ -1946,8 +2003,8 @@ public class IssueService {
 	public IssueComment reactToComment(String issueId, String commentId, String emoji, User user) {
 		IssueComment comment = requireComment(issueId, commentId, user);
 		String normalized = emoji == null ? "" : emoji.strip();
-		if (normalized.isEmpty() || normalized.length() > 32) {
-			throw ApiException.badRequest("error.comment.invalidReaction");
+		if (!ReactionEmoji.isSingle(normalized)) {
+			throw ApiException.badRequest("error.issue.reactionNotEmoji");
 		}
 		// Toggle intent from the loaded snapshot: same emoji → remove.
 		List<IssueComment.Reaction> reactions = comment.getReactions();

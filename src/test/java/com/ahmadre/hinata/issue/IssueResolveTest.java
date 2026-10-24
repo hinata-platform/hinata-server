@@ -60,7 +60,8 @@ class IssueResolveTest {
 				mock(com.ahmadre.hinata.user.UserRepository.class),
 				// Offsets are a module that can be switched off; this test is about
 				// everything else, so the policy answers nothing.
-				mock(IssueDeadlinePolicy.class), IssueReachStubs.everyoneSees(), mock(DeletedContent.class));
+				mock(IssueDeadlinePolicy.class), IssueReachStubs.everyoneSees(), mock(DeletedContent.class),
+				com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
 	}
 
 	private Query capturedQuery() {

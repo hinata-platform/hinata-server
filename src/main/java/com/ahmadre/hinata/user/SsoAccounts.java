@@ -11,6 +11,8 @@ import com.ahmadre.hinata.auth.sso.DynamicRelyingPartyRegistrationRepository;
 import com.ahmadre.hinata.auth.sso.SsoProfileMapper.SsoProfile;
 import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.notification.NotificationService;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import lombok.RequiredArgsConstructor;
@@ -70,6 +72,12 @@ public class SsoAccounts {
 	private final AuditService audit;
 	private final NotificationService notifications;
 	private final UserWords words;
+
+	/**
+	 * Names from the provider are checked as well (HIN-176), but never refuse a sign-in: a refused
+	 * username becomes {@code user-<6 hex>}, a refused name the username, a refused position none.
+	 */
+	private final TextCheck textCheck;
 
 	/**
 	 * The account a sign-in entered. [ownerTold] is set when the sign-in bound the account by its
@@ -264,12 +272,21 @@ public class SsoAccounts {
 		// New SSO users inherit the browser language from the login redirect
 		// (Accept-Language) so their emails are localized from the start.
 		String email = profile.email();
-		String displayName = profile.displayName();
+		String username = userService.uniqueUsernameFrom(email);
+		if (refused(username, TextField.USERNAME)) {
+			username = userService.neutralUsername();
+		}
+		String displayName = profile.displayName() != null && !profile.displayName().isBlank() ? profile.displayName()
+				: email;
+		if (refused(displayName, TextField.DISPLAY_NAME)) {
+			displayName = username;
+		}
+		String title = trimToNull(profile.title());
 		User.UserBuilder builder = User.builder()
 				.email(email.toLowerCase(Locale.ROOT))
-				.username(userService.uniqueUsernameFrom(email))
-				.displayName(displayName != null && !displayName.isBlank() ? displayName : email)
-				.title(trimToNull(profile.title()))
+				.username(username)
+				.displayName(displayName)
+				.title(refused(title, TextField.POSITION) ? null : title)
 				.roles(Set.of(Role.MEMBER))
 				.origin(origin)
 				.ssoLink(SsoLink.of(identity, Instant.now()));
@@ -356,6 +373,11 @@ public class SsoAccounts {
 		};
 	}
 
+	/** Whether the text check refuses [text] as [field]: a name from the provider is replaced, never refused. */
+	private boolean refused(String text, TextField field) {
+		return text != null && textCheck.verdict(text, field, null, null).blocked();
+	}
+
 	/**
 	 * Re-applies the IdP profile to an existing SSO account; see the class comment. Writes the two
 	 * fields alone: a save of the whole account as read at the start of the sign-in would undo
@@ -378,13 +400,14 @@ public class SsoAccounts {
 				|| user.getDisplayName().equalsIgnoreCase(user.getEmail());
 		String displayName = trimToNull(profile.displayName());
 		if (displayName != null && !displayName.equals(user.getDisplayName())
-				&& (syncProfile || placeholderName)) {
+				&& (syncProfile || placeholderName) && !refused(displayName, TextField.DISPLAY_NAME)) {
 			user.setDisplayName(displayName);
 			changes.set("displayName", displayName);
 		}
 		String title = trimToNull(profile.title());
 		if (title != null && !title.equals(user.getTitle())
-				&& (syncProfile || user.getTitle() == null || user.getTitle().isBlank())) {
+				&& (syncProfile || user.getTitle() == null || user.getTitle().isBlank())
+				&& !refused(title, TextField.POSITION)) {
 			user.setTitle(title);
 			changes.set("title", title);
 		}

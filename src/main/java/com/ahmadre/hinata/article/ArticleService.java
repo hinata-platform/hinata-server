@@ -2,7 +2,12 @@ package com.ahmadre.hinata.article;
 
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.ContentKind;
+import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.richtext.RichText;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
+import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -45,6 +50,9 @@ public class ArticleService {
 	private final ArticleHistory history;
 	private final ArticleReading reading;
 	private final com.ahmadre.hinata.richtext.RichTextService richText;
+
+	/** Titles and texts are checked before they are stored (HIN-176); a restored version is not. */
+	private final TextCheck textCheck;
 
 	/** The page, or 404 — also when it exists but the caller may not read it. */
 	public Article readable(String id, User user) {
@@ -139,6 +147,9 @@ public class ArticleService {
 			access.assertCanTarget(projectId, teamId, organization, author);
 		}
 		RichText body = draft.body() != null ? draft.body() : RichText.EMPTY;
+		List<TextVerdict> texts = textCheck.require(author,
+				new TextCheck.Entry(TextField.ARTICLE_TITLE, draft.title(), null),
+				new TextCheck.Entry(TextField.ARTICLE_BODY, body.text(), null));
 		Article created = articles.save(Article.builder()
 				.title(draft.title())
 				.content(body.text())
@@ -156,7 +167,18 @@ public class ArticleService {
 				.lastEditorId(author.getId())
 				.build());
 		history.created(created, author.getId());
+		textFound(created, texts, author);
 		return created;
+	}
+
+	/** Hands what the text check found in [saved]'s title and text to moderation. */
+	private void textFound(Article saved, List<TextVerdict> texts, User author) {
+		if (texts.isEmpty()) {
+			return;
+		}
+		ContentRef ref = new ContentRef(ContentKind.ARTICLE, saved.getId(), null, saved.getProjectId());
+		textCheck.afterSave(ref, TextField.ARTICLE_TITLE, texts.get(0), author);
+		textCheck.afterSave(ref, TextField.ARTICLE_BODY, texts.get(1), author);
 	}
 
 	/**
@@ -166,6 +188,10 @@ public class ArticleService {
 	 * authority as {@link #place}.
 	 */
 	public Article save(Article article, String parentId, User user) {
+		return save(article, parentId, user, true);
+	}
+
+	private Article save(Article article, String parentId, User user, boolean checkText) {
 		boolean reparented = !Objects.equals(article.getParentId(), parentId);
 		Place from = Place.of(article);
 		Place to = from;
@@ -182,13 +208,32 @@ public class ArticleService {
 		article.setTags(labels(article.getTags()));
 		Article before = storedForHistory(article.getId());
 		boolean edited = before != null && ArticleHistory.changed(before, article);
+		List<TextVerdict> texts = checkText && edited ? checkEdit(article, before, user) : List.of();
 		if (edited) article.setLastEditorId(user.getId());
 		// A removed title or text written anew shows the new words again (HIN-169).
 		if (edited) ArticleContentSurface.markRewritten(before, article);
 		Article saved = articles.save(article);
 		if (edited) history.saved(before, saved, user.getId());
+		textFound(saved, texts, user);
 		if (!to.equals(from)) moved(saved, from, user);
 		return saved;
+	}
+
+	/** The verdicts on what an edit changed, against the stored title and text. */
+	private List<TextVerdict> checkEdit(Article article, Article before, User user) {
+		String storedText = Objects.equals(article.getContentDoc(), before.getContentDoc()) ? article.getContent()
+				: storedText(article.getId());
+		return textCheck.require(user,
+				TextCheck.Entry.ifChanged(TextField.ARTICLE_TITLE, article.getTitle(), before.getTitle()),
+				TextCheck.Entry.ifChanged(TextField.ARTICLE_BODY, article.getContent(), storedText));
+	}
+
+	/** The stored plain text of page [id], which the history leaves in the database. */
+	private String storedText(String id) {
+		Query query = Query.query(Criteria.where("_id").is(id));
+		query.fields().include("content").include("sortOrder");
+		Article stored = mongo.findOne(query, Article.class);
+		return stored == null ? null : stored.getContent();
 	}
 
 	/**
@@ -215,7 +260,8 @@ public class ArticleService {
 		article.setContent(body.text());
 		article.setContentDoc(body.doc());
 		article.setReferencedIssueKeys(new ArrayList<>(body.issueKeys()));
-		return save(article, article.getParentId(), user);
+		// The words of a version were checked when they were written.
+		return save(article, article.getParentId(), user, false);
 	}
 
 	/** Labels one page carries at most, and the longest one. */
