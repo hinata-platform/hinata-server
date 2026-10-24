@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.setup.SettingsService;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -30,6 +32,11 @@ final class Retention {
 			return at.plus(NO_ACTION);
 		}
 		return later(plusMonths(at, months), appealUntil(at));
+	}
+
+	/** The months decided cases are kept on this instance, as its settings stand. */
+	static int months(SettingsService settings) {
+		return settings.current().moderationOrDefault().retentionMonthsOrDefault();
 	}
 
 	static Instant plusMonths(Instant at, int months) {
