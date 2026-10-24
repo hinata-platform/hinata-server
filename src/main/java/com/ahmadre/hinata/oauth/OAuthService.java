@@ -5,6 +5,8 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.pat.Scopes;
+import com.ahmadre.hinata.user.User;
+import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -61,6 +63,7 @@ public class OAuthService {
 	private final HinataProperties properties;
 	private final PasswordEncoder passwordEncoder;
 	private final FeatureFlags featureFlags;
+	private final UserRepository users;
 	private final SecureRandom random = new SecureRandom();
 
 	// --- results ------------------------------------------------------------
@@ -348,6 +351,10 @@ public class OAuthService {
 				.orElseThrow(() -> new OAuthException("invalid_grant", "Unknown or expired refresh token"));
 		if (!grant.getClientId().equals(client.getId())) {
 			throw new OAuthException("invalid_grant", "Refresh token was issued to a different client");
+		}
+		// A deactivated or suspended account gets no new token, however valid its grant (HIN-172).
+		if (users.findById(grant.getUserId()).filter(User::isActive).isEmpty()) {
+			throw new OAuthException("invalid_grant", "The account cannot sign in");
 		}
 		Set<String> scopes = grant.getScopes();
 		Set<String> narrowed = normalizeScopes(requestedScope);

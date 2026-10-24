@@ -22,6 +22,10 @@ public record CaseEvent(Instant at, Kind kind, String actorId, String detail) {
 		APPEALED,
 		APPEAL_DECIDED,
 		RESTORED,
-		HELD
+		HELD,
+		CONFIRMATION_REQUESTED,
+		CONFIRMATION_REJECTED,
+		SUSPENDED,
+		SUSPENSION_LIFTED
 	}
 }

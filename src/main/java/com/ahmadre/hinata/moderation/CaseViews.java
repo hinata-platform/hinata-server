@@ -19,6 +19,8 @@ public final class CaseViews {
 		OPEN,
 		URGENT,
 		IN_REVIEW,
+		/** Decided to suspend a person with a role, waiting for a second person (HIN-172). */
+		PENDING_CONFIRMATION,
 		APPEAL,
 		ACTED,
 		NO_ACTION

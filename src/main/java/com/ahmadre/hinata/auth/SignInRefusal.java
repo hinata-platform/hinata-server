@@ -1,7 +1,12 @@
 package com.ahmadre.hinata.auth;
 
+import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.user.Suspension;
 import com.ahmadre.hinata.user.User;
+import org.springframework.http.HttpStatus;
 
+import java.util.Date;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -10,7 +15,7 @@ import java.util.Optional;
  * the SSO callback did until HIN-179 and handed fresh tokens to accounts an administrator had
  * deactivated.
  *
- * <p>The first three are states of the account, read by {@link #of}; the last three are about an
+ * <p>The first four are states of the account, read by {@link #of}; the last three are about an
  * SSO or LDAP sign-in and the account its address points at, decided in
  * {@link com.ahmadre.hinata.user.SsoAccounts}.
  */
@@ -20,6 +25,8 @@ public enum SignInRefusal {
 	EMAIL_NOT_VERIFIED("emailNotVerified", "error.auth.emailNotVerified"),
 	/** A verified self-registration an administrator has not approved yet. */
 	PENDING_APPROVAL("pendingApproval", "error.auth.pendingApproval"),
+	/** An account moderation has suspended (HIN-172), for a while or until further notice. */
+	ACCOUNT_SUSPENDED("accountSuspended", "error.auth.accountSuspended"),
 	/** An account an administrator has deactivated. */
 	ACCOUNT_DEACTIVATED("accountDeactivated", "error.auth.accountDeactivated"),
 	/** An identity whose address belongs to an account it may not enter. */
@@ -69,9 +76,29 @@ public enum SignInRefusal {
 		if (user.isAwaitingApproval()) {
 			return Optional.of(PENDING_APPROVAL);
 		}
+		if (user.isSuspended()) {
+			return Optional.of(ACCOUNT_SUSPENDED);
+		}
 		if (!user.isActive()) {
 			return Optional.of(ACCOUNT_DEACTIVATED);
 		}
 		return Optional.empty();
+	}
+
+	/**
+	 * The 403 that refuses [user] for this reason. A suspension says until when, in the details
+	 * for the app and in words for whoever reads the message, the published app included.
+	 */
+	public ApiException refuse(User user) {
+		Suspension suspension = this == ACCOUNT_SUSPENDED ? user.getSuspension() : null;
+		if (suspension == null) {
+			return ApiException.forbidden(messageKey);
+		}
+		if (suspension.until() == null) {
+			return new ApiException(HttpStatus.FORBIDDEN, "error.auth.accountSuspendedIndefinitely",
+					Map.of("code", reason));
+		}
+		return new ApiException(HttpStatus.FORBIDDEN, messageKey,
+				Map.of("code", reason, "until", suspension.until().toString()), Date.from(suspension.until()));
 	}
 }

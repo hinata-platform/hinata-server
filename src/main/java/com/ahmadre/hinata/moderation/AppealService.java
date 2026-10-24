@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.admin.SuspensionService;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
@@ -155,7 +156,7 @@ public class AppealService {
 		ModerationCase decided;
 		if (reverse) {
 			decided = decisions.undo(id, request.rev(), moderator, note, now,
-					Criteria.where("appeal.state").is(Appeal.State.PENDING),
+					Criteria.where("appeal.state").is(Appeal.State.PENDING), SuspensionService.LiftReason.APPEAL,
 					outcome -> appealDecided(Appeal.State.REVERSED, moderator, note, now, outcome)).moderationCase();
 		}
 		else {

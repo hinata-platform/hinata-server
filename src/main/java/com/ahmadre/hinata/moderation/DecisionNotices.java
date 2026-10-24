@@ -72,13 +72,22 @@ class DecisionNotices {
 		String responsibleId = c.getDecision().responsibleId();
 		if (responsibleId != null) {
 			users.findById(responsibleId).ifPresent(person ->
-					deliver(person, c, Notification.Type.MODERATION_NOTICE, "moderation.notice.statement"));
+					deliver(person, c, Notification.Type.MODERATION_NOTICE, noticeKey(c)));
 			return;
 		}
 		String sender = c.getEvidence() == null ? null : c.getEvidence().externalSender();
 		if (sender != null && !sender.isBlank()) {
 			neutral(c, sender);
 		}
+	}
+
+	/** The words of the notice: content removed, account suspended, or both (HIN-172). */
+	private static String noticeKey(ModerationCase c) {
+		boolean suspended = c.getSuspension() != null;
+		if (!suspended) {
+			return "moderation.notice.statement";
+		}
+		return c.getDecision().removal() == null ? "moderation.notice.suspended" : "moderation.notice.removedAndSuspended";
 	}
 
 	/** The person responsible told that their notice changed: an appeal decided, the content back. */
