@@ -374,10 +374,7 @@ public class MeService {
 				&& users.countByRolesContainingAndActiveIsTrueAndIdNot(Role.ADMIN, user.getId()) == 0) {
 			throw ApiException.conflict("error.user.cannotDeleteLastAdmin");
 		}
-		if (user.isOrgAdmin()
-				&& users.countByRolesContainingAndActiveIsTrueAndIdNot(Role.ORG_ADMIN, user.getId()) == 0) {
-			throw ApiException.conflict("error.user.cannotRemoveLastOrgAdmin");
-		}
+		userService.requireAnotherActiveHolderOfEachRole(user);
 		sessions.revokeAll(user.getId());
 		// Mail the user before their account (and its notifications) are removed.
 		notifications.notifyAccountDeleted(user);

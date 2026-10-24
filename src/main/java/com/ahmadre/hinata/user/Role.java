@@ -12,11 +12,15 @@ package com.ahmadre.hinata.user;
  *       timesheet approvals, absences and their settings, holiday calendars and
  *       billing. It sees the personal data those duties need and no project
  *       content beyond them, and it has no access to the admin area.</li>
+ *   <li>{@link #MODERATOR} reviews reported content and decides on it (HIN-26). It
+ *       sees only what was reported, never a project through the role, and it has
+ *       no access to the admin area.</li>
  *   <li>{@link #MEMBER} is everybody.</li>
  * </ul>
  */
 public enum Role {
 	ADMIN,
 	ORG_ADMIN,
+	MODERATOR,
 	MEMBER
 }

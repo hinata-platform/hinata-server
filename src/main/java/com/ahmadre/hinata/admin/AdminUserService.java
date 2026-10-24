@@ -69,7 +69,7 @@ public class AdminUserService {
 		Map<String, SessionService.Activity> activity = sessions.activityByUser();
 
 		List<User> filtered = all.stream().filter(u -> {
-			if (role != null && !role.isBlank() && !role.equalsIgnoreCase(effectiveRole(u))) return false;
+			if (role != null && !role.isBlank() && !hasListedRole(u, role)) return false;
 			if (status != null && !status.isBlank() && !status.equalsIgnoreCase(status(u))) return false;
 			if (origin != null && !origin.isBlank()
 					&& !origin.equalsIgnoreCase(u.getOrigin().name())) return false;
@@ -226,7 +226,7 @@ public class AdminUserService {
 					throw ApiException.badRequest("error.user.cannotDeactivateSelf");
 				}
 				if (u.isAdmin()) requireAnotherActiveAdmin(u, "error.user.cannotDeactivateLastAdmin");
-				if (u.isOrgAdmin()) requireAnotherActiveOrgAdmin(u);
+				userService.requireAnotherActiveHolderOfEachRole(u);
 				sessions.revokeAll(u.getId()); // deactivation forces sign-out everywhere
 			}
 			u.setActive(activate);
@@ -279,63 +279,75 @@ public class AdminUserService {
 	}
 
 	/**
-	 * Makes people organisation admins, or takes the role away. Independent of the
-	 * admin role in both directions: an administrator does not become one by being an
-	 * administrator, and an organisation admin gains no admin area.
+	 * Gives people a role an administrator hands out besides the admin role, or takes it
+	 * away: {@link Role#ORG_ADMIN} or {@link Role#MODERATOR}. Both are independent of the admin
+	 * role in both directions: an administrator does not hold one by being an administrator,
+	 * and neither opens the admin area.
+	 *
+	 * <p>Nobody hands one to themselves: the roles are separate so that running the platform
+	 * neither opens people's working time nor puts the reports about everybody in the same
+	 * hands, and one click would undo that. The last active holder keeps the role, or what
+	 * it decides would reach nobody. Every refusal comes before the first write, so a
+	 * selection changes whole or not at all.
 	 */
-	public void setOrgAdmin(List<String> ids, boolean orgAdmin) {
+	public void setPlatformRole(List<String> ids, Role role, boolean grant) {
+		if (role != Role.ORG_ADMIN && role != Role.MODERATOR) {
+			throw new IllegalArgumentException("Not a delegated role: " + role);
+		}
 		String actingId = currentUser.requireId();
 		List<User> changing = ids.stream().distinct().map(userService::get)
-				.filter(u -> u.isOrgAdmin() != orgAdmin).toList();
-		// Every refusal before the first write, so a selection is changed whole or not at all.
+				.filter(u -> holds(u, role) != grant).toList();
 		for (User u : changing) {
-			// The two roles are separate so that running the platform does not open
-			// people's working time. An administrator handing the second role to
-			// themselves would undo that in one click.
-			if (orgAdmin && u.getId().equals(actingId)) {
-				throw ApiException.badRequest("error.user.cannotGrantOwnOrgRole");
+			if (grant && u.getId().equals(actingId)) {
+				throw ApiException.badRequest(role == Role.ORG_ADMIN ? "error.user.cannotGrantOwnOrgRole"
+						: "error.user.cannotGrantOwnModeratorRole");
 			}
 		}
-		if (!orgAdmin && !changing.isEmpty()) {
-			long remaining = users.countByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN)
+		if (!grant && !changing.isEmpty()) {
+			long remaining = users.countByRolesContainingAndActiveIsTrue(role)
 					- changing.stream().filter(User::isActive).count();
 			if (remaining < 1) {
-				throw ApiException.conflict("error.user.cannotRemoveLastOrgAdmin");
+				throw ApiException.conflict(role == Role.ORG_ADMIN ? "error.user.cannotRemoveLastOrgAdmin"
+						: "error.user.cannotRemoveLastModerator");
 			}
 		}
-		List<User> holders = users.findByRolesContainingAndActiveIsTrue(Role.ORG_ADMIN);
+		List<User> holders = users.findByRolesContainingAndActiveIsTrue(role);
+		User actor = actingAdmin();
 		for (User u : changing) {
-			User saved = changeOrgRole(u, orgAdmin, actingAdmin(), null);
+			User saved = changeRole(u, role, grant, actor, null);
 			// The people who already hold the role learn who joins or leaves it; the
 			// record alone would only be found by someone looking.
-			notifications.notifyOrgAdminsOfRoleChange(holders, saved);
+			notifications.notifyHoldersOfRoleChange(role, holders, saved);
 		}
 	}
 
 	/**
-	 * Gives or takes the organisation admin role: the account, the record and the
-	 * person's own notice. Shared with the one-time hand-over, so a grant looks the
-	 * same in the log whichever way it came.
+	 * Gives or takes [role]: the account, the record and the person's own notice. Shared with
+	 * the one-time hand-overs, so a grant looks the same in the log whichever way it came.
 	 *
 	 * @param actor  who acted, or null for the system
 	 * @param reason why, when it was not a person's decision (e.g. {@code migration})
 	 */
-	public User changeOrgRole(User user, boolean orgAdmin, User actor, String reason) {
+	public User changeRole(User user, Role role, boolean grant, User actor, String reason) {
 		Set<Role> roles = new java.util.HashSet<>(user.getRoles() == null ? Set.of() : user.getRoles());
 		roles.add(Role.MEMBER);
-		if (orgAdmin) roles.add(Role.ORG_ADMIN); else roles.remove(Role.ORG_ADMIN);
+		if (grant) roles.add(role); else roles.remove(role);
 		user.setRoles(roles);
 		User saved = users.save(user);
 		if (saved.isActive()) {
-			notifications.notifyOrgRoleChanged(saved);
+			notifications.notifyRoleChanged(saved, role, "migration".equals(reason));
 		}
 		var entry = actor != null ? audit.event(AuditAction.USER_ROLE_CHANGED).actor(actor)
 				: audit.event(AuditAction.USER_ROLE_CHANGED).actor(null, "Hinata");
-		entry = entry.target(saved).meta("role", "ORG_ADMIN")
-				.meta("from", String.valueOf(!orgAdmin)).meta("to", String.valueOf(orgAdmin));
+		entry = entry.target(saved).meta("role", role.name())
+				.meta("from", String.valueOf(!grant)).meta("to", String.valueOf(grant));
 		if (reason != null) entry = entry.meta("reason", reason);
 		entry.log();
 		return saved;
+	}
+
+	private static boolean holds(User user, Role role) {
+		return user.getRoles() != null && user.getRoles().contains(role);
 	}
 
 
@@ -417,7 +429,7 @@ public class AdminUserService {
 				throw ApiException.badRequest("error.user.cannotDeleteSelf");
 			}
 			if (u.isAdmin()) requireAnotherActiveAdmin(u, "error.user.cannotDeleteLastAdmin");
-			if (u.isOrgAdmin()) requireAnotherActiveOrgAdmin(u);
+			userService.requireAnotherActiveHolderOfEachRole(u);
 			notifications.notifyAccountDeleted(u);
 			audit.event(AuditAction.USER_DELETED).actor(actingAdmin()).target(u)
 					.meta("email", u.getEmail()).log();
@@ -446,7 +458,7 @@ public class AdminUserService {
 				u.getAvatarUrl(), u.getTitle(), u.getPronouns(), effectiveRole(u),
 				u.getOrigin().name(), status(u), u.isTotpEnabled(), u.isSso(), activity.sessions(),
 				activity.lastActive(), u.getInvitedAt(), u.getInvitedBy(), u.getJoinedAt(), u.isOrgAdmin(),
-				u.getSsoLink() != null);
+				u.getSsoLink() != null, u.isModerator());
 	}
 
 	private static SessionService.Activity activityOf(Map<String, SessionService.Activity> activity, User u) {
@@ -457,27 +469,19 @@ public class AdminUserService {
 		return u.isAdmin() ? "ADMIN" : "USER";
 	}
 
+	/** The list's role filter: {@code ADMIN} or {@code USER} as shown, or {@code MODERATOR}. */
+	private boolean hasListedRole(User u, String role) {
+		return "MODERATOR".equalsIgnoreCase(role) ? u.isModerator() : role.equalsIgnoreCase(effectiveRole(u));
+	}
+
 	private String status(User u) {
 		if (u.isInvitePending()) return "INVITED";
 		if (u.isPendingApproval()) return "PENDING";
 		return u.isActive() ? "ACTIVE" : "DISABLED";
 	}
 
-	/**
-	 * Somebody has to keep deciding timesheets and absences: the approver
-	 * fallbacks name the organisation admins, and with none left those decisions
-	 * would reach nobody.
-	 */
-	private void requireAnotherActiveOrgAdmin(User user) {
-		requireAnotherActive(Role.ORG_ADMIN, user, "error.user.cannotRemoveLastOrgAdmin");
-	}
-
 	private void requireAnotherActiveAdmin(User user, String messageKey) {
-		requireAnotherActive(Role.ADMIN, user, messageKey);
-	}
-
-	private void requireAnotherActive(Role role, User user, String messageKey) {
-		if (users.countByRolesContainingAndActiveIsTrueAndIdNot(role, user.getId()) == 0) {
+		if (users.countByRolesContainingAndActiveIsTrueAndIdNot(Role.ADMIN, user.getId()) == 0) {
 			throw ApiException.conflict(messageKey);
 		}
 	}

@@ -575,12 +575,12 @@ class RoleSeparationIntegrationTest {
 	@Test
 	void anAdministratorCannotGrantThemselvesTheOrganisationRoleNorRemoveTheLastOne() {
 		when(currentUser.requireId()).thenReturn(admin.getId());
-		assertThatThrownBy(() -> adminUsers.setOrgAdmin(List.of(admin.getId()), true))
+		assertThatThrownBy(() -> adminUsers.setPlatformRole(List.of(admin.getId()), Role.ORG_ADMIN, true))
 				.isInstanceOf(ApiException.class).hasMessageContaining("cannotGrantOwnOrgRole");
-		assertThatThrownBy(() -> adminUsers.setOrgAdmin(List.of(orgAdmin.getId()), false))
+		assertThatThrownBy(() -> adminUsers.setPlatformRole(List.of(orgAdmin.getId()), Role.ORG_ADMIN, false))
 				.isInstanceOf(ApiException.class).hasMessageContaining("cannotRemoveLastOrgAdmin");
 
-		adminUsers.setOrgAdmin(List.of(member.getId()), true);
+		adminUsers.setPlatformRole(List.of(member.getId()), Role.ORG_ADMIN, true);
 		assertThat(users.findById(member.getId()).orElseThrow().isOrgAdmin()).isTrue();
 	}
 
@@ -745,7 +745,7 @@ class RoleSeparationIntegrationTest {
 	@Test
 	void aSelectionThatIncludesTheAdministratorChangesNobody() {
 		when(currentUser.requireId()).thenReturn(admin.getId());
-		assertThatThrownBy(() -> adminUsers.setOrgAdmin(List.of(member.getId(), admin.getId()), true))
+		assertThatThrownBy(() -> adminUsers.setPlatformRole(List.of(member.getId(), admin.getId()), Role.ORG_ADMIN, true))
 				.isInstanceOf(ApiException.class);
 		assertThat(users.findById(member.getId()).orElseThrow().isOrgAdmin()).isFalse();
 	}
