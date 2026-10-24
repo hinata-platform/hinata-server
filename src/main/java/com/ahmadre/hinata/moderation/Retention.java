@@ -32,11 +32,6 @@ final class Retention {
 		return later(plusMonths(at, months), appealUntil(at));
 	}
 
-	/** Kept until after a step at [at] on an appeal, never earlier than [until] already says. */
-	static Instant afterAppeal(Instant until, Instant at, int months) {
-		return later(until, plusMonths(at, months));
-	}
-
 	static Instant plusMonths(Instant at, int months) {
 		return at.atZone(ZoneOffset.UTC).plusMonths(months).toInstant();
 	}

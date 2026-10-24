@@ -38,12 +38,13 @@ class SuspensionEnds {
 		Update update = new Update()
 				.set("suspension.liftedAt", now)
 				.set("suspension.liftedHow", event.reason())
-				.max("retainUntil", Retention.plusMonths(now, decisions.retentionMonths()))
-				.set("followUpDue", now)
 				.set("updatedAt", now);
 		// A deactivated account stays out: there is nothing new to tell its person.
-		if (event.reason() != LiftReason.DEACTIVATED) {
-			update.set("noticeChangedAt", now);
+		if (event.reason() == LiftReason.DEACTIVATED) {
+			CaseSteps.followUp(update, now, decisions.retentionMonths());
+		}
+		else {
+			CaseSteps.noticeChanged(update, now, decisions.retentionMonths());
 		}
 		ModerationCase ended = mongo.findAndModify(Query.query(Criteria.where("_id").is(event.caseId())
 						.and("suspension.liftedAt").is(null)), update, FindAndModifyOptions.options().returnNew(true),
