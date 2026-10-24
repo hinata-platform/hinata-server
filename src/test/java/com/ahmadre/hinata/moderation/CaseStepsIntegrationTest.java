@@ -241,6 +241,14 @@ class CaseStepsIntegrationTest extends RemovalIntegrationSupport {
 				mira.getId(), null), ReportCategory.HARASSMENT, "Ich selbst")))
 				.isInstanceOfSatisfying(ApiException.class, refused -> assertThat(refused.getMessageKey())
 						.isEqualTo("error.moderation.ownContent"));
+		// Content the moderator cannot see is named as such, not as a case that is missing.
+		assertThatThrownBy(() -> moderation.open(new CaseService.OwnCaseRequest(new TargetRef(ContentKind.COMMENT,
+				"no-such-comment", issue.getId()), ReportCategory.HARASSMENT, "Im Vorstandskanal gesehen")))
+				.isInstanceOfSatisfying(ApiException.class, missing -> {
+					assertThat(missing.getStatus().value()).isEqualTo(404);
+					assertThat(((org.springframework.context.MessageSourceResolvable) missing.getArgs()[0]).getCodes())
+							.containsExactly("entity.comment");
+				});
 	}
 
 	/** As a report without an account on internal content leaves a case (HIN-175). */
