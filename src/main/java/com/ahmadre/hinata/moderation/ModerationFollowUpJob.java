@@ -1,6 +1,5 @@
 package com.ahmadre.hinata.moderation;
 
-import com.ahmadre.hinata.content.Quarantine;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,8 +27,9 @@ import java.util.Map;
  * <ol>
  *   <li>Open cases older than 20 hours: one reminder per moderator with the number of their cases.</li>
  *   <li>Older than 24 hours: one word to the admins, without content, so they can staff moderation.</li>
- *   <li>Decided cases of the last seven days whose removal left originals behind: deleting them
- *       again. Scrubbing copies, the statement and the reporters' message join here with HIN-171.</li>
+ *   <li>Decided cases due a step for at most seven days: the removal, its originals, the copies,
+ *       the statement, the reporters, a changed notice ({@link ModerationFollowUps#complete}).
+ *       Each case is held for a while first, so a second instance leaves it alone.</li>
  * </ol>
  */
 @Slf4j
@@ -41,6 +41,8 @@ public class ModerationFollowUpJob {
 	static final Duration ESCALATE_AFTER = Duration.ofHours(24);
 	static final Duration REDRIVE_WINDOW = Duration.ofDays(7);
 	static final Duration REDRIVE_GRACE = Duration.ofMinutes(5);
+	/** How long a run holds a case it works on. */
+	static final Duration REDRIVE_HOLD = Duration.ofMinutes(10);
 
 	/** Cases handled per step and run; the next run takes the rest. */
 	static final int BATCH = 200;
@@ -48,7 +50,7 @@ public class ModerationFollowUpJob {
 	private final MongoTemplate mongo;
 	private final CaseAccess access;
 	private final ModerationNotices notices;
-	private final Quarantine quarantine;
+	private final ModerationFollowUps followUps;
 	private final Clock clock;
 
 	@Scheduled(cron = "0 */15 * * * *")
@@ -99,20 +101,25 @@ public class ModerationFollowUpJob {
 		return claimed;
 	}
 
-	/** Originals a removal could not confirm gone, deleted again. */
+	/**
+	 * What decided cases still owe, from five minutes after it fell due (the request does it
+	 * itself first) to seven days, when the job gives up and the case shows what is missing.
+	 */
 	void redrive(Instant now) {
-		Query pending = Query.query(Criteria.where("status").is(CaseStatus.DECIDED)
-				.and("decidedAt").gte(now.minus(REDRIVE_WINDOW)).lt(now.minus(REDRIVE_GRACE))
-				.and("pendingDeletes.0").exists(true)).limit(BATCH);
-		for (ModerationCase decided : mongo.find(pending, ModerationCase.class)) {
-			List<String> left = quarantine.deleteOriginals(decided.getPendingDeletes());
-			Update update = new Update().set("pendingDeletes", left).set("updatedAt", now);
-			if (left.isEmpty()) {
-				update.set("removalState", RemovalState.DONE);
+		Query due = Query.query(Criteria.where("followUpDue").gte(now.minus(REDRIVE_WINDOW))
+				.lt(now.minus(REDRIVE_GRACE)).exists(true)
+				.orOperator(Criteria.where("followUpUntil").is(null), Criteria.where("followUpUntil").lt(now)));
+		for (int i = 0; i < BATCH; i++) {
+			ModerationCase next = mongo.findAndModify(due, new Update().set("followUpUntil", now.plus(REDRIVE_HOLD)),
+					FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
+			if (next == null) {
+				break;
 			}
-			mongo.updateFirst(Query.query(Criteria.where("_id").is(decided.getId())), update, ModerationCase.class);
-			if (!left.isEmpty()) {
-				log.warn("Case {} still has {} original(s) the store would not delete", decided.getId(), left.size());
+			try {
+				followUps.complete(next.getId());
+			}
+			catch (RuntimeException ex) {
+				log.warn("[moderation] follow-up of case {} failed", next.getId(), ex);
 			}
 		}
 	}

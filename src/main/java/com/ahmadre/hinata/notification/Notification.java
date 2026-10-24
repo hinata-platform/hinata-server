@@ -52,7 +52,10 @@ public class Notification {
 		SHIFT_PROMOTED, SHIFT_WAITLIST_SKIPPED, SHIFT_WAITLIST_EXPIRED,
 		// Moderation (HIN-170). The names are the wire contract; none of them carries content.
 		MODERATION_CASE_OPENED, MODERATION_CASE_OVERDUE, MODERATION_CONFIRM_REQUESTED, MODERATION_TEAM_NOTE,
-		MODERATION_ADMIN_ALERT
+		MODERATION_ADMIN_ALERT,
+		// HIN-171: the outcome for reporters, the statement of reasons and its changes for the person
+		// responsible, an appeal for the moderators.
+		MODERATION_DECISION, MODERATION_NOTICE, MODERATION_NOTICE_UPDATED, MODERATION_APPEAL_FILED
 	}
 
 	@Id

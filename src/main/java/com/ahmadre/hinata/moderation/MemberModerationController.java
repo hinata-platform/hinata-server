@@ -6,6 +6,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,6 +24,7 @@ import java.util.Map;
 public class MemberModerationController {
 
 	private final ContentReportService reports;
+	private final AppealService appeals;
 	private final CurrentUser currentUser;
 
 	/**
@@ -34,5 +37,18 @@ public class MemberModerationController {
 	public Map<String, Boolean> report(@Valid @RequestBody ContentReportService.ReportRequest request) {
 		reports.submit(request, currentUser.require());
 		return Map.of("received", true);
+	}
+
+	/** Only the person responsible reaches it; there is no list, the bell and the mail lead here. */
+	@Operation(summary = "A notice of moderation about my content, with its appeal")
+	@GetMapping("/notices/{caseId}")
+	public Statement notice(@PathVariable String caseId) {
+		return appeals.notice(caseId, currentUser.require());
+	}
+
+	@Operation(summary = "Appeal a decision of moderation")
+	@PostMapping("/notices/{caseId}/appeal")
+	public Statement appeal(@PathVariable String caseId, @Valid @RequestBody AppealService.AppealRequest request) {
+		return appeals.appeal(caseId, currentUser.require(), request);
 	}
 }

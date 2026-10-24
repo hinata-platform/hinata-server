@@ -53,10 +53,16 @@ public final class CaseViews {
 			String explanation, Instant createdAt, PersonRef reporter, int unfoundedChildSafetyBefore) {
 	}
 
-	/** A case opened: what was reported, how it stands now while it is open, and what happened. */
+	/**
+	 * A case opened: what was reported, how it stands now while it is open, and what happened.
+	 *
+	 * @param removalState whether the decided removal is done; {@code INCOMPLETE} while the store
+	 *                     still holds originals or the removal is being tried again
+	 */
 	public record CaseDetail(CaseSummary summary, ContentSnapshot evidence, ContentSnapshot current,
 			boolean evidenceWithheld, EvidenceReveal evidenceReveal, List<ReportView> reports, long reportTotal,
-			List<CaseEvent> history, Instant claimedAt, Decision decision, Appeal appeal) {
+			List<CaseEvent> history, Instant claimedAt, Decision decision, Appeal appeal, Restoration restoration,
+			RemovalState removalState) {
 	}
 
 	/** The numbers on the page's pills, each one a count of a list minus what the reader wrote. */

@@ -2,6 +2,7 @@ package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.ContentSnapshot;
+import com.ahmadre.hinata.content.CopySource;
 import com.ahmadre.hinata.content.ReportCategory;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -48,7 +49,10 @@ import java.util.Set;
 		@CompoundIndex(name = "contributor_status", def = "{'contributorIds': 1, 'status': 1}"),
 		// Content under a legal hold, asked by every way content is deleted; empty until HIN-171.
 		@CompoundIndex(name = "legal_hold", def = "{'target.id': 1, 'legalHoldUntil': 1}",
-				partialFilter = "{'legalHoldUntil': {$exists: true}}")
+				partialFilter = "{'legalHoldUntil': {$exists: true}}"),
+		// Decided cases that still owe a step, for the follow-up job (HIN-171); unset when settled.
+		@CompoundIndex(name = "follow_up_due", def = "{'followUpDue': 1}",
+				partialFilter = "{'followUpDue': {$exists: true}}")
 })
 public class ModerationCase {
 
@@ -131,6 +135,25 @@ public class ModerationCase {
 	private Instant copiesScrubbedAt;
 	private Instant statementSentAt;
 	private Instant reportersNotifiedAt;
+
+	/**
+	 * What the copies of the removed words are found by, kept only until they are scrubbed and
+	 * then unset (HIN-171): the follow-up job needs it after a restart.
+	 */
+	private List<CopySource> pendingCopies;
+
+	/** Since when the case owes a step of its follow-up; unset once it owes none (HIN-171). */
+	private Instant followUpDue;
+
+	/** Until when a run of the follow-up job holds the case; a second instance leaves it alone. */
+	private Instant followUpUntil;
+
+	/** The decision's removal undone, after an appeal or without one (HIN-171). */
+	private Restoration restoration;
+
+	/** When the notice of the person responsible last changed, and when they were last told of it. */
+	private Instant noticeChangedAt;
+	private Instant noticeChangeSentAt;
 
 	private Instant retainUntil;
 	private Instant legalHoldUntil;

@@ -1353,14 +1353,42 @@ public class NotificationService {
 		}
 	}
 
+	/** The mail of a {@link #deliverNotice} notice: its own template, and where a reply goes. */
+	public record NoticeMail(String template, Map<String, Object> model, String replyTo) {
+	}
+
+	/**
+	 * A notice the person is owed whatever their account and their settings say (HIN-171): the
+	 * statement of reasons for a moderation decision and its changes (DSA Art. 17). The bell and
+	 * the mail always, also for an account that is off, which is who needs the mail most; the
+	 * push, generic, only to an account that can sign in. Not {@code deliverGated}, which skips
+	 * inactive accounts.
+	 */
+	public void deliverNotice(User user, Notification.Type type, String link, PersonalNotice notice, NoticeMail letter) {
+		notifications.save(Notification.builder().userId(user.getId()).type(type).title(notice.title())
+				.body(notice.body()).link(link).build());
+		Map<String, Object> model = new HashMap<>(letter.model());
+		model.putIfAbsent("locale", localeOf(user));
+		model.putIfAbsent("ctaLink", user.isActive() ? appLink(link) : null);
+		mail.sendTemplate(user.getEmail(), mail.subjectPrefix() + notice.title(), letter.template(), model,
+				letter.replyTo());
+		if (user.isActive()) {
+			push.sendToUser(user.getId(), notice.pushTitle(), notice.pushBody(), link, Map.of("type", type.name()));
+		}
+	}
+
 	/**
 	 * A mail to an address with no account behind it, in [locale]: the instance's contact, when
 	 * nobody with an account is left to tell (HIN-170). Carries no content, only the two texts.
 	 */
 	public void mailAddress(String to, Locale locale, String titleKey, String bodyKey) {
-		String title = words.in(locale, titleKey);
-		mail.sendNotification(to, mail.subjectPrefix() + title, title, words.in(locale, bodyKey), null,
-				buttonLabel(locale), locale.getLanguage(), null);
+		mailWorded(to, locale, words.in(locale, titleKey), words.in(locale, bodyKey));
+	}
+
+	/** As {@link #mailAddress}, with [title] and [body] worded by the caller already. */
+	public void mailWorded(String to, Locale locale, String title, String body) {
+		mail.sendNotification(to, mail.subjectPrefix() + title, title, body, null, buttonLabel(locale),
+				locale.getLanguage(), null);
 	}
 
 	/**
@@ -1848,8 +1876,9 @@ public class NotificationService {
 					SHIFT_HELPER_DECLINED, SHIFT_SERIES_CHANGED, SHIFT_PROMOTED, SHIFT_WAITLIST_SKIPPED,
 					SHIFT_WAITLIST_EXPIRED -> NotificationPreferences.SHIFTS;
 			case MODERATION_CASE_OPENED, MODERATION_CASE_OVERDUE, MODERATION_CONFIRM_REQUESTED,
-					MODERATION_TEAM_NOTE -> NotificationPreferences.MODERATION;
-			// MODERATION_ADMIN_ALERT goes to admins, who have no moderation switch: locked.
+					MODERATION_TEAM_NOTE, MODERATION_APPEAL_FILED -> NotificationPreferences.MODERATION;
+			// MODERATION_ADMIN_ALERT goes to admins, who have no moderation switch; the outcome of a
+			// report and the statement of reasons are owed by law (DSA Art. 16(5), 17): all locked.
 			// TIME_OFF_EXPIRY_NOTICE is deliberately absent and therefore locked: it is the notice
 			// without which no leave lapses (BAG 19.02.2019 – 9 AZR 541/15), and a preference that
 			// switched it off would switch off the protection it gives the person.
