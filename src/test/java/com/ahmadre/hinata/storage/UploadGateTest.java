@@ -139,6 +139,35 @@ class UploadGateTest {
 		assertThat(refusal(narrowed, file(UploadKind.LOGO, png(4, 4), "image/png"))).isNull();
 	}
 
+	/**
+	 * Text is text: no program and no web page behind it, however its first bytes look, and no name
+	 * a system would run on a double click. A spreadsheet's CSV in Windows-1252 stays text.
+	 */
+	@Test
+	void textIsNeverAProgramOrAPageInDisguise() {
+		byte[] program = new byte[600];
+		program[0] = 'M';
+		program[1] = 'Z';
+		for (int i = 2; i < 64; i++) {
+			program[i] = 'A';
+		}
+		assertThat(refusal(file(UploadKind.ATTACHMENT, program, "text/plain"))).isEqualTo("signature");
+		assertThat(refusal(file(UploadKind.MAIL_ATTACHMENT, program, "text/plain"))).isEqualTo("type");
+		for (String start : List.of("#!/bin/sh\nrm -rf ~\n", "<svg onload=alert(1)>", "﻿<html><script>",
+				"  <!DOCTYPE html>", "<hta:application>", "\u007FELF....", "<?xml version=\"1.0\"?><svg/>")) {
+			assertThat(refusal(file(UploadKind.ATTACHMENT, start.getBytes(StandardCharsets.UTF_8), "text/plain")))
+					.as(start).isEqualTo("signature");
+		}
+		for (String name : List.of("Rechnung.pdf.hta", "setup.EXE", "start.bat", "a.ps1", "x.lnk", "page.html",
+				"img.svg", "y.js", "evil.exe.", "run.command")) {
+			assertThat(refusal(UploadCandidate.of(UploadKind.ATTACHMENT, "Hallo".getBytes(StandardCharsets.UTF_8),
+					"text/plain", name))).as(name).isEqualTo("type");
+		}
+		byte[] spreadsheet = "Name;Straße\nMüller;Bahnhofstraße 1\n".getBytes(java.nio.charset.Charset.forName("windows-1252"));
+		assertThat(gate.check(UploadCandidate.of(UploadKind.ATTACHMENT, spreadsheet, "text/csv", "adressen.csv"))
+				.contentType()).isEqualTo("text/csv");
+	}
+
 	/** A sender's header counts for nothing; what the bytes are decides, and only the safe list passes. */
 	@Test
 	void aMailAttachmentIsTypedByItsContent() {
