@@ -34,6 +34,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.ahmadre.hinata.content.RemovedFields.putPresent;
+
 /**
  * Attachments as moderation reaches them (HIN-169). The target names the attachment and, as its
  * parent, the issue it lives in.
@@ -143,14 +145,7 @@ class AttachmentContentSurface implements ContentSurface {
 		putPresent(fields, "blurHash", attachment.getBlurHash());
 		Quarantine.Held held = quarantine.hold(caseId, ref, scope, fields,
 				attachment.getObjectKey() == null ? List.of() : List.of(mediaOf(attachment)), List.of());
-		try {
-			rewrite(found, caseId, placeholders);
-		}
-		catch (RuntimeException ex) {
-			quarantine.discard(held);
-			throw ex;
-		}
-		List<String> pending = quarantine.deleteOriginals(held);
+		List<String> pending = quarantine.rewriteHeld(held, () -> rewrite(found, caseId, placeholders));
 		if (storage.isConfigured()) {
 			storage.delete(ImagePreviewService.attachmentThumbnailKey(attachment.getId()));
 		}
@@ -201,9 +196,4 @@ class AttachmentContentSurface implements ContentSurface {
 		return RestoreOutcome.RESTORED;
 	}
 
-	private static void putPresent(Map<String, Object> fields, String name, Object value) {
-		if (value != null) {
-			fields.put(name, value);
-		}
-	}
 }

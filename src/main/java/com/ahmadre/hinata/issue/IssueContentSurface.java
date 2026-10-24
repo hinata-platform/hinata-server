@@ -19,7 +19,6 @@ import com.ahmadre.hinata.content.TargetRef;
 import com.ahmadre.hinata.media.MediaReferences;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
-import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -38,6 +37,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+
+import static com.ahmadre.hinata.content.RemovedFields.putPresent;
+import static com.ahmadre.hinata.content.RemovedFields.setOrUnset;
 
 /**
  * Issues as moderation reaches them (HIN-169): the title, the description, or both. Attachments
@@ -62,7 +64,6 @@ class IssueContentSurface implements ContentSurface {
 	private final RichTextService richText;
 	private final MediaReferences media;
 	private final Quarantine quarantine;
-	private final StorageService storage;
 	private final MongoTemplate mongo;
 
 	/** Whether moderation removed [field] of [issue] and nobody wrote it anew. */
@@ -195,15 +196,9 @@ class IssueContentSurface implements ContentSurface {
 					Map.of("issues", Criteria.where("_id").is(issue.getId())), category.isSensitive());
 		}
 		Quarantine.Held held = quarantine.hold(caseId, ref, scope, fields, images.move(), images.copy());
-		try {
-			rewrite(issue, title, description, caseId, placeholders);
-		}
-		catch (RuntimeException ex) {
-			quarantine.discard(held);
-			throw ex;
-		}
-		List<String> pending = quarantine.deleteOriginals(held);
-		dropThumbnails(images);
+		List<String> pending = quarantine.rewriteHeld(held,
+				() -> rewrite(issue, title, description, caseId, placeholders));
+		media.dropThumbnails(images);
 		CopySource copies = new CopySource(ref, null, null, title ? issue.getTitle() : null,
 				description ? issue.getDescriptionDoc() : null, keysOf(issue));
 		return new Removal(ref, scope, fields, held.media(), held.id(), pending, images.otherUses(), copies);
@@ -226,13 +221,6 @@ class IssueContentSurface implements ContentSurface {
 		if (title) {
 			IssueSearchText.refresh(mongo, criteria);
 		}
-	}
-
-	private void dropThumbnails(MediaReferences.Split images) {
-		if (!storage.isConfigured()) {
-			return;
-		}
-		images.move().forEach(image -> storage.delete(MediaReferences.thumbnailKeyOf(image.objectKey())));
 	}
 
 	@Override
@@ -267,20 +255,7 @@ class IssueContentSurface implements ContentSurface {
 		return RestoreOutcome.RESTORED;
 	}
 
-	private static void putPresent(Map<String, Object> fields, String name, Object value) {
-		if (value != null) {
-			fields.put(name, value);
-		}
-	}
 
-	private static void setOrUnset(Update update, String name, Object value) {
-		if (value == null) {
-			update.unset(name);
-		}
-		else {
-			update.set(name, value);
-		}
-	}
 
 	/** Kept for the issue keys a removed title's copies are found by. */
 	static List<String> keysOf(Issue issue) {
