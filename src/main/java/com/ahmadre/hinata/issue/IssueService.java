@@ -442,7 +442,7 @@ public class IssueService {
 		TextCheck.Verdicts texts = textCheck.require(
 				new TextCheck.Entry(TextField.ISSUE_TITLE, issue.getTitle(), null),
 				new TextCheck.Entry(TextField.ISSUE_DESCRIPTION, issue.getDescription(), null));
-		Issue saved = create(issue, author, Mentions.NOTIFY);
+		Issue saved = createIn(project, issue, author, Mentions.NOTIFY);
 		textFound(saved, texts);
 		return saved;
 	}
@@ -461,13 +461,18 @@ public class IssueService {
 	 */
 	public Issue create(Issue issue, User author, Mentions mentions) {
 		Project project = projects.get(issue.getProjectId());
+		if (author != null) {
+			projects.assertMember(project, author); // only project members may add issues (A01)
+		}
+		return createIn(project, issue, author, mentions);
+	}
+
+	/** {@link #create(Issue, User, Mentions)} in [project], read already, once membership is settled. */
+	private Issue createIn(Project project, Issue issue, User author, Mentions mentions) {
 		// The builder sets the list fields directly; normalise so the primary
 		// assigneeId is in sync and both lists are de-duped and blank-stripped.
 		issue.setAssigneeIds(issue.getAssigneeIds());
 		issue.setTags(issue.getTags());
-		if (author != null) {
-			projects.assertMember(project, author); // only project members may add issues (A01)
-		}
 		// Nobody is handed an issue in a project they cannot open. Dropped rather than
 		// refused: a copy or a template may carry people the new project does not have.
 		if (!issue.getAssigneeIds().isEmpty()) {
@@ -1923,7 +1928,8 @@ public class IssueService {
 	 */
 	public IssueComment editComment(String issueId, String commentId,
 			java.util.function.Function<IssueComment, RichText> resolver, User editor) {
-		IssueComment comment = requireComment(issueId, commentId, editor);
+		OnIssue found = requireCommentOn(issueId, commentId, editor);
+		IssueComment comment = found.comment();
 		if (!comment.getAuthorId().equals(editor.getId())) {
 			throw ApiException.forbidden("error.comment.editOwnOnly");
 		}
@@ -1954,17 +1960,11 @@ public class IssueService {
 			saved = comment;
 		}
 		else if (text.opensCase()) {
-			// The project only for a find: most edits find nothing and need no second read.
 			textCheck.afterSave(new ContentRef(ContentKind.COMMENT, saved.getId(), saved.getIssueId(),
-					projectOf(saved.getIssueId())), TextField.COMMENT, text);
+					found.issue().getProjectId()), TextField.COMMENT, text);
 		}
 		commentEvents.publishChanged(comment.getIssueId());
 		return withReplyCount(saved);
-	}
-
-	/** The project of issue [issueId], for a find in one of its comments; null when it is gone. */
-	private String projectOf(String issueId) {
-		return issues.findById(issueId).map(Issue::getProjectId).orElse(null);
 	}
 
 	/**
@@ -1973,8 +1973,9 @@ public class IssueService {
 	 * Deleting a ROOT cascades its whole reply thread (and frees each reply's blob).
 	 */
 	public void deleteComment(String issueId, String commentId, User user) {
-		IssueComment comment = requireComment(issueId, commentId, user);
-		Issue issue = get(issueId);
+		OnIssue found = requireCommentOn(issueId, commentId, user);
+		IssueComment comment = found.comment();
+		Issue issue = found.issue();
 		if (!comment.getAuthorId().equals(user.getId())
 				&& !projects.canManage(projects.get(issue.getProjectId()), user)) {
 			throw ApiException.forbidden("error.comment.deleteOwnOnly");
@@ -2081,9 +2082,17 @@ public class IssueService {
 	}
 
 	private IssueComment requireComment(String issueId, String commentId, User user) {
+		return requireCommentOn(issueId, commentId, user).comment();
+	}
+
+	/** A comment and the issue it is on, both read once. */
+	private record OnIssue(Issue issue, IssueComment comment) {
+	}
+
+	private OnIssue requireCommentOn(String issueId, String commentId, User user) {
 		Issue issue = get(issueId);
 		assertAccess(issue, user);
-		return commentOf(issue, commentId);
+		return new OnIssue(issue, commentOf(issue, commentId));
 	}
 
 	private IssueComment commentOf(Issue issue, String commentId) {
