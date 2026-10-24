@@ -22,6 +22,12 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ArticleController {
 
+	/** Bounds of a page, here and in the MCP tools. */
+	public static final int MAX_TITLE = 300;
+	public static final int MAX_SPACE = 60;
+	public static final int MAX_TAGS = 30;
+	public static final int MAX_TAG = 40;
+
 	private final ArticleRepository articles;
 	private final RichTextService richText;
 	private final CurrentUser currentUser;
@@ -29,7 +35,7 @@ public class ArticleController {
 	private final ArticleService service;
 
 	public record ArticleRequest(
-			@NotBlank @Size(max = 300) String title,
+			@NotBlank @Size(max = MAX_TITLE) String title,
 			/**
 			 * Markdown. Accepted and converted; {@code contentDoc} wins. Bounded by
 			 * {@link RichTextService#MAX_MARKDOWN_CHARS} rather than by what a body
@@ -45,10 +51,10 @@ public class ArticleController {
 			/** Shared with the whole organisation; only without project and team. */
 			Boolean organization,
 			String parentId,
-			@Size(max = 60) String space,
+			@Size(max = MAX_SPACE) String space,
 			@Size(max = 60) String icon,
 			/** Labels: a handful of short words, as the app's label field makes them. */
-			@Size(max = 30) List<@NotBlank @Size(max = 40) String> tags,
+			@Size(max = MAX_TAGS) List<@NotBlank @Size(max = MAX_TAG) String> tags,
 			Integer sortOrder) {
 	}
 

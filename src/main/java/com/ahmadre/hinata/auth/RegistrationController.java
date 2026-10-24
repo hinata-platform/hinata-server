@@ -37,8 +37,10 @@ public class RegistrationController {
 	public record RegisterRequest(
 			@NotBlank @Email String email,
 			@NotBlank @Size(min = 3, max = 40) String username,
-			@NotBlank String displayName,
-			@NotBlank String password) {
+			@NotBlank @Size(max = 120) String displayName,
+			// Min length is enforced dynamically by UserService#validatePassword
+			// (SecurityPolicy, admin-configurable); only the hard upper bound is static.
+			@NotBlank @Size(max = 128) String password) {
 	}
 
 	public record VerifyEmailRequest(@NotBlank String token) {

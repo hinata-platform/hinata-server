@@ -3,7 +3,9 @@ package com.ahmadre.hinata.mailingest;
 import com.ahmadre.hinata.auth.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,13 +31,13 @@ public class IssueEmailReplyController {
 	 * Sends the reply. Attachments are referenced by id and must already exist on
 	 * the issue (uploaded through the normal attachment endpoint first).
 	 */
-	public record ReplyRequest(@NotBlank String subject, @NotBlank String body,
-			List<String> attachmentIds) {}
+	public record ReplyRequest(@NotBlank @Size(max = 300) String subject, @NotBlank @Size(max = 30000) String body,
+			@Size(max = 20) List<String> attachmentIds) {}
 
 	@Operation(summary = "Reply by e-mail to the issue's original sender")
 	@PostMapping
 	@ResponseStatus(HttpStatus.NO_CONTENT)
-	public void reply(@PathVariable String issueId, @RequestBody ReplyRequest request) {
+	public void reply(@PathVariable String issueId, @RequestBody @Valid ReplyRequest request) {
 		replyService.reply(issueId, currentUser.require(), request.subject(), request.body(),
 				request.attachmentIds());
 	}

@@ -6,6 +6,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
+import com.ahmadre.hinata.issue.IssueController;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -35,6 +36,7 @@ public class IssueWriteTools {
 	private final CurrentUser currentUser;
 	private final ScopeGuard scopeGuard;
 	private final AuditService audit;
+	private final McpErrors errors;
 
 	@McpTool(name = "create_issue", title = "Create issue",
 			annotations = @McpTool.McpAnnotations(destructiveHint = false, openWorldHint = false),
@@ -57,6 +59,7 @@ public class IssueWriteTools {
 			@McpToolParam(required = false, description = "Story point estimate") Integer storyPoints) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
+		errors.requireLength(title, IssueController.MAX_TITLE, "title", me);
 		// An agent writes markdown; storage is Lexical. Converting here is what
 		// keeps the database holding exactly one representation.
 		RichText body = richText.fromMarkdown(description);
@@ -112,6 +115,7 @@ public class IssueWriteTools {
 			@McpToolParam(required = false, description = "Set true to clear the story points") Boolean clearStoryPoints) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
+		errors.requireLength(title, IssueController.MAX_TITLE, "title", me);
 		Issue saved = issueService.update(idOrReadableId, issue -> {
 			if (title != null) issue.setTitle(title);
 			if (description != null) {

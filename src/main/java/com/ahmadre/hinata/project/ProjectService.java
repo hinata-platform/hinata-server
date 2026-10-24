@@ -43,6 +43,8 @@ public class ProjectService {
 	 * handful of held ids, never an unbounded list handed in by a caller.
 	 * {@link #visibleAmong} goes through {@link #visibleTo} past it. */
 	private static final int RESOLVE_CAP = 100;
+	/** As long as the name of a board column ({@code BoardController.ColumnRequest}). */
+	private static final int STATE_NAME_MAX = 60;
 
 	private static final String ISSUES = "issues";
 	private static final String GIT_DEV_INFO = "git_dev_info";
@@ -634,6 +636,10 @@ public class ProjectService {
 					throw ApiException.badRequest("error.project.stateNameRequired");
 				}
 				s.setName(s.getName().trim());
+				// A state is also the title of a board column, which holds this much.
+				if (s.getName().length() > STATE_NAME_MAX) {
+					throw ApiException.badRequest("error.project.stateNameTooLong", STATE_NAME_MAX);
+				}
 				if (!seen.add(s.getName().toLowerCase(Locale.ROOT))) {
 					throw ApiException.badRequest("error.project.duplicateState", s.getName());
 				}

@@ -153,6 +153,28 @@ class McpOAuthIntegrationTest {
 	// --- tests -------------------------------------------------------------
 
 	@Test
+	@DisplayName("registration without sign-in stores only a bounded name and a bounded list of addresses")
+	void anonymousRegistrationIsBounded() {
+		String uri = "\"" + REDIRECT_URI + "\"";
+		HttpResponse<String> longName = postJson("/oauth/register", "{\"client_name\":\"" + "n".repeat(101)
+				+ "\",\"redirect_uris\":[" + uri + "]}", null);
+		HttpResponse<String> manyUris = postJson("/oauth/register", "{\"client_name\":\"Test AI\",\"redirect_uris\":["
+				+ String.join(",", java.util.Collections.nCopies(11, uri)) + "]}", null);
+		HttpResponse<String> longUri = postJson("/oauth/register", "{\"client_name\":\"Test AI\",\"redirect_uris\":[\""
+				+ "https://client.example/" + "p".repeat(2048) + "\"]}", null);
+
+		assertThat(longName.statusCode()).isEqualTo(400);
+		assertThat(parse(longName.body()).path("error").asText()).isEqualTo("invalid_client_metadata");
+		assertThat(manyUris.statusCode()).isEqualTo(400);
+		assertThat(parse(manyUris.body()).path("error").asText()).isEqualTo("invalid_redirect_uri");
+		assertThat(longUri.statusCode()).isEqualTo(400);
+		assertThat(parse(longUri.body()).path("error").asText()).isEqualTo("invalid_redirect_uri");
+		// At the limits it still registers.
+		assertThat(postJson("/oauth/register", "{\"client_name\":\"" + "n".repeat(100) + "\",\"redirect_uris\":["
+				+ String.join(",", java.util.Collections.nCopies(10, uri)) + "]}", null).statusCode()).isEqualTo(201);
+	}
+
+	@Test
 	@DisplayName("discovery metadata (RFC 9728 + RFC 8414) is published")
 	void discoveryMetadata() {
 		// Root document (served by Spring Security's built-in filter, customized).

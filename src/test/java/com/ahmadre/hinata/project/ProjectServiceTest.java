@@ -110,6 +110,19 @@ class ProjectServiceTest {
 	}
 
 	@Test
+	void rejectsAStateNameLongerThanABoardColumnHolds() {
+		sampleProject();
+		assertThatThrownBy(() -> service.applyUpdate("p1",
+				req(List.of(ws("s1", "o".repeat(61), 250), ws("s2", "Done", 155)), null), user("u1")))
+				.isInstanceOf(ApiException.class)
+				.hasMessageContaining("error.project.stateNameTooLong");
+		// Sixty after trimming is fine.
+		Project saved = service.applyUpdate("p1",
+				req(List.of(ws("s1", " " + "o".repeat(60) + " ", 250), ws("s2", "Done", 155)), null), user("u1"));
+		assertThat(saved.workflowStateNames()).containsExactly("o".repeat(60), "Done");
+	}
+
+	@Test
 	void rejectsEmptyResolvedSet() {
 		sampleProject();
 		assertThatThrownBy(() -> service.applyUpdate("p1",
