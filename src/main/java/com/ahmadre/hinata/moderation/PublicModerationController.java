@@ -23,7 +23,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.util.Locale;
-import java.util.Optional;
 
 /**
  * What answers without an account (HIN-175): the house rules, any version of them, and the form
@@ -62,11 +61,7 @@ class PublicModerationController {
 				forms.issue(clientIp.resolve(http)), null));
 	}
 
-	/**
-	 * Files a report sent from the form. In this order: only from this page, a token this server
-	 * made for this address and not used, every field right; then the token is used, the limits
-	 * are counted with it, and the report filed. A filled-in trap field looks done and files nothing.
-	 */
+	/** Files a report sent from the form, only from this page ({@link PublicReports#submit}). */
 	@Operation(summary = "Send a report from the form for people without an account")
 	@SecurityRequirements
 	@PostMapping(value = "/report", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE,
@@ -77,47 +72,18 @@ class PublicModerationController {
 		if (!fromThisPage(http)) {
 			return PublicPage.page(HttpStatus.FORBIDDEN, pages.foreign(locale));
 		}
-		String address = clientIp.resolve(http);
 		PublicModerationPages.Values values = new PublicModerationPages.Values(form.getFirst("location"),
 				form.getFirst("category"), form.getFirst("explanation"), form.getFirst("name"), form.getFirst("email"),
 				"true".equals(form.getFirst("goodFaith")));
-		String token = form.getFirst("token");
-		switch (forms.check(token, address)) {
-			case INVALID -> {
-				return PublicPage.page(pages.form(locale, values, forms.issue(address),
-						"web.moderation.report.error.expired"));
-			}
-			case TOO_YOUNG -> {
-				return PublicPage.page(pages.form(locale, values, forms.issue(address),
-						"web.moderation.report.error.tooFast"));
-			}
-			case GOOD -> {
-				// On to the rest.
-			}
-		}
-		String trap = form.getFirst("website");
-		if (trap != null && !trap.isEmpty()) {
-			forms.use(token, address);
-			return PublicPage.page(pages.done(locale));
-		}
 		PublicReports.Submission submission = new PublicReports.Submission(values.location(), categoryOf(values.category()),
 				values.explanation(), values.name(), values.email(), values.goodFaith());
-		Optional<String> problem = reports.problemWith(submission);
-		if (problem.isPresent()) {
-			// The token stays good: nothing was sent yet.
-			return PublicPage.page(pages.form(locale, values, token, problem.get()));
-		}
-		if (!forms.use(token, address)) {
-			return PublicPage.page(pages.form(locale, values, forms.issue(address), "web.moderation.report.error.expired"));
-		}
-		// Counted after the token is used, and the mailbox in one step: forms sent at the same
-		// moment cannot all pass a limit each read before the others counted.
-		if (forms.overLimit(address)
-				|| !forms.reserveEmail(PublicReports.countedEmail(submission.email()), PublicReports.PER_EMAIL_PER_DAY)) {
-			return PublicPage.page(pages.limited(locale));
-		}
-		reports.file(submission, locale);
-		return PublicPage.page(pages.done(locale));
+		return switch (reports.submit(form.getFirst("token"), clientIp.resolve(http), form.getFirst("website"),
+				submission, locale)) {
+			case PublicReports.Sent.Again again -> PublicPage.page(pages.form(locale, values, again.token(),
+					again.problem()));
+			case PublicReports.Sent.Limited limited -> PublicPage.page(pages.limited(locale));
+			case PublicReports.Sent.Done done -> PublicPage.page(pages.done(locale));
+		};
 	}
 
 	/**
