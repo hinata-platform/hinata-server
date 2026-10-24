@@ -178,7 +178,7 @@ public class CaseService {
 				c.getListExcerpt(), assignee, reportedByMe, decision == null ? null : decision.outcome(),
 				decision != null && decision.outcome() == Decision.Outcome.ACTION && decision.removal() != null
 						&& c.getRestoration() == null,
-				false, c.getRev());
+				c.getSuspension() != null && c.getSuspension().running(), c.getRev());
 	}
 
 	/** The one state of a case, as the list shows it. */
@@ -188,6 +188,9 @@ public class CaseService {
 			return CaseState.APPEAL;
 		}
 		if (c.getStatus() == CaseStatus.OPEN) {
+			if (c.getPendingDecision() != null) {
+				return CaseState.PENDING_CONFIRMATION;
+			}
 			return c.getAssigneeId() != null ? CaseState.IN_REVIEW : c.isUrgent() ? CaseState.URGENT : CaseState.OPEN;
 		}
 		boolean undone = appeal != null && appeal.state() == Appeal.State.REVERSED || c.getRestoration() != null;
@@ -401,7 +404,7 @@ public class CaseService {
 					.each(new CaseEvent(now, CaseEvent.Kind.EVIDENCE_REQUESTED, moderator.getId(), reason)),
 					ModerationCase.class);
 			if (!access.eligibleModerators(c, Purpose.SECOND_PERSON).isEmpty()) {
-				notices.confirmRequested(c);
+				notices.confirmRequested(c, "moderation.notice.confirm");
 				return detailOf(mongo.findById(id, ModerationCase.class), moderator);
 			}
 			return revealAlone(c, moderator, reason, now);

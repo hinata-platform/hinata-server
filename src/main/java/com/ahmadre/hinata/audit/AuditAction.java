@@ -44,6 +44,11 @@ public enum AuditAction {
 	USER_ACTIVATED(ADMINISTRATION, NOTICE, true),
 	USER_APPROVED(ADMINISTRATION, NOTICE, true),
 	USER_DEACTIVATED(ADMINISTRATION, WARNING, true),
+	// HIN-172: a suspension decided in a moderation case, lifted, and ended by itself. With the
+	// person and the end only, never the case: the feed must not tie a person to an allegation.
+	USER_SUSPENDED(ADMINISTRATION, WARNING, true),
+	USER_SUSPENSION_LIFTED(ADMINISTRATION, NOTICE, true),
+	USER_SUSPENSION_ENDED(ADMINISTRATION, INFO, true),
 	USER_DELETED(ADMINISTRATION, WARNING, true),
 	USER_PASSWORD_RESET_SENT(ADMINISTRATION, NOTICE, true),
 	// An administrator changing somebody else's sign-in address (HIN-129). With a reset
@@ -377,14 +382,15 @@ public enum AuditAction {
 	 * undid, which lets the next sign-in with that address bind the account again. An
 	 * administrator must not be able to switch off the record of either. And, since HIN-170,
 	 * every step of moderation: who opened, took, uncovered or looked at a case is what a person
-	 * affected by it may ask about, so its record cannot depend on a setting.
+	 * affected by it may ask about, so its record cannot depend on a setting. Since HIN-172 also
+	 * every suspension, its lifting and its end.
 	 */
 	public static final java.util.Set<AuditAction> ALWAYS_RECORDED =
 			java.util.EnumSet.of(USER_ROLE_CHANGED, USER_EMAIL_CHANGED, SSO_LINKED, USER_SSO_LINK_REMOVED,
 					MODERATION_CASE_CREATED, MODERATION_CASE_CLAIMED, MODERATION_REPORTER_REVEALED,
 					MODERATION_EVIDENCE_REVEALED, MODERATION_EVIDENCE_VIEWED, MODERATION_DECIDED,
 					MODERATION_RESTORED, MODERATION_APPEAL_RECORDED, MODERATION_APPEAL_DECIDED,
-					MODERATION_LEGAL_HOLD_CHANGED);
+					MODERATION_LEGAL_HOLD_CHANGED, USER_SUSPENDED, USER_SUSPENSION_LIFTED, USER_SUSPENSION_ENDED);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

@@ -111,6 +111,10 @@ public class CaseAccess {
 				&& moderationCase.getEvidenceReveal().requestedBy() != null) {
 			excluded.add(moderationCase.getEvidenceReveal().requestedBy());
 		}
+		if (purpose == Purpose.SECOND_PERSON && moderationCase.getPendingDecision() != null) {
+			// Who decided to suspend a person with a role does not confirm it (HIN-172).
+			excluded.add(moderationCase.getPendingDecision().decidedBy());
+		}
 		return excluded;
 	}
 

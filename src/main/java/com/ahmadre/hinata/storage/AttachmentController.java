@@ -183,8 +183,9 @@ public class AttachmentController {
 	 */
 	@GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter stream(@PathVariable String issueId) {
-		Issue issue = issueService.getForUser(issueId, currentUser.require());
-		return events.subscribe(issue.getId());
+		User viewer = currentUser.require();
+		Issue issue = issueService.getForUser(issueId, viewer);
+		return events.subscribe(issue.getId(), viewer.getId());
 	}
 
 	/**

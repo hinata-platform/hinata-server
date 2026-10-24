@@ -35,5 +35,12 @@ public record AdminUserResponse(
 		 */
 		boolean ssoLinked,
 		/** Whether the person reviews reported content and decides on it (HIN-26). */
-		boolean moderator) {
+		boolean moderator,
+		/**
+		 * Whether moderation suspended the account (HIN-172). {@code status} stays DISABLED for it,
+		 * because the published app reads a status it does not know as active.
+		 */
+		boolean suspended,
+		/** When the suspension ends by itself; null until further notice, or without one. */
+		Instant suspendedUntil) {
 }

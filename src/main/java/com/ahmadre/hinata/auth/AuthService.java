@@ -98,7 +98,7 @@ public class AuthService {
 		if (refusal.isPresent()) {
 			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
 					.ip(ip).userAgent(userAgent).meta("reason", refusal.get().reason()).log();
-			throw ApiException.forbidden(refusal.get().messageKey());
+			throw refusal.get().refuse(user);
 		}
 		attempts.recordSuccess(identifier, ip);
 		if (user.isTotpEnabled()) {
@@ -180,6 +180,9 @@ public class AuthService {
 	 * grandfathered so an in-flight client isn't logged out by a deploy.
 	 */
 	public TokenService.TokenPair refresh(User user, String sessionId) {
+		if (user.isSuspended()) {
+			throw SignInRefusal.ACCOUNT_SUSPENDED.refuse(user);
+		}
 		if (!user.isActive()) {
 			throw ApiException.forbidden("error.auth.accountDeactivated");
 		}

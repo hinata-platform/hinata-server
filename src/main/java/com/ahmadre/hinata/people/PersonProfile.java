@@ -2,6 +2,7 @@ package com.ahmadre.hinata.people;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -31,10 +32,19 @@ public record PersonProfile(
 		PersonAbsences.Absence absenceToday,
 		/** Null unless {@link #canAdmin}. */
 		String email,
-		/** False only for a deactivated account, which only an administrator is shown. */
+		/** False for a deactivated account, which only an administrator is shown, and a suspended one. */
 		boolean active,
 		boolean self,
-		boolean canAdmin) {
+		boolean canAdmin,
+		/**
+		 * Null unless the account is suspended (HIN-172) and the viewer moderates or administers:
+		 * moderators are also shown the case, administrators only the end.
+		 */
+		SuspensionView suspension) {
+
+	/** A suspension as the profile shows it; [until] null for until further notice. */
+	public record SuspensionView(Instant until, String caseId) {
+	}
 
 	public record TeamRef(String id, String name, String key, String avatarUrl, String icon) {
 	}

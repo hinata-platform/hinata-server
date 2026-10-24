@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.admin.SuspensionService;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentSnapshot;
 import com.ahmadre.hinata.content.RestoreOutcome;
@@ -49,7 +50,7 @@ public class Statements {
 				text(locale, "moderation.statement.headline"),
 				measure(c, decision, locale, zone),
 				decision.removal(),
-				null,
+				suspensionUntil(c, decision),
 				text(locale, "moderation.statement.basis." + decision.basis()),
 				decision.facts(),
 				Boolean.TRUE.equals(decision.automatedDetection()),
@@ -70,8 +71,52 @@ public class Statements {
 				decision.messageToAuthor());
 	}
 
-	/** What was done to which content, from when; for content with no account behind it, neutral. */
+	/**
+	 * What was done: to which content, from when, and to the account, until when (HIN-172). One
+	 * statement for a removal and a suspension decided together.
+	 */
 	String measure(ModerationCase c, Decision decision, Locale locale, ZoneId zone) {
+		String removal = decision.removal() == null ? null : removalMeasure(c, decision, locale, zone);
+		String suspension = suspensionMeasure(c, decision, locale, zone);
+		if (removal == null && suspension == null) {
+			return text(locale, "moderation.statement.measure.other");
+		}
+		return removal == null ? suspension : suspension == null ? removal : removal + " " + suspension;
+	}
+
+	/**
+	 * The suspension as it stands: decided and not in effect yet for a preview, running, or ended
+	 * and how. Null when the decision suspends nobody, or the suspension was refused when it was to
+	 * take effect.
+	 */
+	private String suspensionMeasure(ModerationCase c, Decision decision, Locale locale, ZoneId zone) {
+		CaseSuspension suspension = c.getSuspension();
+		if (suspension != null && !suspension.running()) {
+			SuspensionService.LiftReason how = suspension.liftedHow() == null ? SuspensionService.LiftReason.EXPIRED
+					: suspension.liftedHow();
+			return messages.getMessage("moderation.statement.suspension.ended." + how,
+					new Object[] { date(suspension.liftedAt(), locale, zone) }, locale);
+		}
+		if (suspension == null && (decision.suspension() == null || c.getStatus() == CaseStatus.DECIDED)) {
+			return null;
+		}
+		Instant until = suspensionUntil(c, decision);
+		return until == null ? text(locale, "moderation.statement.suspended.indefinite")
+				: messages.getMessage("moderation.statement.suspended.until", new Object[] { dateTime(until, locale, zone) },
+						locale);
+	}
+
+	/** When the suspension ends: as it runs, or as the decision would set it; null otherwise or for further notice. */
+	private static Instant suspensionUntil(ModerationCase c, Decision decision) {
+		CaseSuspension suspension = c.getSuspension();
+		if (suspension != null) {
+			return suspension.running() ? suspension.until() : null;
+		}
+		return decision.suspension() == null || c.getStatus() == CaseStatus.DECIDED ? null
+				: DecisionService.untilOf(decision.suspension(), decision.decidedAt());
+	}
+
+	private String removalMeasure(ModerationCase c, Decision decision, Locale locale, ZoneId zone) {
 		ContentSnapshot evidence = c.getEvidence();
 		ContentKind kind = c.getTarget() == null ? ContentKind.OTHER : c.getTarget().kind();
 		Instant written = evidence == null ? null

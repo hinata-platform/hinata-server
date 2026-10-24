@@ -12,4 +12,6 @@ public interface PersonalAccessTokenRepository extends MongoRepository<PersonalA
 	List<PersonalAccessToken> findByUserIdOrderByCreatedAtDesc(String userId);
 
 	long countByUserIdAndRevokedFalse(String userId);
+
+	long deleteByUserId(String userId);
 }
