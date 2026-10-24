@@ -170,7 +170,7 @@ class AnnualFiguresTemplateTest {
 	}
 
 	private static String cell(List<List<String>> part, String key, String column) {
-		int index = AnnualFigures.column(part, column);
+		int index = TransparencyTemplate.column(part, column);
 		return rows(part, key).getFirst().get(index);
 	}
 
@@ -179,7 +179,7 @@ class AnnualFiguresTemplateTest {
 	}
 
 	private static String indicator(List<List<String>> part, String indicator, String scope) {
-		int value = AnnualFigures.column(part, "Value");
+		int value = TransparencyTemplate.column(part, "Value");
 		return part.stream().filter(row -> row.get(4).strip().equals(indicator) && row.get(5).strip().equals(scope))
 				.findFirst().orElseThrow().get(value);
 	}
