@@ -234,19 +234,30 @@ class ModerationJobsIntegrationTest extends RemovalIntegrationSupport {
 		ModerationCase c = reported(insult, ReportCategory.HARASSMENT, "Beleidigt Lena seit Wochen", reader);
 		reports.submit(new ContentReportService.ReportRequest(new TargetRef(ContentKind.COMMENT, insult.getId(),
 				issue.getId()), ReportCategory.SPAM, null, null, false), owner);
+		// An open case, and one law enforcement holds, are not told before they are settled.
+		ModerationCase open = reported(comment("Du nervst"), ReportCategory.THREAT, null, reader);
+		ModerationCase held = reported(comment("Pass bloss auf"), ReportCategory.PRIVACY, null, reader);
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(held.getId())), new Update()
+				.set("status", CaseStatus.DECIDED)
+				.set("decision", decision(Decision.Outcome.ACTION, Decision.Ground.LAW, mira.getId()))
+				.set("legalHoldUntil", Instant.now().plusSeconds(3600)), ModerationCase.class);
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(c.getId())), new Update()
+				.set("status", CaseStatus.DECIDED)
 				.set("decision", decision(Decision.Outcome.ACTION, Decision.Ground.RULES, mira.getId())),
 				ModerationCase.class);
 
 		String authorsExport = json.writeValueAsString(personalData.data(author));
 		assertThat(authorsExport).contains("casesAboutMyContent", "ACTION", "RULES", "HARASSMENT")
-				.doesNotContain(reader.getId(), owner.getId(), "lena", "Beleidigt Lena");
+				.doesNotContain(reader.getId(), owner.getId(), "lena", "Beleidigt Lena")
+				.doesNotContain("THREAT", "PRIVACY", "LAW");
+		assertThat(open.getStatus()).isEqualTo(CaseStatus.OPEN);
 		List<PersonalDataExport.Table> tables = personalData.tables(author, Locale.GERMAN);
 		assertThat(tables).extracting(PersonalDataExport.Table::title).contains("Meldungen zu deinen Inhalten");
 		assertThat(tables.toString()).doesNotContain("lena", reader.getId());
 
 		Map<String, Object> readers = (Map<String, Object>) personalData.data(reader);
-		assertThat((List<?>) readers.get("reports")).singleElement().satisfies(row -> assertThat((Map<String, Object>) row)
+		// What they reported themselves is theirs to know, settled or not.
+		assertThat((List<?>) readers.get("reports")).hasSize(3).anySatisfy(row -> assertThat((Map<String, Object>) row)
 				.containsEntry("category", ReportCategory.HARASSMENT)
 				.containsEntry("kind", ContentKind.COMMENT)
 				.containsEntry("outcome", "ACTION"));
