@@ -26,15 +26,21 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class CaseAccess {
 
-	/** What somebody wants to do with a case, each excluding more people than the one before. */
+	/**
+	 * What somebody wants to do with a case, and whom it leaves out besides whoever wrote the
+	 * case's content, who is out of every purpose.
+	 */
 	public enum Purpose {
-		/** List, counts, summary, opening it, notices about new and overdue cases. */
+		/** List, counts, summary, opening it, notices about new and overdue cases. Nobody else. */
 		SEE,
-		/** Claiming, deciding, restoring, lifting a suspension, a legal hold. */
+		/** Claiming, deciding, restoring, lifting a suspension, a legal hold. Whoever reported it. */
 		DECIDE,
-		/** Deciding an appeal: not who decided the case. */
+		/** Deciding an appeal. Whoever reported it, and whoever decided or confirmed the decision. */
 		REVIEW_APPEAL,
-		/** The second pair of eyes: not who asked for it. */
+		/**
+		 * The second pair of eyes. Whoever reported it, and whoever asked for it: who wants to see
+		 * the evidence, or who decided to suspend a person with a role.
+		 */
 		SECOND_PERSON
 	}
 
@@ -61,6 +67,22 @@ public class CaseAccess {
 			throw ApiException.conflict("error.moderation.conflictOfInterest");
 		}
 		return new Guarded(moderator, found);
+	}
+
+	/** The cases of [filter] that [viewer] may see ({@link Purpose#SEE}): all but those they wrote content for. */
+	public Criteria visibleTo(User viewer, Criteria filter) {
+		return new Criteria().andOperator(filter, Criteria.where("contributorIds").ne(viewer.getId()));
+	}
+
+	/**
+	 * How many cases of [filter] [viewer] may see: all of them less those they wrote content for.
+	 * Two counts off indexes, where one count of everything not theirs would read every case.
+	 */
+	public long countVisible(User viewer, Criteria filter) {
+		long all = mongo.count(Query.query(filter), ModerationCase.class);
+		long theirs = mongo.count(Query.query(new Criteria().andOperator(
+				Criteria.where("contributorIds").is(viewer.getId()), filter)), ModerationCase.class);
+		return Math.max(all - theirs, 0);
 	}
 
 	/** Whether [person] may serve [purpose] on [moderationCase]. */
