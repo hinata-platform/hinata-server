@@ -137,7 +137,7 @@ public class AppealService {
 		if (filed == null) {
 			throw ApiException.conflict("error.moderation.appealExists");
 		}
-		stats.count(StatMetric.APPEAL_FILED, "ALL");
+		stats.appealFiled(decision);
 		notices.appealFiled(filed);
 		return filed;
 	}
@@ -174,7 +174,8 @@ public class AppealService {
 				throw CaseSteps.stale(mongo, id);
 			}
 		}
-		stats.count(StatMetric.APPEAL_RESULT, request.result().name());
+		stats.appealDecided(guarded.moderationCase().getDecision(), guarded.moderationCase().getAppeal(),
+				request.result().name(), now);
 		audit.event(AuditAction.MODERATION_APPEAL_DECIDED).actor(moderator).meta("case", id).log();
 		followUps.later(id);
 		return CaseService.summaryOf(decided, null, access.reported(decided, moderator.getId()));
