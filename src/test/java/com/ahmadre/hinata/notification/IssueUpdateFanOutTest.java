@@ -81,7 +81,8 @@ class IssueUpdateFanOutTest {
 				new IssueChangeRenderer(users, mock(SprintRepository.class),
 mock(IssueRepository.class), mock(ProjectRepository.class),
 com.ahmadre.hinata.common.UserWordsFixture.real()),
-				com.ahmadre.hinata.common.UserWordsFixture.real(), NotificationDaysFixture.weekday(), digests);
+				com.ahmadre.hinata.common.UserWordsFixture.real(), NotificationDaysFixture.weekday(), digests,
+				mock(com.ahmadre.hinata.block.BlockService.class));
 	}
 
 	// --- fixtures -------------------------------------------------------------
