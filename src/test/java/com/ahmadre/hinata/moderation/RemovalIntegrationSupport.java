@@ -178,7 +178,7 @@ abstract class RemovalIntegrationSupport {
 	static Decision decision(Decision.Outcome outcome, Decision.Ground ground, String decidedBy) {
 		return new Decision(outcome, null, ground, ReportCategory.HARASSMENT, "Beleidigung im Kommentar", null, null,
 				null, false, null, null, false, Decision.Basis.NOTICE, false, null, decidedBy,
-				java.time.Instant.now(), null);
+				java.time.Instant.now(), null, null, null);
 	}
 
 	/** A Lexical document of one paragraph. */
