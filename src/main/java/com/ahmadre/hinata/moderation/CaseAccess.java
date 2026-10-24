@@ -69,21 +69,34 @@ public class CaseAccess {
 				&& !excludedFrom(moderationCase, purpose).contains(person.getId());
 	}
 
+	/** The active moderators, read once for a run or a request that asks about several cases. */
+	public List<User> moderators() {
+		return access.moderators();
+	}
+
+	/** The active admins, read once for a run that asks about several cases. */
+	public List<User> admins() {
+		return users.findByRolesContainingAndActiveIsTrue(Role.ADMIN);
+	}
+
 	/** The active moderators who may serve [purpose] on [moderationCase]. */
 	public List<User> eligibleModerators(ModerationCase moderationCase, Purpose purpose) {
+		return eligibleModerators(moderationCase, purpose, moderators());
+	}
+
+	/** Those of [moderators] who may serve [purpose] on [moderationCase]. */
+	public List<User> eligibleModerators(ModerationCase moderationCase, Purpose purpose, List<User> moderators) {
 		Set<String> excluded = excludedFrom(moderationCase, purpose);
-		return access.moderators().stream().filter(person -> !excluded.contains(person.getId())).toList();
+		return moderators.stream().filter(person -> !excluded.contains(person.getId())).toList();
 	}
 
 	/**
-	 * The active admins outside the case's content, for notices that carry none: a case waiting a
+	 * Those of [admins] outside the case's content, for notices that carry none: a case waiting a
 	 * day, nobody left to decide.
 	 */
-	public List<User> eligibleAdmins(ModerationCase moderationCase) {
+	public List<User> eligibleAdmins(ModerationCase moderationCase, List<User> admins) {
 		Set<String> contributors = contributorsOf(moderationCase);
-		return users.findByRolesContainingAndActiveIsTrue(Role.ADMIN).stream()
-				.filter(admin -> !contributors.contains(admin.getId()))
-				.toList();
+		return admins.stream().filter(admin -> !contributors.contains(admin.getId())).toList();
 	}
 
 	/** Whether [userId] wrote the case's content. */

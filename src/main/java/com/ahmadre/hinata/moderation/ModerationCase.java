@@ -52,7 +52,13 @@ import java.util.Set;
 				partialFilter = "{'legalHoldUntil': {$exists: true}}"),
 		// Decided cases that still owe a step, for the follow-up job (HIN-171); unset when settled.
 		@CompoundIndex(name = "follow_up_due", def = "{'followUpDue': 1}",
-				partialFilter = "{'followUpDue': {$exists: true}}")
+				partialFilter = "{'followUpDue': {$exists: true}}"),
+		// Decided cases whose time is up, oldest first, for retention; holds decided cases only.
+		@CompoundIndex(name = "retention_due", def = "{'retainUntil': 1}", partialFilter = "{'status': 'DECIDED'}"),
+		// The evidence a moderator revealed alone, counted against the daily limit from the index.
+		@CompoundIndex(name = "solo_reveal",
+				def = "{'evidenceReveal.revealedBy': 1, 'evidenceReveal.requestedBy': 1, 'evidenceReveal.revealedAt': 1}",
+				partialFilter = "{'evidenceReveal.revealedAt': {$exists: true}}")
 })
 public class ModerationCase {
 

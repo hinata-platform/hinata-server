@@ -65,7 +65,6 @@ public class ContentReportService {
 	private final MongoTemplate mongo;
 	private final ModerationStats stats;
 	private final ModerationNotices notices;
-	private final CaseAccess access;
 	private final NotificationService notifications;
 	private final BlockService blocks;
 	private final Clock clock;
@@ -104,14 +103,7 @@ public class ContentReportService {
 			blocks.block(reporter, blockId);
 		}
 		notifications.noteInBell(List.of(reporter), "moderation.receipt.title", "moderation.receipt.body", null);
-		if (filed.newCase() || filed.becameUrgent()) {
-			notices.caseOpened(filed.moderationCase());
-		}
-		// Only a new case, or a moderator's report, can leave a case without anyone to decide it.
-		if ((filed.newCase() || filed.newReport() && reporter.isModerator())
-				&& access.eligibleModerators(filed.moderationCase(), CaseAccess.Purpose.DECIDE).isEmpty()) {
-			notices.adminAlert(filed.moderationCase(), "moderation.alert.nobody");
-		}
+		notices.reportFiled(filed, reporter.isModerator());
 	}
 
 	/**
@@ -153,12 +145,7 @@ public class ContentReportService {
 		}
 		Filed filed = file(new Target(snapshot.ref(), snapshot, locationOf(snapshot)), category,
 				String.join(", ", terms), new Source(ReportSource.AUTOMATED, reporterKey, null, null));
-		if (filed.newCase() || filed.becameUrgent()) {
-			notices.caseOpened(filed.moderationCase());
-		}
-		if (filed.newCase() && access.eligibleModerators(filed.moderationCase(), CaseAccess.Purpose.DECIDE).isEmpty()) {
-			notices.adminAlert(filed.moderationCase(), "moderation.alert.nobody");
-		}
+		notices.reportFiled(filed, false);
 	}
 
 	/** Content resolved for a report: where it lives and what it was; no snapshot for {@code OTHER}. */
