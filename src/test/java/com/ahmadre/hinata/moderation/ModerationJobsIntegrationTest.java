@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.moderation;
 
+import com.ahmadre.hinata.admin.SuspensionService;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.Quarantine;
@@ -182,16 +183,20 @@ class ModerationJobsIntegrationTest extends RemovalIntegrationSupport {
 		ModerationCase appealed = decided(past, Appeal.filed("Das war Satire", past, Appeal.Via.APP),
 				null, null);
 		ModerationCase held = decided(past, null, future, null);
-		ModerationCase running = decided(past, null, null, Instant.now().minus(Duration.ofMinutes(10)));
+		ModerationCase holdOver = decided(past, null, past, null);
+		ModerationCase claimedByAnotherRun = decided(past, null, null, Instant.now().minus(Duration.ofMinutes(10)));
 		ModerationCase notYet = decided(future, null, null, null);
 		ModerationCase open = mongo.insert(ModerationCase.builder().status(CaseStatus.OPEN).build());
-		for (ModerationCase c : List.of(due, broken, appealed, held)) {
+		// The case is the reasons of a suspension that still runs (HIN-172); once it ended, it may go.
+		ModerationCase suspending = suspended(past, null);
+		ModerationCase suspensionOver = suspended(past, past);
+		for (ModerationCase c : List.of(due, broken, appealed, held, holdOver, suspending, suspensionOver)) {
 			heldFor(c);
 		}
 
 		retention.run();
 
-		for (ModerationCase gone : List.of(due, broken)) {
+		for (ModerationCase gone : List.of(due, broken, holdOver, suspensionOver)) {
 			assertThat(mongo.findById(gone.getId(), ModerationCase.class)).as(gone.getId()).isNull();
 			assertThat(mongo.count(Query.query(Criteria.where("caseId").is(gone.getId())), ContentReport.class))
 					.isZero();
@@ -201,7 +206,7 @@ class ModerationJobsIntegrationTest extends RemovalIntegrationSupport {
 					QuarantinedVersion.class)).isZero();
 			assertThat(store.has(Quarantine.keyFor(gone.getId(), "object-1"))).isFalse();
 		}
-		for (ModerationCase kept : List.of(appealed, held, running, notYet, open)) {
+		for (ModerationCase kept : List.of(appealed, held, claimedByAnotherRun, notYet, open, suspending)) {
 			assertThat(mongo.findById(kept.getId(), ModerationCase.class)).as(kept.getId()).isNotNull();
 		}
 		assertThat(store.has(Quarantine.keyFor(appealed.getId(), "object-1"))).isTrue();
@@ -212,6 +217,14 @@ class ModerationJobsIntegrationTest extends RemovalIntegrationSupport {
 	private ModerationCase decided(Instant retainUntil, Appeal appeal, Instant legalHoldUntil, Instant purgingAt) {
 		return mongo.insert(ModerationCase.builder().status(CaseStatus.DECIDED).decidedAt(Instant.now())
 				.retainUntil(retainUntil).appeal(appeal).legalHoldUntil(legalHoldUntil).purgingAt(purgingAt).build());
+	}
+
+	/** A decided case whose time is up and whose suspension of [author] ended at [liftedAt], or still runs. */
+	private ModerationCase suspended(Instant retainUntil, Instant liftedAt) {
+		Instant start = Instant.now().minus(Duration.ofDays(40));
+		return mongo.insert(ModerationCase.builder().status(CaseStatus.DECIDED).decidedAt(start)
+				.retainUntil(retainUntil).suspension(new CaseSuspension(author.getId(), null, start, liftedAt,
+						liftedAt == null ? null : SuspensionService.LiftReason.EXPIRED)).build());
 	}
 
 	/** A report, a quarantine with one version and one object, as a decision leaves them. */
