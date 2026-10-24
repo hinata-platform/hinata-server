@@ -53,7 +53,7 @@ public class UploadGate {
 
 	/** The kinds whose types an instance can switch off by group. */
 	private static final Set<UploadKind> SWITCHABLE = EnumSet.of(UploadKind.ATTACHMENT, UploadKind.MAIL_ATTACHMENT,
-			UploadKind.MEDIA, UploadKind.VOICE);
+			UploadKind.MEDIA, UploadKind.PASTED_IMAGE, UploadKind.VOICE);
 
 	/** Every type the gate tells by its content: the most an instance can ever allow. */
 	private static final Set<String> SAFE = Arrays.stream(UploadGroup.values())
@@ -66,8 +66,10 @@ public class UploadGate {
 	static final long VOICE_MAX_BYTES = 16L * 1024 * 1024;
 	static final long AVATAR_MAX_BYTES = 12L * 1024 * 1024;
 	static final long LOGO_MAX_BYTES = 8L * 1024 * 1024;
-	/** Pixels the logo may have; everything else gets the decoder's own budget. */
+	/** Pixels the logo may have; everything else but a pasted image gets the decoder's own budget. */
 	static final long LOGO_MAX_PIXELS = 50_000_000L;
+	/** Pixels an image pasted into a text may have: a large screenshot fits, a decompression bomb does not. */
+	static final long PASTED_MAX_PIXELS = 25_000_000L;
 
 	private final HinataProperties properties;
 	private final ObjectProvider<UploadPolicy> policy;
@@ -153,8 +155,7 @@ public class UploadGate {
 		if (SWITCHABLE.contains(kind) && switchedOff(type)) {
 			throw new Refused(UploadRefusal.DISABLED);
 		}
-		if (PICTURES.contains(type) && !withinPixels(candidate, kind == UploadKind.LOGO ? LOGO_MAX_PIXELS
-				: ImageOps.MAX_DECODE_PIXELS)) {
+		if (PICTURES.contains(type) && !withinPixels(candidate, maxPixels(kind))) {
 			throw new Refused(UploadRefusal.IMAGE);
 		}
 		return new Accepted(type);
@@ -193,7 +194,7 @@ public class UploadGate {
 		return switch (kind) {
 			case ATTACHMENT, MAIL_ATTACHMENT -> properties.getStorage().getAllowedContentTypes().stream()
 					.filter(SAFE::contains).toList();
-			case MEDIA -> IMAGES;
+			case MEDIA, PASTED_IMAGE -> IMAGES;
 			case VOICE -> VOICE;
 			case AVATAR, LOGO -> PICTURES;
 		};
@@ -213,10 +214,19 @@ public class UploadGate {
 	/** The most bytes [kind] may have. */
 	public long maxBytes(UploadKind kind) {
 		return switch (kind) {
-			case ATTACHMENT, MAIL_ATTACHMENT, MEDIA -> (long) properties.getStorage().getMaxUploadMb() * 1024 * 1024;
+			case ATTACHMENT, MAIL_ATTACHMENT, MEDIA, PASTED_IMAGE ->
+					(long) properties.getStorage().getMaxUploadMb() * 1024 * 1024;
 			case VOICE -> VOICE_MAX_BYTES;
 			case AVATAR -> AVATAR_MAX_BYTES;
 			case LOGO -> LOGO_MAX_BYTES;
+		};
+	}
+
+	private static long maxPixels(UploadKind kind) {
+		return switch (kind) {
+			case LOGO -> LOGO_MAX_PIXELS;
+			case PASTED_IMAGE -> PASTED_MAX_PIXELS;
+			default -> ImageOps.MAX_DECODE_PIXELS;
 		};
 	}
 

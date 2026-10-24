@@ -59,18 +59,26 @@ public class MediaService {
 	}
 
 	/**
-	 * Stores an image that arrived inside a text as {@code data:} bytes, exactly as an
-	 * upload is stored: through the gate, without its metadata (HIN-177).
+	 * Stores an image that arrived inside a text as {@code data:} bytes, as an upload is
+	 * stored: through the gate, without its metadata (HIN-177). Its thumbnail is made when
+	 * somebody first looks ({@link #loadThumbnail}): one save brings up to twenty of them,
+	 * and none of it would wait for twenty decodes.
 	 */
-	public MediaUpload store(byte[] data, String declaredType) {
-		return store(UploadCandidate.of(UploadKind.MEDIA, data, declaredType, null));
+	public String storePasted(byte[] data, String declaredType) {
+		StorageService.Stored stored = storage.upload(UploadCandidate.of(UploadKind.PASTED_IMAGE, data, declaredType,
+				null), PREFIX);
+		return urlOf(stored);
 	}
 
 	private MediaUpload store(UploadCandidate candidate) {
 		StorageService.Stored stored = storage.upload(candidate, PREFIX);
 		String id = stored.objectKey().substring(PREFIX.length());
-		return new MediaUpload("/api/v1/media/" + id, candidate.fileName(), stored.contentType(),
+		return new MediaUpload(urlOf(stored), candidate.fileName(), stored.contentType(),
 				stored.size(), storePreview(id, stored.data()));
+	}
+
+	private static String urlOf(StorageService.Stored stored) {
+		return "/api/v1/media/" + stored.objectKey().substring(PREFIX.length());
 	}
 
 	/**
