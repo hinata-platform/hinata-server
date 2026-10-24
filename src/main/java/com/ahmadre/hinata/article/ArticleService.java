@@ -183,6 +183,8 @@ public class ArticleService {
 		Article before = storedForHistory(article.getId());
 		boolean edited = before != null && ArticleHistory.changed(before, article);
 		if (edited) article.setLastEditorId(user.getId());
+		// A removed title or text written anew shows the new words again (HIN-169).
+		if (edited) ArticleContentSurface.markRewritten(before, article);
 		Article saved = articles.save(article);
 		if (edited) history.saved(before, saved, user.getId());
 		if (!to.equals(from)) moved(saved, from, user);

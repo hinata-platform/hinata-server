@@ -60,8 +60,18 @@ public class AttachmentStore {
 	 */
 	public void setBlurHash(String issueId, String attachmentId, String blurHash) {
 		Update update = new Update().set(FIELD + ".$[a].blurHash", blurHash);
-		update.filterArray(Criteria.where("a.id").is(attachmentId));
+		update.filterArray(byId(attachmentId));
 		mongo.updateFirst(new Query(Criteria.where("_id").is(issueId)), update, Issue.class);
+	}
+
+	/**
+	 * The array filter for one attachment. An embedded attachment's {@code id} is stored as
+	 * {@code _id}, and array filters are not mapped the way the update is: filtering on
+	 * {@code a.id} matched nothing, so a late BlurHash was never stored and every preview asked
+	 * for it again.
+	 */
+	public static Criteria byId(String attachmentId) {
+		return Criteria.where("a._id").is(attachmentId);
 	}
 
 	private Issue apply(String issueId, Update update) {

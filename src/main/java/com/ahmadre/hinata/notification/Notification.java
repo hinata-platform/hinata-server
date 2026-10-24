@@ -21,6 +21,10 @@ import java.time.Instant;
 // What waits for a person's notification window (HIN-131). Partial, so it holds only the
 // few notifications that are waiting, not everybody's history.
 @CompoundIndex(name = "held_user", def = "{'held': 1, 'userId': 1}", partialFilter = "{'held': true}")
+// The bell, newest first a page at a time, off the index instead of sorting a person's whole history.
+@CompoundIndex(name = "user_created", def = "{'userId': 1, 'createdAt': -1, '_id': -1}")
+// Every notification about one issue, found by its link when the issue's words are scrubbed (HIN-169).
+@CompoundIndex(name = "link_id", def = "{'link': 1, '_id': 1}")
 public class Notification {
 
 	public enum Type {
@@ -62,6 +66,15 @@ public class Notification {
 
 	/** In-app deep link, e.g. /issues/ACME-42. */
 	private String link;
+
+	/**
+	 * The comment or issue whose words this notification copies, so they can be scrubbed when
+	 * it is removed or deleted (HIN-169). Absent on notifications written before; those are found
+	 * by their link and their text.
+	 */
+	@JsonIgnore
+	@Indexed(sparse = true)
+	private String sourceId;
 
 	@Builder.Default
 	private boolean read = false;

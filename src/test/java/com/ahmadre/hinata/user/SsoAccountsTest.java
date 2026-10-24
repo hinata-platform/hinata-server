@@ -7,6 +7,7 @@ import com.ahmadre.hinata.auth.SignInRefusal;
 import com.ahmadre.hinata.auth.SignInRefusedException;
 import com.ahmadre.hinata.auth.sso.SsoProfileMapper;
 import com.ahmadre.hinata.common.UserWordsFixture;
+import com.ahmadre.hinata.content.ContentMark;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.setup.SettingsService;
 import org.bson.Document;
@@ -18,6 +19,8 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,6 +132,20 @@ class SsoAccountsTest {
 
 		assertThat(user.getDisplayName()).isEqualTo("Grace Hopper");
 		assertThat(user.getTitle()).isEqualTo("Rear Admiral");
+	}
+
+	@Test
+	void wordsModerationRemovedAreNotBroughtBackBySigningIn() {
+		User removed = ssoUser("Person 4f2a", null);
+		removed.setModeration(new HashMap<>(Map.of("profile", ContentMark.removed("case-1"))));
+		when(users.findBySsoLink("oidc", ISSUER, "grace")).thenReturn(Optional.of(removed));
+
+		User user = accounts.signIn(GRACE, profile("grace@example.org", "Grace Hopper", "Rear Admiral"),
+				User.Origin.OIDC, true).user();
+
+		assertThat(user.getDisplayName()).isEqualTo("Person 4f2a");
+		assertThat(user.getTitle()).isNull();
+		verify(mongo, never()).updateFirst(any(), any(), eq(User.class));
 	}
 
 	@Test

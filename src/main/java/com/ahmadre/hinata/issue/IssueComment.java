@@ -1,5 +1,9 @@
 package com.ahmadre.hinata.issue;
 
+import com.ahmadre.hinata.content.ContentMark;
+import com.ahmadre.hinata.content.ContentOrigin;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
@@ -12,6 +16,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -80,6 +85,13 @@ public class IssueComment {
 
 	private String authorId;
 
+	/**
+	 * How the comment came in, when not from its author's own hand: {@code GIT} for a smart
+	 * commit, which stands under whoever connected the repository (HIN-169). Absent for a member.
+	 */
+	@JsonIgnore
+	private ContentOrigin origin;
+
 	private Type type;
 
 	/**
@@ -132,6 +144,18 @@ public class IssueComment {
 
 	/** Denormalised short preview of the quoted comment ("🎤"/"📷" for media). */
 	private String replyToPreview;
+
+	/**
+	 * The comment actually quoted, which {@link #replyToId} is not once a reply answers a reply.
+	 * What finds the quote when the quoted comment is removed or deleted (HIN-169); absent on
+	 * replies written before it existed, which are found by their preview instead.
+	 */
+	@Indexed(sparse = true)
+	private String replyToTargetId;
+
+	/** What moderation removed, under {@code text} (HIN-169); absent otherwise. */
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	private Map<String, ContentMark> moderation;
 
 	/**
 	 * Number of replies whose (root-normalised) {@link #replyToId} points at this

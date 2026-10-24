@@ -114,7 +114,9 @@ public class IssueCloneService {
 			"reporterEmail", "inboundMessageId", "inboundSubject", "ingestConnectionId",
 			"watcherIds", "participantIds", "participantMeta", "spentMinutes", "rank", "resolvedAt", "archived",
 			"archivedAt", "dueReminderFor", "createdAt", "updatedAt",
-			"subtaskCount", "subtaskDoneCount", "searchText");
+			"subtaskCount", "subtaskDoneCount", "searchText",
+			// What moderation decided is about the original; the clone is content of its own (HIN-169).
+			"moderation");
 
 	private final IssueService issues;
 	private final StorageService storage;
@@ -329,6 +331,10 @@ public class IssueCloneService {
 		assertWithinCopyBudget(original.getAttachments());
 		Instant now = Instant.now();
 		for (Issue.Attachment source : original.getAttachments()) {
+			// What moderation removed has no bytes to copy, and the copy gets no placeholder.
+			if (source.isRemoved()) {
+				continue;
+			}
 			String id = UUID.randomUUID().toString();
 			// Minted by the store, in the namespace an upload lands in — the copy is
 			// an attachment like any other, and a key of its own is what keeps

@@ -41,7 +41,7 @@ public class NotificationTools {
 		int pageIndex = page == null || page < 0 ? 0 : page;
 		int pageSize = size == null || size <= 0 ? 25 : Math.min(size, 100);
 		PageResult<NotificationView> items = PageResult.of(
-				notifications.findByUserIdOrderByCreatedAtDesc(me.getId(),
+				notifications.findByUserIdOrderByCreatedAtDescIdDesc(me.getId(),
 						PageRequest.of(pageIndex, pageSize)),
 				NotificationView::of);
 		return new InboxView(notifications.countByUserIdAndReadFalse(me.getId()), items);

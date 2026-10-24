@@ -16,7 +16,6 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectAvatarService;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.project.ProjectService;
-import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.team.ProjectAccess;
 import com.ahmadre.hinata.team.Team;
@@ -45,6 +44,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -99,6 +99,9 @@ public class DeletionService {
 	private final com.ahmadre.hinata.issue.IssueWatcherCleanup watcherCleanup;
 	private final List<ProjectDeletionHook> projectHooks;
 	private final ArticleService articleService;
+
+	/** Deletes files and audio, or keeps what an open case still needs (HIN-169). */
+	private final com.ahmadre.hinata.storage.StoredObjects storedObjects;
 
 	// ── public types ────────────────────────────────────────────────────────
 
@@ -398,7 +401,7 @@ public class DeletionService {
 			// Free voice-comment audio blobs before the bulk row delete — a plain
 			// deleteByIssueId would drop the comments and orphan every S3
 			// object they reference (best-effort; storage.delete logs on failure).
-			freeVoiceBlobs(issueIds);
+			freeVoiceBlobs(projectIssues, issueIds);
 			mongo.remove(byIssue, IssueComment.class);
 			mongo.remove(byIssue, IssueActivity.class);
 			// Remove IssueLink rows referencing these issues so no dangling link
@@ -415,16 +418,16 @@ public class DeletionService {
 	}
 
 	/** Best-effort delete of every voice blob held by the given issues' comments. */
-	private void freeVoiceBlobs(List<String> issueIds) {
+	private void freeVoiceBlobs(List<Issue> projectIssues, List<String> issueIds) {
 		if (!storage.isConfigured()) {
 			return;
 		}
+		Map<String, Issue> byId = new HashMap<>();
+		projectIssues.forEach(issue -> byId.put(issue.getId(), issue));
 		Query voiceComments = new Query(Criteria.where("issueId").in(issueIds)
 				.and("voice.objectKey").exists(true).ne(null));
 		for (IssueComment c : mongo.find(voiceComments, IssueComment.class)) {
-			if (c.getVoice() != null && c.getVoice().getObjectKey() != null) {
-				storage.delete(c.getVoice().getObjectKey());
-			}
+			storedObjects.deleteVoice(byId.get(c.getIssueId()), c);
 		}
 	}
 
@@ -521,19 +524,9 @@ public class DeletionService {
 	}
 
 	private void deleteStoredAttachments(Issue issue) {
-		if (issue.getAttachments() == null || !storage.isConfigured()) {
-			return;
-		}
-		for (Issue.Attachment attachment : issue.getAttachments()) {
-			if (attachment.getObjectKey() != null) {
-				storage.delete(attachment.getObjectKey());
-			}
-			// The generated thumbnail is a second object under its own key; without
-			// this it would outlive the issue with nothing left to reference it.
-			if (attachment.getId() != null) {
-				storage.delete(ImagePreviewService.attachmentThumbnailKey(attachment.getId()));
-			}
-		}
+		// Files and previews both: a thumbnail left behind would outlive the issue with nothing
+		// left to reference it.
+		storedObjects.deleteAttachmentObjects(issue);
 	}
 
 	// ── helpers ───────────────────────────────────────────────────────────────

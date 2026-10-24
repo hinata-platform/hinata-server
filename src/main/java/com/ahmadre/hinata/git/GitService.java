@@ -3,6 +3,7 @@ package com.ahmadre.hinata.git;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.ContentOrigin;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.richtext.RichTextService;
@@ -470,7 +471,7 @@ public class GitService {
 					// A smart-commit comment is plain text from a commit message; it goes
 					// through the same converter as every other markdown source.
 					case COMMENT -> issues.addComment(issue.getId(),
-							richText.fromMarkdown(command.value()), actor);
+							richText.fromMarkdown(command.value()), null, actor, ContentOrigin.GIT);
 					case TIME -> logTime(commit, command, issue, actor);
 					case TRANSITION -> {
 						String state = matchState(project, command.value());
