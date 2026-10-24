@@ -363,11 +363,9 @@ public class CaseService {
 				.filter(found -> c.getId().equals(found.getCaseId()))
 				.orElseThrow(() -> ApiException.notFound("moderationReport"));
 		Instant now = clock.instant();
-		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update()
-				.addToSet("revealedReportIds", reportId)
-				.set("updatedAt", now)
-				.push(HISTORY).slice(-ModerationCase.HISTORY_MAX)
-				.each(new CaseEvent(now, CaseEvent.Kind.REPORTER_REVEALED, guarded.moderator().getId(), reason)),
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), CaseSteps.note(new Update()
+				.addToSet("revealedReportIds", reportId),
+				new CaseEvent(now, CaseEvent.Kind.REPORTER_REVEALED, guarded.moderator().getId(), reason)),
 				ModerationCase.class);
 		audit.event(AuditAction.MODERATION_REPORTER_REVEALED).actor(guarded.moderator()).meta("case", id).log();
 		ModerationCase after = mongo.findById(id, ModerationCase.class);
@@ -391,10 +389,9 @@ public class CaseService {
 		EvidenceReveal asked = c.getEvidenceReveal();
 		if (asked == null || asked.requestedBy() == null) {
 			c.setEvidenceReveal(new EvidenceReveal(moderator.getId(), now, reason, null, null));
-			mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update()
-					.set("evidenceReveal", c.getEvidenceReveal()).set("updatedAt", now)
-					.push(HISTORY).slice(-ModerationCase.HISTORY_MAX)
-					.each(new CaseEvent(now, CaseEvent.Kind.EVIDENCE_REQUESTED, moderator.getId(), reason)),
+			mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), CaseSteps.note(new Update()
+					.set("evidenceReveal", c.getEvidenceReveal()),
+					new CaseEvent(now, CaseEvent.Kind.EVIDENCE_REQUESTED, moderator.getId(), reason)),
 					ModerationCase.class);
 			if (!access.eligibleModerators(c, Purpose.SECOND_PERSON).isEmpty()) {
 				alerts.confirmRequested(c, "moderation.notice.confirm");
@@ -430,10 +427,9 @@ public class CaseService {
 	private CaseDetail reveal(ModerationCase c, User moderator, EvidenceReveal asked, String reason, Instant now) {
 		EvidenceReveal revealed = new EvidenceReveal(asked.requestedBy(), asked.requestedAt(), asked.reason(),
 				moderator.getId(), now);
-		mongo.updateFirst(Query.query(Criteria.where("_id").is(c.getId())), new Update()
-				.set("evidenceReveal", revealed).set("evidenceWithheld", false).set("updatedAt", now)
-				.push(HISTORY).slice(-ModerationCase.HISTORY_MAX)
-				.each(new CaseEvent(now, CaseEvent.Kind.EVIDENCE_REVEALED, moderator.getId(), reason)),
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(c.getId())), CaseSteps.note(new Update()
+				.set("evidenceReveal", revealed).set("evidenceWithheld", false),
+				new CaseEvent(now, CaseEvent.Kind.EVIDENCE_REVEALED, moderator.getId(), reason)),
 				ModerationCase.class);
 		audit.event(AuditAction.MODERATION_EVIDENCE_REVEALED).actor(moderator).meta("case", c.getId()).log();
 		alerts.teamNote(c, "moderation.notice.revealed");

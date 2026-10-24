@@ -79,8 +79,7 @@ public class AppealService {
 		ModerationCase c = caseOfStatement(caseId, person);
 		Instant now = clock.instant();
 		file(c, request.text().strip(), now, Appeal.Via.APP,
-				new Update().push("history").slice(-ModerationCase.HISTORY_MAX)
-						.each(new CaseEvent(now, CaseEvent.Kind.APPEALED, null, Appeal.Via.APP.name())));
+				CaseSteps.note(new Update(), new CaseEvent(now, CaseEvent.Kind.APPEALED, null, Appeal.Via.APP.name())));
 		return statement(caseId, person);
 	}
 
@@ -130,8 +129,7 @@ public class AppealService {
 				.and("appeal").is(null).and("restoration").is(null));
 		Update update = step
 				.set("appeal", Appeal.filed(text, filedAt, via))
-				.set("retainUntil", Retention.afterAppeal(c.getRetainUntil(), filedAt, decisions.retentionMonths()))
-				.set("updatedAt", clock.instant());
+				.max("retainUntil", Retention.plusMonths(filedAt, decisions.retentionMonths()));
 		ModerationCase filed = mongo.findAndModify(open, update, FindAndModifyOptions.options().returnNew(true),
 				ModerationCase.class);
 		if (filed == null) {
@@ -155,19 +153,17 @@ public class AppealService {
 		boolean reverse = request.result() == AppealDecisionRequest.Result.REVERSE;
 		ModerationCase decided;
 		if (reverse) {
+			// The restoring claim moved the revision already.
 			decided = decisions.undo(id, request.rev(), moderator, note, now,
 					Criteria.where("appeal.state").is(Appeal.State.PENDING), SuspensionService.LiftReason.APPEAL,
-					outcome -> appealDecided(Appeal.State.REVERSED, moderator, note, now, outcome)).moderationCase();
+					outcome -> CaseSteps.note(appealDecided(Appeal.State.REVERSED, moderator, note, now, outcome),
+							appealEvent(Appeal.State.REVERSED, moderator, now))).moderationCase();
 		}
 		else {
 			Query pending = Query.query(Criteria.where("_id").is(id).and("rev").is(request.rev())
 					.and("status").is(CaseStatus.DECIDED).and("appeal.state").is(Appeal.State.PENDING));
-			Update update = appealDecided(Appeal.State.UPHELD, moderator, note, now, null)
-					.inc("rev", 1)
-					.set("noticeChangedAt", now)
-					.set("followUpDue", now)
-					.set("retainUntil", Retention.afterAppeal(guarded.moderationCase().getRetainUntil(), now,
-							decisions.retentionMonths()));
+			Update update = CaseSteps.noticeChanged(CaseSteps.step(appealDecided(Appeal.State.UPHELD, moderator, note,
+					now, null), appealEvent(Appeal.State.UPHELD, moderator, now)), now, decisions.retentionMonths());
 			decided = mongo.findAndModify(pending, update, FindAndModifyOptions.options().returnNew(true),
 					ModerationCase.class);
 			if (decided == null) {
@@ -187,13 +183,14 @@ public class AppealService {
 				.set("appeal.state", state)
 				.set("appeal.decidedBy", moderator.getId())
 				.set("appeal.decidedAt", now)
-				.set("appeal.note", note)
-				.set("updatedAt", now);
+				.set("appeal.note", note);
 		if (restored != null) {
 			update.set("appeal.restored", restored);
 		}
-		update.push("history").slice(-ModerationCase.HISTORY_MAX)
-				.each(new CaseEvent(now, CaseEvent.Kind.APPEAL_DECIDED, moderator.getId(), state.name()));
 		return update;
+	}
+
+	private static CaseEvent appealEvent(Appeal.State state, User moderator, Instant now) {
+		return new CaseEvent(now, CaseEvent.Kind.APPEAL_DECIDED, moderator.getId(), state.name());
 	}
 }

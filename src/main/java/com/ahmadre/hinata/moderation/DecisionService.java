@@ -255,9 +255,8 @@ public class DecisionService {
 			log.warn("[moderation] suspension for case {} refused: {}", c.getId(), refused.getMessageKey());
 			return c;
 		}
-		Update update = new Update().set("suspension", new CaseSuspension(person.getId(), until, now, null, null));
-		update.push("history").slice(-ModerationCase.HISTORY_MAX)
-				.each(new CaseEvent(now, CaseEvent.Kind.SUSPENDED, decider.getId(), decision.suspension().name()));
+		Update update = CaseSteps.note(new Update().set("suspension", new CaseSuspension(person.getId(), until, now,
+				null, null)), new CaseEvent(now, CaseEvent.Kind.SUSPENDED, decider.getId(), decision.suspension().name()));
 		return mongo.findAndModify(Query.query(Criteria.where("_id").is(c.getId())), update,
 				FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
 	}
@@ -451,8 +450,8 @@ public class DecisionService {
 		Instant now = clock.instant();
 		Undone undone = undo(id, request.rev(), moderator, request.note().strip(), now,
 				Criteria.where("appeal.state").ne(Appeal.State.PENDING), SuspensionService.LiftReason.MODERATION,
-				outcome -> new Update().push("history").slice(-ModerationCase.HISTORY_MAX)
-						.each(new CaseEvent(now, CaseEvent.Kind.RESTORED, moderator.getId(), outcome.name())));
+				outcome -> CaseSteps.note(new Update(),
+						new CaseEvent(now, CaseEvent.Kind.RESTORED, moderator.getId(), outcome.name())));
 		audit.event(AuditAction.MODERATION_RESTORED).actor(moderator).meta("case", id).log();
 		followUps.later(id);
 		return CaseService.summaryOf(undone.moderationCase(), assigneeOf(undone.moderationCase()),
@@ -492,11 +491,8 @@ public class DecisionService {
 					ModerationCase.class);
 			throw failed;
 		}
-		Update done = after.apply(outcome)
-				.set("restoration.outcome", outcome)
-				.set("noticeChangedAt", now)
-				.set("followUpDue", now)
-				.set("retainUntil", Retention.afterAppeal(held.getRetainUntil(), now, retentionMonths()));
+		Update done = CaseSteps.noticeChanged(after.apply(outcome).set("restoration.outcome", outcome), now,
+				retentionMonths());
 		ModerationCase undone = mongo.findAndModify(Query.query(Criteria.where("_id").is(id)), done,
 				FindAndModifyOptions.options().returnNew(true), ModerationCase.class);
 		// The comment is back: what its reporters fold away is theirs to see again (HIN-173).
