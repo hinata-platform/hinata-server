@@ -2,6 +2,7 @@ package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.admin.SuspensionService;
 import com.ahmadre.hinata.admin.SuspensionService.LiftReason;
+import com.ahmadre.hinata.setup.SettingsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
@@ -26,7 +27,7 @@ class SuspensionEnds {
 	private final MongoTemplate mongo;
 	private final ModerationFollowUps followUps;
 	private final ModerationAlerts alerts;
-	private final DecisionService decisions;
+	private final SettingsService settings;
 	private final Clock clock;
 
 	@EventListener
@@ -41,10 +42,10 @@ class SuspensionEnds {
 				.set("updatedAt", now);
 		// A deactivated account stays out: there is nothing new to tell its person.
 		if (event.reason() == LiftReason.DEACTIVATED) {
-			CaseSteps.followUp(update, now, decisions.retentionMonths());
+			CaseSteps.followUp(update, now, Retention.months(settings));
 		}
 		else {
-			CaseSteps.noticeChanged(update, now, decisions.retentionMonths());
+			CaseSteps.noticeChanged(update, now, Retention.months(settings));
 		}
 		ModerationCase ended = mongo.findAndModify(Query.query(Criteria.where("_id").is(event.caseId())
 						.and("suspension.liftedAt").is(null)), update, FindAndModifyOptions.options().returnNew(true),

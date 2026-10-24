@@ -203,9 +203,8 @@ class LexiconTextGate implements TextGate {
 	}
 
 	private Snapshot snapshotOf(ServerSettings stored) {
-		ServerSettings.Filter filter = stored == null || stored.getModeration() == null
-				|| stored.getModeration().getFilter() == null ? new ServerSettings.Filter()
-				: stored.getModeration().getFilter();
+		ServerSettings.Filter filter = stored == null ? new ServerSettings.Filter()
+				: stored.moderationOrDefault().filterOrDefault();
 		return new Snapshot(stored, filter, bundled.with(filter.ownBlockTerms(), filter.ownAllowTerms()));
 	}
 

@@ -129,7 +129,7 @@ public class AppealService {
 				.and("appeal").is(null).and("restoration").is(null));
 		Update update = step
 				.set("appeal", Appeal.filed(text, filedAt, via))
-				.max("retainUntil", Retention.plusMonths(filedAt, decisions.retentionMonths()));
+				.max("retainUntil", Retention.plusMonths(filedAt, Retention.months(settings)));
 		ModerationCase filed = mongo.findAndModify(open, update, FindAndModifyOptions.options().returnNew(true),
 				ModerationCase.class);
 		if (filed == null) {
@@ -163,7 +163,7 @@ public class AppealService {
 			Query pending = Query.query(Criteria.where("_id").is(id).and("rev").is(request.rev())
 					.and("status").is(CaseStatus.DECIDED).and("appeal.state").is(Appeal.State.PENDING));
 			Update update = CaseSteps.noticeChanged(CaseSteps.step(appealDecided(Appeal.State.UPHELD, moderator, note,
-					now, null), appealEvent(Appeal.State.UPHELD, moderator, now)), now, decisions.retentionMonths());
+					now, null), appealEvent(Appeal.State.UPHELD, moderator, now)), now, Retention.months(settings));
 			decided = mongo.findAndModify(pending, update, FindAndModifyOptions.options().returnNew(true),
 					ModerationCase.class);
 			if (decided == null) {

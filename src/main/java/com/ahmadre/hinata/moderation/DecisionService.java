@@ -559,9 +559,8 @@ public class DecisionService {
 		}
 	}
 
-	int retentionMonths() {
-		ServerSettings.Moderation moderation = settings.get().getModeration();
-		return moderation == null ? 6 : moderation.retentionMonthsOrDefault();
+	private int retentionMonths() {
+		return Retention.months(settings);
 	}
 
 	private PersonRef assigneeOf(ModerationCase c) {
