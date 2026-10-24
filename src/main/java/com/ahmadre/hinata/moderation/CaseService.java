@@ -255,7 +255,10 @@ public class CaseService {
 	 */
 	private List<ReportView> views(ModerationCase c, List<ContentReport> found, int offset) {
 		Map<String, Integer> unfounded = unfoundedChildSafety(found);
-		Set<String> uncovered = c.getRevealedReportIds() == null ? Set.of() : c.getRevealedReportIds();
+		// For the safety of children, who reported stays covered once anybody reported a child,
+		// an earlier uncovering included.
+		boolean childSafety = c.getCategories() != null && c.getCategories().contains(ReportCategory.CHILD_SAFETY);
+		Set<String> uncovered = childSafety || c.getRevealedReportIds() == null ? Set.of() : c.getRevealedReportIds();
 		Set<String> uncoveredIds = new HashSet<>();
 		for (ContentReport report : found) {
 			if (uncovered.contains(report.getId()) && report.getReporterId() != null) {
