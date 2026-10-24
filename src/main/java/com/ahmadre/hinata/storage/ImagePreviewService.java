@@ -92,14 +92,16 @@ public class ImagePreviewService {
 		}
 		try {
 			boolean alpha = ImageOps.hasAlpha(image);
-			BufferedImage thumbnail = ImageOps.scaleWithin(image, THUMBNAIL_MAX_EDGE, alpha);
+			// A turned photo keeps its turn in the EXIF (ImageMetadata); turned here at the small size.
+			int orientation = ImageMetadata.jpegOrientation(source);
+			BufferedImage thumbnail = ImageOps.orient(ImageOps.scaleWithin(image, THUMBNAIL_MAX_EDGE, alpha), orientation);
 			// PNG only where transparency has to survive: a JPEG would flatten it
 			// to white and flash against the app's dark surfaces when the real
 			// image arrives. Everything else is a JPEG, which is far smaller.
 			byte[] bytes = alpha
 					? ImageOps.encodePng(thumbnail)
 					: ImageOps.encodeJpeg(thumbnail, JPEG_QUALITY);
-			return Optional.of(new Preview(bytes, alpha ? "image/png" : "image/jpeg", blurHash(image)));
+			return Optional.of(new Preview(bytes, alpha ? "image/png" : "image/jpeg", blurHash(image, orientation)));
 		}
 		catch (Exception ex) {
 			log.warn("Preview generation failed: {}", ex.toString());
@@ -114,8 +116,8 @@ public class ImagePreviewService {
 	 * transparent pixel's colour channels are undefined, and reading them raw
 	 * would tint the placeholder black.
 	 */
-	private String blurHash(BufferedImage image) {
-		BufferedImage small = ImageOps.scaleWithin(image, BlurHash.MAX_SOURCE_EDGE, false);
+	private String blurHash(BufferedImage image, int orientation) {
+		BufferedImage small = ImageOps.orient(ImageOps.scaleWithin(image, BlurHash.MAX_SOURCE_EDGE, false), orientation);
 		if (ImageOps.hasAlpha(small)) {
 			small = ImageOps.scaleTo(small, small.getWidth(), small.getHeight(), false);
 		}
