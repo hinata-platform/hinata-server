@@ -3,13 +3,14 @@ package com.ahmadre.hinata.me;
 import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.Languages;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.team.TeamRepository;
-import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.ProfileChange;
+import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
@@ -78,13 +79,11 @@ public class MeService {
 
 	/**
 	 * Locales we ship translations for; anything else is ignored on auto-sync.
-	 * The list itself lives in {@link com.ahmadre.hinata.config.LocaleConfig},
-	 * which is also what the two request validators are built from — a tenth
-	 * language accepted by them and silently dropped here is exactly the bug
-	 * that list exists to prevent.
+	 * The list itself is {@link Languages#SUPPORTED}, which is also what the two
+	 * request validators are pinned to — a tenth language accepted by them and
+	 * silently dropped here is exactly the bug that list exists to prevent.
 	 */
-	private static final Set<String> SUPPORTED_LOCALES =
-			Set.copyOf(com.ahmadre.hinata.config.LocaleConfig.supportedLanguages());
+	private static final Set<String> SUPPORTED_LOCALES = Set.copyOf(Languages.SUPPORTED);
 
 	/**
 	 * Reconciles the stored {@link User#getLocale() locale} with the language the

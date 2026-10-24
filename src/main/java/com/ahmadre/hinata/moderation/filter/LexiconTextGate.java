@@ -15,9 +15,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -30,8 +27,9 @@ import java.util.Set;
  * own term; flagging needs the switch, a field with content to look at afterwards and a shipped
  * term of weight {@link #FLAG_AT}. Own terms never flag.
  *
- * <p>Built at start and again on every change of the settings, and read anew when older than
- * {@link #MAX_AGE}: a change reaches only the instance that saved it.
+ * <p>Built at start and again on every change of the settings, and whenever
+ * {@link SettingsService#current()} read them anew: a change reaches only the instance that saved
+ * it, the others within thirty seconds.
  */
 @Slf4j
 @Component
@@ -52,8 +50,6 @@ class LexiconTextGate implements TextGate {
 	 */
 	static final int TECHNICAL_SPAN_CEILING = 60;
 
-	static final Duration MAX_AGE = Duration.ofSeconds(30);
-
 	/** Which category leads when two finds weigh the same. */
 	private static final List<ReportCategory> PRECEDENCE = List.of(ReportCategory.CHILD_SAFETY,
 			ReportCategory.THREAT, ReportCategory.SEXUAL, ReportCategory.HARASSMENT, ReportCategory.ILLEGAL,
@@ -62,12 +58,12 @@ class LexiconTextGate implements TextGate {
 	private final SettingsService settings;
 	private final ContentReportService reports;
 	private final ModerationStats stats;
-	private final Clock clock;
 
 	private final Lexicon bundled = Lexicon.bundled();
 	private volatile Snapshot cached;
 
-	private record Snapshot(ServerSettings.Filter filter, Lexicon lexicon, Instant readAt) {
+	/** The lexicon built from [source], the settings as they stood. */
+	private record Snapshot(ServerSettings source, ServerSettings.Filter filter, Lexicon lexicon) {
 	}
 
 	/** A find and what it weighs where it was found. */
@@ -192,11 +188,15 @@ class LexiconTextGate implements TextGate {
 		return List.copyOf(new LinkedHashSet<>(finds.stream().map(find -> find.hit().term()).toList()));
 	}
 
-	/** The lexicon as the settings stand, at most {@link #MAX_AGE} old. */
+	/**
+	 * The lexicon as the settings stand ({@link SettingsService#current()}), built again only when
+	 * they were read again.
+	 */
 	private Snapshot snapshot() {
+		ServerSettings stored = settings.current();
 		Snapshot snapshot = cached;
-		if (snapshot == null || !snapshot.readAt().plus(MAX_AGE).isAfter(clock.instant())) {
-			snapshot = snapshotOf(settings.get());
+		if (snapshot == null || snapshot.source() != stored) {
+			snapshot = snapshotOf(stored);
 			cached = snapshot;
 		}
 		return snapshot;
@@ -206,7 +206,7 @@ class LexiconTextGate implements TextGate {
 		ServerSettings.Filter filter = stored == null || stored.getModeration() == null
 				|| stored.getModeration().getFilter() == null ? new ServerSettings.Filter()
 				: stored.getModeration().getFilter();
-		return new Snapshot(filter, bundled.with(filter.ownBlockTerms(), filter.ownAllowTerms()), clock.instant());
+		return new Snapshot(stored, filter, bundled.with(filter.ownBlockTerms(), filter.ownAllowTerms()));
 	}
 
 	/**

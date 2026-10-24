@@ -7,7 +7,6 @@ import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import org.junit.jupiter.api.Test;
 
-import java.time.Clock;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,9 +24,9 @@ class TextCheckSpeedTest {
 	@Test
 	void tenThousandCharactersInUnderTwoMilliseconds() {
 		SettingsService settings = mock(SettingsService.class);
-		when(settings.get()).thenReturn(new ServerSettings());
+		when(settings.current()).thenReturn(new ServerSettings());
 		LexiconTextGate gate = new LexiconTextGate(settings, mock(ContentReportService.class),
-				mock(ModerationStats.class), Clock.systemUTC());
+				mock(ModerationStats.class));
 		String text = text(10_000);
 
 		for (int i = 0; i < 200; i++) {
