@@ -480,17 +480,8 @@ public class CaseService {
 		if (request.target().kind() == ContentKind.OTHER) {
 			throw ApiException.badRequest("error.moderation.scopeNotAllowed");
 		}
-		ContentSnapshot snapshot = surface(request.target().kind()).snapshot(request.target(), moderator)
-				.orElseThrow(() -> ApiException.notFound("moderationCase"));
-		if (snapshot.removed()) {
-			throw ApiException.gone("error.moderation.removed");
-		}
-		if (snapshot.contributorIds().contains(moderator.getId())
-				|| request.target().kind() == ContentKind.PERSON && moderator.getId().equals(request.target().id())) {
-			throw ApiException.badRequest("error.moderation.ownContent");
-		}
-		ContentReportService.Target target = new ContentReportService.Target(snapshot.ref(), snapshot,
-				ContentReportService.locationOf(snapshot));
+		ContentReportService.Target target = reports.resolve(request.target(), null, moderator);
+		ContentReportService.requireNotOwn(target, moderator);
 		ContentReportService.Filed filed = reports.file(target, request.category(), request.facts(),
 				new ContentReportService.Source(ReportSource.OWN_INITIATIVE, "own:" + moderator.getId(), null, null));
 		audit.event(AuditAction.MODERATION_CASE_CREATED).actor(moderator).meta("case", filed.moderationCase().getId())

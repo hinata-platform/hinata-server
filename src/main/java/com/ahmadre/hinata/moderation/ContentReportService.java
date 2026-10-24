@@ -91,10 +91,7 @@ public class ContentReportService {
 		ReportCategory category = request.category();
 		requireExplanation(category, request.explanation());
 		Target target = resolve(request.target(), request.location(), reporter);
-		if (target.snapshot() != null && (target.snapshot().contributorIds().contains(reporter.getId())
-				|| target.ref().kind() == ContentKind.PERSON && reporter.getId().equals(target.ref().id()))) {
-			throw ApiException.badRequest("error.moderation.ownContent");
-		}
+		requireNotOwn(target, reporter);
 		String blockId = request.alsoBlock() ? blockable(target) : null;
 		requireWithinLimits(reporter, category);
 
@@ -147,14 +144,26 @@ public class ContentReportService {
 	record Target(ContentRef ref, ContentSnapshot snapshot, String location) {
 	}
 
-	private Target resolve(TargetRef target, String location, User reporter) {
+	/** 400 when [person] wrote what [target] is, or is the person it names: nobody reports themselves. */
+	static void requireNotOwn(Target target, User person) {
+		if (target.snapshot() != null && (target.snapshot().contributorIds().contains(person.getId())
+				|| target.ref().kind() == ContentKind.PERSON && person.getId().equals(target.ref().id()))) {
+			throw ApiException.badRequest("error.moderation.ownContent");
+		}
+	}
+
+	/**
+	 * [target] as [reader] may see it: 404 naming the content when they cannot, 410 when moderation
+	 * removed it; a place of kind {@code OTHER} needs its [location].
+	 */
+	Target resolve(TargetRef target, String location, User reader) {
 		if (target.kind() == ContentKind.OTHER) {
 			if (location == null || location.isBlank()) {
 				throw ApiException.badRequest("error.moderation.locationRequired");
 			}
 			return new Target(new ContentRef(ContentKind.OTHER, null, null, null), null, location.strip());
 		}
-		ContentSnapshot snapshot = surfaces.require(target.kind()).snapshot(target, reporter)
+		ContentSnapshot snapshot = surfaces.require(target.kind()).snapshot(target, reader)
 				.orElseThrow(() -> ApiException.notFound(entityOf(target.kind())));
 		if (snapshot.removed()) {
 			throw ApiException.gone("error.moderation.removed");
