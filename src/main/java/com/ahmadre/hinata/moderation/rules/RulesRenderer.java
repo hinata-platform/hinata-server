@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.moderation.rules;
 
 import com.ahmadre.hinata.common.Languages;
+import com.ahmadre.hinata.moderation.ResponseTimes;
 import com.ahmadre.hinata.setup.ServerSettings.RulesMode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.MessageSource;
@@ -84,7 +85,7 @@ class RulesRenderer {
 		List<String> parts = new ArrayList<>();
 		parts.add("## " + t("moderation.how.title", locale));
 		parts.add(t("moderation.how.report", locale, link(in.reportUrl())));
-		parts.add(t("moderation.how.review", locale, in.operator()));
+		parts.add(t("moderation.how.review", locale, in.operator(), ResponseTimes.hours(ResponseTimes.OVERDUE_AFTER)));
 		parts.add(textCheck(in.textCheck() == null ? TextCheck.DEFAULT : in.textCheck(), locale));
 		parts.add(t("moderation.how.images", locale));
 		parts.add(t("moderation.how.consequences", locale));

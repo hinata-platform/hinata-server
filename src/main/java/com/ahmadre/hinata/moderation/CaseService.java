@@ -66,8 +66,7 @@ public class CaseService {
 	/** Reports shown with an opened case; the rest come a page at a time. */
 	static final int FIRST_REPORTS = 20;
 
-	/** A case is overdue after a day, and somebody else's claim can be taken over after two hours. */
-	static final Duration OVERDUE = Duration.ofHours(24);
+	/** Somebody else's claim can be taken over after two hours. */
 	static final Duration CLAIM_STALE = Duration.ofHours(2);
 
 	/** Times one person may open withheld content alone, with nobody else there, in a day. */
@@ -104,7 +103,7 @@ public class CaseService {
 	/** The pills: open, urgent, overdue and appealed cases, each without what the reader wrote. */
 	public Summary summary() {
 		User viewer = moderators.require();
-		Instant overdueSince = clock.instant().minus(OVERDUE);
+		Instant overdueSince = clock.instant().minus(ResponseTimes.OVERDUE_AFTER);
 		Criteria open = viewFilter(View.OPEN);
 		return new Summary(
 				access.countVisible(viewer, open),
