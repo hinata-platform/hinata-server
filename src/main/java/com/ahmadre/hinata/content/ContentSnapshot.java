@@ -20,6 +20,7 @@ import java.util.Set;
  * @param location        where it is found, as a person would name it ({@code MESSE-14})
  * @param contentHash     SHA-256 over the stored text and object keys, to tell whether it
  *                        changed since it was reported
+ * @param removed         moderation removed all of it already; reporting it again answers 410
  */
 public record ContentSnapshot(
 		ContentRef ref,
@@ -34,7 +35,8 @@ public record ContentSnapshot(
 		List<MediaRef> media,
 		Instant createdAt,
 		Instant editedAt,
-		String contentHash) {
+		String contentHash,
+		boolean removed) {
 
 	public static final int EXCERPT_MAX = 4000;
 	public static final int CONTEXT_MAX = 200;

@@ -52,10 +52,16 @@ public class NotificationPreferences {
 	 */
 	public static final String SHIFTS = "shifts";
 
+	/**
+	 * Moderation (HIN-170): new and overdue cases, a second pair of eyes asked for, notes to the
+	 * team. Only moderators see the switch; what goes to admins stays locked.
+	 */
+	public static final String MODERATION = "moderation";
+
 	/** Stable event ids — mirror the reference {@code account_data.js → NOTIF_EVENTS}. */
 	public static final String[] EVENTS = {
 			"mentions", "assigned", "comments", "status", WATCHING, "ingest", "sprint", "invites",
-			"digest", "time", SHIFTS, "security"
+			"digest", "time", SHIFTS, MODERATION, "security"
 	};
 
 	/** Events that can never be turned off (transactional / security mail). */

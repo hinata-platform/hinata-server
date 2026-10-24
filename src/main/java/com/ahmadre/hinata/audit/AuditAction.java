@@ -351,7 +351,17 @@ public enum AuditAction {
 	MCP_SHIFT_RELEASED(INTEGRATION, INFO, false),
 	MCP_SHIFT_CONFIRMED(INTEGRATION, INFO, false),
 	MCP_SHIFT_DECLINED(INTEGRATION, INFO, false),
-	MCP_SHIFT_REMOVED(INTEGRATION, INFO, false);
+	MCP_SHIFT_REMOVED(INTEGRATION, INFO, false),
+
+	// --- Moderation (HIN-170) ------------------------------------------------------------------
+	// Always recorded, and with nothing but the case's id: an allegation against a named person
+	// is data under Art. 10 GDPR, and no feed is the place for it. Category and reason stay in the
+	// case's history.
+	MODERATION_CASE_CREATED(MODERATION, NOTICE, true),
+	MODERATION_CASE_CLAIMED(MODERATION, INFO, true),
+	MODERATION_REPORTER_REVEALED(MODERATION, WARNING, true),
+	MODERATION_EVIDENCE_REVEALED(MODERATION, WARNING, true),
+	MODERATION_EVIDENCE_VIEWED(MODERATION, NOTICE, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of an act that opens a way into
@@ -359,10 +369,14 @@ public enum AuditAction {
 	 * administrator, whose sign-in address an administrator changed, and, since HIN-179,
 	 * which account an SSO sign-in bound by its address and whose binding an administrator
 	 * undid, which lets the next sign-in with that address bind the account again. An
-	 * administrator must not be able to switch off the record of either.
+	 * administrator must not be able to switch off the record of either. And, since HIN-170,
+	 * every step of moderation: who opened, took, uncovered or looked at a case is what a person
+	 * affected by it may ask about, so its record cannot depend on a setting.
 	 */
 	public static final java.util.Set<AuditAction> ALWAYS_RECORDED =
-			java.util.EnumSet.of(USER_ROLE_CHANGED, USER_EMAIL_CHANGED, SSO_LINKED, USER_SSO_LINK_REMOVED);
+			java.util.EnumSet.of(USER_ROLE_CHANGED, USER_EMAIL_CHANGED, SSO_LINKED, USER_SSO_LINK_REMOVED,
+					MODERATION_CASE_CREATED, MODERATION_CASE_CLAIMED, MODERATION_REPORTER_REVEALED,
+					MODERATION_EVIDENCE_REVEALED, MODERATION_EVIDENCE_VIEWED);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

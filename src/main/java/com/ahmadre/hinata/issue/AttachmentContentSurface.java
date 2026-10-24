@@ -117,7 +117,8 @@ class AttachmentContentSurface implements ContentSurface {
 				attachment.getObjectKey() == null ? List.of() : List.of(mediaOf(attachment)),
 				attachment.getUploadedAt(),
 				null,
-				ContentSnapshot.hashOf(attachment.getObjectKey(), attachment.getFileName()));
+				ContentSnapshot.hashOf(attachment.getObjectKey(), attachment.getFileName()),
+				attachment.isRemoved());
 	}
 
 	private static MediaRef mediaOf(Issue.Attachment attachment) {

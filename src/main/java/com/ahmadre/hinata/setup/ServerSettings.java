@@ -920,6 +920,20 @@ public class ServerSettings {
 		@HttpsUrl
 		@Size(max = 500)
 		private String imprintUrl;
+
+		/**
+		 * How many months a decided case is kept (HIN-170): six or twelve. Boxed, because the
+		 * settings stored before this existed come back without it.
+		 */
+		@Min(6)
+		@Max(12)
+		private Integer retentionMonths;
+
+		/** Six unless set. */
+		@JsonIgnore
+		public int retentionMonthsOrDefault() {
+			return retentionMonths == null ? 6 : retentionMonths;
+		}
 	}
 
 	/**
