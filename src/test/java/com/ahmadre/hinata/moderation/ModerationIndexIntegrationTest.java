@@ -48,6 +48,12 @@ class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 				.append("$exists", true)).append("$or", List.of(new Document("followUpUntil", null),
 				new Document("followUpUntil", new Document("$lt", new Date())))), null))
 				.contains("follow_up_due");
+		// The suspension job's due accounts, and the list of suspended ones (HIN-172).
+		assertThat(plan("users", new Document("suspension.until", new Document("$lte", new Date())
+				.append("$type", "date")), null)).contains("suspension_until");
+		assertThat(plan("users", new Document("suspension.at", new Document("$exists", true))
+				.append("suspension.caseId", new Document("$nin", List.of("case-40"))),
+				new Document("suspension.at", -1).append("_id", -1))).contains("suspended").doesNotContain("\"SORT\"");
 		// The limits are counts answered from the index alone.
 		Document lastDay = new Document("reporterId", "u-3")
 				.append("createdAt", new Document("$gte", Date.from(Instant.now().minusSeconds(86400))));
@@ -79,6 +85,18 @@ class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 		}
 		mongo.insertAll(cases);
 		mongo.insertAll(reports);
+		List<Document> people = new ArrayList<>();
+		for (int i = 0; i < 2000; i++) {
+			Document person = new Document("username", "p-" + i).append("email", "p-" + i + "@example.org")
+					.append("active", i % 40 != 0);
+			if (i % 40 == 0) {
+				person.append("active", false).append("suspension", new Document("caseId", "case-" + i)
+						.append("at", Date.from(now.minusSeconds(i)))
+						.append("until", i % 80 == 0 ? null : Date.from(now.plusSeconds(i))));
+			}
+			people.add(person);
+		}
+		mongo.getCollection("users").insertMany(people);
 	}
 
 	private static Instant now() {
