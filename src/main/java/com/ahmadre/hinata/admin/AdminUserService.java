@@ -2,6 +2,8 @@ package com.ahmadre.hinata.admin;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
 import com.ahmadre.hinata.me.AccountMailService;
 import com.ahmadre.hinata.me.SessionService;
 import com.ahmadre.hinata.notification.GatewayService;
@@ -58,6 +60,9 @@ public class AdminUserService {
 	private final PasswordEncoder passwordEncoder;
 	private final AuditService audit;
 	private final SuspensionService suspensions;
+
+	/** A name or a position an administrator writes is checked like one the person writes (HIN-176). */
+	private final TextCheck textCheck;
 
 	// --- Read: filter + sort + paginate --------------------------------------
 
@@ -426,6 +431,10 @@ public class AdminUserService {
 
 	public AdminUserResponse updateDetails(String id, String displayName, String title, String email) {
 		User u = userService.get(id);
+		textCheck.require(actingAdmin(),
+				TextCheck.Entry.ifChanged(TextField.DISPLAY_NAME, displayName == null ? null : displayName.trim(),
+						u.getDisplayName()),
+				TextCheck.Entry.ifChanged(TextField.POSITION, title == null ? null : title.trim(), u.getTitle()));
 		if (displayName != null) u.setDisplayName(displayName.trim());
 		if (title != null) u.setTitle(title.trim());
 		if (email != null && !email.equalsIgnoreCase(u.getEmail())) {

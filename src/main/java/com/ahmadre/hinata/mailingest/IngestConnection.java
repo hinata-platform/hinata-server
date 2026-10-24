@@ -62,6 +62,16 @@ public class IngestConnection {
 	@JsonProperty(access = JsonProperty.Access.READ_ONLY)
 	private Boolean passwordSet;
 
+	/**
+	 * How many mails the text check refused, and when last (HIN-176). Counted, never kept: no
+	 * subject, no sender. Boxed for connections stored before it; never written by a client.
+	 */
+	@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+	private Long textRefusals;
+
+	@JsonProperty(access = JsonProperty.Access.READ_ONLY)
+	private Instant lastTextRefusalAt;
+
 	@CreatedDate
 	private Instant createdAt;
 

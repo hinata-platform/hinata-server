@@ -59,7 +59,8 @@ class VoiceGateTest {
 				mock(com.ahmadre.hinata.board.AgileBoardRepository.class),
 				mock(com.ahmadre.hinata.board.SprintRepository.class),
 				mock(com.ahmadre.hinata.user.UserRepository.class),
-				mock(IssueDeadlinePolicy.class), IssueReachStubs.everyoneSees(), mock(DeletedContent.class));
+				mock(IssueDeadlinePolicy.class), IssueReachStubs.everyoneSees(), mock(DeletedContent.class),
+				com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
 	}
 
 	@Test

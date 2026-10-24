@@ -1,8 +1,13 @@
 package com.ahmadre.hinata.user;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.ContentKind;
+import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.me.TintPreferences;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
+import com.ahmadre.hinata.richtext.TextVerdict;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -15,6 +20,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -42,21 +48,29 @@ public class UserService {
 	 */
 	public User updateProfile(User user, ProfileChange change) {
 		String zone = change.timezone() == null ? null : UserZones.normalize(change.timezone());
+		String displayName = change.displayName() == null ? null : change.displayName().trim();
+		String title = change.title() == null ? null : change.title().trim();
+		String pronouns = change.pronouns() == null ? null : Pronouns.sanitize(change.pronouns());
+		// Judged before anything is set on the live user, for the same reason as the zone (HIN-176).
+		List<TextVerdict> texts = textCheck.require(user,
+				TextCheck.Entry.ifChanged(TextField.DISPLAY_NAME, displayName, user.getDisplayName()),
+				TextCheck.Entry.ifChanged(TextField.POSITION, title, user.getTitle()),
+				TextCheck.Entry.ifChanged(TextField.PRONOUNS, pronouns, user.getPronouns()));
 		// Targeted $sets, not a save of the whole document: a slider writes the
 		// tint often, the app writes the time zone and the locale on every start,
 		// and a full save would carry whatever this request loaded a moment ago
 		// over whichever of them landed in between.
 		Update update = new Update();
-		if (change.displayName() != null) {
-			user.setDisplayName(change.displayName().trim());
+		if (displayName != null) {
+			user.setDisplayName(displayName);
 			update.set("displayName", user.getDisplayName());
 		}
-		if (change.title() != null) {
-			user.setTitle(change.title().trim());
+		if (title != null) {
+			user.setTitle(title);
 			update.set("title", user.getTitle());
 		}
-		if (change.pronouns() != null) {
-			user.setPronouns(Pronouns.sanitize(change.pronouns()));
+		if (pronouns != null) {
+			user.setPronouns(pronouns);
 			update.set("pronouns", user.getPronouns());
 		}
 		// Words moderation removed and the person wrote anew show again (HIN-169).
@@ -84,7 +98,16 @@ public class UserService {
 			return user;
 		}
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(user.getId())), update, User.class);
+		textFound(user, List.of(TextField.DISPLAY_NAME, TextField.POSITION, TextField.PRONOUNS), texts);
 		return user;
+	}
+
+	/** Hands what the text check found in [user]'s profile to moderation, one field at a time. */
+	private void textFound(User user, List<TextField> fields, List<TextVerdict> texts) {
+		ContentRef ref = new ContentRef(ContentKind.PERSON, user.getId(), null, null);
+		for (int i = 0; i < fields.size(); i++) {
+			textCheck.afterSave(ref, fields.get(i), texts.get(i), user);
+		}
 	}
 
 	/**
@@ -106,6 +129,9 @@ public class UserService {
 	private final com.ahmadre.hinata.notification.NotificationService notifications;
 	private final com.ahmadre.hinata.auth.SecurityPolicy securityPolicy;
 	private final com.ahmadre.hinata.common.UserWords words;
+
+	/** Names, positions and pronouns are checked before they are stored (HIN-176). */
+	private final TextCheck textCheck;
 
 	public User get(String id) {
 		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
@@ -215,6 +241,8 @@ public class UserService {
 	public User createLocal(String email, String username, String displayName, String rawPassword,
 			Set<Role> roles) {
 		validatePassword(rawPassword);
+		textCheck.require(null, new TextCheck.Entry(TextField.USERNAME, username, null),
+				new TextCheck.Entry(TextField.DISPLAY_NAME, displayName, null));
 		if (users.existsByEmailIgnoreCase(email)) {
 			throw ApiException.conflict("error.user.emailInUse");
 		}
@@ -240,13 +268,15 @@ public class UserService {
 	public User createSelfRegistered(String email, String username, String displayName,
 			String rawPassword) {
 		validatePassword(rawPassword);
+		List<TextVerdict> texts = textCheck.require(null, new TextCheck.Entry(TextField.USERNAME, username, null),
+				new TextCheck.Entry(TextField.DISPLAY_NAME, displayName, null));
 		if (users.existsByEmailIgnoreCase(email)) {
 			throw ApiException.conflict("error.user.emailInUse");
 		}
 		if (users.existsByUsernameIgnoreCase(username)) {
 			throw ApiException.conflict("error.user.usernameInUse");
 		}
-		return users.save(User.builder()
+		User created = users.save(User.builder()
 				.email(email.toLowerCase(Locale.ROOT))
 				.username(username)
 				.displayName(displayName != null && !displayName.isBlank() ? displayName : username)
@@ -257,6 +287,8 @@ public class UserService {
 				.emailVerified(false)
 				.awaitingApproval(false)
 				.build());
+		textFound(created, List.of(TextField.USERNAME, TextField.DISPLAY_NAME), texts);
+		return created;
 	}
 
 	/**
@@ -267,9 +299,15 @@ public class UserService {
 	public User createInvited(String email, String displayName, Set<Role> roles, String invitedBy,
 			String inviteTokenHash, Instant invitedAt, Instant inviteExpiresAt) {
 		String normalized = email.toLowerCase(Locale.ROOT);
+		// The name the administrator wrote is checked; one made from the address is replaced.
+		textCheck.require(displayName, TextField.DISPLAY_NAME, null, null);
+		String username = uniqueUsernameFrom(normalized);
+		if (textCheck.verdict(username, TextField.USERNAME, null, null).blocked()) {
+			username = neutralUsername();
+		}
 		return users.save(User.builder()
 				.email(normalized)
-				.username(uniqueUsernameFrom(normalized))
+				.username(username)
 				.displayName(displayName)
 				.roles(roles)
 				.origin(User.Origin.LOCAL)
@@ -280,6 +318,24 @@ public class UserService {
 				.inviteTokenHash(inviteTokenHash)
 				.inviteExpiresAt(inviteExpiresAt)
 				.build());
+	}
+
+	private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+
+	/**
+	 * A username that says nothing ({@code user-<6 hex>}), for one the text check refuses where a
+	 * refusal would lock somebody out: a name made from an address or sent by a provider (HIN-176).
+	 */
+	public String neutralUsername() {
+		for (int attempt = 0; attempt < 5; attempt++) {
+			byte[] random = new byte[3];
+			RANDOM.nextBytes(random);
+			String candidate = "user-" + java.util.HexFormat.of().formatHex(random);
+			if (!users.existsByUsernameIgnoreCase(candidate)) {
+				return candidate;
+			}
+		}
+		return "user-" + java.util.UUID.randomUUID().toString().substring(0, 8);
 	}
 
 	public void changePassword(User user, String currentPassword, String newPassword) {

@@ -56,12 +56,14 @@ class SsoAccountsTest {
 		UserService userService = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class),
 				mock(org.springframework.context.ApplicationEventPublisher.class),
 				mock(AuditService.class), mock(NotificationService.class), mock(SecurityPolicy.class),
-				UserWordsFixture.real());
+				UserWordsFixture.real(),
+				com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
 		mongo = mock(MongoTemplate.class);
 		admission = mock(AccountAdmission.class);
 		accounts = new SsoAccounts(users, mongo, userService, mock(AuthPolicy.class), admission,
 				mock(SettingsService.class), mock(AuditService.class), mock(NotificationService.class),
-				UserWordsFixture.real());
+				UserWordsFixture.real(),
+				com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
 	}
 
 	/** A provider that asks for approval makes the first sign-in wait, as a registration does (HIN-175). */
@@ -97,6 +99,25 @@ class SsoAccountsTest {
 		assertThat(user.getOrigin()).isEqualTo(User.Origin.OIDC);
 		assertThat(user.getDisplayName()).isEqualTo("Grace Hopper");
 		assertThat(user.getTitle()).isEqualTo("Rear Admiral");
+	}
+
+	/** A refused name from the provider is replaced, the sign-in goes on (HIN-176). */
+	@Test
+	void aRefusedNameFromTheProviderIsReplacedNotRefused() {
+		when(users.findByEmailIgnoreCase(anyString())).thenReturn(Optional.empty());
+		SsoAccounts checked = new SsoAccounts(users, mongo, new UserService(users, new BCryptPasswordEncoder(4),
+				mock(MongoTemplate.class), mock(org.springframework.context.ApplicationEventPublisher.class),
+				mock(AuditService.class), mock(NotificationService.class), mock(SecurityPolicy.class),
+				UserWordsFixture.real(), com.ahmadre.hinata.richtext.TestTextChecks.allowAll()),
+				mock(AuthPolicy.class), admission, mock(SettingsService.class), mock(AuditService.class),
+				mock(NotificationService.class), UserWordsFixture.real(),
+				com.ahmadre.hinata.richtext.TestTextChecks.refusing("kys"));
+
+		User user = checked.signIn(GRACE, profile("kys@example.org", "kys", "kys"), User.Origin.OIDC, true).user();
+
+		assertThat(user.getUsername()).matches("user-[0-9a-f]{6}");
+		assertThat(user.getDisplayName()).isEqualTo(user.getUsername());
+		assertThat(user.getTitle()).isNull();
 	}
 
 	@Test

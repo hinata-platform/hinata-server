@@ -37,6 +37,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -71,7 +72,24 @@ class EmailIngestServiceTest {
 		service = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
 				new RichTextService(), projects, notifications, storage,
 				mock(AttachmentStore.class), users, TestUploadGates.open(), settings,
-				new StaticMessageSource());
+				new StaticMessageSource(), com.ahmadre.hinata.richtext.TestTextChecks.allowAll(),
+				mock(IngestConnectionService.class));
+	}
+
+	/** Refused by the text check (HIN-176): no issue, no reply, one more on the connection's count. */
+	@Test
+	void aMailTheTextCheckRefusesBecomesNothingAndIsCounted() throws Exception {
+		IngestConnectionService connections = mock(IngestConnectionService.class);
+		EmailIngestService refusing = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
+				new RichTextService(), projects, notifications, mock(StorageService.class), mock(AttachmentStore.class),
+				users, TestUploadGates.open(), mock(SettingsService.class), new StaticMessageSource(),
+				com.ahmadre.hinata.richtext.TestTextChecks.refusing("fire"), connections);
+
+		refusing.createIssueFrom(message("kim@example.org"), connection());
+
+		verify(issues, never()).create(any(), any());
+		verify(connections).noteTextRefusal("conn-1");
+		verifyNoInteractions(notifications);
 	}
 
 	private IngestConnection connection() {
