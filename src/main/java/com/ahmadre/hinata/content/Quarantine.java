@@ -23,11 +23,6 @@ public interface Quarantine {
 		return PREFIX + caseId + "/" + originalKey;
 	}
 
-	/** Whether [key] is a quarantined copy, which no reader of content may serve. */
-	static boolean isQuarantined(String key) {
-		return key != null && key.startsWith(PREFIX);
-	}
-
 	/** One object: the original, its copy, and whether the original goes once the content is rewritten. */
 	record HeldObject(MediaRef original, String quarantineKey, boolean move) {
 	}

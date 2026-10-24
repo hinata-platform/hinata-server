@@ -108,14 +108,6 @@ public class DecisionService {
 			@Size(max = 2000) String internalNote,
 			boolean lawEnforcementNotified,
 			@Valid SuspensionChoice suspension) {
-
-		/** A decision that suspends nobody. */
-		public DecisionRequest(Long rev, Decision.Outcome outcome, RemovalChoice removal, Decision.Ground ground,
-				ReportCategory category, String facts, String ruleReference, String lawReference, String responsibleId,
-				boolean deceptiveCommercial, String messageToAuthor, String internalNote, boolean lawEnforcementNotified) {
-			this(rev, outcome, removal, ground, category, facts, ruleReference, lawReference, responsibleId,
-					deceptiveCommercial, messageToAuthor, internalNote, lawEnforcementNotified, null);
-		}
 	}
 
 	/** A step on a case at the revision seen. */
