@@ -729,6 +729,38 @@ class ModuleBoundaryTest {
 				.hasMessageContaining("forModeration");
 	}
 
+	/**
+	 * The classes that may call {@code putObject} (HIN-177): the store itself, the previews of
+	 * attachments and embedded images, and the pictures re-encoded from an input that went through
+	 * the upload gate. Each of them stores bytes the server made.
+	 */
+	private static final Set<String> SERVER_BYTE_WRITERS = Set.of(
+			ROOT + ".storage.StorageService", ROOT + ".storage.AttachmentController", ROOT + ".media.MediaService",
+			ROOT + ".me.AvatarService", ROOT + ".project.ProjectAvatarService", ROOT + ".team.TeamAvatarService",
+			ROOT + ".setup.OrganizationLogoService");
+
+	static final ArchRule PUT_OBJECT_ONLY_FOR_SERVER_BYTES = noClasses()
+			.that(not(named(SERVER_BYTE_WRITERS, "a class storing bytes the server made")))
+			.should().callMethodWhere(target(name("putObject"))
+					.and(target(owner(assignableTo(com.ahmadre.hinata.storage.StorageService.class)))))
+			.because("putObject checks nothing; bytes a person sent are stored with putUserObject, "
+					+ "through the upload gate");
+
+	@Test
+	void putObjectOnlyForServerBytes() {
+		PUT_OBJECT_ONLY_FOR_SERVER_BYTES.check(PRODUCTION);
+	}
+
+	@Test
+	void theStorageRuleCatchesWhatItIsThereFor() {
+		assertThatThrownBy(() -> PUT_OBJECT_ONLY_FOR_SERVER_BYTES.check(new ClassFileImporter()
+				.importClasses(com.ahmadre.hinata.storage.StorageBoundaryProbes.PutsAPersonsBytes.class)))
+				.isInstanceOf(AssertionError.class)
+				.hasMessageContaining("PutsAPersonsBytes");
+		PUT_OBJECT_ONLY_FOR_SERVER_BYTES.check(new ClassFileImporter()
+				.importClasses(com.ahmadre.hinata.storage.StorageBoundaryProbes.StoresThroughTheGate.class));
+	}
+
 	/** A core class naming the module: what {@link #NOTHING_OUTSIDE_MODERATION_REACHES_IN} refuses. */
 	@SuppressWarnings("unused")
 	static class CoreReachingIntoModeration {

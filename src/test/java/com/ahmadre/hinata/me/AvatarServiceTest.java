@@ -1,7 +1,9 @@
 package com.ahmadre.hinata.me;
 
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.TestUploadGates;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +21,7 @@ import java.util.Optional;
 import javax.imageio.ImageIO;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -45,7 +48,7 @@ class AvatarServiceTest {
 		users = mock(UserRepository.class);
 		when(users.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(storage.isConfigured()).thenReturn(true);
-		avatars = new AvatarService(storage, users, new ImagePreviewService());
+		avatars = new AvatarService(storage, users, new ImagePreviewService(), TestUploadGates.open());
 	}
 
 	private static byte[] png() throws Exception {
@@ -77,6 +80,20 @@ class AvatarServiceTest {
 		assertThat(blurHashOf(url)).hasSize(6 + 2 * 11);
 		assertThat(user.getAvatarUrl()).isEqualTo(url);
 		verify(storage).putObject(eq("avatars/u1.jpg"), any(byte[].class), eq("image/jpeg"));
+	}
+
+	/** The input passes the upload gate before anything decodes it (HIN-177). */
+	@Test
+	void aPayloadThatIsNotAnImageIsRefusedAtTheGateAndNothingIsStored() {
+		User user = User.builder().id("u1").build();
+
+		assertThatThrownBy(() -> avatars.store(user,
+				new MockMultipartFile("file", "me.png", "image/png", "<?php echo 1; ?>".getBytes())))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.upload.refused.signature");
+
+		verify(storage, never()).putObject(anyString(), any(byte[].class), anyString());
+		assertThat(user.getAvatarUrl()).isNull();
 	}
 
 	@Test
