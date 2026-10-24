@@ -2,6 +2,8 @@ package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.auth.AuthController;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.issue.Issue;
+import com.ahmadre.hinata.issue.IssueController;
 import com.ahmadre.hinata.moderation.rules.HouseRulesService;
 import com.ahmadre.hinata.moderation.rules.RulesAcceptance;
 import com.ahmadre.hinata.moderation.rules.RulesVersion;
@@ -49,6 +51,8 @@ class HouseRulesIntegrationTest extends RemovalIntegrationSupport {
 	ModerationPersonalData personalData;
 	@Autowired
 	ApplicationEventPublisher events;
+	@Autowired
+	IssueController issueController;
 
 	@BeforeEach
 	void freshRules() {
@@ -184,6 +188,20 @@ class HouseRulesIntegrationTest extends RemovalIntegrationSupport {
 
 		assertThat(pats.create(new PatController.CreatePatRequest("Agent", Set.of("issues:read"), 30L)).token())
 				.isNotBlank();
+	}
+
+	/**
+	 * The store app writes over REST and knows no gate before its update: it asks after signing
+	 * in, and a version that predates the gate must not stop working with the server update.
+	 */
+	@Test
+	void theAppStillWritesOverRestWhileTheRulesWait() {
+		Issue issue = issue("Standaufbau", doc("Plan"));
+		actingAs(reader);
+		assertThat(rules.pending(reader)).isTrue();
+
+		assertThat(issueController.comment(issue.getId(), new IssueController.CommentRequest("Passt so", null, null))
+				.getAuthorId()).isEqualTo(reader.getId());
 	}
 
 	@Test
