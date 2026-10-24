@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.auth;
 
+import com.ahmadre.hinata.common.Languages;
 import com.ahmadre.hinata.config.ClientIpResolver;
 import com.ahmadre.hinata.user.HouseRules;
 import com.ahmadre.hinata.user.User;
@@ -37,10 +38,6 @@ import java.time.Instant;
 @RestController
 @RequiredArgsConstructor
 public class InviteController {
-
-	/** Languages we ship email templates for; anything else keeps the default. */
-	private static final java.util.Set<String> SUPPORTED_LOCALES =
-			java.util.Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
 
 	private final UserRepository users;
 	private final UserService userService;
@@ -80,7 +77,7 @@ public class InviteController {
 		// by the app on this first-open request) so account emails from now on are
 		// localized to them, rather than the "en" the invite was created with.
 		String lang = LocaleContextHolder.getLocale().getLanguage();
-		if (SUPPORTED_LOCALES.contains(lang)) user.setLocale(lang);
+		if (Languages.SUPPORTED.contains(lang)) user.setLocale(lang);
 		user.setJoinedAt(Instant.now());
 		user.setActive(true);
 		user.setEmailVerified(true);

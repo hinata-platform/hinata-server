@@ -7,7 +7,6 @@ import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import org.junit.jupiter.api.Test;
 
-import java.time.Clock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -22,9 +21,8 @@ class AdminFilterControllerTest {
 
 	AdminFilterControllerTest() {
 		SettingsService settings = mock(SettingsService.class);
-		when(settings.get()).thenReturn(new ServerSettings());
-		controller = new AdminFilterController(new LexiconTextGate(settings, mock(ContentReportService.class), stats,
-				Clock.systemUTC()));
+		when(settings.current()).thenReturn(new ServerSettings());
+		controller = new AdminFilterController(new LexiconTextGate(settings, mock(ContentReportService.class), stats));
 	}
 
 	@Test

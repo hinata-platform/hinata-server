@@ -96,7 +96,7 @@ public class MetaController {
 	@SecurityRequirements
 	@GetMapping("/api/v1/meta")
 	public Meta meta() {
-		ServerSettings current = settings.get();
+		ServerSettings current = settings.current();
 		ServerSettings.App app = current.getApp();
 		HinataProperties.App appDefaults = properties.getApp();
 		HinataProperties.Storage storage = properties.getStorage();

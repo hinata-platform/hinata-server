@@ -33,7 +33,7 @@ class RulesRendererTest {
 	void theBuiltInRulesHaveAllSevenRulesInEveryLanguage() {
 		Map<String, String> rendered = renderer().render(inputs(RulesMode.BUILT_IN, null, null, "moderation@werkhaus.example"));
 
-		assertThat(rendered).containsOnlyKeys(RulesRenderer.LANGUAGES);
+		assertThat(rendered).containsOnlyKeys(com.ahmadre.hinata.common.Languages.SUPPORTED);
 		rendered.forEach((language, markdown) -> {
 			for (int rule = 1; rule <= 7; rule++) {
 				assertThat(markdown).as(language + " rule " + rule).contains("## " + rule + ". ");

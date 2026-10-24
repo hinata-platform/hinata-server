@@ -9,6 +9,7 @@ import com.ahmadre.hinata.auth.SignInRefusedException;
 import com.ahmadre.hinata.auth.sso.DynamicClientRegistrationRepository;
 import com.ahmadre.hinata.auth.sso.DynamicRelyingPartyRegistrationRepository;
 import com.ahmadre.hinata.auth.sso.SsoProfileMapper.SsoProfile;
+import com.ahmadre.hinata.common.Languages;
 import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.richtext.TextCheck;
@@ -58,10 +59,6 @@ public class SsoAccounts {
 	 * save of a user elsewhere carries the link along as it was read.
 	 */
 	private static final String SSO_LINK = "ssoLink";
-
-	/** Languages we ship email templates for; anything else keeps the default. */
-	private static final Set<String> SUPPORTED_LOCALES =
-			Set.of("en", "de", "zh", "hi", "es", "ja", "fr", "ru", "ar");
 
 	private final UserRepository users;
 	private final MongoTemplate mongo;
@@ -238,7 +235,7 @@ public class SsoAccounts {
 				.unset("inviteTokenHash")
 				.unset("inviteExpiresAt");
 		String lang = LocaleContextHolder.getLocale().getLanguage();
-		if (SUPPORTED_LOCALES.contains(lang)) {
+		if (Languages.SUPPORTED.contains(lang)) {
 			joined.set("locale", lang);
 		}
 		if (!updated(open, joined)) {
@@ -291,7 +288,7 @@ public class SsoAccounts {
 				.origin(origin)
 				.ssoLink(SsoLink.of(identity, Instant.now()));
 		String lang = LocaleContextHolder.getLocale().getLanguage();
-		if (SUPPORTED_LOCALES.contains(lang)) builder.locale(lang);
+		if (Languages.SUPPORTED.contains(lang)) builder.locale(lang);
 		// Nobody decided about this person yet: unless the provider lets them in, the account
 		// waits for an administrator, as a registration does (HIN-175).
 		boolean waits = admission.firstSignInWaits(identity.provider(), email);
