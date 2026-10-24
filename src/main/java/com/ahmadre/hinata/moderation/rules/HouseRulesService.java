@@ -267,7 +267,13 @@ public class HouseRulesService implements HouseRules {
 				mode == RulesMode.TEXT ? rules.getText() : null,
 				mode == RulesMode.URL ? rules.getUrl().strip() : null,
 				operator, contact.contactEmail(), contact.imprintUrl(),
-				block == null ? 6 : block.retentionMonthsOrDefault(), publicReportUrl());
+				block == null ? 6 : block.retentionMonthsOrDefault(), publicReportUrl(), textCheck(block));
+	}
+
+	private static RulesRenderer.TextCheck textCheck(ServerSettings.Moderation block) {
+		ServerSettings.Filter filter = block == null || block.getFilter() == null ? new ServerSettings.Filter()
+				: block.getFilter();
+		return new RulesRenderer.TextCheck(filter.blocks(), filter.flags(), filter.ownBlockTerms());
 	}
 
 	private static String fingerprint(Map<String, String> rendered) {
