@@ -27,7 +27,11 @@ class ActivityCopies implements ContentCopies {
 
 	@Override
 	public void scrub(List<CopySource> sources, ScrubReason reason, Placeholders placeholders) {
-		String placeholder = reason == ScrubReason.REMOVED ? placeholders.removedTitle() : placeholders.deletedText();
+		if (reason == ScrubReason.DELETED) {
+			// A deleted issue's history went with it, before anything is scrubbed.
+			return;
+		}
+		String placeholder = placeholders.removedTitle();
 		for (CopySource source : sources) {
 			if (source.ref().kind() != ContentKind.ISSUE || source.title() == null) {
 				continue;

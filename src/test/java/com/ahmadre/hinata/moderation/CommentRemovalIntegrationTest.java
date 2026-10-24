@@ -218,6 +218,27 @@ class CommentRemovalIntegrationTest extends RemovalIntegrationSupport {
 				.allSatisfy(n -> assertThat(n.getBody()).contains("Strom kommt morgen"));
 	}
 
+	/** Notices written before they kept their source are found by their issue and the words they quote. */
+	@Test
+	void deletingARootScrubsTheOlderNoticesOfItAndItsRepliesInOneSearch() {
+		Issue issue = issue("Stand B12", doc("Aufbau"));
+		IssueComment root = comment(issue, "Wer bringt die Kabel", null, reader);
+		IssueComment answer = comment(issue, "Ich bringe sie", root.getId(), author);
+		IssueComment other = comment(issue, "Strom kommt morgen", null, author);
+		String link = "/issues/" + issue.getReadableId() + "?comment=";
+		for (IssueComment quoted : List.of(root, answer, other)) {
+			mongo.insert(Notification.builder().userId(owner.getId()).type(Notification.Type.ISSUE_COMMENTED)
+					.title(issue.getReadableId()).body(quoted.getText()).link(link + quoted.getId()).build());
+		}
+
+		issues.deleteComment(issue.getId(), root.getId(), reader);
+
+		assertThat(mongo.find(Query.query(Criteria.where("link").regex("^" + java.util.regex.Pattern.quote(link))
+						.and("sourceId").exists(false)), Notification.class))
+				.extracting(Notification::getBody)
+				.containsExactlyInAnyOrder(placeholders.deletedText(), placeholders.deletedText(), "Strom kommt morgen");
+	}
+
 	@Test
 	void deletingAQuotedReplyScrubsTheQuoteOfTheReplyAfterIt() {
 		Issue issue = issue("Stand B12", doc("Aufbau"));
