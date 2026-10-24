@@ -63,6 +63,8 @@ class SuspensionIntegrationTest extends RemovalIntegrationSupport {
 	private PersonProfileService profiles;
 	@Autowired
 	private SettingsService settings;
+	@Autowired
+	private org.springframework.context.MessageSource messages;
 
 	private User mira;
 	private User rita;
@@ -160,6 +162,10 @@ class SuspensionIntegrationTest extends RemovalIntegrationSupport {
 		moderation.decide(c.getId(), suspending(0, null, Decision.SuspensionLength.DAYS_30));
 		followUpsDone();
 		assertThat(reload(c).getRemovalState()).isNull();
+		// The reporter learns that moderation acted, not that something was removed, nor what.
+		assertThat(notices(reader, Notification.Type.MODERATION_DECISION)).singleElement()
+				.satisfies(notice -> assertThat(notice.getBody()).startsWith(
+						messages.getMessage("moderation.decision.ACTED", null, java.util.Locale.ENGLISH)));
 
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(author.getId())),
 				new Update().set("suspension.until", Instant.now().minusSeconds(60)), User.class);

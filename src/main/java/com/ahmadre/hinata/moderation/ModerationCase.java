@@ -181,4 +181,13 @@ public class ModerationCase {
 	public static String keyOf(ContentRef target) {
 		return target.kind().name() + ":" + target.id();
 	}
+
+	/**
+	 * Whether the decision restricted anything: content to remove, or a suspension that took effect.
+	 * An action whose suspension was refused restricted nothing and owes no statement (HIN-172).
+	 */
+	public boolean restricted() {
+		return decision != null && decision.outcome() == Decision.Outcome.ACTION
+				&& (decision.removal() != null || suspension != null);
+	}
 }
