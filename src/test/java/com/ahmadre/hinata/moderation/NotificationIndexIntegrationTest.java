@@ -1,8 +1,13 @@
 package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.notification.Notification;
+import com.ahmadre.hinata.notification.NotificationIndexCleanup;
 import org.bson.Document;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.index.Index;
+import org.springframework.data.mongodb.core.index.IndexInfo;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -17,6 +22,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * about one issue, found by its link when the issue's words are scrubbed.
  */
 class NotificationIndexIntegrationTest extends RemovalIntegrationSupport {
+
+	@Autowired
+	private NotificationIndexCleanup cleanup;
 
 	@Test
 	void theBellAndTheScrubReadOffTheirIndexes() {
@@ -43,5 +51,19 @@ class NotificationIndexIntegrationTest extends RemovalIntegrationSupport {
 				.explain();
 		String scrubPlan = scrub.get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
 		assertThat(scrubPlan).contains("IXSCAN").contains("link_id").doesNotContain("COLLSCAN");
+	}
+
+	/** An older server's index on {@code userId} alone goes; the bell's own serves what it served. */
+	@Test
+	void theIndexOnThePersonAloneIsDropped() {
+		mongo.indexOps(Notification.class).createIndex(new Index().on("userId", Sort.Direction.ASC).named("userId"));
+
+		cleanup.run(null);
+
+		assertThat(mongo.indexOps(Notification.class).getIndexInfo()).extracting(IndexInfo::getName)
+				.doesNotContain("userId").contains("user_created");
+		String unread = mongo.getCollection("notifications").find(new Document("userId", "u1").append("read", false))
+				.explain().get("queryPlanner", Document.class).get("winningPlan", Document.class).toJson();
+		assertThat(unread).contains("user_created").doesNotContain("COLLSCAN");
 	}
 }
