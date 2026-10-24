@@ -671,6 +671,7 @@ final class UgcInventory {
 			entry("sprints.id", system()),
 			entry("sprints.name", reportedAsOther("boards and sprints, named by the people who run them")),
 			entry("sso_handoff_codes.accessToken", system()),
+			entry("sso_handoff_codes.challenge", system()),
 			entry("sso_handoff_codes.code", system()),
 			entry("sso_handoff_codes.refreshToken", system()),
 			entry("team_activity.actorId", system()),

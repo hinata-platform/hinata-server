@@ -93,6 +93,9 @@ class SsoAccountBindingIntegrationTest {
 	private static final String SAML_ENTITY = "https://idp.example.org/saml";
 	private static final String WEB_APP = "https://app.example.org";
 	private static final String INVITE_SECRET = "s3cret-from-the-invitation-mail";
+	/** The S256 pair from RFC 7636, appendix B: what an app keeps, and what it sends to the start. */
+	private static final String VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+	private static final String CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
 	@Autowired
 	private SsoAccounts accounts;
@@ -468,6 +471,30 @@ class SsoAccountBindingIntegrationTest {
 	}
 
 	@Test
+	@DisplayName("a handoff code is redeemed only with the verifier of the app that started the sign-in")
+	void aBoundCodeTakesTheVerifierOfItsApp() throws Exception {
+		String code = param(signIn(oidc("grace", "grace@example.org", true), false, null, CHALLENGE), "code");
+
+		assertInvalidCode(() -> ssoController.exchange(new SsoController.ExchangeRequest(code, null)));
+		assertInvalidCode(() -> ssoController.exchange(new SsoController.ExchangeRequest(code, "a".repeat(43))));
+		// A link that carries the code signs no one else in, and leaves it to the app it belongs to.
+		assertThat(ssoController.exchange(new SsoController.ExchangeRequest(code, VERIFIER)).accessToken())
+				.isNotBlank();
+		assertInvalidCode(() -> ssoController.exchange(new SsoController.ExchangeRequest(code, VERIFIER)));
+	}
+
+	@Test
+	@DisplayName("a code from a sign-in started without a challenge is refused to an app that sends a verifier")
+	void anUnboundCodeIsRefusedToAnAppThatSendsAVerifier() throws Exception {
+		String code = param(signIn(oidc("grace", "grace@example.org", true), false), "code");
+
+		assertInvalidCode(() -> ssoController.exchange(new SsoController.ExchangeRequest(code, VERIFIER)));
+		// An app from before the binding sends none and still signs in.
+		assertThat(ssoController.exchange(new SsoController.ExchangeRequest(code, null)).accessToken())
+				.isNotBlank();
+	}
+
+	@Test
 	@DisplayName("an OAuth2 provider named by the address is bound to the person's id instead")
 	void anOAuth2ProviderIsBoundToTheIdNotTheAddress() throws Exception {
 		signIn(oauth2(Map.of("id", 4711, "email", "grace@example.org"), "email"), false);
@@ -612,21 +639,43 @@ class SsoAccountBindingIntegrationTest {
 
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/auth/sso/start/oidc");
 		MockHttpServletResponse response = new MockHttpServletResponse();
-		ssoController.start("oidc", null, token, request, response);
+		ssoController.start("oidc", null, token, null, request, response);
 
 		assertThat(request.getSession().getAttribute(SsoController.SESSION_INVITE)).isEqualTo(token);
 		assertThat(response.getHeaders("Set-Cookie")).anySatisfy(cookie ->
 				assertThat(cookie).startsWith(SsoController.COOKIE_INVITE + "=" + token).contains("HttpOnly"));
-		assertThatThrownBy(() -> ssoController.start("oidc", null, invited.getId() + ".guessed",
+		assertThatThrownBy(() -> ssoController.start("oidc", null, invited.getId() + ".guessed", null,
 				new MockHttpServletRequest(), new MockHttpServletResponse()))
 				.isInstanceOfSatisfying(ApiException.class,
 						refused -> assertThat(refused.getMessageKey()).isEqualTo("error.user.inviteInvalid"));
 		// A sign-in started without one drops what an abandoned one left in this browser.
 		MockHttpServletResponse plain = new MockHttpServletResponse();
-		ssoController.start("oidc", null, null, request, plain);
+		ssoController.start("oidc", null, null, null, request, plain);
 		assertThat(request.getSession().getAttribute(SsoController.SESSION_INVITE)).isNull();
 		assertThat(plain.getHeaders("Set-Cookie")).anySatisfy(cookie ->
 				assertThat(cookie).startsWith(SsoController.COOKIE_INVITE + "=;").contains("Max-Age=0"));
+	}
+
+	@Test
+	@DisplayName("the SSO start keeps the app's challenge for the way back, and refuses a malformed one")
+	void theStartKeepsTheChallenge() throws Exception {
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/auth/sso/start/oidc");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		ssoController.start("oidc", null, null, CHALLENGE, request, response);
+
+		assertThat(request.getSession().getAttribute(SsoController.SESSION_CHALLENGE)).isEqualTo(CHALLENGE);
+		assertThat(response.getHeaders("Set-Cookie")).anySatisfy(cookie ->
+				assertThat(cookie).startsWith(SsoController.COOKIE_CHALLENGE + "=" + CHALLENGE).contains("HttpOnly"));
+		assertThatThrownBy(() -> ssoController.start("oidc", null, null, "not-a-challenge",
+				new MockHttpServletRequest(), new MockHttpServletResponse()))
+				.isInstanceOfSatisfying(ApiException.class,
+						refused -> assertThat(refused.getMessageKey()).isEqualTo("error.validationFailed"));
+		// A sign-in started without one drops what an abandoned one left in this browser.
+		MockHttpServletResponse plain = new MockHttpServletResponse();
+		ssoController.start("oidc", null, null, null, request, plain);
+		assertThat(request.getSession().getAttribute(SsoController.SESSION_CHALLENGE)).isNull();
+		assertThat(plain.getHeaders("Set-Cookie")).anySatisfy(cookie ->
+				assertThat(cookie).startsWith(SsoController.COOKIE_CHALLENGE + "=;").contains("Max-Age=0"));
 	}
 
 	// --- what the person can see about themselves --------------------------------
@@ -778,8 +827,13 @@ class SsoAccountBindingIntegrationTest {
 		return signIn(authentication, fromWeb, null);
 	}
 
-	/** Through the real handler, for a flow started with [invite] (or none). */
 	private UriComponents signIn(Authentication authentication, boolean fromWeb, String invite) throws Exception {
+		return signIn(authentication, fromWeb, invite, null);
+	}
+
+	/** Through the real handler, for a flow started with [invite] and [challenge] (or none). */
+	private UriComponents signIn(Authentication authentication, boolean fromWeb, String invite, String challenge)
+			throws Exception {
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/login/oauth2/code/oidc");
 		request.addPreferredLocale(Locale.GERMAN);
 		List<Cookie> cookies = new ArrayList<>();
@@ -789,6 +843,9 @@ class SsoAccountBindingIntegrationTest {
 		if (invite != null) {
 			cookies.add(new Cookie(SsoController.COOKIE_INVITE, invite));
 		}
+		if (challenge != null) {
+			cookies.add(new Cookie(SsoController.COOKIE_CHALLENGE, challenge));
+		}
 		request.setCookies(cookies.toArray(Cookie[]::new));
 		MockHttpServletResponse response = new MockHttpServletResponse();
 		handler.onAuthenticationSuccess(request, response, authentication);
@@ -797,7 +854,16 @@ class SsoAccountBindingIntegrationTest {
 			assertThat(response.getHeaders("Set-Cookie")).anySatisfy(cookie ->
 					assertThat(cookie).startsWith(SsoController.COOKIE_INVITE + "=;"));
 		}
+		if (challenge != null) {
+			assertThat(response.getHeaders("Set-Cookie")).anySatisfy(cookie ->
+					assertThat(cookie).startsWith(SsoController.COOKIE_CHALLENGE + "=;"));
+		}
 		return UriComponentsBuilder.fromUriString(response.getRedirectedUrl()).build();
+	}
+
+	private void assertInvalidCode(org.assertj.core.api.ThrowableAssert.ThrowingCallable exchange) {
+		assertThatThrownBy(exchange).isInstanceOfSatisfying(ApiException.class,
+				refused -> assertThat(refused.getMessageKey()).isEqualTo("error.sso.invalidCode"));
 	}
 
 	private String param(UriComponents uri, String name) {
