@@ -27,6 +27,7 @@ import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideOutsid
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -637,29 +638,21 @@ class ModuleBoundaryTest {
 	private static final String MODERATION = ROOT + ".moderation";
 	private static final String CONTENT = ROOT + ".content";
 
-	/** Who outside the module may name it: the wire contracts, for the names that travel. */
-	private static final Set<String> MODERATION_WIRE_CONTRACTS = Set.of(
-			ROOT + ".audit.AuditAction",
-			ROOT + ".notification.Notification");
-
 	/**
 	 * The packages {@code moderation} may read, whole: the core vocabulary of content, blocks,
-	 * people, projects and delivery. Time tracking, absences, billing, templates and shift
+	 * people and delivery. Projects, time tracking, absences, billing, templates and shift
 	 * planning are absent on purpose.
 	 */
 	private static final List<String> MODERATION_READABLE_PACKAGES = List.of(
 			MODERATION, CONTENT, ROOT + ".block", ROOT + ".richtext", ROOT + ".storage", ROOT + ".user",
-			ROOT + ".project", ROOT + ".notification", ROOT + ".audit", ROOT + ".setup", ROOT + ".config",
-			ROOT + ".common");
+			ROOT + ".notification", ROOT + ".audit", ROOT + ".setup", ROOT + ".config", ROOT + ".common");
 
-	/** Single classes of other packages, each for what it is: the signed-in person, the suspension, the export, MCP's errors. */
+	/** Single classes of other packages, each for what it is: the signed-in person, the suspension, the export. */
 	private static final Set<String> MODERATION_READABLE_CLASSES = Set.of(
-			ROOT + ".auth.CurrentUser", ROOT + ".admin.SuspensionService", ROOT + ".me.PersonalDataExport",
-			ROOT + ".mcp.McpErrors");
+			ROOT + ".auth.CurrentUser", ROOT + ".admin.SuspensionService", ROOT + ".me.PersonalDataExport");
 
 	static final ArchRule NOTHING_OUTSIDE_MODERATION_REACHES_IN = noClasses()
-			.that(resideOutsideOfPackages("..moderation..")
-					.and(not(named(MODERATION_WIRE_CONTRACTS, "a wire contract"))))
+			.that().resideOutsideOfPackages("..moderation..")
 			.should().dependOnClassesThat().resideInAnyPackage("..moderation..")
 			.because("the core declares what it needs and the moderation module implements it; "
 					+ "no core package reaches in");
@@ -675,9 +668,16 @@ class ModuleBoundaryTest {
 	static final ArchRule CONTENT_HAS_NO_UPWARD_DEPENDENCIES = noClasses()
 			.that().resideInAPackage(CONTENT + "..")
 			.should().dependOnClassesThat(resideInAnyPackage(ROOT + "..")
-					.and(not(inPackages(List.of(CONTENT, ROOT + ".user", ROOT + ".common"),
-							"content, user or common"))))
-			.because("content is the vocabulary every surface implements; it may know none of them");
+					.and(not(inPackages(List.of(CONTENT, ROOT + ".common"), "content or common")))
+					.and(not(named(Set.of(ROOT + ".user.User"), "the person a surface is read for"))))
+			.because("content is the vocabulary every surface implements; it may know none of them, "
+					+ "and of the people only who reads");
+
+	/** Content, the text check and moderation build on each other in one direction only. */
+	static final ArchRule CONTENT_TEXT_AND_MODERATION_FORM_NO_CYCLE = slices()
+			.matching(ROOT + ".(content|richtext|moderation)..")
+			.should().beFreeOfCycles()
+			.because("moderation implements what content and the text check declare; neither may name it back");
 
 	static final ArchRule FOR_MODERATION_ONLY_FROM_MODERATION = noClasses()
 			.that().resideOutsideOfPackages("..moderation..")
@@ -701,6 +701,11 @@ class ModuleBoundaryTest {
 	void contentKnowsNoSurface() {
 		assertThat(PRODUCTION.stream().map(JavaClass::getFullName)).contains(CONTENT + ".ContentSurface");
 		CONTENT_HAS_NO_UPWARD_DEPENDENCIES.check(PRODUCTION);
+	}
+
+	@Test
+	void contentTheTextCheckAndModerationFormNoCycle() {
+		CONTENT_TEXT_AND_MODERATION_FORM_NO_CYCLE.check(PRODUCTION);
 	}
 
 	@Test

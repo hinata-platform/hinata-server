@@ -92,15 +92,12 @@ public class CaseService {
 		User viewer = moderators.require();
 		PageRequest request = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE));
 		Criteria filter = viewFilter(view);
-		Query query = Query.query(new Criteria().andOperator(filter,
-						Criteria.where("contributorIds").ne(viewer.getId())))
-				.with(sortOf(view)).with(request);
+		Query query = Query.query(access.visibleTo(viewer, filter)).with(sortOf(view)).with(request);
 		query.fields().exclude(HISTORY, "evidence", "decision.facts", "decision.internalNote",
 				"decision.messageToAuthor", "appeal.text", "appeal.note", "restoration.note", "pendingCopies",
 				"otherUses");
 		List<ModerationCase> cases = mongo.find(query, ModerationCase.class);
-		long total = mongo.count(Query.query(filter), ModerationCase.class) - mine(viewer, filter);
-		return new PageImpl<>(summaries(cases, viewer), request, Math.max(total, 0));
+		return new PageImpl<>(summaries(cases, viewer), request, access.countVisible(viewer, filter));
 	}
 
 	/** The pills: open, urgent, overdue and appealed cases, each without what the reader wrote. */
@@ -109,20 +106,11 @@ public class CaseService {
 		Instant overdueSince = clock.instant().minus(OVERDUE);
 		Criteria open = viewFilter(View.OPEN);
 		return new Summary(
-				countWithout(viewer, open),
-				countWithout(viewer, new Criteria().andOperator(open, Criteria.where("urgent").is(true))),
-				countWithout(viewer, new Criteria().andOperator(open, Criteria.where("firstReportedAt").lt(overdueSince))),
-				countWithout(viewer, viewFilter(View.APPEAL)));
-	}
-
-	private long countWithout(User viewer, Criteria filter) {
-		return Math.max(mongo.count(Query.query(filter), ModerationCase.class) - mine(viewer, filter), 0);
-	}
-
-	/** How many cases of [filter] the reader wrote content for: usually none, off {@code contributor_status}. */
-	private long mine(User viewer, Criteria filter) {
-		return mongo.count(Query.query(new Criteria().andOperator(Criteria.where("contributorIds").is(viewer.getId()),
-				filter)), ModerationCase.class);
+				access.countVisible(viewer, open),
+				access.countVisible(viewer, new Criteria().andOperator(open, Criteria.where("urgent").is(true))),
+				access.countVisible(viewer, new Criteria().andOperator(open,
+						Criteria.where("firstReportedAt").lt(overdueSince))),
+				access.countVisible(viewer, viewFilter(View.APPEAL)));
 	}
 
 	private static Criteria viewFilter(View view) {

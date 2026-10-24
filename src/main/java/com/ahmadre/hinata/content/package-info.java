@@ -7,6 +7,8 @@
  * {@link com.ahmadre.hinata.content.ContentCopies}; {@code moderation} calls them and implements
  * {@link com.ahmadre.hinata.content.Quarantine} and {@link com.ahmadre.hinata.content.EvidenceHold}.
  * The package knows none of the surfaces, so no cycle can form between them and the module that
- * reads them ({@code ModuleBoundaryTest}).
+ * reads them ({@code ModuleBoundaryTest}). Of the people it knows only
+ * {@link com.ahmadre.hinata.user.User}, the person a surface is read for; that class carries a
+ * {@link com.ahmadre.hinata.content.ContentMark} in turn, the one cycle accepted here.
  */
 package com.ahmadre.hinata.content;
