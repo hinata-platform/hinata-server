@@ -38,7 +38,11 @@ import java.util.regex.Pattern;
  * inside a quantifier, no nested quantifiers, and every character class is
  * negated-and-bounded rather than lazy, so none of them can backtrack
  * catastrophically on hostile input — this runs on the write path of every comment
- * in the product, on strings an attacker chooses.
+ * in the product, on strings an attacker chooses. Two rules keep it that way. A line
+ * pattern opens on spaces and tabs only: in multiline mode {@code \s} also eats line
+ * breaks, and the scan would restart at every line of a run of blank lines. And a
+ * repeated group has an upper bound: Java's regex engine recurses once per repetition
+ * of a group, and a long enough run overflows the stack.
  */
 final class TechnicalTextStripper {
 
@@ -68,24 +72,24 @@ final class TechnicalTextStripper {
 	 * keyword so it survives localisation of the surrounding message.
 	 */
 	private static final Pattern STACK_FRAME = Pattern.compile(
-			"(?m)^\\s*+(?:at\\s++[\\w$.]++\\([^)\n]*+\\)"
-					+ "|File\\s\"[^\"\n]*+\",\\sline\\s\\d++"
+			"(?m)^[ \t]*+(?:at[ \t]++[\\w$.]++\\([^)\n]*+\\)"
+					+ "|File[ \t]\"[^\"\n]*+\",[ \t]line[ \t]\\d++"
 					+ "|Caused by:[^\n]*+"
-					+ "|[\\w.$]++Exception[^\n]*+"
-					+ "|[\\w.$]++Error:[^\n]*+)$");
+					+ "|[\\w.$]*Exception[^\n]*+"
+					+ "|[\\w.$]*Error:[^\n]*+)$");
 
 	/**
 	 * Log lines: an ISO-ish timestamp or a bracketed level at the start of a line.
 	 * A log line is machine output even when it contains prose-looking words.
 	 */
 	private static final Pattern LOG_LINE = Pattern.compile(
-			"(?m)^\\s*+(?:\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}[^\n]*+"
+			"(?m)^[ \t]*+(?:\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}[^\n]*+"
 					+ "|\\[(?:DEBUG|INFO|WARN|WARNING|ERROR|FATAL|TRACE)][^\n]*+"
-					+ "|(?:DEBUG|INFO|WARN|WARNING|ERROR|FATAL|TRACE)\\s{2,}[^\n]*+)$");
+					+ "|(?:DEBUG|INFO|WARN|WARNING|ERROR|FATAL|TRACE)[ \t]{2,}[^\n]*+)$");
 
 	/** Shell prompts and diff/patch lines. */
 	private static final Pattern COMMAND_LINE = Pattern.compile(
-			"(?m)^\\s*+(?:[$#>]\\s++[^\n]*+|[+-]{3}\\s[^\n]*+|@@[^\n]*+@@[^\n]*+)$");
+			"(?m)^[ \t]*+(?:[$#>][ \t]++[^\n]*+|[+-]{3}[ \t][^\n]*+|@@[^@\n]*+@@[^\n]*+)$");
 
 	/** URLs, including bare www hosts. */
 	private static final Pattern URL = Pattern.compile(
@@ -94,8 +98,8 @@ final class TechnicalTextStripper {
 	/** Absolute and relative file paths, POSIX and Windows. */
 	private static final Pattern FILE_PATH = Pattern.compile(
 			"(?:[A-Za-z]:\\\\[^\\s\"'<>|]++"
-					+ "|(?:\\.{1,2})?/(?:[\\w.@+-]++/)++[\\w.@+-]*+"
-					+ "|\\b[\\w-]++\\.(?:java|dart|kt|kts|ts|tsx|js|jsx|py|rb|go|rs|c|h|cpp|cs|php|swift"
+					+ "|(?:\\.{1,2})?/(?:[\\w.@+-]++/){1,64}+[\\w.@+-]*+"
+					+ "|(?<![\\w-])[\\w-]++\\.(?:java|dart|kt|kts|ts|tsx|js|jsx|py|rb|go|rs|c|h|cpp|cs|php|swift"
 					+ "|yml|yaml|json|xml|html|css|scss|sql|sh|gradle|properties|lock|md|toml|ini)\\b)");
 
 	/** HTML/XML tags — markup is not prose. */
@@ -121,11 +125,11 @@ final class TechnicalTextStripper {
 	 * word is never treated as an identifier and prose stays intact.
 	 */
 	private static final Pattern IDENTIFIER = Pattern.compile(
-			"\\b(?:[a-z]++(?:[A-Z][a-z\\d]*+)++"
-					+ "|[A-Z][a-z\\d]++(?:[A-Z][a-z\\d]*+)++"
-					+ "|[A-Za-z]++(?:_[A-Za-z\\d]++)++"
-					+ "|[a-z\\d]++(?:-[a-z\\d]++){2,}"
-					+ "|[A-Za-z]++(?:\\.[A-Za-z][A-Za-z\\d]*+){2,})\\b");
+			"\\b(?:[a-z]++(?:[A-Z][a-z\\d]*+){1,32}+"
+					+ "|[A-Z][a-z\\d]++(?:[A-Z][a-z\\d]*+){1,32}+"
+					+ "|[A-Za-z]++(?:_[A-Za-z\\d]++){1,32}+"
+					+ "|[a-z\\d]++(?:-[a-z\\d]++){2,32}+"
+					+ "|[A-Za-z]++(?:\\.[A-Za-z][A-Za-z\\d]*+){2,32}+)\\b");
 
 	/** CLI flags: {@code -9}, {@code --force}, {@code -rf}. */
 	private static final Pattern CLI_FLAG = Pattern.compile("(?<![\\w-])--?[A-Za-z\\d][\\w-]*+\\b");
