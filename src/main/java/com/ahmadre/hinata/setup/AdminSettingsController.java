@@ -261,6 +261,9 @@ public class AdminSettingsController {
 			if (updated.getModeration().getRules() == null) {
 				updated.getModeration().setRules(current.getModeration().getRules());
 			}
+			if (updated.getModeration().getFilter() == null) {
+				updated.getModeration().setFilter(current.getModeration().getFilter());
+			}
 		}
 		if (updated.getProjectTemplates() == null) {
 			updated.setProjectTemplates(current.getProjectTemplates());
@@ -286,6 +289,14 @@ public class AdminSettingsController {
 		if (!opened.isEmpty() && !Boolean.TRUE.equals(updated.getOpenAccessConfirmed())) {
 			throw new ApiException(HttpStatus.CONFLICT, "error.moderation.openAccessUnconfirmed",
 					Map.of("code", "moderation.openAccess", "ways", String.join(",", opened)));
+		}
+		// Putting texts before moderation starts only once the administrator confirmed that the works
+		// council was involved and the impact assessment done (HIN-176).
+		ServerSettings.Filter filterBefore = filterOf(current);
+		ServerSettings.Filter filterAfter = filterOf(updated);
+		if (filterAfter.flags() && !filterBefore.flags() && !Boolean.TRUE.equals(updated.getFlagConfirmed())) {
+			throw new ApiException(HttpStatus.CONFLICT, "error.moderation.flagUnconfirmed",
+					Map.of("code", "moderation.flagConfirm"));
 		}
 		// Before the audit record and before the write, so a refusal leaves no
 		// trace of a change that did not happen. A module guard throws on purpose
@@ -323,12 +334,31 @@ public class AdminSettingsController {
 						.log();
 			}
 		}
+		if (!sameFilter(filterBefore, filterAfter)) {
+			audit.event(AuditAction.MODERATION_FILTER_CHANGED).actor(actor)
+					.meta("block", String.valueOf(filterAfter.blocks()))
+					.meta("flag", String.valueOf(filterAfter.flags()))
+					.meta("blockTerms", String.valueOf(filterAfter.ownBlockTerms().size()))
+					.meta("allowTerms", String.valueOf(filterAfter.ownAllowTerms().size()))
+					.log();
+		}
 		// After the save: a failed write must not leave the settings pointing at an
 		// object that is already gone.
 		if (droppingUpload) {
 			logoService.deleteStoredObject();
 		}
 		return saved;
+	}
+
+	private static ServerSettings.Filter filterOf(ServerSettings stored) {
+		return stored.getModeration() == null || stored.getModeration().getFilter() == null
+				? new ServerSettings.Filter() : stored.getModeration().getFilter();
+	}
+
+	/** Whether the text check does the same with [a] as with [b]; the terms compared as lists. */
+	private static boolean sameFilter(ServerSettings.Filter a, ServerSettings.Filter b) {
+		return a.blocks() == b.blocks() && a.flags() == b.flags() && a.ownBlockTerms().equals(b.ownBlockTerms())
+				&& a.ownAllowTerms().equals(b.ownAllowTerms());
 	}
 
 	/** WRITE_ONLY secrets are not echoed back; keep stored values when omitted. */

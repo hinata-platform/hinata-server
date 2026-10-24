@@ -54,6 +54,15 @@ public class ServerSettings {
 	@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
 	private Boolean openAccessConfirmed;
 
+	/**
+	 * Sent with a save that switches on flagging by the text check (HIN-176): the administrator
+	 * confirmed the sentence about codetermination and the data protection impact assessment.
+	 * Never stored, never sent back.
+	 */
+	@Transient
+	@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+	private Boolean flagConfirmed;
+
 	private String organizationName;
 
 	/**
@@ -999,6 +1008,68 @@ public class ServerSettings {
 		 */
 		@Valid
 		private Rules rules;
+
+		/**
+		 * The text check (HIN-176). Null in settings stored before it and from a client that does
+		 * not send it: refusing is on, flagging off, and a PUT keeps what is stored.
+		 */
+		@Valid
+		private Filter filter;
+	}
+
+	/**
+	 * What the text check does on this instance (HIN-176). Own terms only ever refuse, they never
+	 * put anything before moderation: otherwise every mention of a works council or of a name could
+	 * be sent there, which is keyword surveillance (BetrVG § 87 (1) no. 6).
+	 */
+	@Data
+	public static class Filter {
+
+		public static final int TERMS_MAX = 500;
+		public static final int TERM_LENGTH_MAX = 60;
+
+		/** Refuse what the shipped lists name without doubt. Null: on. */
+		private Boolean blockEnabled;
+
+		/** Put what the shipped lists find unclear before moderation. Null: off, also after an update. */
+		private Boolean flagEnabled;
+
+		/** Own terms that are refused, whatever the switches say. */
+		@Size(max = TERMS_MAX)
+		private List<@Size(max = TERM_LENGTH_MAX) String> blockTerms;
+
+		/** Own exceptions: words that are never judged on their own. */
+		@Size(max = TERMS_MAX)
+		private List<@Size(max = TERM_LENGTH_MAX) String> allowTerms;
+
+		@JsonIgnore
+		public boolean blocks() {
+			return !Boolean.FALSE.equals(blockEnabled);
+		}
+
+		@JsonIgnore
+		public boolean flags() {
+			return Boolean.TRUE.equals(flagEnabled);
+		}
+
+		@JsonIgnore
+		public List<String> ownBlockTerms() {
+			return clean(blockTerms);
+		}
+
+		@JsonIgnore
+		public List<String> ownAllowTerms() {
+			return clean(allowTerms);
+		}
+
+		/** Trimmed, without blanks and repeats, in the order given. */
+		private static List<String> clean(List<String> terms) {
+			if (terms == null) {
+				return List.of();
+			}
+			return terms.stream().filter(java.util.Objects::nonNull).map(String::strip)
+					.filter(term -> !term.isEmpty()).distinct().toList();
+		}
 	}
 
 	/** Where the house rules come from. */

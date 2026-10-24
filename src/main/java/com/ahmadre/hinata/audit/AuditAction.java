@@ -376,7 +376,9 @@ public enum AuditAction {
 	// HIN-175: a version of the house rules, which acceptances and decisions point at, and the
 	// switch that lets new accounts in without anybody approving them.
 	MODERATION_RULES_VERSION_CREATED(MODERATION, NOTICE, true),
-	ACCOUNT_APPROVAL_CHANGED(MODERATION, WARNING, true);
+	ACCOUNT_APPROVAL_CHANGED(MODERATION, WARNING, true),
+	/** The text check's switches or own lists changed (HIN-176): how many terms, never which. */
+	MODERATION_FILTER_CHANGED(MODERATION, NOTICE, true);
 
 	/**
 	 * Recorded whatever the settings say. Each is the trace of an act that opens a way into
@@ -396,7 +398,7 @@ public enum AuditAction {
 					MODERATION_EVIDENCE_REVEALED, MODERATION_EVIDENCE_VIEWED, MODERATION_DECIDED,
 					MODERATION_RESTORED, MODERATION_APPEAL_RECORDED, MODERATION_APPEAL_DECIDED,
 					MODERATION_LEGAL_HOLD_CHANGED, USER_SUSPENDED, USER_SUSPENSION_LIFTED, USER_SUSPENSION_ENDED,
-					MODERATION_RULES_VERSION_CREATED, ACCOUNT_APPROVAL_CHANGED);
+					MODERATION_RULES_VERSION_CREATED, ACCOUNT_APPROVAL_CHANGED, MODERATION_FILTER_CHANGED);
 
 	private final AuditCategory category;
 	private final AuditSeverity defaultSeverity;

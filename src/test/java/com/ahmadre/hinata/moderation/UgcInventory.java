@@ -561,6 +561,8 @@ final class UgcInventory {
 			entry("server_settings.ldap.userSearchBase", system()),
 			entry("server_settings.ldap.userSearchFilter", system()),
 			entry("server_settings.moderation.contactEmail", system()),
+			entry("server_settings.moderation.filter.allowTerms", reportedAsOther("written by administrators")),
+			entry("server_settings.moderation.filter.blockTerms", reportedAsOther("written by administrators")),
 			entry("server_settings.moderation.imprintUrl", system()),
 			entry("server_settings.moderation.operatorName", reportedAsOther("written by administrators")),
 			entry("server_settings.moderation.rules.text", reportedAsOther("written by administrators")),
