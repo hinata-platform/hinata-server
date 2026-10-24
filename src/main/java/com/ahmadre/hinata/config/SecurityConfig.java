@@ -4,6 +4,7 @@ import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import com.ahmadre.hinata.auth.TokenService;
 import com.ahmadre.hinata.auth.sso.MongoAuthorizationRequestRepository;
 import com.ahmadre.hinata.auth.sso.SsoLoginSuccessHandler;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -210,6 +211,20 @@ public class SecurityConfig {
 			.addFilterBefore(patAuthenticationFilter,
 					org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class);
 		return http.build();
+	}
+
+	/**
+	 * Keeps Personal Access Tokens on {@code /mcp}, where {@link #mcpFilterChain} runs the filter. As a
+	 * component it would also be registered with the servlet container and run after every chain,
+	 * outside the rules that confine it.
+	 */
+	@Bean
+	public FilterRegistrationBean<com.ahmadre.hinata.pat.PatAuthenticationFilter> patFilterOnlyInItsChain(
+			com.ahmadre.hinata.pat.PatAuthenticationFilter filter) {
+		FilterRegistrationBean<com.ahmadre.hinata.pat.PatAuthenticationFilter> registration =
+				new FilterRegistrationBean<>(filter);
+		registration.setEnabled(false);
+		return registration;
 	}
 
 	/** This server's issuer identifier (its public base URL, no trailing slash). */
