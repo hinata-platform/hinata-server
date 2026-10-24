@@ -4,6 +4,7 @@ import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.content.MediaRef;
 import com.ahmadre.hinata.storage.ImagePreviewService;
+import com.ahmadre.hinata.storage.StorageService;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -63,6 +64,7 @@ public class MediaReferences {
 			new Source("article_versions", "contentDoc"));
 
 	private final MongoTemplate mongo;
+	private final StorageService storage;
 
 	/** The media ids [content] references, in the order they first appear. */
 	public static Set<String> idsIn(String content) {
@@ -80,6 +82,14 @@ public class MediaReferences {
 	/** The object key an inline image lives under. */
 	public static String objectKey(String id) {
 		return MediaService.PREFIX + id;
+	}
+
+	/** Deletes the previews of the images that left with a removal: derived from them, nothing to keep. */
+	public void dropThumbnails(Split images) {
+		if (!storage.isConfigured()) {
+			return;
+		}
+		images.move().forEach(image -> storage.delete(thumbnailKeyOf(image.objectKey())));
 	}
 
 	/** The object key of the generated preview of the image stored under [objectKey]. */

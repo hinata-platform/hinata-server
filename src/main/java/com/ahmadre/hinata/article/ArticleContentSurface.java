@@ -19,7 +19,6 @@ import com.ahmadre.hinata.content.VersionCopy;
 import com.ahmadre.hinata.media.MediaReferences;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
-import com.ahmadre.hinata.storage.StorageService;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -40,6 +39,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
+
+import static com.ahmadre.hinata.content.RemovedFields.putPresent;
+import static com.ahmadre.hinata.content.RemovedFields.setOrUnset;
 
 /**
  * Knowledge pages as moderation reaches them (HIN-169).
@@ -73,7 +75,6 @@ class ArticleContentSurface implements ContentSurface {
 	private final RichTextService richText;
 	private final MediaReferences media;
 	private final Quarantine quarantine;
-	private final StorageService storage;
 	private final MongoTemplate mongo;
 
 	/** Whether moderation removed [field] of [page] and nobody wrote it anew. */
@@ -172,10 +173,8 @@ class ArticleContentSurface implements ContentSurface {
 				: null;
 		// Nothing before the reported version to go back to: the page goes as a whole.
 		boolean revert = before != null;
-		Criteria moved = Criteria.where(ARTICLE_ID).is(page.getId());
-		if (revert) {
-			moved = moved.and(NUMBER).gte(reported);
-		}
+		Criteria moved = revert ? Criteria.where(ARTICLE_ID).is(page.getId()).and(NUMBER).gte(reported)
+				: Criteria.where(ARTICLE_ID).is(page.getId());
 		ContentRef ref = refOf(page, reported == 0 ? null : reported);
 
 		Map<String, Object> fields = new LinkedHashMap<>();
@@ -198,26 +197,20 @@ class ArticleContentSurface implements ContentSurface {
 
 		RemovalScope taken = revert ? RemovalScope.REVERT : RemovalScope.WHOLE;
 		Quarantine.Held held = quarantine.hold(caseId, ref, taken, fields, split.move(), split.copy());
-		try {
-			Quarantine.Held into = held;
-			forEachVersion(moved, batch -> quarantine.keepVersions(into, batch));
+		List<String> pending = quarantine.rewriteHeld(held, () -> {
+			forEachVersion(moved, batch -> quarantine.keepVersions(held, batch));
 			if (revert) {
 				revertTo(page, before, resetVersion, placeholders);
 			}
 			else {
 				replace(page, caseId, placeholders);
 			}
-		}
-		catch (RuntimeException ex) {
-			quarantine.discard(held);
-			throw ex;
-		}
-		// The originals of the versions go last, like the objects: their copies are kept by now.
+		});
+		// The originals of the versions go last too, like the objects: their copies are kept by now.
 		Criteria originals = revert ? Criteria.where(ARTICLE_ID).is(page.getId()).and(NUMBER).gte(reported).lte(latest)
 				: Criteria.where(ARTICLE_ID).is(page.getId());
 		mongo.remove(Query.query(originals), ArticleVersion.class);
-		List<String> pending = quarantine.deleteOriginals(held);
-		dropThumbnails(split);
+		media.dropThumbnails(split);
 		return new Removal(ref, taken, fields, held.media(), held.id(), pending, split.otherUses(), null);
 	}
 
@@ -269,13 +262,6 @@ class ArticleContentSurface implements ContentSurface {
 						.set("moderation." + TITLE, mark)
 						.set("moderation." + CONTENT, mark),
 				Article.class);
-	}
-
-	private void dropThumbnails(MediaReferences.Split images) {
-		if (!storage.isConfigured()) {
-			return;
-		}
-		images.move().forEach(image -> storage.delete(MediaReferences.thumbnailKeyOf(image.objectKey())));
 	}
 
 	@Override
@@ -346,18 +332,5 @@ class ArticleContentSurface implements ContentSurface {
 		}
 	}
 
-	private static void putPresent(Map<String, Object> fields, String name, Object value) {
-		if (value != null) {
-			fields.put(name, value);
-		}
-	}
 
-	private static void setOrUnset(Update update, String name, Object value) {
-		if (value == null) {
-			update.unset(name);
-		}
-		else {
-			update.set(name, value);
-		}
-	}
 }
