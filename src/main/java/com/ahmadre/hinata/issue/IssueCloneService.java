@@ -94,10 +94,10 @@ public class IssueCloneService {
 	 *   <li>{@code state}: cloning a finished issue must produce work to do, not a
 	 *       second finished issue — {@code create} resets it to the first state;
 	 *   <li>{@code reporterId}: the person cloning is the author of the copy;
-	 *   <li>the e-mail-ingest trio ({@code reporterEmail}, {@code inboundMessageId},
-	 *       {@code inboundSubject}, {@code ingestConnectionId}): the copy did not
-	 *       arrive by mail, and duplicating the message id would break the dedupe
-	 *       that stops a re-polled mail becoming a second ticket;
+	 *   <li>what came with an e-mail ({@code reporterEmail}, {@code inboundMessageId},
+	 *       {@code inboundSubject}, {@code ingestConnectionId}, {@code refusedAttachments}):
+	 *       the copy did not arrive by mail, and duplicating the message id would break
+	 *       the dedupe that stops a re-polled mail becoming a second ticket;
 	 *   <li>{@code watcherIds}: a subscription is a person's own decision about one
 	 *       ticket, never something a copy inherits on their behalf;
 	 *   <li>history and progress — {@code spentMinutes}, {@code resolvedAt},
@@ -116,7 +116,7 @@ public class IssueCloneService {
 	 */
 	static final List<String> LEFT_BEHIND = List.of(
 			"id", "numberInProject", "readableId", "formerReadableIds", "state", "reporterId",
-			"reporterEmail", "inboundMessageId", "inboundSubject", "ingestConnectionId",
+			"reporterEmail", "inboundMessageId", "inboundSubject", "ingestConnectionId", "refusedAttachments",
 			"watcherIds", "participantIds", "participantMeta", "spentMinutes", "rank", "resolvedAt", "archived",
 			"archivedAt", "dueReminderFor", "createdAt", "updatedAt",
 			"subtaskCount", "subtaskDoneCount", "searchText",

@@ -46,6 +46,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
  * E-mail-to-ticket: polls every enabled managed IMAP connection and turns
@@ -147,10 +148,9 @@ public class EmailIngestService {
 			log.info("Skipping already-ingested message {}", messageId);
 			return; // caller still sets SEEN
 		}
-		// Before the issue exists, so a refused attachment can say so in its description.
-		List<MailFile> files = filesOf(message, true);
+		String body = bodyOf(message);
 		// An e-mail body arrives as markdown (HtmlToMarkdown); storage is Lexical.
-		RichText ingested = richText.fromMarkdown(buildDescription(from, message, files));
+		RichText ingested = richText.fromMarkdown(buildDescription(from, body, List.of()));
 		String reporterId = resolveReporterId(from);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
@@ -164,8 +164,9 @@ public class EmailIngestService {
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
 				.build();
-		// Refused by the text check: nothing becomes an issue, and nobody is mailed back, or the
-		// mailbox would answer spam. The connection counts it, without any of the words.
+		// Refused by the text check: nothing becomes an issue, no attachment is even read, and
+		// nobody is mailed back, or the mailbox would answer spam. The connection counts it,
+		// without any of the words.
 		TextCheck.Verdicts texts;
 		try {
 			texts = textCheck.require(new TextCheck.Entry(TextField.ISSUE_TITLE, issue.getTitle(), null),
@@ -188,8 +189,12 @@ public class EmailIngestService {
 		textCheck.afterSave(ref, texts);
 		log.info("Created {} from e-mail by {}{}", created.getReadableId(), from,
 				reporterId != null ? " (author resolved to user " + reporterId + ")" : "");
+		List<Issue.RefusedAttachment> refused = attachFiles(message, created.getId());
+		if (!refused.isEmpty()) {
+			issues.noteRefusedAttachments(created.getId(), refused,
+					richText.fromMarkdown(buildDescription(from, body, refused)));
+		}
 		notifyMembers(created, projectId, from, reporterId);
-		attachFiles(files, created.getId());
 	}
 
 	/**
@@ -210,20 +215,23 @@ public class EmailIngestService {
 		return users.findActiveByEmail(from).map(User::getId).orElse(null);
 	}
 
+	/** The parsed (plain or HTML→Markdown) body of [message], as much of it as a description keeps. */
+	private String bodyOf(Message message) throws Exception {
+		return truncate(textOf(message), 20000);
+	}
+
 	/** The description body written for an ingested message: an attribution header,
-	 * the parsed (plain or HTML→Markdown) mail body, and a line for every attachment
-	 * the upload gate refused. */
-	private String buildDescription(String from, Message message, List<MailFile> files) throws Exception {
+	 * the mail's [body], and a line for every attachment the upload gate refused. */
+	private String buildDescription(String from, String body, List<Issue.RefusedAttachment> refused) {
 		StringBuilder description = new StringBuilder(DESCRIPTION_HEADER).append("**").append(from)
-				.append("**\n\n---\n\n").append(truncate(textOf(message), 20000));
+				.append("**\n\n---\n\n").append(body);
 		Locale locale = settings.instanceLocale();
-		for (MailFile file : files) {
-			if (file.refusal() != null) {
-				String reason = messages.getMessage(file.refusal().messageKey(),
-						gate.argumentsOf(file.refusal(), UploadKind.MAIL_ATTACHMENT), locale);
-				description.append("\n\n").append(messages.getMessage("ingest.attachmentRefused",
-						new Object[] { codeSpan(file.candidate().fileName()), reason }, locale));
-			}
+		for (Issue.RefusedAttachment file : refused) {
+			UploadRefusal refusal = UploadRefusal.of(file.reason());
+			String reason = messages.getMessage(refusal.messageKey(),
+					gate.argumentsOf(refusal, UploadKind.MAIL_ATTACHMENT), locale);
+			description.append("\n\n").append(messages.getMessage("ingest.attachmentRefused",
+					new Object[] { codeSpan(file.fileName()), reason }, locale));
 		}
 		return description.toString();
 	}
@@ -336,8 +344,9 @@ public class EmailIngestService {
 						|| !issue.getDescription().startsWith(DESCRIPTION_HEADER)) {
 					return Outcome.SKIPPED; // foreign project or a manually edited body
 				}
-				RichText rebuilt = richText.fromMarkdown(
-						buildDescription(senderOf(message), message, filesOf(message, false)));
+				// The refused attachments as they were noted at ingest: none of their bytes is read again.
+				RichText rebuilt = richText.fromMarkdown(buildDescription(senderOf(message), bodyOf(message),
+						issue.getRefusedAttachments() == null ? List.of() : issue.getRefusedAttachments()));
 				// Compare the derived plain text, not the document: re-converting the
 				// same body must read as "already current" even if the converter's
 				// output shifts between releases.
@@ -388,37 +397,34 @@ public class EmailIngestService {
 	}
 
 	/**
-	 * One attachment of a mail as it was read, and the reason the upload gate refused
-	 * it; null when it passed.
+	 * Takes the attachments of [message] into issue [issueId] one at a time, each through the
+	 * upload gate first, so no more than one is ever held in memory. Returns those the gate
+	 * refused; each refusal is counted. The header's type is a sender's word, so the gate takes
+	 * the type from the content. Best-effort: a part that cannot be read is left out, and so is an
+	 * empty one; one that cannot be stored is logged and skipped. Without object storage there is
+	 * nothing to store and so nothing to check.
 	 */
-	private record MailFile(UploadCandidate candidate, UploadRefusal refusal) {
-	}
-
-	/**
-	 * The attachments of [message], each checked at the upload gate. The header's type is
-	 * a sender's word, so the gate takes the type from the content. A refusal is counted
-	 * when [count] is set, as it is when the mail is taken in, and not when only its
-	 * description is rebuilt. Best-effort: a part that cannot be read is left out, and so
-	 * is an empty one; without object storage there is nothing to store and so nothing to
-	 * check.
-	 */
-	private List<MailFile> filesOf(Message message, boolean count) {
-		List<MailFile> files = new ArrayList<>();
+	private List<Issue.RefusedAttachment> attachFiles(Message message, String issueId) {
+		List<Issue.RefusedAttachment> refused = new ArrayList<>();
 		if (!storage.isConfigured()) {
-			return files;
+			return refused;
 		}
-		List<UploadCandidate> candidates = new ArrayList<>();
 		try {
-			collectFiles(message, candidates);
+			forEachFile(message, candidate -> {
+				UploadRefusal refusal = refusalCounted(candidate);
+				if (refusal != null) {
+					log.info("Refused e-mail attachment {} ({} bytes) for {}: {}", candidate.fileName(),
+							candidate.size(), issueId, refusal.code());
+					refused.add(new Issue.RefusedAttachment(candidate.fileName(), refusal.code()));
+					return;
+				}
+				attach(candidate, issueId);
+			});
 		}
 		catch (Exception ex) {
 			log.warn("Extracting e-mail attachments failed: {}", ex.getMessage());
 		}
-		for (UploadCandidate candidate : candidates) {
-			files.add(new MailFile(candidate, count ? refusalCounted(candidate)
-					: gate.refusalOf(candidate).orElse(null)));
-		}
-		return files;
+		return refused;
 	}
 
 	private UploadRefusal refusalCounted(UploadCandidate candidate) {
@@ -431,7 +437,8 @@ public class EmailIngestService {
 		}
 	}
 
-	private void collectFiles(Part part, List<UploadCandidate> out) throws Exception {
+	/** Hands every attachment of [part] to [file], one after the other. */
+	private void forEachFile(Part part, Consumer<UploadCandidate> file) throws Exception {
 		Object content;
 		try {
 			content = part.getContent();
@@ -442,7 +449,7 @@ public class EmailIngestService {
 		}
 		if (content instanceof Multipart multipart) {
 			for (int i = 0; i < multipart.getCount(); i++) {
-				collectFiles(multipart.getBodyPart(i), out);
+				forEachFile(multipart.getBodyPart(i), file);
 			}
 			return;
 		}
@@ -458,39 +465,27 @@ public class EmailIngestService {
 		if (data.length == 0) {
 			return;
 		}
-		out.add(UploadCandidate.of(UploadKind.MAIL_ATTACHMENT, data, baseContentType(part),
+		file.accept(UploadCandidate.of(UploadKind.MAIL_ATTACHMENT, data, baseContentType(part),
 				safeFileName(attachmentName(part))));
 	}
 
-	/**
-	 * Stores every attachment the gate let through as an issue attachment, and logs the
-	 * ones it refused with the reason. Runs after the issue exists so a single bad part
-	 * can never abort ticket creation; failures are logged and skipped.
-	 */
-	private void attachFiles(List<MailFile> files, String issueId) {
-		for (MailFile file : files) {
-			UploadCandidate candidate = file.candidate();
-			if (file.refusal() != null) {
-				log.info("Refused e-mail attachment {} ({} bytes) for {}: {}", candidate.fileName(),
-						candidate.size(), issueId, file.refusal().code());
-				continue;
-			}
-			try {
-				StorageService.Stored stored = storage.putUserObject(StorageService.newObjectKey(), candidate);
-				attachments.add(issueId, Issue.Attachment.builder()
-						.id(UUID.randomUUID().toString())
-						.fileName(candidate.fileName())
-						.contentType(stored.contentType())
-						.size(stored.size())
-						.objectKey(stored.objectKey())
-						.uploadedAt(Instant.now())
-						.build());
-				log.info("Attached {} ({} bytes) from e-mail to {}", candidate.fileName(), stored.size(), issueId);
-			}
-			catch (RuntimeException ex) {
-				log.warn("Storing e-mail attachment {} for {} failed: {}", candidate.fileName(), issueId,
-						ex.getMessage());
-			}
+	/** Stores [candidate], which the gate let through, as an attachment of issue [issueId]. */
+	private void attach(UploadCandidate candidate, String issueId) {
+		try {
+			StorageService.Stored stored = storage.putUserObject(StorageService.newObjectKey(), candidate);
+			attachments.add(issueId, Issue.Attachment.builder()
+					.id(UUID.randomUUID().toString())
+					.fileName(candidate.fileName())
+					.contentType(stored.contentType())
+					.size(stored.size())
+					.objectKey(stored.objectKey())
+					.uploadedAt(Instant.now())
+					.build());
+			log.info("Attached {} ({} bytes) from e-mail to {}", candidate.fileName(), stored.size(), issueId);
+		}
+		catch (RuntimeException ex) {
+			log.warn("Storing e-mail attachment {} for {} failed: {}", candidate.fileName(), issueId,
+					ex.getMessage());
 		}
 	}
 
