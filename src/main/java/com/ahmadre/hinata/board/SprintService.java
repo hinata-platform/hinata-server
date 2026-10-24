@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.board;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.common.UserWords;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueActivity;
 import com.ahmadre.hinata.issue.IssueActivityRepository;
@@ -54,6 +55,7 @@ public class SprintService {
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
 	private final BoardAccess access;
+	private final UserWords words;
 
 	// ── access ────────────────────────────────────────────────────────────
 
@@ -312,7 +314,7 @@ public class SprintService {
 				doneIssues.size(), inSprint.size(), sprint.getCapacityPoints(), avg);
 
 		return new SprintReport(summary, burndown(sprint, inSprint, committed),
-				velocity, scopeChanges(sprint, inSprint), breakdown(inSprint, resolvedCache));
+				velocity, scopeChanges(sprint, inSprint, visible, user), breakdown(inSprint, resolvedCache));
 	}
 
 	/**
@@ -425,8 +427,12 @@ public class SprintService {
 		return out;
 	}
 
-	/** SPRINT-field activity touching this sprint inside its window → scope deltas. */
-	private List<ScopeChange> scopeChanges(Sprint sprint, List<Issue> inSprint) {
+	/**
+	 * SPRINT-field activity touching this sprint inside its window → scope deltas. An issue of a
+	 * project outside [visible] still moves the points, but under a name that gives away neither
+	 * its key nor its title: a board can span projects its reader does not belong to.
+	 */
+	private List<ScopeChange> scopeChanges(Sprint sprint, List<Issue> inSprint, Set<String> visible, User reader) {
 		if (sprint.getStartDate() == null) {
 			return List.of();
 		}
@@ -455,7 +461,9 @@ public class SprintService {
 			if (delta == 0) {
 				continue;
 			}
-			String label = issue != null ? issue.getReadableId() + " · " + issue.getTitle() : a.getIssueId();
+			String label = issue == null ? a.getIssueId()
+					: visible.contains(issue.getProjectId()) ? issue.getReadableId() + " · " + issue.getTitle()
+					: words.of(reader, "sprint.report.issueWithoutAccess");
 			LocalDate date = a.getCreatedAt() != null
 					? a.getCreatedAt().atZone(ZoneOffset.UTC).toLocalDate() : sprint.getStartDate();
 			out.add(new ScopeChange(date, delta, label));
