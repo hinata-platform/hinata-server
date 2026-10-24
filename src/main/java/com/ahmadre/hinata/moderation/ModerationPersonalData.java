@@ -13,6 +13,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -28,7 +29,7 @@ import java.util.stream.Collectors;
  * versions of the house rules they accepted when (HIN-175).
  *
  * <p>Never who blocks them, and never who reported them or why (Art. 15 Abs. 4 DSGVO, § 29 Abs. 1
- * BDSG): a case about their content shows when, which categories, and how it was decided.
+ * BDSG): a decided case about their content shows when, which categories, and how it was decided.
  */
 @Component
 @RequiredArgsConstructor
@@ -38,6 +39,7 @@ public class ModerationPersonalData implements PersonalDataExport {
 	private final UserWords words;
 	private final MongoTemplate mongo;
 	private final HouseRulesService houseRules;
+	private final Clock clock;
 
 	@Override
 	public String key() {
@@ -163,9 +165,14 @@ public class ModerationPersonalData implements PersonalDataExport {
 		return byId;
 	}
 
-	/** The cases about content [user] wrote, off {@code contributor_status}; nothing of who reported. */
+	/**
+	 * The decided cases about content [user] wrote, off {@code contributor_status}; nothing of who
+	 * reported. An open case and one held for law enforcement stay out until they are settled: an
+	 * export must not warn somebody of a case before it is decided (Art. 23 DSGVO, § 29 BDSG).
+	 */
 	private List<ModerationCase> casesAbout(User user) {
-		Query query = Query.query(Criteria.where("contributorIds").is(user.getId()))
+		Query query = Query.query(Criteria.where("contributorIds").is(user.getId()).and("status").is(CaseStatus.DECIDED)
+				.orOperator(Criteria.where("legalHoldUntil").is(null), Criteria.where("legalHoldUntil").lte(clock.instant())))
 				.with(Sort.by(Sort.Direction.DESC, "firstReportedAt"));
 		query.fields().include("firstReportedAt", "categories", "decision.outcome", "decision.ground");
 		return mongo.find(query, ModerationCase.class);
