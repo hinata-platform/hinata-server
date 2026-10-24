@@ -502,6 +502,7 @@ final class UgcInventory {
 			entry("public_form_tokens.id", system()),
 			entry("public_form_tokens.ipHash", system()),
 			entry("public_form_tokens.tokenHash", system()),
+			entry("public_report_quota.id", system()),
 			entry("rules_acceptances.id", system()),
 			entry("rules_acceptances.userId", system()),
 			entry("running_timers.activityType", reportedAsOther("time tracking and absences: seen by the person and those responsible for them")),

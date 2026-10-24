@@ -3,6 +3,8 @@ package com.ahmadre.hinata.moderation;
 import com.ahmadre.hinata.config.HinataProperties;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
@@ -17,6 +19,8 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.LocalDate;
 import java.util.Base64;
 import java.util.HexFormat;
 
@@ -98,15 +102,48 @@ class PublicForms {
 				? Check.INVALID : Check.GOOD;
 	}
 
-	/** Whether [ip], or everybody together, sent as many forms in the last hour as they may. */
+	/**
+	 * Whether [ip], or everybody together, sent more forms in the last hour than they may, counted
+	 * after the token of this one was used up ({@link #use}): forms sent at the same moment each see
+	 * the others, so none passes a limit the others already reached.
+	 */
 	boolean overLimit(String ip) {
 		Instant hourAgo = clock.instant().minus(Duration.ofHours(1));
 		long fromAddress = mongo.count(Query.query(Criteria.where("ipHash").is(ipHash(ip)).and("usedAt").gte(hourAgo)),
 				PublicFormToken.class);
-		if (fromAddress >= PER_ADDRESS_PER_HOUR) {
+		if (fromAddress > PER_ADDRESS_PER_HOUR) {
 			return true;
 		}
-		return mongo.count(Query.query(Criteria.where("usedAt").gte(hourAgo)), PublicFormToken.class) >= TOTAL_PER_HOUR;
+		return mongo.count(Query.query(Criteria.where("usedAt").gte(hourAgo)), PublicFormToken.class) > TOTAL_PER_HOUR;
+	}
+
+	/**
+	 * Counts one more report of [countedEmail] today; false when it sent its [perDay] already. One
+	 * atomic step on a counter of its own: two reports at the same moment cannot both take the last
+	 * place. Null, no address, is always room.
+	 */
+	boolean reserveEmail(String countedEmail, int perDay) {
+		if (countedEmail == null) {
+			return true;
+		}
+		String id = HexFormat.of().formatHex(hmac(key, ("mail:" + countedEmail).getBytes(StandardCharsets.UTF_8)))
+				.substring(0, 32) + ":" + LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC);
+		Query room = Query.query(Criteria.where("_id").is(id).and("count").lt(perDay));
+		Update one = new Update().inc("count", 1L).setOnInsert("createdAt", clock.instant());
+		for (int attempt = 0; attempt < 2; attempt++) {
+			try {
+				return mongo.findAndModify(room, one, FindAndModifyOptions.options().upsert(true).returnNew(true),
+						PublicReportQuota.class) != null;
+			}
+			catch (DuplicateKeyException full) {
+				// Either the counter is full, or another report created it a moment ago: once more,
+				// and a full counter answers the same again.
+				if (attempt == 1) {
+					return false;
+				}
+			}
+		}
+		return false;
 	}
 
 	/** Uses [token] up; false when it was used a moment ago by another request. */

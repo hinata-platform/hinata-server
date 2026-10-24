@@ -64,8 +64,8 @@ class PublicModerationController {
 
 	/**
 	 * Files a report sent from the form. In this order: only from this page, a token this server
-	 * made for this address and not used, within the limits, every field right; then the token is
-	 * used and the report filed. A filled-in trap field looks done and files nothing.
+	 * made for this address and not used, every field right; then the token is used, the limits
+	 * are counted with it, and the report filed. A filled-in trap field looks done and files nothing.
 	 */
 	@Operation(summary = "Send a report from the form for people without an account")
 	@SecurityRequirements
@@ -102,9 +102,6 @@ class PublicModerationController {
 		}
 		PublicReports.Submission submission = new PublicReports.Submission(values.location(), categoryOf(values.category()),
 				values.explanation(), values.name(), values.email(), values.goodFaith());
-		if (forms.overLimit(address) || reports.emailOverLimit(submission)) {
-			return PublicPage.page(pages.limited(locale));
-		}
 		Optional<String> problem = reports.problemWith(submission);
 		if (problem.isPresent()) {
 			// The token stays good: nothing was sent yet.
@@ -112,6 +109,12 @@ class PublicModerationController {
 		}
 		if (!forms.use(token, address)) {
 			return PublicPage.page(pages.form(locale, values, forms.issue(address), "web.moderation.report.error.expired"));
+		}
+		// Counted after the token is used, and the mailbox in one step: forms sent at the same
+		// moment cannot all pass a limit each read before the others counted.
+		if (forms.overLimit(address)
+				|| !forms.reserveEmail(PublicReports.countedEmail(submission.email()), PublicReports.PER_EMAIL_PER_DAY)) {
+			return PublicPage.page(pages.limited(locale));
 		}
 		reports.file(submission, locale);
 		return PublicPage.page(pages.done(locale));
