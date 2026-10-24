@@ -40,7 +40,7 @@ class AvatarImagesTest {
 
 	@Test
 	void aTallPhotoIsCroppedSquareAndCappedAtTheMaxEdge() throws Exception {
-		byte[] jpeg = AvatarImages.compress(upload("image/png", png(900, 1400)));
+		byte[] jpeg = AvatarImages.compress(TestUploadGates.open(), upload("image/png", png(900, 1400)));
 
 		BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(jpeg));
 		assertThat(decoded.getWidth()).isEqualTo(AvatarImages.MAX_SIZE);
@@ -49,7 +49,7 @@ class AvatarImagesTest {
 
 	@Test
 	void aSmallSourceIsNeverBlownUp() throws Exception {
-		byte[] jpeg = AvatarImages.compress(upload("image/png", png(200, 200)));
+		byte[] jpeg = AvatarImages.compress(TestUploadGates.open(), upload("image/png", png(200, 200)));
 
 		BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(jpeg));
 		assertThat(decoded.getWidth()).isEqualTo(200);
@@ -57,39 +57,56 @@ class AvatarImagesTest {
 
 	@Test
 	void anEmptyUploadIsRejected() {
-		assertThatThrownBy(() -> AvatarImages.compress(upload("image/png", new byte[0])))
+		assertThatThrownBy(() -> AvatarImages.compress(TestUploadGates.open(), upload("image/png", new byte[0])))
 				.isInstanceOf(ApiException.class)
-				.hasMessage("error.avatar.empty");
+				.hasMessage("error.upload.refused.empty");
 	}
 
 	@Test
 	void anUploadOverTheSizeCapIsRejectedBeforeItIsDecoded() {
 		// One byte past 12 MiB — the guard exists so a phone photo cannot be used
 		// to make the server decode (and hold) an arbitrarily large raster.
-		byte[] tooBig = new byte[(int) AvatarImages.MAX_UPLOAD_BYTES + 1];
+		byte[] tooBig = new byte[(int) UploadGate.AVATAR_MAX_BYTES + 1];
 
-		assertThatThrownBy(() -> AvatarImages.compress(upload("image/jpeg", tooBig)))
+		assertThatThrownBy(() -> AvatarImages.compress(TestUploadGates.open(), upload("image/jpeg", tooBig)))
 				.isInstanceOf(ApiException.class)
-				.hasMessage("error.avatar.tooLarge");
+				.hasMessage("error.upload.refused.size");
 	}
 
 	@Test
-	void aTypeTheServerCannotDecodeIsRejected() throws Exception {
-		assertThatThrownBy(() -> AvatarImages.compress(upload("image/webp", png(200, 200))))
+	void aTypeTheServerCannotDecodeIsRejected() {
+		// A WebP by its first bytes: the gate refuses the type before anything is decoded.
+		byte[] webp = new byte[64];
+		System.arraycopy("RIFF".getBytes(StandardCharsets.US_ASCII), 0, webp, 0, 4);
+		webp[4] = 56;
+		System.arraycopy("WEBPVP8 ".getBytes(StandardCharsets.US_ASCII), 0, webp, 8, 8);
+
+		assertThatThrownBy(() -> AvatarImages.compress(TestUploadGates.open(), upload("image/webp", webp)))
 				.isInstanceOf(ApiException.class)
-				.hasMessage("error.avatar.unsupportedType");
+				.hasMessage("error.upload.refused.type");
 	}
 
 	/**
 	 * The declared content type is a claim, not evidence. A payload that is not
-	 * actually an image has to fail here — it is the only place that would notice
-	 * before the bytes are stored and later served back to a browser.
+	 * actually an image has to fail at the gate, before the bytes are decoded,
+	 * stored, or later served back to a browser.
 	 */
 	@Test
 	void aNonImageWearingAnImageContentTypeIsRejected() {
 		byte[] spoofed = "<?php echo 'not a png'; ?>".getBytes(StandardCharsets.UTF_8);
 
-		assertThatThrownBy(() -> AvatarImages.compress(upload("image/png", spoofed)))
+		assertThatThrownBy(() -> AvatarImages.compress(TestUploadGates.open(), upload("image/png", spoofed)))
+				.isInstanceOf(ApiException.class)
+				.hasMessage("error.upload.refused.signature");
+	}
+
+	/** A picture whose header passes but whose pixels do not decode is still refused. */
+	@Test
+	void aPictureThatDoesNotDecodeIsRejected() throws Exception {
+		byte[] png = png(200, 200);
+		byte[] broken = java.util.Arrays.copyOf(png, 40);
+
+		assertThatThrownBy(() -> AvatarImages.compress(TestUploadGates.open(), upload("image/png", broken)))
 				.isInstanceOf(ApiException.class)
 				.hasMessage("error.avatar.unreadable");
 	}
@@ -108,7 +125,7 @@ class AvatarImagesTest {
 		assertThat(indexOf(source, EXIF_SIGNATURE)).isNotEqualTo(-1);
 		assertThat(indexOf(source, APP1_MARKER)).isNotEqualTo(-1);
 
-		byte[] stored = AvatarImages.compress(upload("image/jpeg", source));
+		byte[] stored = AvatarImages.compress(TestUploadGates.open(), upload("image/jpeg", source));
 
 		assertThat(indexOf(stored, EXIF_SIGNATURE)).as("Exif header").isEqualTo(-1);
 		// 0xFF in entropy-coded JPEG data is always followed by 0x00 or a marker,

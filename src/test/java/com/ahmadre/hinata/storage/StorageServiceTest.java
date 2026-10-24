@@ -19,7 +19,7 @@ class StorageServiceTest {
 
 	@Test
 	void unconfiguredS3IsNotConfigured() {
-		StorageService service = new StorageService(properties());
+		StorageService service = new StorageService(properties(), TestUploadGates.open());
 		assertThat(service.isConfigured()).isFalse();
 		assertThatThrownBy(() -> service.getObject("media/x")).isInstanceOf(ApiException.class);
 	}
@@ -29,7 +29,7 @@ class StorageServiceTest {
 		HinataProperties props = properties();
 		props.getStorage().setAccessKey("key");
 		props.getStorage().setSecretKey("secret");
-		assertThat(new StorageService(props).isConfigured()).isTrue();
+		assertThat(new StorageService(props, TestUploadGates.open()).isConfigured()).isTrue();
 	}
 
 	@Test
@@ -39,7 +39,7 @@ class StorageServiceTest {
 			props.getStorage().setAccessKey("key");
 			props.getStorage().setSecretKey("secret");
 			props.getStorage().setAddressingStyle(style);
-			assertThat(new StorageService(props).isConfigured()).isTrue();
+			assertThat(new StorageService(props, TestUploadGates.open()).isConfigured()).isTrue();
 		}
 	}
 
@@ -50,7 +50,7 @@ class StorageServiceTest {
 		// S3 credentials must not accidentally count for the azure provider.
 		props.getStorage().setAccessKey("key");
 		props.getStorage().setSecretKey("secret");
-		assertThat(new StorageService(props).isConfigured()).isFalse();
+		assertThat(new StorageService(props, TestUploadGates.open()).isConfigured()).isFalse();
 	}
 
 	@Test
@@ -61,14 +61,14 @@ class StorageServiceTest {
 				"DefaultEndpointsProtocol=https;AccountName=unittest;AccountKey="
 						+ java.util.Base64.getEncoder().encodeToString("test-key".getBytes())
 						+ ";EndpointSuffix=core.windows.net");
-		assertThat(new StorageService(props).isConfigured()).isTrue();
+		assertThat(new StorageService(props, TestUploadGates.open()).isConfigured()).isTrue();
 	}
 
 	@Test
 	void unknownProviderFailsFastAtStartup() {
 		HinataProperties props = properties();
 		props.getStorage().setProvider("ftp");
-		assertThatThrownBy(() -> new StorageService(props))
+		assertThatThrownBy(() -> new StorageService(props, TestUploadGates.open()))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("ftp");
 	}
