@@ -4,6 +4,7 @@ import com.ahmadre.hinata.setup.ServerSettings.RulesMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.support.ResourceBundleMessageSource;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,7 +26,7 @@ class RulesRendererTest {
 
 	private static RulesRenderer.Inputs inputs(RulesMode mode, String text, String url, String email) {
 		return new RulesRenderer.Inputs(mode, text, url, "Werkhaus e. V.", email, "https://werkhaus.example/impressum",
-				12, "https://api.werkhaus.example/api/v1/public/report");
+				12, "https://api.werkhaus.example/api/v1/public/report", RulesRenderer.TextCheck.DEFAULT);
 	}
 
 	@Test
@@ -51,6 +52,28 @@ class RulesRendererTest {
 		assertThat(own).startsWith("# Unsere Regeln").contains("## So moderieren wir");
 		assertThat(elsewhere).contains("[https://werkhaus.example/regeln](https://werkhaus.example/regeln)")
 				.contains("## So moderieren wir");
+	}
+
+	private static RulesRenderer.Inputs checking(RulesRenderer.TextCheck check) {
+		return new RulesRenderer.Inputs(RulesMode.BUILT_IN, null, null, "Werkhaus e. V.", null, null, 6,
+				"https://api.werkhaus.example/api/v1/public/report", check);
+	}
+
+	/** "How we moderate" says what the text check does (HIN-176), own terms included and inert. */
+	@Test
+	void theTextCheckLineFollowsTheSwitchesAndNamesOwnTerms() {
+		RulesRenderer renderer = renderer();
+		String refuses = renderer.render(checking(RulesRenderer.TextCheck.DEFAULT)).get("de");
+		String both = renderer.render(checking(new RulesRenderer.TextCheck(true, true, List.of()))).get("de");
+		String off = renderer.render(checking(new RulesRenderer.TextCheck(false, false, List.of()))).get("de");
+		String own = renderer.render(checking(new RulesRenderer.TextCheck(false, false,
+				List.of("Spast", "[x](javascript:alert(1))")))).get("de");
+
+		assertThat(refuses).contains("**Texte** prüft der Server beim Speichern. Eindeutige Begriffe")
+				.doesNotContain("legt er der Moderation vor");
+		assertThat(both).contains("Was unklar ist, legt er der Moderation vor, und ein Mensch entscheidet.");
+		assertThat(off).contains("**Texte** werden nicht automatisch geprüft.");
+		assertThat(own).contains("nur auf diese Begriffe und lehnt sie ab: Spast, \\[x\\]\\(javascript:alert\\(1\\)\\)");
 	}
 
 	@Test

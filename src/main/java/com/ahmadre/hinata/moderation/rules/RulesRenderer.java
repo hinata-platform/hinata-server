@@ -41,7 +41,20 @@ class RulesRenderer {
 	 * instance is called by its organisation's.
 	 */
 	record Inputs(RulesMode mode, String text, String url, String operator, String contactEmail,
-			String imprintUrl, int retentionMonths, String reportUrl) {
+			String imprintUrl, int retentionMonths, String reportUrl, TextCheck textCheck) {
+	}
+
+	/**
+	 * What the text check does (HIN-176), as "How we moderate" has to say: whether the shipped
+	 * lists refuse, whether unclear finds go before moderation, and the own terms that are refused.
+	 */
+	record TextCheck(boolean refuses, boolean flags, List<String> ownTerms) {
+
+		static final TextCheck DEFAULT = new TextCheck(true, false, List.of());
+
+		TextCheck {
+			ownTerms = ownTerms == null ? List.of() : List.copyOf(ownTerms);
+		}
 	}
 
 	/** The rules in each language, by language tag, in {@link #LANGUAGES} order. */
@@ -69,7 +82,7 @@ class RulesRenderer {
 		parts.add("## " + t("moderation.how.title", locale));
 		parts.add(t("moderation.how.report", locale, link(in.reportUrl())));
 		parts.add(t("moderation.how.review", locale, in.operator()));
-		parts.add(t("moderation.how.text", locale));
+		parts.add(textCheck(in.textCheck() == null ? TextCheck.DEFAULT : in.textCheck(), locale));
 		parts.add(t("moderation.how.images", locale));
 		parts.add(t("moderation.how.consequences", locale));
 		parts.add(t("moderation.how.retention", locale, in.retentionMonths()));
@@ -80,6 +93,36 @@ class RulesRenderer {
 			parts.add(t("moderation.how.imprint", locale, link(in.imprintUrl())));
 		}
 		return String.join("\n\n", parts);
+	}
+
+	/** The line on the text check, as the settings stand: one sentence per thing it does. */
+	private String textCheck(TextCheck check, Locale locale) {
+		String own = check.ownTerms().isEmpty() ? null
+				: String.join(", ", check.ownTerms().stream().map(RulesRenderer::literal).toList());
+		if (!check.refuses() && !check.flags()) {
+			return own == null ? t("moderation.how.text", locale) : t("moderation.how.textOwnOnly", locale, own);
+		}
+		List<String> sentences = new ArrayList<>();
+		sentences.add(t(check.refuses() ? "moderation.how.textRefuses" : "moderation.how.textFlagsOnly", locale));
+		if (check.refuses() && check.flags()) {
+			sentences.add(t("moderation.how.textFlags", locale));
+		}
+		if (own != null) {
+			sentences.add(t("moderation.how.textOwn", locale, own));
+		}
+		return String.join(" ", sentences);
+	}
+
+	/** [text] as plain words in Markdown: nothing in it becomes a link, a heading or emphasis. */
+	static String literal(String text) {
+		StringBuilder out = new StringBuilder(text.length() + 8);
+		for (char c : text.toCharArray()) {
+			if ("\\`*_{}[]()<>#+-.!|~".indexOf(c) >= 0) {
+				out.append('\\');
+			}
+			out.append(c == '\n' || c == '\r' ? ' ' : c);
+		}
+		return out.toString();
 	}
 
 	private String t(String key, Locale locale, Object... args) {

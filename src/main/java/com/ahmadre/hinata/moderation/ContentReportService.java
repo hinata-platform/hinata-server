@@ -108,6 +108,33 @@ public class ContentReportService {
 		}
 	}
 
+	/**
+	 * Files what the text check found in [ref] as an automated report (HIN-176): [reporterKey] names
+	 * the field, [terms] what was found. The same field finding again adds a hit to the report,
+	 * never a second one. Read past the check of who may see it: the server just saved it, also
+	 * from a mail nobody signed in to send. Gone content files nothing.
+	 */
+	public void fileAutomated(ContentRef ref, ReportCategory category, List<String> terms, String reporterKey) {
+		ContentSurface surface = surfaces.stream().filter(candidate -> candidate.kind() == ref.kind())
+				.findFirst().orElse(null);
+		if (surface == null) {
+			return;
+		}
+		ContentSnapshot snapshot = surface.forModeration(new TargetRef(ref.kind(), ref.id(), ref.parentId()))
+				.orElse(null);
+		if (snapshot == null || snapshot.removed()) {
+			return;
+		}
+		Filed filed = file(new Target(snapshot.ref(), snapshot, locationOf(snapshot)), category,
+				String.join(", ", terms), new Source(ReportSource.AUTOMATED, reporterKey, null, null));
+		if (filed.newCase() || filed.becameUrgent()) {
+			notices.caseOpened(filed.moderationCase());
+		}
+		if (filed.newCase() && access.eligibleModerators(filed.moderationCase(), CaseAccess.Purpose.DECIDE).isEmpty()) {
+			notices.adminAlert(filed.moderationCase(), "moderation.alert.nobody");
+		}
+	}
+
 	/** Content resolved for a report: where it lives and what it was; no snapshot for {@code OTHER}. */
 	record Target(ContentRef ref, ContentSnapshot snapshot, String location) {
 	}
