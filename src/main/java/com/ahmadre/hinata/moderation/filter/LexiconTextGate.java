@@ -88,7 +88,7 @@ class LexiconTextGate implements TextGate {
 	public TextVerdict check(String text, TextField field, User author, String before) {
 		TextVerdict verdict = evaluate(text, field, before);
 		if (verdict.blocked()) {
-			count(StatMetric.TEXT_REFUSED, field);
+			count(StatMetric.TEXT_REFUSED, verdict);
 		}
 		return verdict;
 	}
@@ -96,7 +96,7 @@ class LexiconTextGate implements TextGate {
 	@Override
 	public void flagged(ContentRef ref, TextField field, TextVerdict verdict, User author) {
 		reports.fileAutomated(ref, verdict.category(), verdict.newFlagTerms(), "auto:" + field.name());
-		count(StatMetric.TEXT_FLAGGED, field);
+		count(StatMetric.TEXT_FLAGGED, verdict);
 	}
 
 	/** The verdict on [text] as [field], without counting anything: also for the admin's test. */
@@ -209,13 +209,17 @@ class LexiconTextGate implements TextGate {
 		return new Snapshot(filter, bundled.with(filter.ownBlockTerms(), filter.ownAllowTerms()), clock.instant());
 	}
 
-	/** In the request it counts for; a count that fails must not fail the request. */
-	private void count(StatMetric metric, TextField field) {
+	/**
+	 * By the category of [verdict], which the yearly figures report by (HIN-178). In the request
+	 * it counts for; a count that fails must not fail the request.
+	 */
+	private void count(StatMetric metric, TextVerdict verdict) {
+		ReportCategory category = verdict.category() == null ? ReportCategory.OTHER : verdict.category();
 		try {
-			stats.count(metric, field.name());
+			stats.count(metric, category.name());
 		}
 		catch (RuntimeException ex) {
-			log.warn("Counting {} for {} failed: {}", metric, field, ex.getMessage());
+			log.warn("Counting {} for {} failed: {}", metric, category, ex.getMessage());
 		}
 	}
 }

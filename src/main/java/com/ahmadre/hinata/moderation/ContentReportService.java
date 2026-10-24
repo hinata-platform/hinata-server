@@ -293,8 +293,9 @@ public class ContentReportService {
 		if (newReport) {
 			mongo.updateFirst(Query.query(Criteria.where("_id").is(moderationCase.getId())),
 					new Update().inc("reportCount", 1), ModerationCase.class);
-			stats.count(StatMetric.REPORT_CATEGORY, category.name());
-			stats.count(StatMetric.REPORT_SOURCE, source.kind().name());
+			if (source.kind() == ReportSource.MEMBER || source.kind() == ReportSource.PUBLIC) {
+				stats.notice(category);
+			}
 		}
 		return new Filed(moderationCase, opened.inserted(), opened.becameUrgent(), newReport);
 	}

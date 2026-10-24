@@ -69,9 +69,6 @@ public class DecisionService {
 	/** A legal hold without an end. */
 	static final Instant INDEFINITELY = Instant.parse("9999-12-31T23:59:59Z");
 
-	/** Hours to a decision are counted one by one up to a month; longer ones in one bucket. */
-	static final int HOURS_COUNTED = 720;
-
 	private final CaseAccess access;
 	private final MongoTemplate mongo;
 	private final List<ContentSurface> surfaces;
@@ -220,7 +217,7 @@ public class DecisionService {
 		if (decided == null) {
 			throw CaseSteps.stale(mongo, id);
 		}
-		count(decided, decision, now);
+		stats.decided(decided, decision, now);
 		audit.event(AuditAction.MODERATION_DECIDED).actor(actor).meta("case", id).log();
 		if (Boolean.TRUE.equals(decision.lawEnforcementNotified())) {
 			audit.event(AuditAction.MODERATION_LEGAL_HOLD_CHANGED).actor(actor).meta("case", id).log();
@@ -257,7 +254,6 @@ public class DecisionService {
 			log.warn("[moderation] suspension for case {} refused: {}", c.getId(), refused.getMessageKey());
 			return c;
 		}
-		stats.count(StatMetric.SUSPENSION_DURATION, decision.suspension().name());
 		Update update = new Update().set("suspension", new CaseSuspension(person.getId(), until, now, null, null));
 		update.push("history").slice(-ModerationCase.HISTORY_MAX)
 				.each(new CaseEvent(now, CaseEvent.Kind.SUSPENDED, decider.getId(), decision.suspension().name()));
@@ -432,23 +428,6 @@ public class DecisionService {
 				: Decision.Basis.AUTOMATED_DETECTION;
 	}
 
-	private void count(ModerationCase c, Decision decision, Instant now) {
-		stats.count(StatMetric.DECISION_OUTCOME, decision.outcome().name());
-		if (decision.ground() != null) {
-			stats.count(StatMetric.DECISION_GROUND, decision.ground().name());
-		}
-		if (decision.category() != null) {
-			stats.count(StatMetric.DECISION_CATEGORY, decision.category().name());
-		}
-		stats.count(StatMetric.DECISION_AUTOMATED_DETECTION, String.valueOf(Boolean.TRUE.equals(decision.automatedDetection())));
-		stats.count(StatMetric.HOURS_TO_DECISION, hoursBucket(c.getFirstReportedAt(), now));
-	}
-
-	/** The bucket of the hours from the first report to the decision: {@code 0} to {@code 720}, then {@code overflow}. */
-	static String hoursBucket(Instant firstReportedAt, Instant decidedAt) {
-		long hours = firstReportedAt == null ? 0 : Math.max(Duration.between(firstReportedAt, decidedAt).toHours(), 0);
-		return hours > HOURS_COUNTED ? "overflow" : String.valueOf(hours);
-	}
 
 	/** The admins hear once when one person removes more than ten times within an hour. */
 	private void alertOnManyRemovals(ModerationCase decided, User moderator, Instant now) {

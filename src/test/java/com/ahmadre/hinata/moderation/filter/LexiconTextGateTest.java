@@ -15,6 +15,8 @@ import java.time.Clock;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -54,7 +56,8 @@ class LexiconTextGateTest {
 		assertThat(verdict.verdict()).isEqualTo(TextVerdict.Verdict.BLOCK);
 		assertThat(verdict.category()).isEqualTo(ReportCategory.THREAT);
 		assertThat(verdict.terms()).containsExactly("ich bringe dich um");
-		verify(stats).count(StatMetric.TEXT_REFUSED, "COMMENT");
+		// Counted by its category, the way the yearly figures report it.
+		verify(stats).count(StatMetric.TEXT_REFUSED, "THREAT");
 	}
 
 	@Test
@@ -136,7 +139,7 @@ class LexiconTextGateTest {
 				"POST /api/v1/execute returns 500")) {
 			assertThat(gate.check(text, TextField.COMMENT, null, null)).as(text).isEqualTo(TextVerdict.ALLOW);
 		}
-		verify(stats, never()).count(StatMetric.TEXT_REFUSED, "COMMENT");
+		verify(stats, never()).count(eq(StatMetric.TEXT_REFUSED), anyString());
 	}
 
 	@Test

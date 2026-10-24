@@ -1,0 +1,6 @@
+Applicability,Service,Indicator,Value
+All,,Name of the service provider,Text
+All,,Date of the publication of the report,YYYY-MM-DD
+All,,Date of the publication of the latest previous report,YYYY-MM-DD
+All,,Starting date of reporting period,YYYY-MM-DD
+All,,Ending date of reporting period,YYYY-MM-DD

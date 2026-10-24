@@ -104,8 +104,7 @@ class ReportFlowIntegrationTest extends RemovalIntegrationSupport {
 				});
 		assertThat(mongo.find(Query.query(Criteria.where("userId").is(author.getId())), Notification.class))
 				.noneMatch(notice -> notice.getType().name().startsWith("MODERATION_"));
-		assertThat(stat(StatMetric.REPORT_CATEGORY, "HARASSMENT")).isEqualTo(1);
-		assertThat(stat(StatMetric.REPORT_SOURCE, "MEMBER")).isEqualTo(1);
+		assertThat(stat(StatMetric.NOTICE, "HARASSMENT")).isEqualTo(1);
 	}
 
 	@Test
@@ -164,9 +163,9 @@ class ReportFlowIntegrationTest extends RemovalIntegrationSupport {
 			assertThat(report.getCategory()).isEqualTo(ReportCategory.SPAM);
 			assertThat(report.getExplanation()).isEqualTo("Werbung fuer den eigenen Laden");
 		});
-		assertThat(stat(StatMetric.REPORT_CATEGORY, "HARASSMENT")).isEqualTo(1);
-		assertThat(stat(StatMetric.REPORT_CATEGORY, "SPAM")).isZero();
-		assertThat(stat(StatMetric.REPORT_SOURCE, "MEMBER")).isEqualTo(1);
+		// One notice: the second reason of the same person changed the first.
+		assertThat(stat(StatMetric.NOTICE, "HARASSMENT")).isEqualTo(1);
+		assertThat(stat(StatMetric.NOTICE, "SPAM")).isZero();
 		// The moderators heard of the case once.
 		assertThat(noticesOf(moderator, Notification.Type.MODERATION_CASE_OPENED)).hasSize(1);
 	}
@@ -194,7 +193,7 @@ class ReportFlowIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(cases()).singleElement()
 				.satisfies(opened -> assertThat(opened.getReportCount()).isEqualTo(2));
 		assertThat(mongo.findAll(ContentReport.class)).hasSize(2);
-		assertThat(stat(StatMetric.REPORT_SOURCE, "MEMBER")).isEqualTo(2);
+		assertThat(stat(StatMetric.NOTICE, "HARASSMENT")).isEqualTo(2);
 	}
 
 	@Test
@@ -219,7 +218,8 @@ class ReportFlowIntegrationTest extends RemovalIntegrationSupport {
 			assertThat(found.getHits()).isEqualTo(2);
 			assertThat(found.getLastSeenAt()).isNotNull();
 		});
-		assertThat(stat(StatMetric.REPORT_SOURCE, "AUTOMATED")).isEqualTo(1);
+		// The text check's find is no notice; the member's report is one.
+		assertThat(stat(StatMetric.NOTICE, "HARASSMENT")).isEqualTo(1);
 	}
 
 	@Test
