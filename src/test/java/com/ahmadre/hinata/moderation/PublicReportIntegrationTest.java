@@ -71,6 +71,7 @@ class PublicReportIntegrationTest extends RemovalIntegrationSupport {
 	@BeforeEach
 	void clean() {
 		mongo.getCollection("public_form_tokens").deleteMany(new Document());
+		mongo.getCollection("public_report_quota").deleteMany(new Document());
 		contactIs(settings, "moderation@example.org");
 		address = 1;
 	}
@@ -105,6 +106,8 @@ class PublicReportIntegrationTest extends RemovalIntegrationSupport {
 		form.add("name", "Kim");
 		form.add("email", email);
 		form.add("goodFaith", "true");
+		// Where the form was fetched from, for sending it from there again; the page ignores it.
+		form.add("sentFrom", "198.51.100." + address);
 		return form;
 	}
 
@@ -221,6 +224,55 @@ class PublicReportIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(send(form(freshToken(), "x", "SPAM", null, null)).getBody()).contains("moderation@example.org");
 		verify(mail, never()).sendNotification(eq("kim@example.org"), anyString(), anyString(), anyString(), any(),
 				any(), any(), any());
+	}
+
+	/** An address with a name in it is one mailbox under many spellings: refused, so none counts apart. */
+	@Test
+	void anAddressWithANameInItIsRefused() {
+		for (String spelling : List.of("a<kim@example.org>", "Kim <kim@example.org>", "kim@example.org, eve@example.org")) {
+			assertThat(send(form(freshToken(), "x", "SPAM", null, spelling)).getBody()).as(spelling)
+					.doesNotContain(DONE);
+		}
+	}
+
+	/** Sent all at once, the forms of one address and the reports of one mailbox still keep to the limits. */
+	@Test
+	void formsSentAtOnceKeepToTheLimits() throws Exception {
+		List<String> tokens = new java.util.ArrayList<>();
+		for (int i = 0; i < 3 * PublicForms.PER_ADDRESS_PER_HOUR; i++) {
+			tokens.add(tokenFrom(controller.form(null, "en", browser())));
+		}
+		clock.advance(Duration.ofSeconds(4));
+		assertThat(sentAtOnce(tokens.stream().map(token -> form(token, "x", "SPAM", null, null)).toList()))
+				.isLessThanOrEqualTo(PublicForms.PER_ADDRESS_PER_HOUR);
+
+		List<MultiValueMap<String, String>> sameMailbox = new java.util.ArrayList<>();
+		for (int i = 0; i < 3 * PublicReports.PER_EMAIL_PER_DAY; i++) {
+			address = 100 + i;
+			sameMailbox.add(form(freshToken(), "x", "SPAM", null, "kim@example.org"));
+		}
+		assertThat(sentAtOnce(sameMailbox)).isLessThanOrEqualTo(PublicReports.PER_EMAIL_PER_DAY);
+	}
+
+	/** How many of [forms], sent at the same moment each from the address it was fetched from, got through. */
+	private long sentAtOnce(List<MultiValueMap<String, String>> forms) throws Exception {
+		java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(forms.size());
+		try {
+			List<java.util.concurrent.Callable<String>> sends = new java.util.ArrayList<>();
+			for (MultiValueMap<String, String> form : forms) {
+				MockHttpServletRequest request = browser();
+				request.setRemoteAddr(form.getFirst("sentFrom"));
+				sends.add(() -> controller.submit(form, "en", request).getBody());
+			}
+			long done = 0;
+			for (java.util.concurrent.Future<String> page : pool.invokeAll(sends)) {
+				done += page.get().contains(DONE) ? 1 : 0;
+			}
+			return done;
+		}
+		finally {
+			pool.shutdownNow();
+		}
 	}
 
 	/** One policy for every page the server renders itself. */

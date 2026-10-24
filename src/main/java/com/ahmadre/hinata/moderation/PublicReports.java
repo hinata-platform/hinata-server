@@ -10,15 +10,12 @@ import com.ahmadre.hinata.content.TargetRef;
 import com.ahmadre.hinata.notification.NotificationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
 import java.time.Clock;
-import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -45,7 +42,12 @@ class PublicReports {
 	/** The one problem whose line names a number: how long an explanation has to be at least. */
 	static final String EXPLANATION_PROBLEM = "web.moderation.report.error.explanation";
 
-	private static final Pattern EMAIL = Pattern.compile("[^@\\s]+@[^@\\s]+\\.[^@\\s]+");
+	/**
+	 * One mailbox, nothing else: no name, no list, no comment. A name in angle brackets or a second
+	 * address would let one mailbox count as many for the limit, while mail still reaches it.
+	 */
+	private static final Pattern EMAIL = Pattern.compile(
+			"[^@\\s<>()\\[\\],;:\"\\\\]+@[^@\\s<>()\\[\\],;:\"\\\\]+\\.[^@\\s<>()\\[\\],;:\"\\\\]+");
 
 	private final ContentReportService reports;
 	private final List<ContentSurface> surfaces;
@@ -81,14 +83,6 @@ class PublicReports {
 			return Optional.of("web.moderation.report.error.goodFaith");
 		}
 		return Optional.empty();
-	}
-
-	/** Whether the address in [submission] sent its {@link #PER_EMAIL_PER_DAY} reports today already. */
-	boolean emailOverLimit(Submission submission) {
-		String counted = countedEmail(submission.email());
-		return counted != null && mongo.count(Query.query(Criteria.where("notifier.countedEmail").is(counted)
-				.and("createdAt").gte(clock.instant().minus(Duration.ofDays(1)))), ContentReport.class)
-				>= PER_EMAIL_PER_DAY;
 	}
 
 	/** Files [submission], sends the receipt in [locale] when there is an address. */
