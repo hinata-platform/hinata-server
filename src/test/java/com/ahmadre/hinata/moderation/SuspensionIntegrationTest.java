@@ -264,6 +264,18 @@ class SuspensionIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(reload(confirmed).getDecision().confirmedBy()).isEqualTo(rita.getId());
 		assertThat(reload(confirmed).getDecision().decidedBy()).isEqualTo(mira.getId());
 
+		// Both who decided and who confirmed stay out of the appeal; a third person decides it.
+		moderation.recordAppeal(confirmed.getId(), new AppealService.RecordedAppealRequest(
+				"Das war ein Scherz unter Kollegen.", Instant.now()));
+		long appealed = reload(confirmed).getRev();
+		AppealService.AppealDecisionRequest uphold = new AppealService.AppealDecisionRequest(appealed,
+				AppealService.AppealDecisionRequest.Result.UPHOLD, "Die Sperre bleibt, der Ton war verletzend.");
+		assertThatThrownBy(() -> moderation.decideAppeal(confirmed.getId(), uphold))
+				.satisfies(refused -> assertThat(keyOf(refused)).isEqualTo("error.moderation.conflictOfInterest"));
+		actingAs(user("nina", Role.MODERATOR));
+		moderation.decideAppeal(confirmed.getId(), uphold);
+		assertThat(reload(confirmed).getAppeal().state()).isEqualTo(Appeal.State.UPHELD);
+
 		actingAs(mira);
 		User olga = user("olga", Role.ORG_ADMIN);
 		user("otto", Role.ORG_ADMIN);

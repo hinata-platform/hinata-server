@@ -103,9 +103,14 @@ public class CaseAccess {
 			return excluded;
 		}
 		excluded.addAll(reporterIdsOf(moderationCase));
-		if (purpose == Purpose.REVIEW_APPEAL && moderationCase.getDecision() != null
-				&& moderationCase.getDecision().decidedBy() != null) {
-			excluded.add(moderationCase.getDecision().decidedBy());
+		if (purpose == Purpose.REVIEW_APPEAL && moderationCase.getDecision() != null) {
+			// Both who decided and who confirmed a suspension made the decision under review.
+			if (moderationCase.getDecision().decidedBy() != null) {
+				excluded.add(moderationCase.getDecision().decidedBy());
+			}
+			if (moderationCase.getDecision().confirmedBy() != null) {
+				excluded.add(moderationCase.getDecision().confirmedBy());
+			}
 		}
 		if (purpose == Purpose.SECOND_PERSON && moderationCase.getEvidenceReveal() != null
 				&& moderationCase.getEvidenceReveal().requestedBy() != null) {
