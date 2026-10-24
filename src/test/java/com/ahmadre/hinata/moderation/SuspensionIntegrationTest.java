@@ -334,6 +334,14 @@ class SuspensionIntegrationTest extends RemovalIntegrationSupport {
 		actingAs(rita);
 		assertThat(moderation.suspensions(0, 25).getContent()).extracting(SuspendedAccounts.SuspendedAccount::caseId)
 				.containsExactly(aboutAuthor.getId());
+		// Nor on the profile, nor in a note to the team: the case does not exist for its contributor.
+		assertThat(profiles.profile(reload(rita), reader.getId()).suspension().caseId()).isNull();
+		assertThat(profiles.profile(reload(rita), author.getId()).suspension().caseId()).isEqualTo(aboutAuthor.getId());
+		actingAs(admin);
+		adminUsers.liftSuspension(reader.getId(), "Klaerendes Gespraech gefuehrt");
+		followUpsDone();
+		assertThat(notices(rita, Notification.Type.MODERATION_TEAM_NOTE)).isEmpty();
+		assertThat(notices(mira, Notification.Type.MODERATION_TEAM_NOTE)).hasSize(1);
 	}
 
 	@Test

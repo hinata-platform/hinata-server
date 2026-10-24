@@ -75,10 +75,14 @@ public class ModerationNotices {
 				person -> notice(person, "moderation.notice.appeal"), QUIET);
 	}
 
-	/** A note to everybody who moderates, about [moderationCase] or the page when null. */
+	/**
+	 * A note to the team about [moderationCase], to whoever may see it, or about the page when null,
+	 * to everybody who moderates.
+	 */
 	void teamNote(ModerationCase moderationCase, String key) {
-		notifications.notifyPeople(Notification.Type.MODERATION_TEAM_NOTE, users.findByRolesContainingAndActiveIsTrue(
-						Role.MODERATOR),
+		List<User> team = moderationCase == null ? users.findByRolesContainingAndActiveIsTrue(Role.MODERATOR)
+				: access.eligibleModerators(moderationCase, CaseAccess.Purpose.SEE);
+		notifications.notifyPeople(Notification.Type.MODERATION_TEAM_NOTE, team,
 				moderationCase == null ? "/moderation" : caseLink(moderationCase), person -> notice(person, key), null);
 	}
 
