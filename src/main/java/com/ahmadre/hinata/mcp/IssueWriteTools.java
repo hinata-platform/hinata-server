@@ -4,13 +4,14 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.ContentOrigin;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueComment;
 import com.ahmadre.hinata.issue.IssueController;
 import com.ahmadre.hinata.issue.IssueService;
+import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
-import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.mcp.annotation.McpTool;
@@ -165,7 +166,7 @@ public class IssueWriteTools {
 			@McpToolParam(required = true, description = "Comment text (markdown)") String text) {
 		scopeGuard.require(Scopes.ISSUES_WRITE);
 		User me = currentUser.require();
-		IssueComment saved = issueService.addComment(idOrReadableId, commentContent(text), me);
+		IssueComment saved = issueService.addComment(idOrReadableId, commentContent(text), null, me, ContentOrigin.MCP);
 		audit.event(AuditAction.MCP_COMMENT_ADDED).actor(me)
 				.meta("issue", saved.getIssueId()).log();
 		return McpViews.CommentView.of(saved);

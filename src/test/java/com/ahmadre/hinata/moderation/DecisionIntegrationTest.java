@@ -96,14 +96,24 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 		return mongo.findOne(Query.query(Criteria.where("target.id").is(comment.getId())), ModerationCase.class);
 	}
 
+	/** A decision that suspends nobody. */
+	static DecisionService.DecisionRequest request(Long rev, Decision.Outcome outcome,
+			DecisionService.RemovalChoice removal, Decision.Ground ground, ReportCategory category, String facts,
+			String ruleReference, String lawReference, String responsibleId, boolean deceptiveCommercial,
+			String messageToAuthor, String internalNote, boolean lawEnforcementNotified) {
+		return new DecisionService.DecisionRequest(rev, outcome, removal, ground, category, facts, ruleReference,
+				lawReference, responsibleId, deceptiveCommercial, messageToAuthor, internalNote, lawEnforcementNotified,
+				null);
+	}
+
 	static DecisionService.DecisionRequest action(long rev, RemovalScope scope) {
-		return new DecisionService.DecisionRequest(rev, Decision.Outcome.ACTION, new DecisionService.RemovalChoice(scope),
+		return request(rev, Decision.Outcome.ACTION, new DecisionService.RemovalChoice(scope),
 				Decision.Ground.RULES, ReportCategory.HARASSMENT, FACTS, "Hausregel 2: Kein Herabsetzen anderer", null,
 				null, false, "Bitte bleib sachlich.", "Zweiter Vorfall im Projekt", false);
 	}
 
 	static DecisionService.DecisionRequest outcome(long rev, Decision.Outcome outcome, String facts) {
-		return new DecisionService.DecisionRequest(rev, outcome, null, null, null, facts, null, null, null, false, null,
+		return request(rev, outcome, null, null, null, facts, null, null, null, false, null,
 				null, false);
 	}
 
@@ -194,7 +204,7 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 				ReportCategory.OTHER, "Der Teamname beleidigt Mitglieder", "Team Aufbau", false), reader);
 		ModerationCase other = mongo.findOne(Query.query(Criteria.where("target.kind").is(ContentKind.OTHER)),
 				ModerationCase.class);
-		DecisionService.DecisionRequest handled = new DecisionService.DecisionRequest(0L, Decision.Outcome.HANDLED, null,
+		DecisionService.DecisionRequest handled = request(0L, Decision.Outcome.HANDLED, null,
 				Decision.Ground.RULES, ReportCategory.HARASSMENT, "Die Projektleitung hat den Teamnamen geaendert.", null,
 				null, null, false, null, null, false);
 
@@ -216,7 +226,7 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 		ModerationCase c = mongo.findOne(Query.query(Criteria.where("target.id").is(photo.getId())),
 				ModerationCase.class);
 
-		moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, Decision.Outcome.ACTION,
+		moderation.decide(c.getId(), request(0L, Decision.Outcome.ACTION,
 				new DecisionService.RemovalChoice(RemovalScope.DESCRIPTION), Decision.Ground.RULES, ReportCategory.SEXUAL,
 				FACTS, "Hausregel 4: Keine sexuellen Inhalte", null, null, false, null, null, false));
 		followUpsDone();
@@ -233,17 +243,17 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 		ModerationCase c = reported(comment("Halt den Mund"));
 		DecisionService.DecisionRequest full = action(0, RemovalScope.WHOLE);
 
-		assertThatThrownBy(() -> moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, full.outcome(),
+		assertThatThrownBy(() -> moderation.decide(c.getId(), request(0L, full.outcome(),
 				full.removal(), full.ground(), full.category(), "zu kurz", full.ruleReference(), null, null, false, null,
 				null, false))).satisfies(refused -> assertThat(keyOf(refused)).isEqualTo("error.moderation.factsRequired"));
-		assertThatThrownBy(() -> moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, full.outcome(),
+		assertThatThrownBy(() -> moderation.decide(c.getId(), request(0L, full.outcome(),
 				full.removal(), Decision.Ground.RULES, full.category(), FACTS, " ", null, null, false, null, null, false)))
 				.satisfies(refused -> assertThat(keyOf(refused)).isEqualTo("error.moderation.referenceRequired"));
-		assertThatThrownBy(() -> moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, full.outcome(),
+		assertThatThrownBy(() -> moderation.decide(c.getId(), request(0L, full.outcome(),
 				full.removal(), Decision.Ground.LAW, full.category(), FACTS, full.ruleReference(), null, null, false,
 				null, null, false)))
 				.satisfies(refused -> assertThat(keyOf(refused)).isEqualTo("error.moderation.referenceRequired"));
-		assertThatThrownBy(() -> moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, full.outcome(),
+		assertThatThrownBy(() -> moderation.decide(c.getId(), request(0L, full.outcome(),
 				full.removal(), full.ground(), ReportCategory.HARASSMENT, FACTS, full.ruleReference(), null, null, true,
 				null, null, false)))
 				.satisfies(refused -> assertThat(keyOf(refused)).isEqualTo("error.moderation.outcomeNotAllowed"));
@@ -373,7 +383,7 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 		// A threat the shipped lists do not refuse, so that it gets saved and reported (HIN-176).
 		ModerationCase c = reported(comment("Ich weiss, wo dein Auto steht"));
 		DecisionService.DecisionRequest full = action(0, RemovalScope.WHOLE);
-		moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, full.outcome(), full.removal(),
+		moderation.decide(c.getId(), request(0L, full.outcome(), full.removal(),
 				Decision.Ground.LAW, ReportCategory.THREAT, FACTS, null, "§ 241 StGB", null, false, null, null, true));
 
 		Instant held = reload(c).getLegalHoldUntil();
