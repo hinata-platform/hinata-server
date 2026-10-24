@@ -3,6 +3,7 @@ package com.ahmadre.hinata.team;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.storage.ImagePreviewService;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.TestUploadGates;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
@@ -43,7 +44,7 @@ class TeamAvatarServiceTest {
 		teams = mock(TeamRepository.class);
 		when(teams.save(any(Team.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(storage.isConfigured()).thenReturn(true);
-		avatars = new TeamAvatarService(storage, teams, new ImagePreviewService());
+		avatars = new TeamAvatarService(storage, teams, new ImagePreviewService(), TestUploadGates.open());
 	}
 
 	private static Team team() {
@@ -146,14 +147,15 @@ class TeamAvatarServiceTest {
 		verify(teams, never()).save(any(Team.class));
 	}
 
+	/** The input passes the upload gate before anything decodes it (HIN-177). */
 	@Test
-	void aPayloadThatIsNotAnImageIsRejectedAndNothingIsStored() {
+	void aPayloadThatIsNotAnImageIsRefusedAtTheGateAndNothingIsStored() {
 		Team team = team();
 
 		assertThatThrownBy(() -> avatars.store(team,
 				new MockMultipartFile("file", "x.png", "image/png", "not a png".getBytes())))
 				.isInstanceOf(ApiException.class)
-				.hasMessage("error.avatar.unreadable");
+				.hasMessage("error.upload.refused.signature");
 
 		verify(storage, never()).putObject(anyString(), any(byte[].class), anyString());
 		assertThat(team.getAvatarUrl()).isNull();

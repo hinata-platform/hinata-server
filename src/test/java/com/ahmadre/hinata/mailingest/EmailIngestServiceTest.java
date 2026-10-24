@@ -6,8 +6,10 @@ import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.richtext.RichTextService;
+import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.AttachmentStore;
 import com.ahmadre.hinata.storage.StorageService;
+import com.ahmadre.hinata.storage.TestUploadGates;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserService;
 import jakarta.mail.Session;
@@ -15,12 +17,14 @@ import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.support.StaticMessageSource;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Properties;
 
@@ -62,9 +66,12 @@ class EmailIngestServiceTest {
 		lenient().when(projects.get("p1")).thenReturn(Project.builder().id("p1")
 				.memberIds(new ArrayList<>(List.of("u-author", "u-lead"))).build());
 		lenient().when(users.findActiveByEmail(anyString())).thenReturn(Optional.empty());
+		SettingsService settings = mock(SettingsService.class);
+		lenient().when(settings.instanceLocale()).thenReturn(Locale.GERMAN);
 		service = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
 				new RichTextService(), projects, notifications, storage,
-				mock(AttachmentStore.class), users);
+				mock(AttachmentStore.class), users, TestUploadGates.open(), settings,
+				new StaticMessageSource());
 	}
 
 	private IngestConnection connection() {
