@@ -8,7 +8,6 @@ import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentOrigin;
 import com.ahmadre.hinata.content.ContentRef;
-import com.ahmadre.hinata.content.CopySource;
 import com.ahmadre.hinata.content.MarkState;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
@@ -766,9 +765,9 @@ public class IssueService {
 		if (!projects.canDeleteIssues(project, user)) {
 			throw ApiException.forbidden("error.issue.deleteForbidden");
 		}
-		List<CopySource> copies = new ArrayList<>();
-		deleteChecked(issue, user, copies);
-		deleted.scrubCopies(copies);
+		DeletedContent.Request deletion = deleted.begin();
+		deleteChecked(issue, user, deletion);
+		deletion.finish();
 	}
 
 	/**
@@ -788,23 +787,23 @@ public class IssueService {
 			}
 		}
 		java.util.Set<String> gone = new java.util.HashSet<>();
-		// One scrub for the whole request, however many issues it deletes.
-		List<CopySource> copies = new ArrayList<>();
+		// One release of the objects and one scrub for the whole request, however many issues it deletes.
+		DeletedContent.Request deletion = deleted.begin();
 		for (Issue issue : found) {
 			if (gone.contains(issue.getId())) continue;
-			gone.addAll(deleteChecked(issue, user, copies));
+			gone.addAll(deleteChecked(issue, user, deletion));
 		}
-		deleted.scrubCopies(copies);
+		deletion.finish();
 		return found.size();
 	}
 
 	/**
 	 * Deletes an issue whose access is already settled, with what hangs off it: comments,
-	 * history, links, the files of its attachments and the audio of its voice messages. Adds
-	 * what the copies of its words are found by to [copies]. Returns the ids it removed: the
-	 * issue and any sub-tasks that went with it.
+	 * history, links, the files of its attachments and the audio of its voice messages. The files
+	 * and the copies of its words are left to [deletion], which settles them at the end of the
+	 * request. Returns the ids it removed: the issue and any sub-tasks that went with it.
 	 */
-	private java.util.Set<String> deleteChecked(Issue issue, User user, List<CopySource> copies) {
+	private java.util.Set<String> deleteChecked(Issue issue, User user, DeletedContent.Request deletion) {
 		java.util.Set<String> removed = new java.util.HashSet<>();
 		if (issue.getType().isEpic()) {
 			// Standard children survive as top-level issues — just drop the epic link.
@@ -814,9 +813,9 @@ public class IssueService {
 		else if (issue.getType().isStandard()) {
 			// Sub-tasks can't exist without their parent → cascade-delete them.
 			for (Issue child : issues.findByParentId(issue.getId())) {
-				freeVoiceBlobs(child);
-				deleted.attachmentsOf(child);
-				copies.add(DeletedContent.sourceOf(child));
+				freeVoiceBlobs(child, deletion);
+				deletion.attachmentsOf(child);
+				deletion.copiesOf(DeletedContent.sourceOf(child));
 				comments.deleteByIssueId(child.getId());
 				activities.deleteByIssueId(child.getId());
 				workItems.detachFromIssue(child.getId());
@@ -825,10 +824,10 @@ public class IssueService {
 				removed.add(child.getId());
 			}
 		}
-		freeVoiceBlobs(issue);
+		freeVoiceBlobs(issue, deletion);
 		// The files went nowhere before (HIN-169): the issue was deleted, its objects stayed.
-		deleted.attachmentsOf(issue);
-		copies.add(DeletedContent.sourceOf(issue));
+		deletion.attachmentsOf(issue);
+		deletion.copiesOf(DeletedContent.sourceOf(issue));
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
 		// Logged time outlives the issue: the hours were worked and the project
@@ -914,11 +913,11 @@ public class IssueService {
 	}
 
 	/**
-	 * Frees the audio blobs backing an issue's voice comments before the bulk
+	 * Hands the audio blobs backing an issue's voice comments to [deletion] before the bulk
 	 * {@code deleteByIssueId} drops those rows — otherwise the S3 objects
 	 * orphan forever. Best-effort (storage.delete logs on failure).
 	 */
-	private void freeVoiceBlobs(Issue issue) {
+	private void freeVoiceBlobs(Issue issue, DeletedContent.Request deletion) {
 		if (!storage.isConfigured()) {
 			return;
 		}
@@ -927,7 +926,7 @@ public class IssueService {
 						.and("voice.objectKey").exists(true).ne(null)),
 				IssueComment.class);
 		for (IssueComment c : voice) {
-			deleted.voiceOf(issue, c);
+			deletion.voiceOf(issue, c);
 		}
 	}
 
@@ -1971,21 +1970,21 @@ public class IssueService {
 		}
 		// Whatever quotes, the bell and the digests copied of it goes with it, the replies'
 		// words included, in one scrub (HIN-169).
-		List<CopySource> copies = new ArrayList<>();
-		copies.add(DeletedContent.sourceOf(comment, issue));
+		DeletedContent.Request deletion = deleted.begin();
+		deletion.copiesOf(DeletedContent.sourceOf(comment, issue));
 		// A top-level comment owns a flat reply thread — remove it too so replies
 		// don't orphan, freeing any voice blobs they hold (best-effort).
 		if (comment.getReplyToId() == null) {
 			for (IssueComment reply : comments.findByReplyToId(comment.getId())) {
-				deleted.voiceOf(issue, reply);
-				copies.add(DeletedContent.sourceOf(reply, issue));
+				deletion.voiceOf(issue, reply);
+				deletion.copiesOf(DeletedContent.sourceOf(reply, issue));
 			}
 			comments.deleteByReplyToId(comment.getId());
 		}
 		comments.delete(comment);
 		// Free the audio blob backing a voice message (best-effort; delete() logs).
-		deleted.voiceOf(issue, comment);
-		deleted.scrubCopies(copies);
+		deletion.voiceOf(issue, comment);
+		deletion.finish();
 		commentEvents.publishChanged(comment.getIssueId());
 	}
 

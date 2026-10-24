@@ -1,5 +1,8 @@
 package com.ahmadre.hinata.content;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -14,4 +17,16 @@ public interface EvidenceHold {
 
 	/** The case holding [ref], if one does. */
 	Optional<String> holdingCaseId(ContentRef ref);
+
+	/**
+	 * The cases holding any of [refs], by ref; a ref no case holds is not in it. An implementation
+	 * answers this in a few reads however many refs there are; the default asks one at a time.
+	 */
+	default Map<ContentRef, String> holdingCaseIds(Collection<ContentRef> refs) {
+		Map<ContentRef, String> held = new LinkedHashMap<>();
+		for (ContentRef ref : refs) {
+			holdingCaseId(ref).ifPresent(caseId -> held.put(ref, caseId));
+		}
+		return held;
+	}
 }

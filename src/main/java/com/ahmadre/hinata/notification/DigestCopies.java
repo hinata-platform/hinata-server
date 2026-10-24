@@ -26,15 +26,16 @@ class DigestCopies implements ContentCopies {
 
 	@Override
 	public void scrub(List<CopySource> sources, ScrubReason reason, Placeholders placeholders) {
-		for (CopySource source : sources) {
-			if (source.ref().kind() != ContentKind.ISSUE) {
-				continue;
+		List<CopySource> issues = sources.stream().filter(source -> source.ref().kind() == ContentKind.ISSUE).toList();
+		if (reason == ScrubReason.DELETED) {
+			if (!issues.isEmpty()) {
+				mongo.remove(Query.query(Criteria.where("issueId").in(issues.stream().map(source -> source.ref().id())
+						.toList())), IssueMailDigest.class);
 			}
+			return;
+		}
+		for (CopySource source : issues) {
 			Query digests = Query.query(Criteria.where("issueId").is(source.ref().id()));
-			if (reason == ScrubReason.DELETED) {
-				mongo.remove(digests, IssueMailDigest.class);
-				continue;
-			}
 			for (IssueMailDigest digest : mongo.find(digests, IssueMailDigest.class)) {
 				List<FieldChange> changes = digest.getChanges().stream()
 						.map(change -> scrubbed(change, source, placeholders))
