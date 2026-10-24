@@ -4,6 +4,7 @@ import com.ahmadre.hinata.audit.AuditAction;
 import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.audit.AuditLogRepository;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.richtext.TextCheck;
 import com.ahmadre.hinata.common.TestMongo;
 import com.ahmadre.hinata.notification.Notification;
 import com.ahmadre.hinata.notification.NotificationRepository;
@@ -193,6 +194,18 @@ class IssueCloneIntegrationTest {
 	}
 
 	// --- identity ------------------------------------------------------------
+
+	/** The title is typed anew in the clone dialog, so the text check judges it (HIN-176). */
+	@Test
+	void aCloneTitleTheTextCheckRefusesIsNotSaved() {
+		long before = issueRepository.count();
+
+		assertThatThrownBy(() -> clones.clone(original.getReadableId(), new IssueCloneService.Options(
+				"Ich bringe dich um", List.of(cloner.getId()), false, false, false), cloner))
+				.isInstanceOfSatisfying(ApiException.class,
+						refused -> assertThat(TextCheck.isRefusal(refused)).isTrue());
+		assertThat(issueRepository.count()).isEqualTo(before);
+	}
 
 	@Test
 	void theCloneIsANewIssueWithItsOwnNumber() {

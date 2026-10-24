@@ -7,6 +7,7 @@ import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.pat.Scopes;
 import com.ahmadre.hinata.richtext.TextCheck;
 import com.ahmadre.hinata.richtext.TextField;
+import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -120,8 +121,10 @@ public class OAuthService {
 					"client_name is longer than " + CLIENT_NAME_MAX + " characters");
 		}
 		// The name stands on the consent page of whoever connects it (HIN-176): refused, never flagged.
-		if (clientName != null
-				&& textCheck.verdict(clientName.trim(), TextField.OAUTH_CLIENT_NAME, null, null).blocked()) {
+		TextVerdict name = clientName == null ? TextVerdict.ALLOW
+				: textCheck.verdict(clientName.trim(), TextField.OAUTH_CLIENT_NAME, null);
+		if (name.blocked()) {
+			textCheck.refused(name);
 			throw new OAuthException("invalid_client_metadata", "client_name is not allowed on this server");
 		}
 		if (redirectUris == null || redirectUris.isEmpty()) {

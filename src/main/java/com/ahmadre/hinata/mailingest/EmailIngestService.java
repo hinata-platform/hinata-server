@@ -12,7 +12,6 @@ import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.richtext.TextCheck;
 import com.ahmadre.hinata.richtext.TextField;
-import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.AttachmentStore;
 import com.ahmadre.hinata.storage.StorageService;
@@ -167,9 +166,9 @@ public class EmailIngestService {
 				.build();
 		// Refused by the text check: nothing becomes an issue, and nobody is mailed back, or the
 		// mailbox would answer spam. The connection counts it, without any of the words.
-		List<TextVerdict> texts;
+		TextCheck.Verdicts texts;
 		try {
-			texts = textCheck.require(null, new TextCheck.Entry(TextField.ISSUE_TITLE, issue.getTitle(), null),
+			texts = textCheck.require(new TextCheck.Entry(TextField.ISSUE_TITLE, issue.getTitle(), null),
 					new TextCheck.Entry(TextField.ISSUE_DESCRIPTION, issue.getDescription(), null));
 		}
 		catch (ApiException refused) {
@@ -186,8 +185,7 @@ public class EmailIngestService {
 		// leaves a builder-set reporterId untouched when the actor is null.
 		Issue created = issues.create(issue, null);
 		ContentRef ref = new ContentRef(ContentKind.ISSUE, created.getId(), null, created.getProjectId());
-		textCheck.afterSave(ref, TextField.ISSUE_TITLE, texts.get(0), null);
-		textCheck.afterSave(ref, TextField.ISSUE_DESCRIPTION, texts.get(1), null);
+		textCheck.afterSave(ref, texts);
 		log.info("Created {} from e-mail by {}{}", created.getReadableId(), from,
 				reporterId != null ? " (author resolved to user " + reporterId + ")" : "");
 		notifyMembers(created, projectId, from, reporterId);

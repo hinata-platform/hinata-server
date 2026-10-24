@@ -375,7 +375,7 @@ public class SsoAccounts {
 
 	/** Whether the text check refuses [text] as [field]: a name from the provider is replaced, never refused. */
 	private boolean refused(String text, TextField field) {
-		return text != null && textCheck.verdict(text, field, null, null).blocked();
+		return text != null && textCheck.verdict(text, field, null).blocked();
 	}
 
 	/**
