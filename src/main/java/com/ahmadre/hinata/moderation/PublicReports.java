@@ -51,7 +51,7 @@ class PublicReports {
 
 	private final ContentReportService reports;
 	private final List<ContentSurface> surfaces;
-	private final ModerationNotices notices;
+	private final ModerationAlerts alerts;
 	private final NotificationService notifications;
 	private final MongoTemplate mongo;
 	private final HinataProperties properties;
@@ -93,7 +93,7 @@ class PublicReports {
 				"public:" + UUID.randomUUID(), null, notifier);
 		ContentReportService.Filed filed = reports.file(targetOf(submission.location().strip()),
 				submission.category(), clip(submission.explanation(), ContentReport.EXPLANATION_MAX_PUBLIC), source);
-		notices.reportFiled(filed, false);
+		alerts.reportFiled(filed, false);
 		if (email != null) {
 			// The receipt never repeats what was entered: the form would be a way to send mail otherwise.
 			notifications.mailAddress(email, locale, "moderation.receipt.title", "moderation.receipt.body");

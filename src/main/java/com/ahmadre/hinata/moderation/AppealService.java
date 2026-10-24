@@ -41,7 +41,7 @@ public class AppealService {
 	private final Statements statements;
 	private final DecisionService decisions;
 	private final ModerationFollowUps followUps;
-	private final ModerationNotices notices;
+	private final ModerationAlerts alerts;
 	private final ModerationStats stats;
 	private final AuditService audit;
 	private final SettingsService settings;
@@ -67,24 +67,25 @@ public class AppealService {
 
 	// --- the person's side -----------------------------------------------------------------------
 
-	/** The notice of case [caseId] for [person]: 404 for anybody but the person responsible. */
-	public Statement notice(String caseId, User person) {
-		ModerationCase c = noticeOf(caseId, person);
+	/** The statement of reasons of case [caseId] for [person]: 404 for anybody but the person responsible. */
+	public Statement statement(String caseId, User person) {
+		ModerationCase c = caseOfStatement(caseId, person);
 		return statements.of(c, c.getDecision(), words.localeOf(person), UserZones.of(person, settings.get()),
 				DecisionNotices.canSignIn(person), clock.instant());
 	}
 
 	/** [person] appealing the decision of case [caseId], once, within six months. */
 	public Statement appeal(String caseId, User person, AppealRequest request) {
-		ModerationCase c = noticeOf(caseId, person);
+		ModerationCase c = caseOfStatement(caseId, person);
 		Instant now = clock.instant();
 		file(c, request.text().strip(), now, Appeal.Via.APP,
 				new Update().push("history").slice(-ModerationCase.HISTORY_MAX)
 						.each(new CaseEvent(now, CaseEvent.Kind.APPEALED, null, Appeal.Via.APP.name())));
-		return notice(caseId, person);
+		return statement(caseId, person);
 	}
 
-	private ModerationCase noticeOf(String caseId, User person) {
+	/** Case [caseId] when [person] is the one responsible its statement is for; 404 otherwise. */
+	private ModerationCase caseOfStatement(String caseId, User person) {
 		ModerationCase c = caseId == null ? null : mongo.findById(caseId, ModerationCase.class);
 		if (c == null || !DecisionNotices.owesStatement(c) || !person.getId().equals(c.getDecision().responsibleId())) {
 			throw ApiException.notFound("moderationNotice");
@@ -137,7 +138,7 @@ public class AppealService {
 			throw ApiException.conflict("error.moderation.appealExists");
 		}
 		stats.appealFiled(decision);
-		notices.appealFiled(filed);
+		alerts.appealFiled(filed);
 		return filed;
 	}
 
