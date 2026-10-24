@@ -144,7 +144,9 @@ public class ProjectCopyService {
 			"inboundSubject", "ingestConnectionId", "watcherIds", "participantIds", "participantMeta",
 			"sprintId", "spentMinutes",
 			"resolvedAt", "archivedAt", "dueReminderFor", "assigneeId", "assigneeIds",
-			"subtaskCount", "subtaskDoneCount");
+			"subtaskCount", "subtaskDoneCount",
+			// What moderation decided is about the original; the copy is content of its own (HIN-169).
+			"moderation");
 
 	private final ProjectService projects;
 	private final MongoTemplate mongo;
@@ -739,6 +741,10 @@ public class ProjectCopyService {
 		}
 		Instant now = Instant.now();
 		for (Issue.Attachment source : original.getAttachments()) {
+			// What moderation removed has no bytes to copy, and the copy gets no placeholder.
+			if (source.isRemoved()) {
+				continue;
+			}
 			String id = UUID.randomUUID().toString();
 			String objectKey = StorageService.newObjectKey();
 			if (!storage.copyObject(source.getObjectKey(), objectKey)) {

@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.issue;
 
 import com.ahmadre.hinata.common.RelativeDate;
+import com.ahmadre.hinata.content.ContentMark;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -22,6 +23,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder(toBuilder = true)
@@ -377,6 +379,13 @@ public class Issue {
 		this.archived = archived;
 	}
 
+	/**
+	 * What moderation removed here, by field (HIN-169); absent on everything it never touched.
+	 * The removed field holds the placeholder itself, so a reader that ignores this still shows it.
+	 */
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	private Map<String, ContentMark> moderation;
+
 	@CreatedDate
 	private Instant createdAt;
 
@@ -450,5 +459,18 @@ public class Issue {
 		 * blurred stand-in in the first frame, before requesting any image bytes.
 		 */
 		private String blurHash;
+
+		/** The file moderation removed, under {@code file} (HIN-169); absent otherwise. */
+		@JsonInclude(JsonInclude.Include.NON_NULL)
+		private Map<String, ContentMark> moderation;
+
+		/**
+		 * Whether moderation removed the file. Its bytes are in the quarantine then, and every
+		 * reader answers 410 instead of looking for them.
+		 */
+		@JsonIgnore
+		public boolean isRemoved() {
+			return objectKey == null && moderation != null && moderation.containsKey("file");
+		}
 	}
 }

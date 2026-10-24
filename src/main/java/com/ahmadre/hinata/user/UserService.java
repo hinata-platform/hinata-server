@@ -59,6 +59,10 @@ public class UserService {
 			user.setPronouns(Pronouns.sanitize(change.pronouns()));
 			update.set("pronouns", user.getPronouns());
 		}
+		// Words moderation removed and the person wrote anew show again (HIN-169).
+		if (change.displayName() != null || change.title() != null || change.pronouns() != null) {
+			PersonContentSurface.markRewritten(user, PersonContentSurface.PROFILE, update);
+		}
 		if (change.locale() != null) {
 			user.setLocale(change.locale());
 			update.set("locale", user.getLocale());

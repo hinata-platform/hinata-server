@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import com.ahmadre.hinata.content.ContentMark;
 import com.ahmadre.hinata.me.NotificationPreferences;
 import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.me.TintPreferences;
@@ -19,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Data
@@ -102,6 +104,12 @@ public class User {
 
 	@Builder.Default
 	private boolean active = true;
+
+	/**
+	 * What moderation removed from the profile, by field (HIN-169): {@code avatar} and the
+	 * profile's words. Absent on every account it never touched.
+	 */
+	private Map<String, ContentMark> moderation;
 
 	@CreatedDate
 	private Instant createdAt;

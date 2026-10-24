@@ -2,7 +2,6 @@ package com.ahmadre.hinata.me;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.storage.StorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -45,15 +44,21 @@ public class AvatarController {
 		avatars.remove(currentUser.require());
 	}
 
+	/**
+	 * Private and for an hour, with a tag to ask again cheaply (HIN-169): a picture moderation
+	 * removed, or one its owner replaced, is gone from every cache within the hour, and no shared
+	 * cache keeps it for a week.
+	 */
 	@Operation(summary = "Fetch a user's profile picture (public, cacheable)")
 	@SecurityRequirements
 	@GetMapping("/api/v1/users/{id}/avatar")
 	public ResponseEntity<byte[]> get(@PathVariable String id) {
-		StorageService.StoredObject avatar = avatars.load(id)
+		AvatarService.Avatar avatar = avatars.load(id)
 				.orElseThrow(() -> ApiException.notFound("avatar"));
 		return ResponseEntity.ok()
-				.contentType(MediaType.parseMediaType(avatar.contentType()))
-				.cacheControl(CacheControl.maxAge(Duration.ofDays(7)).cachePublic())
-				.body(avatar.data());
+				.contentType(MediaType.parseMediaType(avatar.object().contentType()))
+				.cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePrivate())
+				.eTag(avatar.etag())
+				.body(avatar.object().data());
 	}
 }

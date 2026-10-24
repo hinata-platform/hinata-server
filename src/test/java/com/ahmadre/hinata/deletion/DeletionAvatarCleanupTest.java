@@ -53,7 +53,8 @@ class DeletionAvatarCleanupTest {
 				mock(TeamActivityRepository.class), projectAvatars, teamAvatars,
 				mock(StorageService.class), mock(MongoTemplate.class), mock(MessageSource.class),
 				mock(IssueWatcherCleanup.class), java.util.List.of(),
-				mock(com.ahmadre.hinata.article.ArticleService.class));
+				mock(com.ahmadre.hinata.article.ArticleService.class),
+				mock(com.ahmadre.hinata.storage.StoredObjects.class));
 	}
 
 	@Test

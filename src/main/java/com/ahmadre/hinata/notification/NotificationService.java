@@ -227,7 +227,7 @@ public class NotificationService {
 						// recipient who cannot open the issue gets no table at all — the
 						// one-line body is exactly what they received before there was
 						// one, and a table of every field is more than that.
-						withBodyText ? diff::apply : locale -> null));
+						withBodyText ? diff::apply : locale -> null, issue.getId()));
 	}
 
 	/** As {@link #notifyUpdated(Issue, List, User, Set)} with nobody pre-notified. */
@@ -251,7 +251,7 @@ public class NotificationService {
 		Set<String> mentioned = new HashSet<>(richText.mentionedUsers(doc));
 		mentioned.remove(author.getId());
 		mentioned.removeAll(blockers);
-		mentionAll(issue, author, mentioned, preview);
+		mentionAll(issue, author, mentioned, preview, comment == null ? issue.getId() : comment.getId());
 		// Everyone already directly notified about this comment — start with the
 		// mentioned users, then add the reply target so the watcher notice below
 		// skips them too. Who blocks the author counts as told.
@@ -270,7 +270,8 @@ public class NotificationService {
 							? words.in(locale, "notify.mention.body", author.getDisplayName(),
 									issue.getTitle())
 							: words.in(locale, "notify.preview.body", author.getDisplayName(), preview),
-					issueLink(issue), issue);
+					issueLink(issue), LinkScope.issue(issue),
+					Routing.of(Notification.Type.ISSUE_COMMENTED).from(comment == null ? issue.getId() : comment.getId()));
 		}
 	}
 
@@ -301,7 +302,7 @@ public class NotificationService {
 						: words.in(locale, "notify.commentReply.body", actor.getDisplayName(),
 								issue.getTitle()),
 				commentLink(issue, comment.getId()), LinkScope.issueKnown(issue, Set.of(recipient)),
-				Routing.of(Notification.Type.COMMENT_REPLY));
+				Routing.of(Notification.Type.COMMENT_REPLY).from(comment.getId()));
 	}
 
 	/**
@@ -325,11 +326,14 @@ public class NotificationService {
 		recipients.remove(actor.getId());
 		if (recipients.isEmpty()) return;
 		recipients.removeAll(blocks.blockersOf(actor.getId()));
-		mentionAll(issue, actor, recipients, preview);
+		mentionAll(issue, actor, recipients, preview, issue.getId());
 	}
 
-	/** The mention notices for [mentionedIds], with the actor and their blockers already out. */
-	private void mentionAll(Issue issue, User actor, Set<String> mentionedIds, String preview) {
+	/**
+	 * The mention notices for [mentionedIds], with the actor and their blockers already out.
+	 * [sourceId] is the comment or the issue whose text the notice quotes.
+	 */
+	private void mentionAll(Issue issue, User actor, Set<String> mentionedIds, String preview, String sourceId) {
 		Set<String> recipients = new HashSet<>(mentionedIds);
 		if (recipients.isEmpty()) return;
 		// A mention of somebody who cannot open the issue stays silent: the notice quotes the
@@ -345,7 +349,8 @@ public class NotificationService {
 						? words.in(locale, "notify.preview.body", actor.getDisplayName(), preview)
 						: words.in(locale, "notify.mention.body", actor.getDisplayName(),
 								issue.getTitle()),
-				issueLink(issue), LinkScope.issueKnown(issue, mayFollow), Routing.of(Notification.Type.MENTION));
+				issueLink(issue), LinkScope.issueKnown(issue, mayFollow),
+				Routing.of(Notification.Type.MENTION).from(sourceId));
 	}
 
 	/**
@@ -1632,7 +1637,8 @@ public class NotificationService {
 			// are gated by the recipient's per-event channel preferences.
 			Delivery delivery = delivery(user, eventId);
 			notifications.save(delivery.mark(Notification.builder()
-					.userId(user.getId()).type(type).title(t).body(b).link(userLink)).build());
+					.userId(user.getId()).type(type).title(t).body(b).link(userLink)
+					.sourceId(routing.sourceId())).build());
 			// In-app notifications keep the relative route; the e-mail button gets
 			// an absolute deep link that the native app intercepts as a
 			// Universal/App Link, straight to the issue. A held mail is not handed to
@@ -1664,13 +1670,21 @@ public class NotificationService {
 	 * all of them but an issue update.
 	 */
 	private record Routing(Function<String, String> eventFor, EmailSink emailSink,
-			Function<Locale, List<IssueChangeRenderer.Line>> changeLines) {
+			Function<Locale, List<IssueChangeRenderer.Line>> changeLines, String sourceId) {
 
 		/** The ordinary case: one event for everyone, every mail sent at once, and
 		 *  no diff — the body copy is the whole message. */
 		static Routing of(Notification.Type type) {
 			String fixed = NotificationService.eventId(type);
-			return new Routing(userId -> fixed, EmailSink.NONE, locale -> null);
+			return new Routing(userId -> fixed, EmailSink.NONE, locale -> null, null);
+		}
+
+		/**
+		 * The comment or issue whose words the notice copies, recorded on it so the copy can be
+		 * scrubbed when that content is removed or deleted (HIN-169).
+		 */
+		Routing from(String source) {
+			return new Routing(eventFor, emailSink, changeLines, source);
 		}
 	}
 

@@ -97,7 +97,9 @@ public final class IssueChangeDiff {
 			"dueReminderFor", "attachments",
 			"rank", "resolvedAt", "archivedAt", "createdAt", "updatedAt",
 			"subtaskCount", "subtaskDoneCount", "searchText",
-			"startOffset", "dueOffset");
+			"startOffset", "dueOffset",
+			// Moderation's marks: what it removed is never announced to watchers (HIN-169).
+			"moderation");
 
 	/**
 	 * One whitelisted field and how a change to it is read off two snapshots.

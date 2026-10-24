@@ -49,6 +49,7 @@ public class AttachmentController {
 	private final AttachmentEvents events;
 	private final ImagePreviewService previews;
 	private final CurrentUser currentUser;
+	private final StoredObjects storedObjects;
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
@@ -114,6 +115,10 @@ public class AttachmentController {
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
 				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
+		// Removed: no preview, and none built again from the original (HIN-169).
+		if (attachment.isRemoved()) {
+			throw ApiException.gone("error.moderation.removed");
+		}
 		StorageService.StoredObject object = storage
 				.getObject(ImagePreviewService.attachmentThumbnailKey(attachmentId))
 				.orElseGet(() -> generateMissingPreview(issue, attachment));
@@ -197,6 +202,9 @@ public class AttachmentController {
 				.filter(a -> a.getId().equals(attachmentId))
 				.findFirst()
 				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
+		if (attachment.isRemoved()) {
+			throw ApiException.gone("error.moderation.removed");
+		}
 		StorageService.StoredObject object = storage.getObject(attachment.getObjectKey())
 				.orElseThrow(() -> ApiException.notFound(ATTACHMENT));
 		String fileName = attachment.getFileName() != null ? attachment.getFileName() : "download";
@@ -265,6 +273,9 @@ public class AttachmentController {
 	 * single bad object must not abort (and truncate) the whole archive.
 	 */
 	private StorageService.StoredObject readForArchive(Issue.Attachment attachment) {
+		if (attachment.isRemoved()) {
+			return null;
+		}
 		try {
 			return storage.getObject(attachment.getObjectKey()).orElse(null);
 		}
@@ -310,7 +321,7 @@ public class AttachmentController {
 			throw ApiException.forbidden("error.issue.participantReadOnly");
 		}
 		Issue saved = store.remove(issue.getId(), attachmentId);
-		deleteObjects(attachment);
+		deleteObjects(issue, attachment);
 		events.publishRemoved(saved.getId(), attachmentId);
 	}
 
@@ -323,13 +334,12 @@ public class AttachmentController {
 		return !participantOnly || (uploader != null && uploader.equals(user.getId()));
 	}
 
-	/** Drops an attachment's stored bytes and its derived thumbnail. */
-	private void deleteObjects(Issue.Attachment attachment) {
-		storage.delete(attachment.getObjectKey());
-		// Unconditional: a thumbnail that was never generated is a no-op delete,
-		// and skipping it based on the content type would leak the object for an
-		// attachment whose type was recorded differently than it was previewed.
-		storage.delete(ImagePreviewService.attachmentThumbnailKey(attachment.getId()));
+	/**
+	 * Drops an attachment's stored bytes and its derived thumbnail, or keeps the bytes for a case
+	 * that still needs them (HIN-169).
+	 */
+	private void deleteObjects(Issue issue, Issue.Attachment attachment) {
+		storedObjects.deleteAttachmentObjects(issue, attachment);
 	}
 
 	/**
@@ -359,7 +369,7 @@ public class AttachmentController {
 		List<String> targetIds = targets.stream().map(Issue.Attachment::getId).toList();
 		Issue saved = store.removeAll(issue.getId(), targetIds);
 		for (Issue.Attachment attachment : targets) {
-			deleteObjects(attachment);
+			deleteObjects(issue, attachment);
 			events.publishRemoved(saved.getId(), attachment.getId());
 		}
 	}

@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.storage;
 
+import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.issue.Issue;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -124,6 +125,10 @@ public class AttachmentContentService {
 	 * are all answers, not errors — the caller reports the reason and moves on.
 	 */
 	public AttachmentContent render(Issue.Attachment attachment, Limits limits) {
+		// Removed by moderation: refused like every other reader, never looked for (HIN-169).
+		if (attachment.isRemoved()) {
+			throw ApiException.gone("error.moderation.removed");
+		}
 		String type = normalizeType(attachment.getContentType());
 		if (!isRenderable(type)) {
 			return new AttachmentContent.Unavailable(AttachmentContent.Reason.TYPE_NOT_RENDERABLE);

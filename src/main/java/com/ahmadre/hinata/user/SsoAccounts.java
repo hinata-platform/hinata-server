@@ -352,6 +352,11 @@ public class SsoAccounts {
 		if (!user.isSso()) {
 			return user;
 		}
+		// Words moderation removed stay removed: the provider would bring them back on every
+		// sign-in. The person may write them anew in the app (HIN-169).
+		if (PersonContentSurface.isRemoved(user, PersonContentSurface.PROFILE)) {
+			return user;
+		}
 		Update changes = new Update();
 		// A display name that is just the address was our fallback for an IdP that
 		// sent no name — never something the user chose — so it is replaced even

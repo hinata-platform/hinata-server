@@ -8,7 +8,12 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 
 public interface NotificationRepository extends MongoRepository<Notification, String> {
 
-	Page<Notification> findByUserIdOrderByCreatedAtDesc(String userId, Pageable pageable);
+	/**
+	 * The bell, newest first a page at a time. Off the {@code user_created} index, with the id as
+	 * the tiebreaker, so a page is read in order instead of sorting a person's whole history first,
+	 * and two notices of the same instant never trade places between pages.
+	 */
+	Page<Notification> findByUserIdOrderByCreatedAtDescIdDesc(String userId, Pageable pageable);
 
 	long countByUserIdAndReadFalse(String userId);
 

@@ -2,11 +2,14 @@ package com.ahmadre.hinata.storage;
 
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.EvidenceHold;
+import com.ahmadre.hinata.content.Quarantine;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.user.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -52,8 +56,14 @@ class AttachmentControllerTest {
 		events = mock(AttachmentEvents.class);
 		CurrentUser currentUser = mock(CurrentUser.class);
 		when(currentUser.require()).thenReturn(mock(User.class));
+		// The real deleter over the mocked store, with no case holding anything: what goes is
+		// what the store is asked to delete.
+		when(storage.isConfigured()).thenReturn(true);
+		@SuppressWarnings("unchecked")
+		ObjectProvider<EvidenceHold> noHolds = mock(ObjectProvider.class);
+		when(noHolds.orderedStream()).thenAnswer(call -> Stream.empty());
 		controller = new AttachmentController(issues, storage, store, events,
-				new ImagePreviewService(), currentUser);
+				new ImagePreviewService(), currentUser, new StoredObjects(storage, mock(Quarantine.class), noHolds));
 	}
 
 	private static Issue.Attachment attachment(String id, String fileName, String objectKey) {

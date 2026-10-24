@@ -1,10 +1,12 @@
 package com.ahmadre.hinata.article;
 
 import com.ahmadre.hinata.auth.CurrentUser;
+import com.ahmadre.hinata.content.ContentMark;
 import com.ahmadre.hinata.richtext.LexicalJson;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.user.User;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -15,6 +17,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @Tag(name = "Knowledge Base")
 @RestController
@@ -68,14 +71,16 @@ public class ArticleController {
 			String parentId,
 			String space, String icon, String title, String content, String contentDoc,
 			List<String> tags, String authorId, int sortOrder, java.time.Instant createdAt,
-			java.time.Instant updatedAt, String lastEditorId) {
+			java.time.Instant updatedAt, String lastEditorId,
+			// What moderation removed, by field (HIN-169); absent on every page it never touched.
+			@JsonInclude(JsonInclude.Include.NON_NULL) Map<String, ContentMark> moderation) {
 
 		public static ArticleResponse from(Article a) {
 			return new ArticleResponse(a.getId(), a.getProjectId(), a.getTeamId(), a.getOrganization(),
 					a.getParentId(),
 					a.getSpace(), a.getIcon(), a.getTitle(), a.getContent(), a.getContentDoc(),
 					a.getTags(), a.getAuthorId(), a.getSortOrder(), a.getCreatedAt(), a.getUpdatedAt(),
-					a.getLastEditorId());
+					a.getLastEditorId(), a.getModeration());
 		}
 
 		static List<ArticleResponse> from(List<Article> articles) {
