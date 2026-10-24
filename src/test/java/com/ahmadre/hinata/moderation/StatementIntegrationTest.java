@@ -109,7 +109,7 @@ class StatementIntegrationTest extends RemovalIntegrationSupport {
 		moderation.decide(c.getId(), DecisionIntegrationTest.action(0, RemovalScope.WHOLE));
 		followUpsDone();
 		actingAs(author);
-		Statement notice = member.notice(c.getId());
+		Statement notice = member.statement(c.getId());
 
 		assertThat(notice).usingRecursiveComparison().ignoringFields("appealUntil").isEqualTo(preview);
 	}

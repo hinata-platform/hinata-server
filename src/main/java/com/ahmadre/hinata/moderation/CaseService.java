@@ -81,7 +81,7 @@ public class CaseService {
 	private final List<ContentSurface> surfaces;
 	private final StorageService storage;
 	private final AuditService audit;
-	private final ModerationNotices notices;
+	private final ModerationAlerts alerts;
 	private final ContentReportService reports;
 	private final Clock clock;
 
@@ -397,7 +397,7 @@ public class CaseService {
 					.each(new CaseEvent(now, CaseEvent.Kind.EVIDENCE_REQUESTED, moderator.getId(), reason)),
 					ModerationCase.class);
 			if (!access.eligibleModerators(c, Purpose.SECOND_PERSON).isEmpty()) {
-				notices.confirmRequested(c, "moderation.notice.confirm");
+				alerts.confirmRequested(c, "moderation.notice.confirm");
 				return detailOf(mongo.findById(id, ModerationCase.class), moderator);
 			}
 			return revealAlone(c, moderator, reason, now);
@@ -423,7 +423,7 @@ public class CaseService {
 					Map.of("code", "moderation.tooManyReveals"));
 		}
 		CaseDetail opened = reveal(c, moderator, c.getEvidenceReveal(), reason, now);
-		notices.adminAlert(c, "moderation.alert.alone");
+		alerts.adminAlert(c, "moderation.alert.alone");
 		return opened;
 	}
 
@@ -436,7 +436,7 @@ public class CaseService {
 				.each(new CaseEvent(now, CaseEvent.Kind.EVIDENCE_REVEALED, moderator.getId(), reason)),
 				ModerationCase.class);
 		audit.event(AuditAction.MODERATION_EVIDENCE_REVEALED).actor(moderator).meta("case", c.getId()).log();
-		notices.teamNote(c, "moderation.notice.revealed");
+		alerts.teamNote(c, "moderation.notice.revealed");
 		return detailOf(mongo.findById(c.getId(), ModerationCase.class), moderator);
 	}
 

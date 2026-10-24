@@ -49,7 +49,7 @@ public class ModerationFollowUpJob {
 
 	private final MongoTemplate mongo;
 	private final CaseAccess access;
-	private final ModerationNotices notices;
+	private final ModerationAlerts alerts;
 	private final ModerationFollowUps followUps;
 	private final Clock clock;
 
@@ -73,21 +73,21 @@ public class ModerationFollowUpJob {
 					.forEach(moderator -> waiting.merge(moderator, 1, Integer::sum));
 		}
 		if (!waiting.isEmpty()) {
-			notices.overdue(waiting);
+			alerts.overdue(waiting);
 		}
 	}
 
 	void escalate(Instant now) {
 		List<ModerationCase> escalated = claim("escalatedAt", now.minus(ESCALATE_AFTER), now);
 		if (!escalated.isEmpty()) {
-			notices.adminAlert(escalated, "moderation.alert.overdue");
+			alerts.adminAlert(escalated, "moderation.alert.overdue");
 		}
 	}
 
 	/**
 	 * The open cases older than [before] without [mark], each marked first and only then handed
 	 * back: a second instance finds the mark and leaves the case alone. One read finds the due
-	 * ids; each is then marked by its id and comes back with what the notices read of it.
+	 * ids; each is then marked by its id and comes back with what the alerts read of it.
 	 */
 	private List<ModerationCase> claim(String mark, Instant before, Instant now) {
 		Query due = Query.query(Criteria.where("status").is(CaseStatus.OPEN).and("firstReportedAt").lt(before)

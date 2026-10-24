@@ -125,7 +125,7 @@ class CaseAccessIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(mongo.find(Query.query(Criteria.where("userId").is(karl.getId())
 				.and("type").is(Notification.Type.MODERATION_CASE_OPENED)), Notification.class))
 				.extracting(Notification::getLink)
-				.containsExactly(ModerationNotices.caseLink(aboutTheIssue));
+				.containsExactly(ModerationAlerts.caseLink(aboutTheIssue));
 		// The other case stays theirs to work on.
 		assertThat(moderation.detail(aboutTheIssue.getId()).summary().id()).isEqualTo(aboutTheIssue.getId());
 

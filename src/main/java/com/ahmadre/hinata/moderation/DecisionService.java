@@ -74,7 +74,7 @@ public class DecisionService {
 	private final List<ContentSurface> surfaces;
 	private final ModerationFollowUps followUps;
 	private final ModerationStats stats;
-	private final ModerationNotices notices;
+	private final ModerationAlerts alerts;
 	private final Statements statements;
 	private final AuditService audit;
 	private final SettingsService settings;
@@ -289,8 +289,8 @@ public class DecisionService {
 		if (pending == null) {
 			throw CaseSteps.stale(mongo, id);
 		}
-		notices.confirmRequested(pending, "moderation.notice.confirmDecision");
-		notices.adminAlert(pending, "moderation.alert.suspendRole");
+		alerts.confirmRequested(pending, "moderation.notice.confirmDecision");
+		alerts.adminAlert(pending, "moderation.alert.suspendRole");
 		return CaseService.summaryOf(pending, personOf(moderator), access.reported(pending, moderator.getId()));
 	}
 
@@ -437,7 +437,7 @@ public class DecisionService {
 				.and("decision.decidedBy").is(moderator.getId())
 				.and("decision.outcome").is(Decision.Outcome.ACTION)), ModerationCase.class);
 		if (lastHour == REMOVALS_PER_HOUR + 1) {
-			notices.adminAlert(decided, "moderation.alert.many");
+			alerts.adminAlert(decided, "moderation.alert.many");
 		}
 	}
 
