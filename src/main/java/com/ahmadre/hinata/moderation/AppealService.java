@@ -37,6 +37,7 @@ import java.time.Instant;
 public class AppealService {
 
 	private final CaseAccess access;
+	private final CaseSummaries summaries;
 	private final MongoTemplate mongo;
 	private final Statements statements;
 	private final Restorations restorations;
@@ -110,7 +111,7 @@ public class AppealService {
 				CaseSteps.step(new Update(), new CaseEvent(now, CaseEvent.Kind.APPEALED, moderator.getId(),
 						Appeal.Via.REPLY.name())));
 		audit.event(AuditAction.MODERATION_APPEAL_RECORDED).actor(moderator).meta("case", id).log();
-		return CaseService.summaryOf(filed, null, access.reported(filed, moderator.getId()));
+		return summaries.of(filed, null, access.reported(filed, moderator.getId()));
 	}
 
 	/**
@@ -174,7 +175,7 @@ public class AppealService {
 				request.result(), now);
 		audit.event(AuditAction.MODERATION_APPEAL_DECIDED).actor(moderator).meta("case", id).log();
 		followUps.later(id);
-		return CaseService.summaryOf(decided, null, access.reported(decided, moderator.getId()));
+		return summaries.of(decided, null, access.reported(decided, moderator.getId()));
 	}
 
 	private static Update appealDecided(Appeal.State state, User moderator, String note, Instant now,

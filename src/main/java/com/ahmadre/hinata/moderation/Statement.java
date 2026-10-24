@@ -11,7 +11,10 @@ import java.time.Instant;
  *
  * @param measure            what was done, to what, from when (Art. 17(3)(a))
  * @param scope              what of the content the removal took
- * @param until              when a suspension ends (HIN-172); null otherwise
+ * @param until              when a suspension ends (HIN-172); null for one until further notice,
+ *                           one that ended, and none
+ * @param suspension         the suspension decided, however it stands now; null when it suspends
+ *                           nobody, or the suspension was refused when it was to take effect
  * @param basis              whether it was reported, found by moderation or flagged (Art. 17(3)(b))
  * @param facts              what moderation found, as it wrote it (Art. 17(3)(b), (d), (e))
  * @param automatedDetection whether the automatic check found it (Art. 17(3)(c))
@@ -32,6 +35,7 @@ public record Statement(
 		String measure,
 		RemovalScope scope,
 		Instant until,
+		Decision.SuspensionLength suspension,
 		String basis,
 		String facts,
 		boolean automatedDetection,

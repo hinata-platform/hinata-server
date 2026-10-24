@@ -51,6 +51,7 @@ public class Statements {
 				measure(c, decision, locale, zone),
 				decision.removal(),
 				suspensionUntil(c, decision),
+				decidedSuspension(c, decision),
 				text(locale, "moderation.statement.basis." + decision.basis()),
 				decision.facts(),
 				Boolean.TRUE.equals(decision.automatedDetection()),
@@ -104,6 +105,17 @@ public class Statements {
 		return until == null ? text(locale, "moderation.statement.suspended.indefinite")
 				: messages.getMessage("moderation.statement.suspended.until", new Object[] { dateTime(until, locale, zone) },
 						locale);
+	}
+
+	/**
+	 * The suspension [decision] decided: for a preview before it takes effect, and once it took
+	 * effect, running or ended. Null when it suspends nobody, or the suspension was refused.
+	 */
+	private static Decision.SuspensionLength decidedSuspension(ModerationCase c, Decision decision) {
+		if (decision.suspension() == null) {
+			return null;
+		}
+		return c.getSuspension() != null || c.getStatus() != CaseStatus.DECIDED ? decision.suspension() : null;
 	}
 
 	/** When the suspension ends: as it runs, or as the decision would set it; null otherwise or for further notice. */

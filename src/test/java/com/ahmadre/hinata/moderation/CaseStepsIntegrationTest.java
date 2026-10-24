@@ -91,6 +91,7 @@ class CaseStepsIntegrationTest extends RemovalIntegrationSupport {
 				.satisfies(entry -> assertThat(entry.getMetadata()).containsOnlyKeys("case"));
 
 		actingAs(rita);
+		assertThat(moderation.detail(c.getId()).takeOverAllowed()).as("claimed a moment ago").isFalse();
 		assertThatThrownBy(() -> moderation.claim(c.getId(), at(0, false)))
 				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("error.moderation.caseChanged"));
 		assertThatThrownBy(() -> moderation.claim(c.getId(), at(1, true)))
@@ -99,7 +100,10 @@ class CaseStepsIntegrationTest extends RemovalIntegrationSupport {
 
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(c.getId())),
 				new Update().set("claimedAt", Instant.now().minusSeconds(3 * 3600)), ModerationCase.class);
+		// Decided on the server's clock, so the app offers what the server allows.
+		assertThat(moderation.detail(c.getId()).takeOverAllowed()).isTrue();
 		assertThat(moderation.claim(c.getId(), at(1, true)).assignee().id()).isEqualTo(rita.getId());
+		assertThat(moderation.detail(c.getId()).takeOverAllowed()).as("nobody takes over their own claim").isFalse();
 		assertThat(moderation.release(c.getId(), at(2, false)).assignee()).isNull();
 		assertThat(reload(c).getHistory()).extracting(CaseEvent::kind).containsExactly(CaseEvent.Kind.REPORTED,
 				CaseEvent.Kind.CLAIMED, CaseEvent.Kind.CLAIMED, CaseEvent.Kind.RELEASED);
@@ -108,6 +112,23 @@ class CaseStepsIntegrationTest extends RemovalIntegrationSupport {
 				new Update().set("status", CaseStatus.DECIDED), ModerationCase.class);
 		assertThatThrownBy(() -> moderation.claim(c.getId(), at(3, false)))
 				.satisfies(refused -> assertThat(codeOf(refused)).isEqualTo("error.moderation.caseDecided"));
+	}
+
+	/** Whether a case is overdue, and whether its content changed, the server says itself. */
+	@Test
+	void aRowSaysWhetherItIsOverdueAndTheDetailWhetherTheContentChanged() {
+		ModerationCase fresh = reported(comment("Halt den Mund"), ReportCategory.HARASSMENT, null);
+		ModerationCase old = reported(comment("Du nervst"), ReportCategory.HARASSMENT, null);
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(old.getId())), new Update().set("firstReportedAt",
+				Instant.now().minus(ResponseTimes.OVERDUE_AFTER).minusSeconds(60)), ModerationCase.class);
+		actingAs(mira);
+
+		assertThat(moderation.list(CaseViews.View.OPEN, 0, 50).getContent())
+				.extracting(CaseViews.CaseSummary::id, CaseViews.CaseSummary::overdue)
+				.contains(org.assertj.core.groups.Tuple.tuple(fresh.getId(), false),
+						org.assertj.core.groups.Tuple.tuple(old.getId(), true));
+		CaseViews.CaseDetail detail = moderation.detail(fresh.getId());
+		assertThat(detail.currentHash()).isNotNull().isEqualTo(detail.evidence().contentHash());
 	}
 
 	@Test
