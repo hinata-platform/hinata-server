@@ -127,6 +127,10 @@ class CaseStepsIntegrationTest extends RemovalIntegrationSupport {
 		});
 		assertThat(audits(AuditAction.MODERATION_REPORTER_REVEALED)).singleElement()
 				.satisfies(entry -> assertThat(entry.getMetadata()).containsOnlyKeys("case"));
+		// Filed again about the same content, now about a child: covered again, for good.
+		reports.submit(new ContentReportService.ReportRequest(new TargetRef(ContentKind.COMMENT, c.getTarget().id(),
+				issue.getId()), ReportCategory.CHILD_SAFETY, "Es geht um ein Kind", null, false), reader);
+		assertThat(moderation.detail(c.getId()).reports().getFirst().reporter()).isNull();
 
 		ModerationCase childSafety = reported(comment("Schick mir Bilder von dir"), ReportCategory.CHILD_SAFETY,
 				"Erwachsener schreibt einem Kind");
