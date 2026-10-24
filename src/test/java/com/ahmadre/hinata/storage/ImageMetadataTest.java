@@ -52,6 +52,20 @@ class ImageMetadataTest {
 		assertThat(indexOf(TestImages.animatedGif(3), "Hamburg")).isNotNegative();
 	}
 
+	/** A save brings up to twenty pasted images; none of them is decoded before somebody looks. */
+	@Test
+	void aPastedPhotoLosesItsPositionAndGetsItsThumbnailOnFirstView() {
+		byte[] photo = TestImages.jpegWithExif(64, 32, 1);
+
+		String url = media.storePasted(photo, "image/jpeg");
+		String id = url.substring("/api/v1/media/".length());
+
+		assertThat(indexOf(objects.get("media/" + id).data(), TestImages.gpsIfd())).as("GPS IFD").isNegative();
+		assertThat(objects).doesNotContainKey(ImagePreviewService.mediaThumbnailKey(id));
+		assertThat(media.loadThumbnail(id).contentType()).isEqualTo("image/jpeg");
+		assertThat(objects).containsKey(ImagePreviewService.mediaThumbnailKey(id));
+	}
+
 	@Test
 	void aPhotoIsStoredAndServedWithoutItsPosition() throws Exception {
 		byte[] photo = TestImages.jpegWithExif(64, 32, 1);

@@ -109,6 +109,11 @@ class UploadGateTest {
 		assertThat(refusal(file(UploadKind.LOGO, TestImages.pngDeclaring(8_000, 8_000), "image/png")))
 				.isEqualTo("image");
 		assertThat(refusal(file(UploadKind.MEDIA, TestImages.pngDeclaring(8_000, 8_000), "image/png"))).isNull();
+		// So is a pasted one's: a save brings up to twenty of them.
+		assertThat(refusal(UploadCandidate.of(UploadKind.PASTED_IMAGE, TestImages.pngDeclaring(6_000, 6_000),
+				"image/png", null))).isEqualTo("image");
+		assertThat(refusal(UploadCandidate.of(UploadKind.PASTED_IMAGE, TestImages.pngDeclaring(3_840, 2_160),
+				"image/png", null))).isNull();
 	}
 
 	@Test
