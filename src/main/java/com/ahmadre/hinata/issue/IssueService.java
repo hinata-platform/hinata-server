@@ -12,7 +12,6 @@ import com.ahmadre.hinata.content.CopySource;
 import com.ahmadre.hinata.content.MarkState;
 import com.ahmadre.hinata.board.SprintRepository;
 import com.ahmadre.hinata.common.ApiException;
-import com.ahmadre.hinata.notification.FieldChange;
 import com.ahmadre.hinata.notification.IssueChangeDiff;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.richtext.RichText;
@@ -441,22 +440,17 @@ public class IssueService {
 			assertAssignable(project, issue.getAssigneeIds());
 		}
 		// What somebody wrote is checked; a copy is a copy of what was checked already.
-		List<TextVerdict> texts = textCheck.require(author,
+		TextCheck.Verdicts texts = textCheck.require(
 				new TextCheck.Entry(TextField.ISSUE_TITLE, issue.getTitle(), null),
 				new TextCheck.Entry(TextField.ISSUE_DESCRIPTION, issue.getDescription(), null));
 		Issue saved = create(issue, author, Mentions.NOTIFY);
-		textFound(saved, texts, author);
+		textFound(saved, texts);
 		return saved;
 	}
 
 	/** Hands what the text check found in [saved]'s title and description to moderation. */
-	private void textFound(Issue saved, List<TextVerdict> texts, User author) {
-		if (texts.isEmpty()) {
-			return;
-		}
-		ContentRef ref = new ContentRef(ContentKind.ISSUE, saved.getId(), null, saved.getProjectId());
-		textCheck.afterSave(ref, TextField.ISSUE_TITLE, texts.get(0), author);
-		textCheck.afterSave(ref, TextField.ISSUE_DESCRIPTION, texts.get(1), author);
+	private void textFound(Issue saved, TextCheck.Verdicts texts) {
+		textCheck.afterSave(new ContentRef(ContentKind.ISSUE, saved.getId(), null, saved.getProjectId()), texts);
 	}
 
 	/**
@@ -536,8 +530,7 @@ public class IssueService {
 			return issue;
 		}
 		// Nor what the text check refuses now (HIN-176): the description stays as it was.
-		if (textCheck.verdict(description.text(), TextField.ISSUE_DESCRIPTION, null, issue.getDescription())
-				.blocked()) {
+		if (textCheck.verdict(description.text(), TextField.ISSUE_DESCRIPTION, issue.getDescription()).blocked()) {
 			LOGGER.info("Reprocessed description of issue {} is refused by the text check and was not replaced",
 					issue.getId());
 			return issue;
@@ -600,7 +593,7 @@ public class IssueService {
 		mutator.accept(issue);
 		// Only what changed is judged, against what was stored (HIN-176). A write of the server's
 		// own, without an editor, is not.
-		List<TextVerdict> texts = editor == null ? List.of() : textCheck.require(editor,
+		TextCheck.Verdicts texts = editor == null ? new TextCheck.Verdicts(Map.of()) : textCheck.require(
 				TextCheck.Entry.ifChanged(TextField.ISSUE_TITLE, issue.getTitle(), before.getTitle()),
 				TextCheck.Entry.ifChanged(TextField.ISSUE_DESCRIPTION, issue.getDescription(),
 						before.getDescription()));
@@ -640,7 +633,7 @@ public class IssueService {
 		// A removed title or description written anew shows the new words again (HIN-169).
 		IssueContentSurface.markRewritten(before, issue);
 		Issue saved = issues.save(issue);
-		textFound(saved, texts, editor);
+		textFound(saved, texts);
 		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);
 		// Ping anyone newly @-mentioned in the description (existing mentions on an
@@ -1718,7 +1711,7 @@ public class IssueService {
 			ContentOrigin origin) {
 		Issue issue = get(issueId);
 		assertAccess(issue, author);
-		TextVerdict text = textCheck.require(content.text(), TextField.COMMENT, author, null);
+		TextVerdict text = textCheck.require(content.text(), TextField.COMMENT, null);
 		IssueComment.IssueCommentBuilder builder = IssueComment.builder()
 				.issueId(issue.getId())
 				.authorId(author.getId())
@@ -1728,7 +1721,7 @@ public class IssueService {
 		applyReplyTo(builder, issue.getId(), replyToId);
 		IssueComment saved = comments.save(builder.build());
 		textCheck.afterSave(new ContentRef(ContentKind.COMMENT, saved.getId(), issue.getId(), issue.getProjectId()),
-				TextField.COMMENT, text, author);
+				TextField.COMMENT, text);
 		// Notifications are best-effort: a failure in the mail/push fan-out (e.g.
 		// an SMTP hiccup, or a body the mail layer can't encode) must NEVER undo
 		// the already-saved comment by bubbling a 500 back to the author.
@@ -1933,8 +1926,8 @@ public class IssueService {
 		}
 		RichText content = resolver.apply(comment);
 		if (content == null) return withReplyCount(comment);
-		TextVerdict text = textCheck.require(editor,
-				TextCheck.Entry.ifChanged(TextField.COMMENT, content.text(), comment.getText())).get(0);
+		TextVerdict text = textCheck.require(
+				TextCheck.Entry.ifChanged(TextField.COMMENT, content.text(), comment.getText())).of(TextField.COMMENT);
 		// Atomic field $set (not a whole-document save) so a concurrent
 		// reaction/pin on the same comment isn't clobbered by a stale edit copy.
 		// The document and its derived text are set together — they must never be
@@ -1950,9 +1943,10 @@ public class IssueService {
 		if (saved == null) {
 			saved = comment;
 		}
-		else {
+		else if (text.opensCase()) {
+			// The project only for a find: most edits find nothing and need no second read.
 			textCheck.afterSave(new ContentRef(ContentKind.COMMENT, saved.getId(), saved.getIssueId(),
-					projectOf(saved.getIssueId())), TextField.COMMENT, text, editor);
+					projectOf(saved.getIssueId())), TextField.COMMENT, text);
 		}
 		commentEvents.publishChanged(comment.getIssueId());
 		return withReplyCount(saved);

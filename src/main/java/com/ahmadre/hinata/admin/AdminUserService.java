@@ -431,7 +431,7 @@ public class AdminUserService {
 
 	public AdminUserResponse updateDetails(String id, String displayName, String title, String email) {
 		User u = userService.get(id);
-		textCheck.require(actingAdmin(),
+		textCheck.require(
 				TextCheck.Entry.ifChanged(TextField.DISPLAY_NAME, displayName == null ? null : displayName.trim(),
 						u.getDisplayName()),
 				TextCheck.Entry.ifChanged(TextField.POSITION, title == null ? null : title.trim(), u.getTitle()));

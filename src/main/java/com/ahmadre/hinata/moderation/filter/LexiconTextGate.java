@@ -10,7 +10,6 @@ import com.ahmadre.hinata.richtext.TextGate;
 import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
-import com.ahmadre.hinata.user.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -85,16 +84,17 @@ class LexiconTextGate implements TextGate {
 	}
 
 	@Override
-	public TextVerdict check(String text, TextField field, User author, String before) {
-		TextVerdict verdict = evaluate(text, field, before);
-		if (verdict.blocked()) {
-			count(StatMetric.TEXT_REFUSED, verdict);
-		}
-		return verdict;
+	public TextVerdict check(String text, TextField field, String before) {
+		return evaluate(text, field, before);
 	}
 
 	@Override
-	public void flagged(ContentRef ref, TextField field, TextVerdict verdict, User author) {
+	public void refused(TextVerdict verdict) {
+		count(StatMetric.TEXT_REFUSED, verdict);
+	}
+
+	@Override
+	public void flagged(ContentRef ref, TextField field, TextVerdict verdict) {
 		reports.fileAutomated(ref, verdict.category(), verdict.newFlagTerms(), "auto:" + field.name());
 		count(StatMetric.TEXT_FLAGGED, verdict);
 	}

@@ -3,11 +3,9 @@ package com.ahmadre.hinata.user;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.content.ContentKind;
 import com.ahmadre.hinata.content.ContentRef;
-import com.ahmadre.hinata.me.TimePreferences;
 import com.ahmadre.hinata.me.TintPreferences;
 import com.ahmadre.hinata.richtext.TextCheck;
 import com.ahmadre.hinata.richtext.TextField;
-import com.ahmadre.hinata.richtext.TextVerdict;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -52,7 +50,7 @@ public class UserService {
 		String title = change.title() == null ? null : change.title().trim();
 		String pronouns = change.pronouns() == null ? null : Pronouns.sanitize(change.pronouns());
 		// Judged before anything is set on the live user, for the same reason as the zone (HIN-176).
-		List<TextVerdict> texts = textCheck.require(user,
+		TextCheck.Verdicts texts = textCheck.require(
 				TextCheck.Entry.ifChanged(TextField.DISPLAY_NAME, displayName, user.getDisplayName()),
 				TextCheck.Entry.ifChanged(TextField.POSITION, title, user.getTitle()),
 				TextCheck.Entry.ifChanged(TextField.PRONOUNS, pronouns, user.getPronouns()));
@@ -98,16 +96,13 @@ public class UserService {
 			return user;
 		}
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(user.getId())), update, User.class);
-		textFound(user, List.of(TextField.DISPLAY_NAME, TextField.POSITION, TextField.PRONOUNS), texts);
+		textFound(user, texts);
 		return user;
 	}
 
 	/** Hands what the text check found in [user]'s profile to moderation, one field at a time. */
-	private void textFound(User user, List<TextField> fields, List<TextVerdict> texts) {
-		ContentRef ref = new ContentRef(ContentKind.PERSON, user.getId(), null, null);
-		for (int i = 0; i < fields.size(); i++) {
-			textCheck.afterSave(ref, fields.get(i), texts.get(i), user);
-		}
+	private void textFound(User user, TextCheck.Verdicts texts) {
+		textCheck.afterSave(new ContentRef(ContentKind.PERSON, user.getId(), null, null), texts);
 	}
 
 	/**
@@ -241,7 +236,7 @@ public class UserService {
 	public User createLocal(String email, String username, String displayName, String rawPassword,
 			Set<Role> roles) {
 		validatePassword(rawPassword);
-		textCheck.require(null, new TextCheck.Entry(TextField.USERNAME, username, null),
+		textCheck.require(new TextCheck.Entry(TextField.USERNAME, username, null),
 				new TextCheck.Entry(TextField.DISPLAY_NAME, displayName, null));
 		if (users.existsByEmailIgnoreCase(email)) {
 			throw ApiException.conflict("error.user.emailInUse");
@@ -268,7 +263,7 @@ public class UserService {
 	public User createSelfRegistered(String email, String username, String displayName,
 			String rawPassword) {
 		validatePassword(rawPassword);
-		List<TextVerdict> texts = textCheck.require(null, new TextCheck.Entry(TextField.USERNAME, username, null),
+		TextCheck.Verdicts texts = textCheck.require(new TextCheck.Entry(TextField.USERNAME, username, null),
 				new TextCheck.Entry(TextField.DISPLAY_NAME, displayName, null));
 		if (users.existsByEmailIgnoreCase(email)) {
 			throw ApiException.conflict("error.user.emailInUse");
@@ -287,7 +282,7 @@ public class UserService {
 				.emailVerified(false)
 				.awaitingApproval(false)
 				.build());
-		textFound(created, List.of(TextField.USERNAME, TextField.DISPLAY_NAME), texts);
+		textFound(created, texts);
 		return created;
 	}
 
@@ -300,9 +295,9 @@ public class UserService {
 			String inviteTokenHash, Instant invitedAt, Instant inviteExpiresAt) {
 		String normalized = email.toLowerCase(Locale.ROOT);
 		// The name the administrator wrote is checked; one made from the address is replaced.
-		textCheck.require(displayName, TextField.DISPLAY_NAME, null, null);
+		textCheck.require(displayName, TextField.DISPLAY_NAME, null);
 		String username = uniqueUsernameFrom(normalized);
-		if (textCheck.verdict(username, TextField.USERNAME, null, null).blocked()) {
+		if (textCheck.verdict(username, TextField.USERNAME, null).blocked()) {
 			username = neutralUsername();
 		}
 		return users.save(User.builder()
