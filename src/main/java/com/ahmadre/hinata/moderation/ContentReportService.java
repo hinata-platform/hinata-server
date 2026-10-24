@@ -230,8 +230,8 @@ public class ContentReportService {
 	}
 
 	private static ApiException tooMany(Duration window) {
-		return new ApiException(HttpStatus.TOO_MANY_REQUESTS, "error.moderation.tooManyReports",
-				Map.of("code", "moderation.tooManyReports", "retryAfter", String.valueOf(window.toSeconds())));
+		return ApiException.refusal(HttpStatus.TOO_MANY_REQUESTS, "error.moderation.tooManyReports",
+				Map.of("retryAfter", String.valueOf(window.toSeconds())));
 	}
 
 	static boolean urgent(ReportCategory category) {

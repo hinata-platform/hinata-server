@@ -25,7 +25,7 @@ import java.util.Set;
 public class TextCheck {
 
 	/** What the app reads a refusal by: {@code details.code}, never the status alone. */
-	public static final String REFUSED = "moderation.refused";
+	public static final String REFUSED = "error.moderation.refused";
 
 	private final ObjectProvider<TextGate> gate;
 
@@ -123,9 +123,8 @@ public class TextCheck {
 	/** The refusal of [verdict], for a write that refuses in its own way first, like a mail. */
 	public static ApiException refusal(TextVerdict verdict) {
 		String terms = String.join(", ", verdict.terms());
-		return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "error.moderation.refused",
-				Map.of("code", REFUSED, "category", verdict.category() == null ? "" : verdict.category().name(),
-						"terms", terms),
+		return ApiException.refusal(HttpStatus.UNPROCESSABLE_CONTENT, REFUSED,
+				Map.of("category", verdict.category() == null ? "" : verdict.category().name(), "terms", terms),
 				terms);
 	}
 

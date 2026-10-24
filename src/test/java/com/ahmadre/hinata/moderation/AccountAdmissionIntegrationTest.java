@@ -109,7 +109,7 @@ class AccountAdmissionIntegrationTest extends RemovalIntegrationSupport {
 		assertThatThrownBy(() -> adminSettings.update(opening))
 				.isInstanceOfSatisfying(ApiException.class, ex -> {
 					assertThat(ex.getMessageKey()).isEqualTo("error.moderation.openAccessUnconfirmed");
-					assertThat(ex.getDetails()).containsEntry("code", "moderation.openAccess")
+					assertThat(ex.getDetails()).containsEntry("code", "error.moderation.openAccessUnconfirmed")
 							.containsEntry("ways", AccountAdmission.REGISTRATION);
 				});
 		assertThat(openWays()).isEmpty();

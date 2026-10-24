@@ -109,7 +109,7 @@ class CommentRemovalIntegrationTest extends RemovalIntegrationSupport {
 				richText.fromLexical(doc("Nachgebessert")), reader))
 				.isInstanceOfSatisfying(ApiException.class, refused -> {
 					assertThat(refused.getStatus().value()).isEqualTo(409);
-					assertThat(refused.getMessageKey()).isEqualTo("error.moderation.removed");
+					assertThat(refused.getMessageKey()).isEqualTo("error.moderation.removedNotWritable");
 				});
 		issues.deleteComment(issue.getId(), insult.getId(), reader);
 		assertThat(comments.findById(insult.getId())).isEmpty();

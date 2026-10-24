@@ -2,10 +2,10 @@ package com.ahmadre.hinata.moderation;
 
 import com.ahmadre.hinata.common.ApiException;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.Instant;
-import java.util.Map;
 
 /**
  * What every write on a case shares (HIN-170, HIN-171): its history entry, its revision, its 409,
@@ -51,7 +51,7 @@ final class CaseSteps {
 	/** 409 for a step on a case that moved: decided meanwhile, or changed by somebody else. */
 	static ApiException stale(MongoTemplate mongo, String id) {
 		ModerationCase now = mongo.findById(id, ModerationCase.class);
-		String code = now != null && now.getStatus() == CaseStatus.DECIDED ? "decided" : "changed";
-		return ApiException.conflict("error.moderation.caseChanged", Map.of("code", code));
+		return ApiException.refusal(HttpStatus.CONFLICT, now != null && now.getStatus() == CaseStatus.DECIDED
+				? "error.moderation.caseDecided" : "error.moderation.caseChanged");
 	}
 }
