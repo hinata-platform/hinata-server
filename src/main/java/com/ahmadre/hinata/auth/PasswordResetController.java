@@ -77,6 +77,11 @@ public class PasswordResetController {
 		user.setPasswordResetExpiresAt(null);
 		User saved = users.save(user);
 		sessions.revokeAll(saved.getId()); // sign out every existing device
+		// The new password is set, but only who may sign in is signed in: a person suspended after
+		// asking for the link gets the refusal a sign-in gets (HIN-172).
+		SignInRefusal.of(saved).ifPresent(refusal -> {
+			throw refusal.refuse(saved);
+		});
 		TokenService.TokenPair pair = authService.issueWithSession(saved,
 				clientIpResolver.resolve(http), http.getHeader("User-Agent"));
 		return new AuthController.LoginResponse(false, null, pair.accessToken(), pair.refreshToken(),
