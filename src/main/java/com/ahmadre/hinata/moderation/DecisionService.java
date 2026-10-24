@@ -67,6 +67,7 @@ public class DecisionService {
 	static final Instant INDEFINITELY = Instant.parse("9999-12-31T23:59:59Z");
 
 	private final CaseAccess access;
+	private final CaseSummaries summaries;
 	private final MongoTemplate mongo;
 	private final ContentSurfaces surfaces;
 	private final ModerationFollowUps followUps;
@@ -223,7 +224,7 @@ public class DecisionService {
 			alertOnManyRemovals(decided, decider, now);
 		}
 		followUps.later(id);
-		return CaseService.summaryOf(decided, personOf(decider), access.reported(decided, actor.getId()));
+		return summaries.of(decided, personOf(decider), access.reported(decided, actor.getId()));
 	}
 
 	/**
@@ -271,7 +272,7 @@ public class DecisionService {
 		}
 		alerts.confirmRequested(pending, "moderation.notice.confirmDecision");
 		alerts.adminAlert(pending, "moderation.alert.suspendRole");
-		return CaseService.summaryOf(pending, personOf(moderator), access.reported(pending, moderator.getId()));
+		return summaries.of(pending, personOf(moderator), access.reported(pending, moderator.getId()));
 	}
 
 	/** Confirms the decision waiting on case [id], as the second pair of eyes; then it takes effect. */
@@ -301,7 +302,7 @@ public class DecisionService {
 		if (reopened == null) {
 			throw CaseSteps.stale(mongo, id);
 		}
-		return CaseService.summaryOf(reopened, null, access.reported(reopened, guarded.moderator().getId()));
+		return summaries.of(reopened, null, access.reported(reopened, guarded.moderator().getId()));
 	}
 
 	/**
@@ -435,7 +436,7 @@ public class DecisionService {
 						new CaseEvent(now, CaseEvent.Kind.RESTORED, moderator.getId(), outcome.name())));
 		audit.event(AuditAction.MODERATION_RESTORED).actor(moderator).meta("case", id).log();
 		followUps.later(id);
-		return CaseService.summaryOf(undone.moderationCase(), assigneeOf(undone.moderationCase()),
+		return summaries.of(undone.moderationCase(), assigneeOf(undone.moderationCase()),
 				access.reported(undone.moderationCase(), moderator.getId()));
 	}
 
@@ -461,7 +462,7 @@ public class DecisionService {
 				.ifPresent(person -> suspensions.lift(person, SuspensionService.LiftReason.MODERATION, moderator,
 						request.note().strip()));
 		ModerationCase after = mongo.findById(id, ModerationCase.class);
-		return CaseService.summaryOf(after, assigneeOf(after), access.reported(after, moderator.getId()));
+		return summaries.of(after, assigneeOf(after), access.reported(after, moderator.getId()));
 	}
 
 	/** Holds case [id] beyond its time: never shorter than it is held already. */
@@ -482,7 +483,7 @@ public class DecisionService {
 			throw ApiException.notFound("moderationCase");
 		}
 		audit.event(AuditAction.MODERATION_LEGAL_HOLD_CHANGED).actor(moderator).meta("case", id).log();
-		return CaseService.summaryOf(held, assigneeOf(held), access.reported(held, moderator.getId()));
+		return summaries.of(held, assigneeOf(held), access.reported(held, moderator.getId()));
 	}
 
 	// --- helpers ---------------------------------------------------------------------------------

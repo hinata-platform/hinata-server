@@ -79,6 +79,7 @@ public class CaseService {
 	private final MongoTemplate mongo;
 	private final UserRepository users;
 	private final ContentSurfaces surfaces;
+	private final CaseSummaries summaries;
 	private final StorageService storage;
 	private final AuditService audit;
 	private final ModerationAlerts alerts;
@@ -147,7 +148,7 @@ public class CaseService {
 		own.fields().include("caseId");
 		Set<String> reportedByMe = new HashSet<>();
 		mongo.find(own, ContentReport.class).forEach(report -> reportedByMe.add(report.getCaseId()));
-		return cases.stream().map(moderationCase -> summaryOf(moderationCase,
+		return cases.stream().map(moderationCase -> summaries.of(moderationCase,
 				people.get(moderationCase.getAssigneeId()), reportedByMe.contains(moderationCase.getId()))).toList();
 	}
 
@@ -160,32 +161,6 @@ public class CaseService {
 		return people;
 	}
 
-	static CaseSummary summaryOf(ModerationCase c, PersonRef assignee, boolean reportedByMe) {
-		Decision decision = c.getDecision();
-		return new CaseSummary(c.getId(), stateOf(c), c.isUrgent(), c.getTarget() == null ? null : c.getTarget().kind(),
-				c.getCategories(), c.getSources(), c.getReportCount(), c.getFirstReportedAt(), c.getLocation(),
-				c.getListExcerpt(), assignee, reportedByMe, decision == null ? null : decision.outcome(),
-				decision != null && decision.outcome() == Decision.Outcome.ACTION && decision.removal() != null
-						&& c.getRestoration() == null,
-				c.getSuspension() != null && c.getSuspension().running(), c.getRev());
-	}
-
-	/** The one state of a case, as the list shows it. */
-	static CaseState stateOf(ModerationCase c) {
-		Appeal appeal = c.getAppeal();
-		if (appeal != null && appeal.state() == Appeal.State.PENDING) {
-			return CaseState.APPEAL;
-		}
-		if (c.getStatus() == CaseStatus.OPEN) {
-			if (c.getPendingDecision() != null) {
-				return CaseState.PENDING_CONFIRMATION;
-			}
-			return c.getAssigneeId() != null ? CaseState.IN_REVIEW : c.isUrgent() ? CaseState.URGENT : CaseState.OPEN;
-		}
-		boolean undone = appeal != null && appeal.state() == Appeal.State.REVERSED || c.getRestoration() != null;
-		return c.getDecision() != null && c.getDecision().acted() && !undone ? CaseState.ACTED : CaseState.NO_ACTION;
-	}
-
 	// --- one case --------------------------------------------------------------------------------
 
 	/** Case [id] opened: the reported state, the current one while open, the first reports, the history. */
@@ -196,20 +171,24 @@ public class CaseService {
 
 	private CaseDetail detailOf(ModerationCase c, User moderator) {
 		boolean withheld = withheldFrom(c, moderator);
-		ContentSnapshot current = null;
+		String currentHash = null;
 		if (c.getStatus() == CaseStatus.OPEN && !withheld && c.getTarget() != null
 				&& c.getTarget().kind() != ContentKind.OTHER) {
-			current = surface(c.getTarget().kind()).forModeration(TargetRef.of(c.getTarget())).orElse(null);
+			currentHash = surface(c.getTarget().kind()).forModeration(TargetRef.of(c.getTarget()))
+					.map(ContentSnapshot::contentHash).orElse(null);
 		}
+		boolean takeOverAllowed = c.getStatus() == CaseStatus.OPEN && c.getAssigneeId() != null
+				&& !c.getAssigneeId().equals(moderator.getId()) && c.getClaimedAt() != null
+				&& c.getClaimedAt().isBefore(clock.instant().minus(CLAIM_STALE));
 		Query first = Query.query(Criteria.where("caseId").is(c.getId()))
 				.with(Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("_id"))).limit(FIRST_REPORTS);
 		List<ContentReport> found = mongo.find(first, ContentReport.class);
 		long total = mongo.count(Query.query(Criteria.where("caseId").is(c.getId())), ContentReport.class);
 		PersonRef assignee = c.getAssigneeId() == null ? null : people(Set.of(c.getAssigneeId())).get(c.getAssigneeId());
 		boolean reportedByMe = access.reported(c, moderator.getId());
-		return new CaseDetail(summaryOf(c, assignee, reportedByMe), withheld ? null : c.getEvidence(), current,
+		return new CaseDetail(summaries.of(c, assignee, reportedByMe), withheld ? null : c.getEvidence(), currentHash,
 				withheld, c.getEvidenceReveal(), views(c, found, 0), total, c.getHistory(), c.getClaimedAt(),
-				c.getDecision(), c.getAppeal(), c.getRestoration(), c.getRemovalState(),
+				takeOverAllowed, c.getDecision(), c.getAppeal(), c.getRestoration(), c.getRemovalState(),
 				c.getOtherUses() == null ? List.of() : c.getOtherUses());
 	}
 
@@ -321,7 +300,7 @@ public class CaseService {
 			throw CaseSteps.stale(mongo, id);
 		}
 		audit.event(AuditAction.MODERATION_CASE_CLAIMED).actor(moderator).meta("case", id).log();
-		return summaryOf(claimed, new PersonRef(moderator.getId(), moderator.getDisplayName(), moderator.getAvatarUrl()),
+		return summaries.of(claimed, new PersonRef(moderator.getId(), moderator.getDisplayName(), moderator.getAvatarUrl()),
 				access.reported(claimed, moderator.getId()));
 	}
 
@@ -339,7 +318,7 @@ public class CaseService {
 		if (released == null) {
 			throw CaseSteps.stale(mongo, id);
 		}
-		return summaryOf(released, null, access.reported(released, moderator.getId()));
+		return summaries.of(released, null, access.reported(released, moderator.getId()));
 	}
 
 

@@ -47,6 +47,9 @@ import static org.mockito.Mockito.verify;
  */
 class SuspensionIntegrationTest extends RemovalIntegrationSupport {
 
+	@org.springframework.beans.factory.annotation.Autowired
+	private AppealService appeals;
+
 	private static final String NOTE = "Die Sperre war nach dem Gespraech nicht mehr noetig.";
 
 	@Autowired
@@ -152,6 +155,10 @@ class SuspensionIntegrationTest extends RemovalIntegrationSupport {
 		verify(mail, timeout(3000)).sendTemplate(eq(author.getEmail()), anyString(), eq("email/moderation-notice"),
 				model.capture(), eq(DecisionIntegrationTest.CONTACT));
 		assertThat((String) model.getValue().get("measure")).contains("was removed", "Your account is suspended until");
+		// The notice tells both measures apart by what was decided, not by an end date.
+		Statement statement = appeals.statement(c.getId(), out);
+		assertThat(statement.scope()).isEqualTo(RemovalScope.WHOLE);
+		assertThat(statement.suspension()).isEqualTo(Decision.SuspensionLength.DAYS_7);
 		verify(push, never()).sendToUser(eq(author.getId()), any(), any(), any(), any());
 		assertInvariant(author);
 	}
