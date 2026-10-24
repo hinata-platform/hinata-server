@@ -5,6 +5,8 @@ import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.FeatureFlags;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.pat.Scopes;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -64,6 +66,7 @@ public class OAuthService {
 	private final PasswordEncoder passwordEncoder;
 	private final FeatureFlags featureFlags;
 	private final UserRepository users;
+	private final TextCheck textCheck;
 	private final SecureRandom random = new SecureRandom();
 
 	// --- results ------------------------------------------------------------
@@ -115,6 +118,11 @@ public class OAuthService {
 		if (clientName != null && clientName.trim().length() > CLIENT_NAME_MAX) {
 			throw new OAuthException("invalid_client_metadata",
 					"client_name is longer than " + CLIENT_NAME_MAX + " characters");
+		}
+		// The name stands on the consent page of whoever connects it (HIN-176): refused, never flagged.
+		if (clientName != null
+				&& textCheck.verdict(clientName.trim(), TextField.OAUTH_CLIENT_NAME, null, null).blocked()) {
+			throw new OAuthException("invalid_client_metadata", "client_name is not allowed on this server");
 		}
 		if (redirectUris == null || redirectUris.isEmpty()) {
 			throw new OAuthException("invalid_redirect_uri", "At least one redirect_uri is required");

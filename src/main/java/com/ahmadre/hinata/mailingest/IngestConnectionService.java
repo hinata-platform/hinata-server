@@ -10,8 +10,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -29,6 +34,7 @@ public class IngestConnectionService {
 
 	private final IngestConnectionRepository connections;
 	private final SettingsService settings;
+	private final MongoTemplate mongo;
 
 	public List<IngestConnection> list() {
 		List<IngestConnection> all = new ArrayList<>(connections.findAll());
@@ -53,11 +59,19 @@ public class IngestConnectionService {
 		IngestConnection current = get(id);
 		updated.setId(current.getId());
 		updated.setCreatedAt(current.getCreatedAt());
+		updated.setTextRefusals(current.getTextRefusals());
+		updated.setLastTextRefusalAt(current.getLastTextRefusalAt());
 		if (isBlank(updated.getPassword())) {
 			updated.setPassword(current.getPassword());
 		}
 		validate(updated);
 		return deriveFlags(connections.save(updated));
+	}
+
+	/** Counts one mail of connection [id] that the text check refused (HIN-176). */
+	public void noteTextRefusal(String id) {
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)),
+				new Update().inc("textRefusals", 1).set("lastTextRefusalAt", Instant.now()), IngestConnection.class);
 	}
 
 	public void delete(String id) {

@@ -66,7 +66,7 @@ class AdminUserServiceTest {
 		when(mail.organizationName()).thenReturn("Hinata");
 		service = new AdminUserService(users, userService, mock(SsoAccounts.class), sessions, notifications, gateway,
 				adminMail, mail, accountMail, currentUser, new BCryptPasswordEncoder(4), audit,
-				mock(SuspensionService.class));
+				mock(SuspensionService.class), com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
 	}
 
 	private User user(String id, Role role, boolean active, User.Origin origin) {

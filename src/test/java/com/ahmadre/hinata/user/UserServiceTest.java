@@ -31,7 +31,8 @@ class UserServiceTest {
 		service = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class),
 				mock(org.springframework.context.ApplicationEventPublisher.class),
 				mock(AuditService.class), mock(NotificationService.class), securityPolicy,
-				com.ahmadre.hinata.common.UserWordsFixture.real());
+				com.ahmadre.hinata.common.UserWordsFixture.real(),
+				com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
 	}
 
 	@Test

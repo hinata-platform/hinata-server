@@ -1,6 +1,8 @@
 package com.ahmadre.hinata.mailingest;
 
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.content.ContentKind;
+import com.ahmadre.hinata.content.ContentRef;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.notification.NotificationService;
@@ -8,6 +10,9 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
+import com.ahmadre.hinata.richtext.TextCheck;
+import com.ahmadre.hinata.richtext.TextField;
+import com.ahmadre.hinata.richtext.TextVerdict;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.storage.AttachmentStore;
 import com.ahmadre.hinata.storage.StorageService;
@@ -63,6 +68,10 @@ public class EmailIngestService {
 	private final UploadGate gate;
 	private final SettingsService settings;
 	private final MessageSource messages;
+
+	/** A mail is checked like a form (HIN-176); a refused one becomes nothing and is counted. */
+	private final TextCheck textCheck;
+	private final IngestConnectionService ingestConnections;
 
 	/** Per-connection epoch seconds of the last poll (the 15s tick is the beat). */
 	private final Map<String, Long> lastRun = new ConcurrentHashMap<>();
@@ -156,11 +165,29 @@ public class EmailIngestService {
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
 				.build();
+		// Refused by the text check: nothing becomes an issue, and nobody is mailed back, or the
+		// mailbox would answer spam. The connection counts it, without any of the words.
+		List<TextVerdict> texts;
+		try {
+			texts = textCheck.require(null, new TextCheck.Entry(TextField.ISSUE_TITLE, issue.getTitle(), null),
+					new TextCheck.Entry(TextField.ISSUE_DESCRIPTION, issue.getDescription(), null));
+		}
+		catch (ApiException refused) {
+			if (!TextCheck.isRefusal(refused)) {
+				throw refused;
+			}
+			log.info("Message {} for project {} refused by the text check", messageId, projectId);
+			ingestConnections.noteTextRefusal(config.getId());
+			return; // caller still sets SEEN
+		}
 		// Created with a null actor on purpose: the sender is the ticket's author, not
 		// an authenticated creator. Passing them as the actor would demand project
 		// membership (A01) and abort ingestion for every non-member sender; IssueService
 		// leaves a builder-set reporterId untouched when the actor is null.
 		Issue created = issues.create(issue, null);
+		ContentRef ref = new ContentRef(ContentKind.ISSUE, created.getId(), null, created.getProjectId());
+		textCheck.afterSave(ref, TextField.ISSUE_TITLE, texts.get(0), null);
+		textCheck.afterSave(ref, TextField.ISSUE_DESCRIPTION, texts.get(1), null);
 		log.info("Created {} from e-mail by {}{}", created.getReadableId(), from,
 				reporterId != null ? " (author resolved to user " + reporterId + ")" : "");
 		notifyMembers(created, projectId, from, reporterId);

@@ -347,7 +347,8 @@ class DecisionIntegrationTest extends RemovalIntegrationSupport {
 
 	@Test
 	void aNoteToLawEnforcementHoldsTheCaseAndTheHoldOnlyGrows() {
-		ModerationCase c = reported(comment("Ich weiss, wo du wohnst"));
+		// A threat the shipped lists do not refuse, so that it gets saved and reported (HIN-176).
+		ModerationCase c = reported(comment("Ich weiss, wo dein Auto steht"));
 		DecisionService.DecisionRequest full = action(0, RemovalScope.WHOLE);
 		moderation.decide(c.getId(), new DecisionService.DecisionRequest(0L, full.outcome(), full.removal(),
 				Decision.Ground.LAW, ReportCategory.THREAT, FACTS, null, "§ 241 StGB", null, false, null, null, true));

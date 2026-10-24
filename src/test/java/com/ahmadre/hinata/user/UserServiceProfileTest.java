@@ -52,7 +52,8 @@ class UserServiceProfileTest {
 				mock(org.springframework.context.ApplicationEventPublisher.class),
 				mock(AuditService.class),
 				mock(NotificationService.class), mock(SecurityPolicy.class),
-				UserWordsFixture.real());
+				UserWordsFixture.real(),
+				com.ahmadre.hinata.richtext.TestTextChecks.allowAll());
 	}
 
 	@Test

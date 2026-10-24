@@ -81,7 +81,8 @@ class MailAttachmentGateTest {
 		service = new EmailIngestService(mock(IngestConnectionRepository.class), issues, new RichTextService(),
 				projects, mock(NotificationService.class),
 				TestStorage.inMemory(TestUploadGates.counting(refused), objects), attachments, users,
-				TestUploadGates.counting(refused), settings, messages);
+				TestUploadGates.counting(refused), settings, messages, com.ahmadre.hinata.richtext.TestTextChecks.allowAll(),
+				mock(IngestConnectionService.class));
 	}
 
 	private static IngestConnection connection() {
