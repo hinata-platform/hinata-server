@@ -42,6 +42,12 @@ class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 		assertThat(plan("moderation_cases", new Document("target._id", "c-7").append("target.kind", "COMMENT")
 				.append("legalHoldUntil", new Document("$gt", new Date()).append("$exists", true)), null))
 				.contains("legal_hold");
+		// The follow-up job's due cases (HIN-171).
+		assertThat(plan("moderation_cases", new Document("followUpDue", new Document("$gte",
+				Date.from(now().minusSeconds(7 * 86400))).append("$lt", Date.from(now().minusSeconds(300)))
+				.append("$exists", true)).append("$or", List.of(new Document("followUpUntil", null),
+				new Document("followUpUntil", new Document("$lt", new Date())))), null))
+				.contains("follow_up_due");
 		// The limits are counts answered from the index alone.
 		Document lastDay = new Document("reporterId", "u-3")
 				.append("createdAt", new Document("$gte", Date.from(Instant.now().minusSeconds(86400))));
@@ -64,14 +70,19 @@ class ModerationIndexIntegrationTest extends RemovalIntegrationSupport {
 					.status(open ? CaseStatus.OPEN : CaseStatus.DECIDED).urgent(i % 7 == 0)
 					.contributorIds(new java.util.LinkedHashSet<>(Set.of("u-" + (i % 50))))
 					.firstReportedAt(now.minusSeconds(i)).decidedAt(open ? null : now.minusSeconds(i))
-					.appeal(i % 11 == 0 ? new Appeal(Appeal.State.PENDING, null, now.minusSeconds(i), null, null) : null)
+					.appeal(i % 11 == 0 ? Appeal.filed(null, now.minusSeconds(i), Appeal.Via.APP) : null)
 					.legalHoldUntil(i % 97 == 0 ? now.plusSeconds(3600) : null)
+					.followUpDue(i % 13 == 0 ? now.minusSeconds(3600 + i) : null)
 					.build());
 			reports.add(ContentReport.builder().caseId("case-" + (i % 300)).reporterKey("u-" + i)
 					.reporterId("u-" + (i % 60)).category(ReportCategory.SPAM).createdAt(now.minusSeconds(i)).build());
 		}
 		mongo.insertAll(cases);
 		mongo.insertAll(reports);
+	}
+
+	private static Instant now() {
+		return Instant.now();
 	}
 
 	private static Document notMine() {

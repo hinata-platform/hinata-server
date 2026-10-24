@@ -146,12 +146,8 @@ class ModerationJobsIntegrationTest extends RemovalIntegrationSupport {
 		store.put("object-a", "a");
 		store.put("object-b", "b");
 		store.refuseDeletes.add("object-b");
-		ModerationCase decided = mongo.insert(ModerationCase.builder().status(CaseStatus.DECIDED)
-				.decidedAt(Instant.now().minus(Duration.ofHours(1))).removalState(RemovalState.INCOMPLETE)
-				.pendingDeletes(new ArrayList<>(List.of("object-a"))).build());
-		ModerationCase stuck = mongo.insert(ModerationCase.builder().status(CaseStatus.DECIDED)
-				.decidedAt(Instant.now().minus(Duration.ofHours(1))).removalState(RemovalState.INCOMPLETE)
-				.pendingDeletes(new ArrayList<>(List.of("object-b"))).build());
+		ModerationCase decided = mongo.insert(due(List.of("object-a")));
+		ModerationCase stuck = mongo.insert(due(List.of("object-b")));
 
 		followUp.redrive(Instant.now());
 
@@ -159,9 +155,20 @@ class ModerationJobsIntegrationTest extends RemovalIntegrationSupport {
 		ModerationCase done = mongo.findById(decided.getId(), ModerationCase.class);
 		assertThat(done.getPendingDeletes()).isEmpty();
 		assertThat(done.getRemovalState()).isEqualTo(RemovalState.DONE);
+		assertThat(done.getFollowUpDue()).isNull();
 		ModerationCase left = mongo.findById(stuck.getId(), ModerationCase.class);
 		assertThat(left.getPendingDeletes()).containsExactly("object-b");
 		assertThat(left.getRemovalState()).isEqualTo(RemovalState.INCOMPLETE);
+		assertThat(left.getFollowUpDue()).as("still due, for the next run").isNotNull();
+	}
+
+	/** A case decided an hour ago whose removal left [originals] in the store, everything else done. */
+	private ModerationCase due(List<String> originals) {
+		Instant hourAgo = Instant.now().minus(Duration.ofHours(1));
+		return ModerationCase.builder().status(CaseStatus.DECIDED).decidedAt(hourAgo).followUpDue(hourAgo)
+				.decision(decision(Decision.Outcome.ACTION, Decision.Ground.RULES, mira.getId()))
+				.removalState(RemovalState.INCOMPLETE).pendingDeletes(new ArrayList<>(originals))
+				.copiesScrubbedAt(hourAgo).statementSentAt(hourAgo).reportersNotifiedAt(hourAgo).build();
 	}
 
 	// --- retention ---------------------------------------------------------------------------------
@@ -172,7 +179,7 @@ class ModerationJobsIntegrationTest extends RemovalIntegrationSupport {
 		Instant future = Instant.now().plus(Duration.ofDays(30));
 		ModerationCase due = decided(past, null, null, null);
 		ModerationCase broken = decided(past, null, null, Instant.now().minus(Duration.ofHours(2)));
-		ModerationCase appealed = decided(past, new Appeal(Appeal.State.PENDING, "Das war Satire", past, null, null),
+		ModerationCase appealed = decided(past, Appeal.filed("Das war Satire", past, Appeal.Via.APP),
 				null, null);
 		ModerationCase held = decided(past, null, future, null);
 		ModerationCase running = decided(past, null, null, Instant.now().minus(Duration.ofMinutes(10)));
