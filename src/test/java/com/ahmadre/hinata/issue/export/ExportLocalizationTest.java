@@ -25,6 +25,7 @@ import org.springframework.data.domain.Pageable;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
@@ -216,10 +217,14 @@ class ExportLocalizationTest {
 		// those are the same display strings the PDF prints, localized spelling
 		// and all, which is what a `label` attribute beside a stable `name` is
 		// there to make legible.
-		assertThat(xml).contains("<generatedAt>").contains("+02:00");
-		assertThat(xml).doesNotContain("<generatedAt>2026-08-27T00");
-		assertThat(xml.substring(xml.indexOf("<generatedAt>"),
-				xml.indexOf("</generatedAt>"))).doesNotContain("MESZ");
+		// The stamp is now, so its offset is Berlin's at this moment: +02:00 in
+		// summer, +01:00 in winter. A fixed +02:00 turned red with the clock change.
+		String stamp = xml.substring(xml.indexOf("<generatedAt>") + "<generatedAt>".length(),
+				xml.indexOf("</generatedAt>"));
+		OffsetDateTime written = OffsetDateTime.parse(stamp);
+		assertThat(written.getOffset())
+				.isEqualTo(ZoneId.of("Europe/Berlin").getRules().getOffset(written.toInstant()));
+		assertThat(stamp).doesNotContain("MESZ").doesNotEndWith("Z");
 	}
 
 	// --- smart links ---------------------------------------------------------
