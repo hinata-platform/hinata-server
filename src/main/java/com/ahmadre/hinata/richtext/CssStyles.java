@@ -69,7 +69,7 @@ public final class CssStyles {
 			String value = declaration[1];
 			switch (property) {
 				case "background-color", "color" -> put(out, property, color(value));
-				case "background" -> put(out, "background-color", color(value));
+				case "background" -> put(out, "background-color", backgroundColor(value));
 				case "padding" -> put(out, property, lengths(value, 1, 4, false));
 				case "padding-top", "padding-right", "padding-bottom", "padding-left", "margin-top",
 						"margin-bottom" -> put(out, property, length(value, false));
@@ -167,6 +167,19 @@ public final class CssStyles {
 					: "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
 		}
 		return NAMED_COLORS.contains(value) ? value : null;
+	}
+
+	/**
+	 * The color of a {@code background} shorthand, or null. An image in it ({@code url(…)}, a
+	 * gradient) is dropped: a stored document fetches nothing, so only the color is kept.
+	 */
+	static String backgroundColor(String value) {
+		String color = null;
+		for (String part : value.split("\\s+(?![^(]*\\))")) {
+			String candidate = color(part);
+			if (candidate != null) color = candidate;
+		}
+		return color;
 	}
 
 	/**

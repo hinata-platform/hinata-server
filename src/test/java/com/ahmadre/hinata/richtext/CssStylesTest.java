@@ -34,9 +34,11 @@ class CssStylesTest {
 	}
 
 	@Test
-	void block_takesTheColorOutOfABackgroundShorthandOnly() {
+	void block_takesTheColorOutOfABackgroundShorthandAndDropsItsImage() {
 		assertThat(CssStyles.block("background:#fff")).isEqualTo("background-color:#fff");
-		assertThat(CssStyles.block("background:#fff url(x.png) no-repeat")).isEmpty();
+		assertThat(CssStyles.block("background:#333333 url(https://cdn.example/curve.png) no-repeat top center"))
+				.isEqualTo("background-color:#333333");
+		assertThat(CssStyles.block("background:url(https://cdn.example/curve.png)")).isEmpty();
 	}
 
 	@Test
