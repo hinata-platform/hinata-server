@@ -314,6 +314,32 @@ class HtmlToLexicalTest {
 	}
 
 	@Test
+	void unclosedCommentsInAStyleSheetCostLinearTime() {
+		String hostile = "<style>" + "/* x ".repeat(12_000) + "</style><p>Text</p>";
+
+		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofMillis(500),
+				() -> HtmlToLexical.styleSheet(org.jsoup.Jsoup.parse(hostile)));
+	}
+
+	@Test
+	void anUnclosedMediaQueryCostsLinearTime() {
+		String hostile = "<style>" + "@media ".repeat(150_000) + "</style><p>Text</p>";
+
+		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(2),
+				() -> assertThat(LexicalJson.plainText(document(hostile))).isEqualTo("Text"));
+	}
+
+	@Test
+	void commentsAreStrippedAndTheBreakpointStillFound() {
+		String html = "<style>/* .a{color:blue} */ .a{color:red} /* @media (min-width:999px) {} */"
+				+ "@media only screen and (min-width:520px) { .x {} }</style><p class=\"a\">Text</p>" + MJML_ROW;
+
+		JsonNode document = document(html);
+		assertThat(nodes(document, "text").getFirst().path("style").asText()).isEqualTo("color:red");
+		assertThat(style(onlyContainer(document, "50% 50%"))).contains("--stack-below:520px");
+	}
+
+	@Test
 	void anEmptyBodyIsNoDocument() {
 		assertThatThrownBy(() -> converter.convert("<html><head><style>p{}</style></head><body> </body></html>"))
 				.isInstanceOf(IllegalArgumentException.class);
