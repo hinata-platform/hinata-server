@@ -230,4 +230,12 @@ class LexicalToMarkdownTest {
 
 		assertThat(LexicalToMarkdown.convert(mapper.readTree(json))).isEqualTo("drin");
 	}
+
+	@Test
+	void textThatLooksLikeMarkupComesBackAsTheSameText() {
+		// Escaped on the way out, resolved on the way in: the characters survive a round
+		// trip instead of turning into formatting, or into backslashes (HIN-181).
+		isFixedPoint("2\\*3 snake\\_case C:\\\\Temp `a*b`");
+		assertThat(md("2\\*3 snake\\_case")).isEqualTo("2\\*3 snake\\_case");
+	}
 }

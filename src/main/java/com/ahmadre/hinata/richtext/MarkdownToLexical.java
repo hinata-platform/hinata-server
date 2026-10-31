@@ -13,6 +13,7 @@ import com.vladsch.flexmark.ast.FencedCodeBlock;
 import com.vladsch.flexmark.ast.HardLineBreak;
 import com.vladsch.flexmark.ast.Heading;
 import com.vladsch.flexmark.ast.HtmlBlock;
+import com.vladsch.flexmark.ast.HtmlEntity;
 import com.vladsch.flexmark.ast.HtmlInline;
 import com.vladsch.flexmark.ast.Image;
 import com.vladsch.flexmark.ast.IndentedCodeBlock;
@@ -424,7 +425,10 @@ public final class MarkdownToLexical {
 			return;
 		}
 		switch (node) {
-			case com.vladsch.flexmark.ast.Text text -> smartText(text.getChars().toString(), out, format);
+			// flexmark leaves escapes and entities in the source characters; the text
+			// is what they stand for ({@code \*} is an asterisk, {@code &amp;} an ampersand).
+			case com.vladsch.flexmark.ast.Text text -> smartText(text.getChars().unescape(), out, format);
+			case HtmlEntity entity -> out.text(entity.getChars().unescape(), format);
 			case StrongEmphasis emphasis -> inlines(emphasis, out, format | BOLD, depth + 1);
 			case Emphasis emphasis -> inlines(emphasis, out, format | ITALIC, depth + 1);
 			case Strikethrough strike -> inlines(strike, out, format | STRIKETHROUGH, depth + 1);
@@ -471,15 +475,16 @@ public final class MarkdownToLexical {
 		Inline inline = new Inline(children);
 		inlines(link, inline, format, depth + 1);
 		inline.flush();
-		if (children.isEmpty()) children.add(text(link.getUrl().toString(), format));
+		String url = link.getUrl().unescape();
+		if (children.isEmpty()) children.add(text(url, format));
 
 		ObjectNode element = element("link", children, 0);
 		element.putNull("rel");
 		element.putNull("target");
-		String title = link.getTitle().toString();
+		String title = link.getTitle().unescape();
 		if (title.isEmpty()) element.putNull("title");
 		else element.put("title", title);
-		element.put("url", link.getUrl().toString());
+		element.put("url", url);
 		return element;
 	}
 
@@ -500,14 +505,14 @@ public final class MarkdownToLexical {
 
 	private ObjectNode image(Image image) {
 		ObjectNode node = mapper.createObjectNode();
-		node.put("altText", image.getText().toString());
+		node.put("altText", image.getText().unescape());
 		ObjectNode caption = mapper.createObjectNode();
 		caption.set("editorState", emptyCaptionState());
 		node.set("caption", caption);
 		node.put("height", 0);
 		node.put("maxWidth", IMAGE_MAX_WIDTH);
 		node.put("showCaption", false);
-		node.put("src", image.getUrl().toString());
+		node.put("src", image.getUrl().unescape());
 		node.put("type", "image");
 		node.put("version", 1);
 		node.put("width", 0);
