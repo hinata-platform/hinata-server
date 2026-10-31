@@ -297,6 +297,20 @@ class ExternalImagesIntegrationTest {
 	}
 
 	@Test
+	void anImageOfADeletedCommentIsNoLongerServed() throws Exception {
+		String path = "/api/v1/issues/" + issue.getId() + "/external-image?src=" + encode(IN_COMMENT);
+		assertThat(getBytes(path, member).statusCode()).isEqualTo(200);
+		IssueComment comment = mongo.findOne(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("issueId").is(issue.getId())), IssueComment.class);
+
+		HttpResponse<String> deleted = send("DELETE", "/api/v1/issues/" + issue.getId() + "/comments/" + comment.getId(),
+				member);
+
+		assertThat(deleted.statusCode()).as(deleted.body()).isEqualTo(204);
+		assertThat(getBytes(path, member).statusCode()).isEqualTo(404);
+	}
+
+	@Test
 	void theProxyAsksNobodyForAnAddressThatIsNotInTheIssue() throws Exception {
 		org.mockito.Mockito.reset(fetcher);
 

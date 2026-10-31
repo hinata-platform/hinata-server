@@ -36,7 +36,8 @@ import java.util.regex.Pattern;
  * <p>Bounded under load: one fetch per address however many readers ask at once (the others wait
  * for it), at most {@value #FETCHES_PER_PERSON} running for one person and {@value #FETCHES_IN_ALL}
  * in all (503 when full, never a queue), a fetch that failed is not tried again for
- * {@link #FAILURE_TTL}, and the addresses an issue may load are worked out once per version of it.
+ * {@link #FAILURE_TTL}, and the addresses an issue's description may load are worked out once per
+ * version of it.
  */
 @Service
 @RequiredArgsConstructor
@@ -168,22 +169,21 @@ public class ExternalImageService {
 
 	/**
 	 * Whether [src] is an external image of the issue's description or of one of its comments.
-	 * Remembered per version of the issue: the description's images once, and every comment
-	 * image once it was found, so a mail of forty images is not read forty times.
+	 * The description's images are worked out once per version of the issue, so a mail of forty
+	 * images is not read forty times. A comment's are looked up on every request: deleting or
+	 * moderating a comment leaves the issue's version as it was, and its images must stop loading
+	 * the moment it is gone.
 	 */
 	private boolean shows(Issue issue, String src) {
 		String version = issue.getId() + "@" + issue.getUpdatedAt();
-		Set<String> known = allowed.computeIfAbsent(version, key -> ConcurrentHashMap.newKeySet());
-		if (known.isEmpty()) known.addAll(LegacyDocs.externalImageSources(issue.getDescriptionDoc()));
-		if (known.contains(src)) return true;
+		Set<String> description = allowed.computeIfAbsent(version,
+				key -> Set.copyOf(LegacyDocs.externalImageSources(issue.getDescriptionDoc())));
+		if (description.contains(src)) return true;
 		Query query = Query.query(Criteria.where("issueId").is(issue.getId())
 				.and("textDoc").regex(Pattern.quote(src))).limit(MAX_COMMENTS);
 		query.fields().include("textDoc");
 		for (IssueComment comment : mongo.find(query, IssueComment.class)) {
-			if (LegacyDocs.externalImageSources(comment.getTextDoc()).contains(src)) {
-				known.add(src);
-				return true;
-			}
+			if (LegacyDocs.externalImageSources(comment.getTextDoc()).contains(src)) return true;
 		}
 		return false;
 	}
