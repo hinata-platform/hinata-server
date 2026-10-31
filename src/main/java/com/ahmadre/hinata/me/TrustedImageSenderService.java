@@ -56,12 +56,14 @@ public class TrustedImageSenderService {
 	/**
 	 * Trusts [domain] for [user]. Idempotent: a domain already trusted stays as it was.
 	 *
-	 * @throws ApiException 400 {@code error.trustedSender.invalid} for no domain name, 409
+	 * @throws ApiException 400 {@code error.trustedSender.invalid} for no domain name and
+	 *                      {@code error.trustedSender.publicSuffix} for a public suffix, 409
 	 *                      {@code error.trustedSender.tooMany} past {@link #MAX_DOMAINS}
 	 */
 	public void trust(User user, String domain) {
 		String normal = SenderDomains.normalize(domain);
 		if (normal == null) throw ApiException.badRequest("error.trustedSender.invalid");
+		if (SenderDomains.isPublicSuffix(normal)) throw ApiException.badRequest("error.trustedSender.publicSuffix");
 		Query notYetAndRoom = Query.query(Criteria.where("_id").is(user.getId())
 				.and(FIELD + ".domain").ne(normal)
 				.and(FIELD + "." + (MAX_DOMAINS - 1)).exists(false));
