@@ -30,9 +30,11 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li><b>Only delimiters are escaped.</b> A {@code *}, {@code _}, {@code `},
  *       {@code ~} or backslash in text is written with a backslash, which
- *       {@link MarkdownToLexical} reads back as the character. Other syntax is
- *       written as it stands, as upstream Lexical does, so text in a document
- *       that starts with {@code # } may be re-read as a heading.</li>
+ *       {@link MarkdownToLexical} reads back as the character, and so is the
+ *       {@code &} of anything that reads as an entity ({@code &amp;}), which
+ *       CommonMark would otherwise decode. Other syntax is written as it stands,
+ *       as upstream Lexical does, so text in a document that starts with
+ *       {@code # } may be re-read as a heading.</li>
  *   <li><b>Table cells.</b> A row is one line, so a newline inside a cell becomes
  *       a space. A literal {@code |} has no spelling that survives — flexmark
  *       splits on {@code \|} as readily as on {@code |} — so it is emitted
@@ -51,8 +53,12 @@ public final class LexicalToMarkdown {
 	private LexicalToMarkdown() {
 	}
 
-	/** The characters upstream Lexical escapes in text: the delimiters and the backslash. */
-	private static final Pattern MARKUP = Pattern.compile("[*_`~\\\\]");
+	/**
+	 * What text has to escape to come back as itself: the delimiters and the backslash
+	 * upstream Lexical escapes, and an {@code &} that would start an entity reference.
+	 */
+	private static final Pattern MARKUP = Pattern.compile(
+			"[*_`~\\\\]|&(?=#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[A-Za-z][A-Za-z0-9]{1,31};)");
 
 	/** Text format bits, matching {@link MarkdownToLexical}'s and lexical_core's. */
 	private static final int BOLD = 1;
@@ -254,7 +260,7 @@ public final class LexicalToMarkdown {
 	 * {@code \|} exactly as it splits on {@code |} and does not decode
 	 * {@code &#124;} either, so there is no spelling of a pipe that survives a
 	 * cell. Emitting the character unchanged at least keeps every character of the
-	 * content; escaping would add a stray backslash and split the cell anyway.
+	 * content; escaping it would split the cell all the same.
 	 */
 	private static String cell(JsonNode node, int depth, Out budget) {
 		StringBuilder content = new StringBuilder();

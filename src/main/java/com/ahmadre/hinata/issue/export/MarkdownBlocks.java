@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.issue.export;
 
+import com.ahmadre.hinata.richtext.MarkdownToLexical;
 import com.vladsch.flexmark.ast.BlockQuote;
 import com.vladsch.flexmark.ast.BulletList;
 import com.vladsch.flexmark.ast.Code;
@@ -285,10 +286,10 @@ final class MarkdownBlocks {
 						collectSpans(node, spans, bold, italic, code, strike);
 					}
 					else {
-						// A leaf: its own characters, whatever kind of leaf it is. A soft
-						// line break inside a paragraph reads as a space, which is what
-						// its characters already are.
-						add(spans, node.getChars().toString(), bold, italic, code, strike);
+						// A leaf: the text its characters stand for, whatever kind of leaf it
+						// is — `\*` is an asterisk. A soft line break inside a paragraph
+						// reads as a space, which is what its characters already are.
+						add(spans, MarkdownToLexical.textOf(node.getChars()), bold, italic, code, strike);
 					}
 				}
 			}

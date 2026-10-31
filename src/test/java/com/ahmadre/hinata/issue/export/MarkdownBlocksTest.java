@@ -34,6 +34,17 @@ class MarkdownBlocksTest {
 	}
 
 	@Test
+	void textThatLooksLikeMarkupIsExportedAsTheText() {
+		// The stored text is 2*3 and snake_case; the markdown in between escapes them, and the
+		// PDF must not show the escapes (HIN-181).
+		List<ExportBlock> blocks = throughStorage("2\\*3 snake\\_case a & b");
+
+		assertThat(blocks).singleElement().isInstanceOfSatisfying(ExportBlock.Paragraph.class,
+				paragraph -> assertThat(ExportBlock.Span.plain(paragraph.spans()))
+						.isEqualTo("2*3 snake_case a & b"));
+	}
+
+	@Test
 	void headingsKeepTheirLevel() {
 		List<ExportBlock> blocks = throughStorage("# One\n\n## Two\n\n### Three");
 
