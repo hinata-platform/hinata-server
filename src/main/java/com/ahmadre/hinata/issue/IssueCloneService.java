@@ -105,8 +105,8 @@ public class IssueCloneService {
 	 *       {@code createdAt}, {@code updatedAt}: none of it happened to the copy;
 	 *   <li>{@code rank}: set fresh by {@code create} so the copy lands where a new
 	 *       issue lands;
-	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount}: not stored at all,
-	 *       computed per request.
+	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount}, {@code imagesTrustedByViewer},
+	 *       {@code descriptionForms}: not stored at all, computed per request.
 	 *   <li>{@code searchText}: derived from the key, the title and the labels, so the
 	 *       copy computes its own when it is saved;
 	 * </ul>
@@ -119,7 +119,7 @@ public class IssueCloneService {
 			"reporterEmail", "inboundMessageId", "inboundSubject", "ingestConnectionId", "refusedAttachments",
 			"watcherIds", "participantIds", "participantMeta", "spentMinutes", "rank", "resolvedAt", "archived",
 			"archivedAt", "dueReminderFor", "createdAt", "updatedAt",
-			"subtaskCount", "subtaskDoneCount", "searchText",
+			"subtaskCount", "subtaskDoneCount", "imagesTrustedByViewer", "descriptionForms", "searchText",
 			// What moderation decided is about the original; the clone is content of its own (HIN-169).
 			"moderation");
 

@@ -130,7 +130,8 @@ public class ProjectCopyService {
 	 *       somebody's name on it is a claim nobody made. It would also be their first news of
 	 *       the project: the reminder job mails assignees, so an inherited assignment turns into
 	 *       a "due soon" mail about a project they were never told they had joined;
-	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount}: never stored, computed per request.
+	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount}, {@code imagesTrustedByViewer},
+	 *       {@code descriptionForms}: never stored, computed per request.
 	 * </ul>
 	 *
 	 * <p>Comments, activity, recorded time and approvals are not fields at all: they are other
@@ -145,7 +146,7 @@ public class ProjectCopyService {
 			"participantMeta",
 			"sprintId", "spentMinutes",
 			"resolvedAt", "archivedAt", "dueReminderFor", "assigneeId", "assigneeIds",
-			"subtaskCount", "subtaskDoneCount",
+			"subtaskCount", "subtaskDoneCount", "imagesTrustedByViewer", "descriptionForms",
 			// What moderation decided is about the original; the copy is content of its own (HIN-169).
 			"moderation");
 

@@ -86,4 +86,18 @@ class LinkTargetsTest {
 		assertThatThrownBy(() -> richText.fromLexical(doc)).isInstanceOfSatisfying(ApiException.class,
 				refused -> assertThat(refused.getMessageKey()).isEqualTo("error.richtext.tooLarge"));
 	}
+
+	@Test
+	void aLinkInsideAMailsColumnsIsCheckedToo() {
+		var words = LayoutDocs.NODES.array();
+		words.add(LayoutDocs.NODES.text("klick", 0));
+		var content = LayoutDocs.NODES.array();
+		content.add(LayoutDocs.NODES.link("javascript:alert(1)", words));
+		var document = LayoutDocs.read(LayoutDocs.doc(LayoutDocs.columns("1fr 1fr",
+				LayoutDocs.item(LayoutDocs.NODES.paragraph(content, 0)), LayoutDocs.item(LayoutDocs.paragraph("rechts")))));
+
+		assertThat(LinkTargets.unwrapUnsafe(document)).isTrue();
+		assertThat(LayoutDocs.nodes(LayoutDocs.write(document), "link")).isEmpty();
+		assertThat(LexicalJson.plainText(document)).isEqualTo("klick\nrechts");
+	}
 }

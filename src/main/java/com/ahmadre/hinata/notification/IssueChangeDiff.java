@@ -78,8 +78,9 @@ public final class IssueChangeDiff {
 	 *   <li>{@code rank} / {@code resolvedAt} / {@code archivedAt} /
 	 *       {@code createdAt} / {@code updatedAt} — derived or internal; they move
 	 *       as a consequence of the real edit that is already reported.</li>
-	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount} — {@code @Transient},
-	 *       computed per response and never stored at all.</li>
+	 *   <li>{@code subtaskCount} / {@code subtaskDoneCount}, {@code imagesTrustedByViewer},
+	 *       {@code descriptionForms} — {@code @Transient}, computed per response and never
+	 *       stored at all.</li>
 	 *   <li>{@code searchText}: derived from the key, the title and the labels, for
 	 *       the board search.</li>
 	 *   <li>{@code startOffset} / {@code dueOffset} — the rule behind a date rather
@@ -96,7 +97,7 @@ public final class IssueChangeDiff {
 			"ingestConnectionId", "watcherIds", "participantIds", "participantMeta", "spentMinutes",
 			"dueReminderFor", "attachments",
 			"rank", "resolvedAt", "archivedAt", "createdAt", "updatedAt",
-			"subtaskCount", "subtaskDoneCount", "searchText",
+			"subtaskCount", "subtaskDoneCount", "imagesTrustedByViewer", "descriptionForms", "searchText",
 			"startOffset", "dueOffset",
 			// Moderation's marks: what it removed is never announced to watchers (HIN-169).
 			"moderation",
