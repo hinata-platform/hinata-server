@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -287,6 +288,29 @@ class HtmlToLexicalTest {
 		assertThat(HtmlToLexical.contentColumns("1fr 1fr 1fr", 600)).isZero();
 		assertThat(HtmlToLexical.contentColumns("48px 48px 48px", 600)).isZero();
 		assertThat(HtmlToLexical.contentColumns("120px 1fr", 600)).isEqualTo(1);
+	}
+
+	// --- a hostile mail ----------------------------------------------------------
+
+	@Test
+	void aStyleSheetRepeatingOneRuleCannotGrowAnElementsStyle() {
+		String body = "color:#e60000;" + "x".repeat(10_000);
+		String hostile = "<style>" + "p,".repeat(499) + "p{" + body + "}</style>" + "<p>Text</p>".repeat(5);
+
+		Map<org.jsoup.nodes.Element, String> sheet = HtmlToLexical.styleSheet(org.jsoup.Jsoup.parse(hostile));
+
+		assertThat(sheet).hasSize(5);
+		assertThat(sheet.values()).allSatisfy(css -> assertThat(css.length())
+				.isLessThanOrEqualTo(8 * com.ahmadre.hinata.richtext.CssStyles.MAX_CHARS));
+	}
+
+	@Test
+	void aHugeStyleSheetIsReadOnlyToItsBound() {
+		String hostile = "<style>" + ".a{color:red}".repeat(20_000) + "</style><p class=\"a\">Text</p>";
+
+		assertThat(HtmlToLexical.styleSheet(org.jsoup.Jsoup.parse(hostile)).values())
+				.allSatisfy(css -> assertThat(css.length()).isLessThanOrEqualTo(8 * com.ahmadre.hinata.richtext.CssStyles.MAX_CHARS));
+		assertThat(LexicalJson.plainText(document(hostile))).isEqualTo("Text");
 	}
 
 	@Test
