@@ -26,7 +26,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -71,7 +70,8 @@ public class AttachmentController {
 				.uploaderId(userId)
 				.uploadedAt(Instant.now())
 				.blurHash(blurHash)
-				.passwordProtected(blurHash == null && isPdf(stored.contentType()) && needsPassword(file)
+				.passwordProtected(blurHash == null && ImagePreviewService.isPdf(stored.contentType())
+						&& needsPassword(file)
 						? Boolean.TRUE : null)
 				.build();
 		// Atomic $push so parallel uploads to the same issue can't lose each other.
@@ -122,10 +122,6 @@ public class AttachmentController {
 
 	private static boolean needsPassword(byte[] bytes) {
 		return FileSignature.isPdf(bytes) && PdfPageRenderer.needsPassword(bytes);
-	}
-
-	private static boolean isPdf(String contentType) {
-		return contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("application/pdf");
 	}
 
 	/**
