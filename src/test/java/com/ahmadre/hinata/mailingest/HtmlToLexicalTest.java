@@ -276,9 +276,10 @@ class HtmlToLexicalTest {
 	void theRealMjmlMailsStepRowsStack() throws Exception {
 		JsonNode document = document(fixture("vodafone-mjml-forward.html"));
 
-		assertThat(nodes(document, "layout-container").stream()
-				.filter(c -> c.path("templateColumns").asText().equals("51% 49%")))
-				.allSatisfy(c -> assertThat(style(c)).contains("--stack-below:480px"));
+		List<JsonNode> steps = nodes(document, "layout-container").stream()
+				.filter(c -> c.path("templateColumns").asText().equals("51% 49%")).toList();
+		assertThat(steps).hasSize(5);
+		assertThat(steps).allSatisfy(c -> assertThat(style(c)).contains("--stack-below:480px"));
 	}
 
 	@Test
