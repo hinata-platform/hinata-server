@@ -14,11 +14,17 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * Settles every image of a document before it is stored (HIN-177), so each image somebody sees
- * went through the upload gate. An image of this server's media stays. An external one becomes a
- * link: showing it would hand the address of every reader to a foreign server, and its bytes were
- * never checked. A {@code data:} image becomes media like an upload. Anything else, and anything
- * the gate refuses, gives way to a short line that says an image was not kept.
+ * Settles every image of a document before it is stored (HIN-177), so no image somebody sees is
+ * loaded from where its author pointed. An image of this server's media stays. A {@code data:}
+ * image becomes media like an upload. Anything else, and anything the gate refuses, gives way to
+ * a short line that says an image was not kept.
+ *
+ * <p>An external {@code http(s)} image depends on the text ({@link ExternalImages}). Until
+ * HIN-181 it always became a link, because showing it would hand the address of every reader to
+ * a foreign server. An issue's texts now keep it as an image: no reader's app fetches it, the
+ * server does, through the issue's image proxy and only after the reader chose to load it, so the
+ * reader's address stays private and the mail keeps its layout. Every other text still turns it
+ * into a link.
  */
 final class ImagesInText {
 
@@ -42,16 +48,22 @@ final class ImagesInText {
 		this.images = images;
 	}
 
+	/** What a link standing for an external image says, in the instance's language. */
+	String externalImageLabel() {
+		return images.externalImageLabel();
+	}
+
 	/** One image node and the place it sits in. */
 	private record Found(ArrayNode siblings, int index, ObjectNode image, boolean insideLink) {
 	}
 
 	/**
-	 * Settles the images of [document] in place and says whether anything changed. Refuses more
-	 * than {@link #MAX_IMAGES} images, or more than {@link #MAX_DATA_IMAGES} {@code data:} ones,
+	 * Settles the images of [document] in place, external ones as [external] says, and says whether
+	 * anything changed. Refuses more than {@link #MAX_IMAGES} images (kept external ones count),
+	 * or more than {@link #MAX_DATA_IMAGES} {@code data:} ones,
 	 * before it stores a single one.
 	 */
-	boolean settle(JsonNode document) {
+	boolean settle(JsonNode document, ExternalImages external) {
 		List<Found> found = new ArrayList<>();
 		collect(document.path("root"), false, found);
 		if (found.isEmpty()) {
@@ -68,7 +80,7 @@ final class ImagesInText {
 		Words words = new Words();
 		boolean changed = false;
 		for (Found image : found) {
-			changed |= settle(image, words);
+			changed |= settle(image, words, external);
 		}
 		return changed;
 	}
@@ -112,7 +124,7 @@ final class ImagesInText {
 		}
 	}
 
-	private boolean settle(Found found, Words words) {
+	private boolean settle(Found found, Words words, ExternalImages external) {
 		String source = sourceOf(found.image());
 		if (MEDIA_PATH.matcher(source).matches()) {
 			return false;
@@ -131,6 +143,9 @@ final class ImagesInText {
 			if (own != null) {
 				found.image().put("src", own);
 				return true;
+			}
+			if (external == ExternalImages.KEEP) {
+				return false;
 			}
 			// A link inside a link is no link; the outer one stays and this says what was here.
 			return replace(found, found.insideLink() ? nodes.text(words.externalImage(), 0)
