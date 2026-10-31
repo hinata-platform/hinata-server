@@ -48,6 +48,43 @@ final class ImagesInText {
 		this.images = images;
 	}
 
+	/**
+	 * Normalises the address of every image of [document] in place: no surrounding space, the
+	 * scheme in lower case, so that an address reads the same to every check that follows and to
+	 * every reader ({@code HTTPS://} is {@code https://}). Says whether one changed.
+	 */
+	static boolean normalizeSources(JsonNode document) {
+		List<JsonNode> work = new ArrayList<>();
+		work.add(document.path("root"));
+		boolean changed = false;
+		int nodes = 0;
+		while (!work.isEmpty() && ++nodes <= LexicalJson.MAX_NODES) {
+			JsonNode node = work.removeLast();
+			if (node instanceof ObjectNode image && "image".equals(node.path("type").asText())
+					&& node.path("src").isTextual()) {
+				String src = node.path("src").asText();
+				String normal = normalSource(src);
+				if (!normal.equals(src)) {
+					image.put("src", normal);
+					changed = true;
+				}
+			}
+			JsonNode caption = node.path("caption").path("editorState").path("root");
+			if (caption.isObject()) work.add(caption);
+			JsonNode children = node.get("children");
+			if (children != null && children.isArray()) children.forEach(work::add);
+		}
+		return changed;
+	}
+
+	private static final Pattern SCHEME = Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]*:");
+
+	private static String normalSource(String src) {
+		String stripped = src.strip();
+		var scheme = SCHEME.matcher(stripped);
+		return scheme.find() ? scheme.group().toLowerCase(Locale.ROOT) + stripped.substring(scheme.end()) : stripped;
+	}
+
 	/** What a link standing for an external image says, in the instance's language. */
 	String externalImageLabel() {
 		return images.externalImageLabel();

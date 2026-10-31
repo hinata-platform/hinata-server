@@ -99,12 +99,16 @@ public final class LegacyDocs {
 	}
 
 	/**
-	 * A cheap first look: whether [json] could hold a layout or an external image at all. A miss
-	 * costs a parse; nothing it rules out can need a projection.
+	 * A cheap first look: whether [json] could hold a layout or an external image at all, with
+	 * no false negative. Case-insensitive, because a scheme may be spelled {@code HTTPS}; and any
+	 * escape ({@code \\u0068ttps}) sends the document to the parser, which reads what it says.
+	 * A miss costs a parse; nothing it rules out can need a projection.
 	 */
 	static boolean mayNeedProjection(String json) {
 		if (json == null || json.isEmpty()) return false;
-		return json.contains("layout-") || json.contains("\"image\"") && json.contains("http");
+		String lower = json.toLowerCase(Locale.ROOT);
+		return lower.contains("layout-") || lower.contains("\\u")
+				|| lower.contains("\"image\"") && lower.contains("http");
 	}
 
 	/**
@@ -114,7 +118,7 @@ public final class LegacyDocs {
 	 */
 	public static Set<String> externalImageSources(String doc) {
 		Set<String> sources = new java.util.LinkedHashSet<>();
-		if (doc == null || !doc.contains("\"image\"") || !doc.contains("http")) return sources;
+		if (!mayNeedProjection(doc)) return sources;
 		JsonNode document;
 		try {
 			document = MAPPER.readTree(doc);
