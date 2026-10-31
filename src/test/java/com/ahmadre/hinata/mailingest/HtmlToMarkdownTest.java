@@ -2,6 +2,10 @@ package com.ahmadre.hinata.mailingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.ahmadre.hinata.richtext.RichTextService;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import org.junit.jupiter.api.Test;
 
 class HtmlToMarkdownTest {
@@ -141,5 +145,28 @@ class HtmlToMarkdownTest {
 	void returnsEmptyForBlankInput() {
 		assertThat(HtmlToMarkdown.convert(null)).isEmpty();
 		assertThat(HtmlToMarkdown.convert("   ")).isEmpty();
+	}
+
+	@Test
+	void aRunOfLineBreaksIsSpacingNotRawHtml() {
+		// flexmark's default spells three or more <br> as a `<br />` line, which the
+		// description then shows as text (HIN-181).
+		String md = HtmlToMarkdown.convert("<table><tr><td>Ändern.<br><br><br></td><td>Kontakt</td></tr></table>");
+
+		assertThat(md).doesNotContain("<br").contains("Ändern.").contains("Kontakt");
+	}
+
+	@Test
+	void aTransactionalTemplateBecomesTextWithoutMarkupLeftOver() throws Exception {
+		// The shape of the mail in HIN-181: layout tables, runs of <br>, `*`, `&` and `|` in
+		// the copy. What the description shows is what the reader of the mail saw.
+		String html = Files.readString(Path.of("src/test/resources/mailingest/transactional-template.html"));
+
+		String text = new RichTextService().fromMarkdown(HtmlToMarkdown.convert(html)).text();
+
+		assertThat(text).doesNotContain("\\").doesNotContain("<br")
+				.contains("ruf uns an unter 0172 229 0 229*.")
+				.contains("Hilfe & FAQ")
+				.contains("Kontakt | Impressum");
 	}
 }

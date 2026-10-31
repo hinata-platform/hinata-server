@@ -1,6 +1,7 @@
 package com.ahmadre.hinata.mailingest;
 
 import com.vladsch.flexmark.html2md.converter.FlexmarkHtmlConverter;
+import com.vladsch.flexmark.util.data.MutableDataSet;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -20,7 +21,14 @@ import java.util.Locale;
  */
 final class HtmlToMarkdown {
 
-	private static final FlexmarkHtmlConverter CONVERTER = FlexmarkHtmlConverter.builder().build();
+	/**
+	 * {@code BR_AS_EXTRA_BLANK_LINES} is off: by default flexmark spells a run of
+	 * three or more {@code <br>} — the spacing a mail template builds from — as a
+	 * line {@code <br />}, which Markdown keeps as raw HTML and the description then
+	 * shows as those six characters. A blank line already separates the blocks.
+	 */
+	private static final FlexmarkHtmlConverter CONVERTER = FlexmarkHtmlConverter.builder(
+			new MutableDataSet().set(FlexmarkHtmlConverter.BR_AS_EXTRA_BLANK_LINES, false)).build();
 
 	private HtmlToMarkdown() {
 	}

@@ -443,4 +443,37 @@ class MarkdownToLexicalTest {
 
 		assertThat(mapper.readTree(json)).isEqualTo(converter.convert(markdown));
 	}
+
+	@Test
+	void anEscapeIsTheCharacterItEscapes() {
+		// HTML mail arrives as flexmark-written markdown, which escapes every `*`, `&` and `|`;
+		// the description has to show the characters, not the backslashes (HIN-181).
+		JsonNode text = block("0172 229\\*. Hilfe \\& FAQ \\| Kontakt").path("children").path(0);
+
+		assertThat(text.path("text").asText()).isEqualTo("0172 229*. Hilfe & FAQ | Kontakt");
+	}
+
+	@Test
+	void anEntityIsTheCharacterItNames() {
+		JsonNode children = block("a &amp; b &#38; c").path("children");
+
+		StringBuilder text = new StringBuilder();
+		for (JsonNode child : children) text.append(child.path("text").asText());
+		assertThat(text.toString()).isEqualTo("a & b & c");
+	}
+
+	@Test
+	void aLinkResolvesTheEscapesOfItsLabelAndItsDestination() {
+		JsonNode link = block("[Hilfe \\& FAQ](https://example.com/a\\_b)").path("children").path(0);
+
+		assertThat(link.path("url").asText()).isEqualTo("https://example.com/a_b");
+		assertThat(link.path("children").path(0).path("text").asText()).isEqualTo("Hilfe & FAQ");
+	}
+
+	@Test
+	void aBackslashInsideCodeStaysABackslash() {
+		JsonNode code = block("`a \\* b`").path("children").path(0);
+
+		assertThat(code.path("text").asText()).isEqualTo("a \\* b");
+	}
 }
