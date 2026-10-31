@@ -65,6 +65,17 @@ public class AttachmentStore {
 	}
 
 	/**
+	 * Marks one embedded attachment as a PDF that needs a password (HIN-180), found out late
+	 * for a file uploaded before the flag existed. Targets the element like
+	 * {@link #setBlurHash}.
+	 */
+	public void setPasswordProtected(String issueId, String attachmentId) {
+		Update update = new Update().set(FIELD + ".$[a].passwordProtected", true);
+		update.filterArray(byId(attachmentId));
+		mongo.updateFirst(new Query(Criteria.where("_id").is(issueId)), update, Issue.class);
+	}
+
+	/**
 	 * The array filter for one attachment. An embedded attachment's {@code id} is stored as
 	 * {@code _id}, and array filters are not mapped the way the update is: filtering on
 	 * {@code a.id} matched nothing, so a late BlurHash was never stored and every preview asked

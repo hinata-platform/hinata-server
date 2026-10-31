@@ -51,13 +51,16 @@ public class AttachmentTools {
 				: issue.getAttachments().stream().map(AttachmentView::of).toList();
 	}
 
-	/** Attachment metadata without the internal storage object key. */
+	/**
+	 * Attachment metadata without the internal storage object key. {@code passwordProtected}
+	 * tells an agent up front that a PDF will not read without its password (HIN-180).
+	 */
 	public record AttachmentView(String id, String fileName, String contentType, long size,
-			String uploaderId, Instant uploadedAt) {
+			String uploaderId, Instant uploadedAt, boolean passwordProtected) {
 
 		static AttachmentView of(Issue.Attachment a) {
 			return new AttachmentView(a.getId(), a.getFileName(), a.getContentType(), a.getSize(),
-					a.getUploaderId(), a.getUploadedAt());
+					a.getUploaderId(), a.getUploadedAt(), Boolean.TRUE.equals(a.getPasswordProtected()));
 		}
 	}
 

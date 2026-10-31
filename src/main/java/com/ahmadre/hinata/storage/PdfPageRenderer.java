@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
@@ -61,6 +62,24 @@ final class PdfPageRenderer {
 		catch (Exception | OutOfMemoryError ex) {
 			log.warn("PDF page render failed: {}", ex.toString());
 			return null;
+		}
+	}
+
+	/**
+	 * Whether the PDF only opens with a password (HIN-180). PDFBox opens a file that carries
+	 * just an owner password with the empty one, as every viewer does, so this is true only
+	 * where a person really has to type something. Anything else that goes wrong — a malformed
+	 * file, memory — answers false: the file list then shows a plain PDF, as it did before.
+	 */
+	static boolean needsPassword(byte[] pdf) {
+		try (PDDocument ignored = Loader.loadPDF(pdf)) {
+			return false;
+		}
+		catch (InvalidPasswordException ex) {
+			return true;
+		}
+		catch (Exception | OutOfMemoryError ex) {
+			return false;
 		}
 	}
 }

@@ -60,6 +60,7 @@ public class AttachmentController {
 		// Byte for byte as sent, metadata and all: somebody attached this file on purpose.
 		StorageService.Stored stored = storage.upload(UploadCandidate.of(UploadKind.ATTACHMENT, file), "");
 		String attachmentId = UUID.randomUUID().toString();
+		String blurHash = storePreview(attachmentId, stored.contentType(), file);
 		Issue.Attachment attachment = Issue.Attachment.builder()
 				.id(attachmentId)
 				.fileName(file.getOriginalFilename())
@@ -68,7 +69,8 @@ public class AttachmentController {
 				.objectKey(stored.objectKey())
 				.uploaderId(userId)
 				.uploadedAt(Instant.now())
-				.blurHash(storePreview(attachmentId, stored.contentType(), file))
+				.blurHash(blurHash)
+				.passwordProtected(blurHash == null && needsPassword(file) ? Boolean.TRUE : null)
 				.build();
 		// Atomic $push so parallel uploads to the same issue can't lose each other.
 		Issue saved = store.add(issue.getId(), attachment);
@@ -99,6 +101,21 @@ public class AttachmentController {
 		catch (IOException | RuntimeException ex) {
 			log.warn("Preview for attachment {} failed: {}", attachmentId, ex.toString());
 			return null;
+		}
+	}
+
+	/**
+	 * Whether the upload is a PDF that only opens with a password. Asked only once its preview
+	 * has failed: a PDF that rendered a page opened without one, and the second read of the
+	 * file is spent on the few that did not.
+	 */
+	private static boolean needsPassword(MultipartFile file) {
+		try {
+			byte[] bytes = file.getBytes();
+			return FileSignature.isPdf(bytes) && PdfPageRenderer.needsPassword(bytes);
+		}
+		catch (IOException ex) {
+			return false;
 		}
 	}
 
@@ -145,8 +162,9 @@ public class AttachmentController {
 	 * free of a job that would re-encode every picture in the installation, and
 	 * limits the work to images somebody actually looks at.
 	 *
-	 * <p>Returns the preview bytes, the original when the format cannot be
-	 * decoded (webp), or null when there is nothing to show.
+	 * <p>Returns the preview bytes, the original when the picture format cannot
+	 * be decoded (webp), or null when there is nothing to show — which includes
+	 * a PDF that renders no page.
 	 */
 	private StorageService.StoredObject generateMissingPreview(Issue issue,
 			Issue.Attachment attachment) {
@@ -160,7 +178,17 @@ public class AttachmentController {
 		}
 		Optional<ImagePreviewService.Preview> preview = previews.create(original.data());
 		if (preview.isEmpty()) {
-			return original;
+			if (!FileSignature.isPdf(original.data())) {
+				return original;
+			}
+			// A PDF that renders no page is no picture either: handing it out as one only
+			// sent the whole document to every tile that asked. A file uploaded before
+			// HIN-180 learns here that it needs a password, for the next one to load it.
+			if (attachment.getPasswordProtected() == null
+					&& PdfPageRenderer.needsPassword(original.data())) {
+				store.setPasswordProtected(issue.getId(), attachment.getId());
+			}
+			return null;
 		}
 		try {
 			storage.putObject(ImagePreviewService.attachmentThumbnailKey(attachment.getId()),
