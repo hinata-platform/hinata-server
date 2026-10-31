@@ -458,7 +458,7 @@ public class Issue {
 	 */
 	@JsonProperty("descriptionDoc")
 	public String descriptionDocForClients() {
-		return forms().legacy(descriptionDoc);
+		return forms().forClient(descriptionDoc);
 	}
 
 	/**
@@ -466,8 +466,9 @@ public class Issue {
 	 * null when it is the same as {@code descriptionDoc}. Additive: older apps ignore it.
 	 */
 	@JsonProperty("descriptionLayoutDoc")
+	@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
 	public String descriptionLayoutDoc() {
-		return forms().layout(descriptionDoc);
+		return forms().layoutForClient(descriptionDoc);
 	}
 
 	/**

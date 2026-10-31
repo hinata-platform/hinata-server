@@ -129,10 +129,12 @@ class UnauthenticatedSurfaceTest {
 	/**
 	 * Filters the container runs around every request. The rate limit also runs once outside the
 	 * chains; Tomcat's WebSocket filter acts only on WebSocket endpoints, and the server registers none.
+	 * The doc form filter (HIN-181) only notes which form of a rich-text document the request asks
+	 * for and adds a {@code Vary} header; it answers nothing itself.
 	 */
 	static final Set<String> SERVLET_FILTERS = Set.of("Tomcat WebSocket (JSR356) Filter", "characterEncodingFilter",
-			"formContentFilter", "rateLimitFilter", "requestContextFilter", "trustedForwardedHeaderFilter",
-			"springSecurityFilterChain", "webMvcObservationFilter");
+			"docFormFilter", "formContentFilter", "rateLimitFilter", "requestContextFilter",
+			"trustedForwardedHeaderFilter", "springSecurityFilterChain", "webMvcObservationFilter");
 
 	private static final String REVIEW = "Whatever answers without a token can reach people outside the "
 			+ "organisation. Review it, then list it here with its reason and in the docs (security.md, "

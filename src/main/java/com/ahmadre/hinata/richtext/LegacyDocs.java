@@ -257,6 +257,19 @@ public final class LegacyDocs {
 			return hasExternalImages;
 		}
 
+		/**
+		 * What a client gets in the document's own field: the legacy projection of [stored], or
+		 * [stored] itself for a request that reads layouts ({@link DocForm#LAYOUT}).
+		 */
+		public String forClient(String stored) {
+			return DocForm.current() == DocForm.LAYOUT ? stored : legacy(stored);
+		}
+
+		/** What a client gets in the additive field: {@link #layout}, and nothing for {@link DocForm#LAYOUT}. */
+		public String layoutForClient(String stored) {
+			return DocForm.current() == DocForm.LAYOUT ? null : layout(stored);
+		}
+
 		/** The legacy projection of [stored]. */
 		public String legacy(String stored) {
 			if (stored == null) return null;

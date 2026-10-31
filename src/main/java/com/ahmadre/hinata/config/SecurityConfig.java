@@ -440,8 +440,10 @@ public class SecurityConfig {
 		// "ngrok-skip-browser-warning" lets web/XHR clients bypass the ngrok
 		// free-tier interstitial; it must be allow-listed or the CORS preflight
 		// for that custom header fails in browsers (Flutter web).
-		config.setAllowedHeaders(
-				List.of("Authorization", "Content-Type", "Accept", "ngrok-skip-browser-warning"));
+		// "X-Hinata-Doc" asks for the full rich-text documents (HIN-181); the web app sends it on
+		// every request, so without it every preflight would fail.
+		config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "ngrok-skip-browser-warning",
+				com.ahmadre.hinata.richtext.DocForm.HEADER));
 		// A browser hides every response header it is not told about. These carry
 		// facts the client acts on: that a list was cut at its cap (a picker must not
 		// treat a cut list as complete), and an export's file name.

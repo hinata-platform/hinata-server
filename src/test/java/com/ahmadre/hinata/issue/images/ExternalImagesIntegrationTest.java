@@ -55,7 +55,8 @@ import static org.mockito.Mockito.when;
 		"hinata.gateway.enabled=false",
 		"hinata.demo.seed=false",
 		"hinata.rate-limit.enabled=false",
-		"management.health.mail.enabled=false"
+		"management.health.mail.enabled=false",
+		"hinata.cors.allowed-origins=https://app.example.org"
 })
 @Testcontainers(disabledWithoutDocker = true)
 class ExternalImagesIntegrationTest {
@@ -133,6 +134,36 @@ class ExternalImagesIntegrationTest {
 	}
 
 	@Test
+	void anAppAskingForLayoutGetsTheFullDocumentOnlyOnce() throws Exception {
+		HttpResponse<String> response = send("GET", "/api/v1/issues/" + issue.getId(), member, null,
+				"X-Hinata-Doc", "layout");
+		JsonNode body = JSON.readTree(response.body());
+
+		assertThat(body.path("descriptionDoc").asText()).isEqualTo(layoutDoc);
+		assertThat(body.has("descriptionLayoutDoc")).isFalse();
+		assertThat(response.headers().allValues("Vary")).anySatisfy(vary -> assertThat(vary).contains("X-Hinata-Doc"));
+		JsonNode comment = JSON.readTree(send("GET", "/api/v1/issues/" + issue.getId() + "/comments", member, null,
+				"X-Hinata-Doc", "layout").body()).path("content").get(0);
+		assertThat(comment.path("textDoc").asText()).contains(IN_COMMENT);
+		assertThat(comment.has("textLayoutDoc")).isFalse();
+	}
+
+	@Test
+	void aBrowserMaySendTheDocHeader() throws Exception {
+		HttpResponse<String> preflight = http.send(HttpRequest.newBuilder(
+				URI.create("http://localhost:" + port + "/api/v1/issues/" + issue.getId()))
+				.method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+				.header("Origin", "https://app.example.org")
+				.header("Access-Control-Request-Method", "GET")
+				.header("Access-Control-Request-Headers", "authorization,x-hinata-doc").build(),
+				HttpResponse.BodyHandlers.ofString());
+
+		assertThat(preflight.statusCode()).isEqualTo(200);
+		assertThat(preflight.headers().firstValue("Access-Control-Allow-Headers").orElse("").toLowerCase())
+				.contains("x-hinata-doc");
+	}
+
+	@Test
 	void anIssueWithoutLayoutOrExternalImagesGoesOutAsBefore() throws Exception {
 		String plain = LayoutDocs.doc(LayoutDocs.paragraph("Nur Text"));
 		mongo.updateFirst(org.springframework.data.mongodb.core.query.Query.query(
@@ -142,7 +173,7 @@ class ExternalImagesIntegrationTest {
 		JsonNode body = JSON.readTree(get("/api/v1/issues/" + issue.getId(), member).body());
 
 		assertThat(body.path("descriptionDoc").asText()).isEqualTo(plain);
-		assertThat(body.path("descriptionLayoutDoc").isNull()).isTrue();
+		assertThat(body.has("descriptionLayoutDoc")).as("written only when it differs").isFalse();
 		assertThat(body.path("externalImageSender").isNull()).isTrue();
 	}
 
@@ -280,11 +311,13 @@ class ExternalImagesIntegrationTest {
 		return send(method, path, bearer, null);
 	}
 
-	private HttpResponse<String> send(String method, String path, String bearer, String body) throws Exception {
+	private HttpResponse<String> send(String method, String path, String bearer, String body, String... headers)
+			throws Exception {
 		HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
 				.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
 		if (body != null) request.header("Content-Type", "application/json");
 		if (bearer != null) request.header("Authorization", "Bearer " + bearer);
+		for (int i = 0; i + 1 < headers.length; i += 2) request.header(headers[i], headers[i + 1]);
 		return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
 	}
 }
