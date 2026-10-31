@@ -165,7 +165,8 @@ public class EmailIngestService {
 				.type(Issue.Type.TASK)
 				.reporterId(reporterId)
 				.reporterEmail(from)
-				.senderVerified(SenderVerification.verified(message.getHeader("Authentication-Results"), from))
+				.senderVerified(SenderVerification.verified(message.getHeader("Authentication-Results"), from,
+						config.getAuthservId()))
 				.inboundMessageId(messageId)
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
@@ -431,7 +432,7 @@ public class EmailIngestService {
 				// Whether its sender was vouched for, as the mail says; issues ingested before
 				// HIN-181 learn it here.
 				boolean verified = SenderVerification.verified(message.getHeader("Authentication-Results"),
-						senderOf(message));
+						senderOf(message), config.getAuthservId());
 				if (!Boolean.valueOf(verified).equals(issue.getSenderVerified())) {
 					issues.noteSenderVerified(issue.getId(), verified);
 				}

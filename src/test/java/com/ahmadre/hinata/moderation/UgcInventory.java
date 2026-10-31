@@ -217,6 +217,8 @@ final class UgcInventory {
 			entry("holidays.calendarId", system()),
 			entry("holidays.id", system()),
 			entry("holidays.name", reportedAsOther("written by administrators")),
+			// The receiving mail server's name, set by an administrator (HIN-181); shown to nobody else.
+			entry("ingest_connections.authservId", system()),
 			entry("ingest_connections.folder", system()),
 			entry("ingest_connections.host", system()),
 			entry("ingest_connections.id", system()),
