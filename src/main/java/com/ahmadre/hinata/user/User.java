@@ -210,6 +210,19 @@ public class User {
 	@Builder.Default
 	private List<String> recoveryCodeHashes = new ArrayList<>();
 
+	/**
+	 * The sender domains whose external images this person loads without being asked (HIN-181),
+	 * at most {@code TrustedImageSenderService.MAX_DOMAINS}. Their own and nobody else's: never
+	 * serialized with the user, only listed to themselves. Absent in documents written before.
+	 */
+	@JsonIgnore
+	private List<TrustedImageSender> trustedImageSenders;
+
+	/** Never null: a person stored before HIN-181 trusts nobody. */
+	public List<TrustedImageSender> getTrustedImageSenders() {
+		return trustedImageSenders == null ? List.of() : trustedImageSenders;
+	}
+
 	private Instant totpEnabledAt;
 
 	// --- Notification preferences (matrix + master channel switches) ---------

@@ -195,7 +195,12 @@ public class Issue {
 	@TextIndexed(weight = 2)
 	private String description;
 
-	/** The Lexical document — the source of truth for the description. */
+	/**
+	 * The Lexical document — the source of truth for the description. Clients get it in two
+	 * forms (HIN-181), see {@link #descriptionDocForClients()}; this getter, which every reader
+	 * on the server uses, gives the stored one.
+	 */
+	@Getter(AccessLevel.NONE)
 	private String descriptionDoc;
 
 	@Builder.Default
@@ -420,6 +425,71 @@ public class Issue {
 	@Transient
 	@JsonInclude(JsonInclude.Include.NON_NULL)
 	private Integer subtaskDoneCount;
+
+	/**
+	 * Whether the person this issue is written out for loads its external images without being
+	 * asked (HIN-181): they trust its sender's domain. Not persisted; set per request by
+	 * {@link IssueService#withImageTrust}, false wherever it is not.
+	 */
+	@Transient
+	@JsonIgnore
+	@Getter(AccessLevel.NONE)
+	private Boolean imagesTrustedByViewer;
+
+	/** Both client forms of {@link #descriptionDoc}, drawn once per response. Not persisted. */
+	@Transient
+	@JsonIgnore
+	@Getter(AccessLevel.NONE)
+	@Setter(AccessLevel.NONE)
+	@lombok.EqualsAndHashCode.Exclude
+	@lombok.ToString.Exclude
+	private com.ahmadre.hinata.richtext.LegacyDocs.Memo descriptionForms;
+
+	/** The stored description document; see {@link #descriptionDocForClients()} for what clients get. */
+	@JsonIgnore
+	public String getDescriptionDoc() {
+		return descriptionDoc;
+	}
+
+	/**
+	 * The description as {@code descriptionDoc} goes out (HIN-181): the legacy projection an app
+	 * published before HIN-181 can read, with a mail's layout flattened and its external images
+	 * as links. The same document as stored when it has neither.
+	 */
+	@JsonProperty("descriptionDoc")
+	public String descriptionDocForClients() {
+		return forms().legacy(descriptionDoc);
+	}
+
+	/**
+	 * The full description document, for an app that reads layouts and proxied images (HIN-181);
+	 * null when it is the same as {@code descriptionDoc}. Additive: older apps ignore it.
+	 */
+	@JsonProperty("descriptionLayoutDoc")
+	public String descriptionLayoutDoc() {
+		return forms().layout(descriptionDoc);
+	}
+
+	/**
+	 * The domain of the mail this issue came from, when its description shows external images
+	 * (HIN-181): what a reader is offered to trust. Null for any other issue.
+	 */
+	@JsonProperty("externalImageSender")
+	public String externalImageSender() {
+		if (reporterEmail == null || !forms().hasExternalImages(descriptionDoc)) return null;
+		return com.ahmadre.hinata.user.SenderDomains.ofAddress(reporterEmail);
+	}
+
+	/** Whether the reader loads this issue's external images without being asked (HIN-181). */
+	@JsonProperty("externalImagesTrusted")
+	public boolean externalImagesTrusted() {
+		return Boolean.TRUE.equals(imagesTrustedByViewer);
+	}
+
+	private com.ahmadre.hinata.richtext.LegacyDocs.Memo forms() {
+		if (descriptionForms == null) descriptionForms = new com.ahmadre.hinata.richtext.LegacyDocs.Memo();
+		return descriptionForms;
+	}
 
 	/**
 	 * Sets the full assignee list (multi-assignee mode), de-duplicated and blank-
