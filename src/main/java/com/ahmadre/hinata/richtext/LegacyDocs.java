@@ -44,6 +44,13 @@ public final class LegacyDocs {
 
 	private static volatile Supplier<String> label = () -> DEFAULT_LABEL;
 
+	/** Documents parsed here so far; tests read it to see that a response parses a document once. */
+	private static final java.util.concurrent.atomic.AtomicLong PARSES = new java.util.concurrent.atomic.AtomicLong();
+
+	static long parses() {
+		return PARSES.get();
+	}
+
 	/** Where the label of an external image comes from: the instance's language. */
 	static void labelFrom(Supplier<String> source) {
 		label = source;
@@ -58,18 +65,20 @@ public final class LegacyDocs {
 	}
 
 	static String project(String stored, Supplier<String> labelSource) {
-		if (!mayNeedProjection(stored)) return stored;
-		JsonNode document;
-		try {
-			document = MAPPER.readTree(stored);
-		}
-		catch (JsonProcessingException unreadable) {
-			return stored;
-		}
-		if (document == null || !document.path("root").isObject()) return stored;
+		return projected(stored, labelSource).doc();
+	}
+
+	/** A projection and the external image addresses it replaced, from one read of the document. */
+	record Projected(String doc, Set<String> sources) {
+	}
+
+	static Projected projected(String stored, Supplier<String> labelSource) {
+		if (!mayNeedProjection(stored)) return new Projected(stored, Set.of());
+		JsonNode document = parse(stored);
+		if (document == null || !document.path("root").isObject()) return new Projected(stored, Set.of());
 		Projection projection = new Projection(labelSource);
 		projection.children((ObjectNode) document.get("root"), false, 0);
-		return projection.changed ? write(document) : stored;
+		return new Projected(projection.changed ? write(document) : stored, projection.sources);
 	}
 
 	/**
@@ -84,15 +93,9 @@ public final class LegacyDocs {
 		if (incoming == null || stored == null) return false;
 		String projected = project(stored, () -> externalImageLabel);
 		if (projected == stored) return false;
-		JsonNode sent;
-		JsonNode legacy;
-		try {
-			sent = MAPPER.readTree(incoming);
-			legacy = MAPPER.readTree(projected);
-		}
-		catch (JsonProcessingException unreadable) {
-			return false;
-		}
+		JsonNode sent = parse(incoming);
+		JsonNode legacy = parse(projected);
+		if (legacy == null) return false;
 		if (sent == null || !sent.path("root").isObject() || hasLayoutOrExternalImage(sent)) return false;
 		if (sent.equals(legacy)) return true;
 		return LexicalJson.plainText(sent).equals(LexicalJson.plainText(legacy));
@@ -100,17 +103,32 @@ public final class LegacyDocs {
 
 	/**
 	 * A cheap first look: whether [json] could hold a layout or an external image at all, with
-	 * no false negative. Case-insensitive, because a scheme may be spelled {@code HTTPS}; and any
-	 * escape ({@code \\u0068ttps}) sends the document to the parser, which reads what it says.
+	 * no false negative. An image address is looked for as {@code "src":"http(s)://"}, ignoring
+	 * case, because a scheme may be spelled {@code HTTPS}; any escape ({@code \\u0068ttps})
+	 * sends the document to the parser, which reads what it says.
 	 * A miss costs a parse; nothing it rules out can need a projection.
 	 */
 	static boolean mayNeedProjection(String json) {
 		if (json == null || json.isEmpty()) return false;
+		if (json.contains("\\u")) return true;
 		String lower = json.toLowerCase(Locale.ROOT);
-		return lower.contains("layout-") || lower.contains("\\u")
-				|| lower.contains("\"image\"") && lower.contains("http");
+		return lower.contains("layout-") || EXTERNAL_SRC.matcher(json).find();
 	}
 
+	/** An image address on another server, as it stands in canonical JSON. */
+	private static final java.util.regex.Pattern EXTERNAL_SRC = java.util.regex.Pattern.compile(
+			"\"src\"\\s*:\\s*\"\\s*https?://", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+	/** [json] read, counted; null for an unreadable document. */
+	private static JsonNode parse(String json) {
+		PARSES.incrementAndGet();
+		try {
+			return MAPPER.readTree(json);
+		}
+		catch (JsonProcessingException unreadable) {
+			return null;
+		}
+	}
 	/**
 	 * The addresses of the external images [doc] shows, in document order, captions included;
 	 * empty for a document without any and for an unreadable one. What the image proxy may fetch
@@ -119,13 +137,8 @@ public final class LegacyDocs {
 	public static Set<String> externalImageSources(String doc) {
 		Set<String> sources = new java.util.LinkedHashSet<>();
 		if (!mayNeedProjection(doc)) return sources;
-		JsonNode document;
-		try {
-			document = MAPPER.readTree(doc);
-		}
-		catch (JsonProcessingException unreadable) {
-			return sources;
-		}
+		JsonNode document = parse(doc);
+		if (document == null) return sources;
 		List<JsonNode> work = new ArrayList<>();
 		work.add(document.path("root"));
 		int nodes = 0;
@@ -179,6 +192,7 @@ public final class LegacyDocs {
 	private static final class Projection {
 
 		private final Supplier<String> labelSource;
+		private final Set<String> sources = new java.util.LinkedHashSet<>();
 		private String label;
 		private boolean changed;
 
@@ -216,6 +230,7 @@ public final class LegacyDocs {
 				}
 				if ("image".equals(type) && isExternal(node)) {
 					changed = true;
+					sources.add(node.path("src").asText("").strip());
 					out.add(standIn(node, link, BLOCK_PARENTS.contains(parentType)));
 					continue;
 				}
@@ -243,18 +258,13 @@ public final class LegacyDocs {
 	public static final class Memo {
 
 		private String source;
-		private String projection;
-		private String imagesOf;
-		private boolean hasExternalImages;
+		private Projected projection;
 
-		/** Whether [stored] shows an external image. */
+		/** Whether [stored] shows an external image; from the same read as its projection. */
 		public boolean hasExternalImages(String stored) {
 			if (stored == null) return false;
-			if (stored != imagesOf) {
-				hasExternalImages = !externalImageSources(stored).isEmpty();
-				imagesOf = stored;
-			}
-			return hasExternalImages;
+			read(stored);
+			return !projection.sources().isEmpty();
 		}
 
 		/**
@@ -273,9 +283,13 @@ public final class LegacyDocs {
 		/** The legacy projection of [stored]. */
 		public String legacy(String stored) {
 			if (stored == null) return null;
+			return read(stored).doc();
+		}
+
+		private Projected read(String stored) {
 			// The same instance is the same document: an entity's field only changes by assignment.
 			if (stored != source) {
-				projection = project(stored);
+				projection = projected(stored, label);
 				source = stored;
 			}
 			return projection;

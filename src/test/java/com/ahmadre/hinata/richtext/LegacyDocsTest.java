@@ -153,4 +153,27 @@ class LegacyDocsTest {
 			assertThat(nodes(legacy, "link")).as(stored).hasSize(1);
 		}
 	}
+
+	@Test
+	void mayNeedProjection_looksOnlyForAnExternalImageAddressOrALayout() {
+		String linkOnly = doc(imageParagraph(MEDIA), paragraph("Siehe https://example.org"));
+
+		assertThat(LegacyDocs.mayNeedProjection(linkOnly)).isFalse();
+		assertThat(LegacyDocs.mayNeedProjection(doc(imageParagraph("https://mail.example.com/a.png")))).isTrue();
+		assertThat(LegacyDocs.mayNeedProjection(doc(imageParagraph("HTTP://mail.example.com/a.png")))).isTrue();
+		assertThat(LegacyDocs.mayNeedProjection(doc(columns("1fr", item(paragraph("x")))))).isTrue();
+	}
+
+	@Test
+	void memo_readsADocumentOnceForBothItsProjectionAndItsImages() {
+		String stored = doc(columns("1fr", item(imageParagraph("https://mail.example.com/a.png"))));
+		LegacyDocs.Memo memo = new LegacyDocs.Memo();
+		long before = LegacyDocs.parses();
+
+		memo.legacy(stored);
+		memo.layout(stored);
+		assertThat(memo.hasExternalImages(stored)).isTrue();
+
+		assertThat(LegacyDocs.parses() - before).isEqualTo(1);
+	}
 }
