@@ -51,6 +51,15 @@ final class HtmlToLexical {
 	/** Element nesting read; mails nest tables a dozen levels, rarely more. */
 	private static final int MAX_DEPTH = 48;
 
+	/** Characters of a mail's style sheets read at all. */
+	static final int MAX_SHEET_CHARS = 64 * 1024;
+
+	/** Characters of sheet declarations one element takes. */
+	static final int MAX_ELEMENT_CSS = 8 * CssStyles.MAX_CHARS;
+
+	/** Elements the rules of a sheet reach together. */
+	static final int MAX_SHEET_MATCHES = 50_000;
+
 	/** Rules of a mail's style sheets taken into account. */
 	private static final int MAX_CSS_RULES = 500;
 
@@ -135,34 +144,55 @@ final class HtmlToLexical {
 	 * The declarations each element gets from the mail's {@code <style>} sheets: rules with a
 	 * plain tag, class or tag.class selector, outside any {@code @media} or other at-rule, so
 	 * what is kept is what a desktop client shows. Later rules come later in the string.
+	 *
+	 * <p>A sheet is text a sender wrote, so everything here is bounded: the sheet is read to
+	 * {@value #MAX_SHEET_CHARS} characters, an element takes a rule's body once however often the
+	 * sheet repeats it and at most {@link #MAX_ELEMENT_CSS} characters in all, and the rules
+	 * together reach at most {@value #MAX_SHEET_MATCHES} elements.
 	 */
-	private static Map<Element, String> styleSheet(Document document) {
-		Map<Element, String> styles = new IdentityHashMap<>();
+	static Map<Element, String> styleSheet(Document document) {
+		Map<Element, StringBuilder> styles = new IdentityHashMap<>();
 		StringBuilder css = new StringBuilder();
-		for (Element style : document.select("style")) css.append(style.data()).append('\n');
+		for (Element style : document.select("style")) {
+			if (css.length() >= MAX_SHEET_CHARS) break;
+			String data = style.data();
+			css.append(data, 0, Math.min(data.length(), MAX_SHEET_CHARS - css.length())).append('\n');
+		}
 		String source = css.toString().replaceAll("(?s)/\\*.*?\\*/", "");
 		int rules = 0;
+		int matches = 0;
 		int i = 0;
-		while (i < source.length() && rules < MAX_CSS_RULES) {
+		while (i < source.length() && rules < MAX_CSS_RULES && matches < MAX_SHEET_MATCHES) {
 			int open = source.indexOf('{', i);
 			if (open < 0) break;
 			String prelude = source.substring(i, open).strip().toLowerCase(Locale.ROOT);
 			int close = matching(source, open);
 			if (close < 0) break;
 			if (!prelude.startsWith("@")) {
-				String body = source.substring(open + 1, close);
+				String body = source.substring(open + 1, close).strip();
+				if (body.length() > MAX_ELEMENT_CSS) body = body.substring(0, MAX_ELEMENT_CSS);
 				for (String selector : prelude.split(",")) {
 					String simple = selector.strip();
 					if (!SIMPLE_SELECTOR.matcher(simple).matches()) continue;
-					rules++;
+					if (++rules > MAX_CSS_RULES) break;
 					for (Element element : document.select(simple)) {
-						styles.merge(element, body, (a, b) -> a + ";" + b);
+						if (++matches > MAX_SHEET_MATCHES) break;
+						StringBuilder own = styles.computeIfAbsent(element, key -> new StringBuilder());
+						boolean room = own.isEmpty() || own.length() + body.length() + 1 <= MAX_ELEMENT_CSS;
+						if (room && own.indexOf(body) < 0) {
+							if (!own.isEmpty()) own.append(';');
+							own.append(body);
+						}
 					}
 				}
 			}
 			i = close + 1;
 		}
-		return styles;
+		Map<Element, String> out = new IdentityHashMap<>();
+		styles.forEach((element, own) -> {
+			if (!own.isEmpty()) out.put(element, own.toString());
+		});
+		return out;
 	}
 
 	/** The index of the brace closing the one at [open], or -1. */
