@@ -339,6 +339,16 @@ class HtmlToLexicalTest {
 	}
 
 	@Test
+	void manyMediaQueriesWithoutABraceAreReadOnlyNearEachOne() {
+		// Every @media without its brace: looking for that brace to the end of the sheet each time
+		// is quadratic in the sheet; a megabyte of it would take minutes.
+		String hostile = "@media x".repeat(125_000) + "@media only screen and (min-width:520px) {}";
+
+		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(1),
+				() -> assertThat(HtmlToLexical.breakpointIn(hostile)).isEqualTo(520));
+	}
+
+	@Test
 	void commentsAreStrippedAndTheBreakpointStillFound() {
 		String html = "<style>/* .a{color:blue} */ .a{color:red} /* @media (min-width:999px) {} */"
 				+ "@media only screen and (min-width:520px) { .x {} }</style><p class=\"a\">Text</p>" + MJML_ROW;

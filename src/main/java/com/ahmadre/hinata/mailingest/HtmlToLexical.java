@@ -123,7 +123,7 @@ final class HtmlToLexical {
 		if (html == null || html.isBlank()) throw new IllegalArgumentException("empty body");
 		if (html.length() > MAX_HTML_CHARS) throw new IllegalArgumentException("body too large");
 		Document document = Jsoup.parse(html);
-		int breakpoint = breakpoint(document);
+		int breakpoint = breakpointOf(document);
 		Map<Element, String> sheet = styleSheet(document);
 		document.select(String.join(",", DROPPED)).remove();
 		applySheet(sheet);
@@ -748,20 +748,28 @@ final class HtmlToLexical {
 	 * The breakpoint of a mail: MJML's {@code @media only screen and (min-width:NNNpx)} in its
 	 * style sheet, {@value #DEFAULT_BREAKPOINT} px (MJML's default) without one.
 	 */
-	private static int breakpoint(Document document) {
+	static int breakpointOf(Document document) {
 		StringBuilder css = new StringBuilder();
 		for (Element style : document.select("style")) {
 			if (css.length() >= MAX_SHEET_CHARS) break;
 			String data = style.data();
 			css.append(data, 0, Math.min(data.length(), MAX_SHEET_CHARS - css.length())).append('\n');
 		}
-		String source = withoutComments(css.toString());
-		String lower = source.toLowerCase(Locale.ROOT);
+		return breakpointIn(css.toString());
+	}
+
+	/** The breakpoint [css] names, {@value #DEFAULT_BREAKPOINT} px without one; linear in [css]. */
+	static int breakpointIn(String css) {
+		String lower = withoutComments(css).toLowerCase(Locale.ROOT);
 		for (int at = lower.indexOf("@media"); at >= 0; at = lower.indexOf("@media", at + 6)) {
 			// The condition up to its brace, read only so far: no regex runs over the rest of the sheet.
 			int end = Math.min(lower.length(), at + MAX_PRELUDE_CHARS);
-			int brace = lower.indexOf('{', at);
-			if (brace >= 0 && brace < end) end = brace;
+			for (int i = at; i < end; i++) {
+				if (lower.charAt(i) == '{') {
+					end = i;
+					break;
+				}
+			}
 			Matcher matcher = MIN_WIDTH.matcher(lower.substring(at, end));
 			if (matcher.find()) {
 				int width = Integer.parseInt(matcher.group(1));
