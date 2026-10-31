@@ -91,6 +91,22 @@ public class IngestConnectionService {
 		if (connection.getPollSeconds() < 15) {
 			connection.setPollSeconds(15);
 		}
+		connection.setAuthservId(authservId(connection.getAuthservId()));
+	}
+
+	/** Longest authserv-id taken: a host name's length. */
+	static final int MAX_AUTHSERV_ID = 255;
+
+	private static final java.util.regex.Pattern AUTHSERV_ID = java.util.regex.Pattern.compile("[a-z0-9._-]{1,255}");
+
+	/** [raw] as stored: lower case, null for blank. @throws ApiException 400 for no host name */
+	private static String authservId(String raw) {
+		if (raw == null || raw.isBlank()) return null;
+		String normal = raw.strip().toLowerCase(java.util.Locale.ROOT);
+		if (normal.length() > MAX_AUTHSERV_ID || !AUTHSERV_ID.matcher(normal).matches()) {
+			throw ApiException.badRequest("error.ingest.authservIdInvalid");
+		}
+		return normal;
 	}
 
 	private IngestConnection deriveFlags(IngestConnection connection) {

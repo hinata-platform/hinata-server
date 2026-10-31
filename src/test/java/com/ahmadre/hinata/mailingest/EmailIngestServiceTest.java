@@ -93,7 +93,7 @@ class EmailIngestServiceTest {
 	}
 
 	private IngestConnection connection() {
-		return IngestConnection.builder().id("conn-1").projectId("p1").build();
+		return IngestConnection.builder().id("conn-1").projectId("p1").authservId("mx.example.org").build();
 	}
 
 	/** A minimal RFC 822 message, parsed the way the IMAP folder would hand it over. */
@@ -264,8 +264,16 @@ class EmailIngestServiceTest {
 	@Test
 	void anIngestedIssueRecordsWhetherTheReceivingServerVouchedForItsSender() throws Exception {
 		Issue verified = ingested(alternative("x", "<p>x</p>",
-				"Authentication-Results: mx.example.org; dkim=pass header.d=example.com; dmarc=pass\r\n"));
+				"Authentication-Results: mx.example.org; dkim=pass header.d=example.com;"
+						+ " dmarc=pass header.from=kundenservice.example.com\r\n"));
 		assertThat(verified.getSenderVerified()).isTrue();
+	}
+
+	@Test
+	void aVouchOfAServerTheConnectionDoesNotNameCountsForNothing() throws Exception {
+		assertThat(ingested(alternative("x", "<p>x</p>",
+				"Authentication-Results: forged.example; dmarc=pass header.from=kundenservice.example.com\r\n"))
+				.getSenderVerified()).isFalse();
 	}
 
 	@Test

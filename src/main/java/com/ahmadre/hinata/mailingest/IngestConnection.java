@@ -57,6 +57,15 @@ public class IngestConnection {
 	@Builder.Default
 	private int pollSeconds = 60;
 
+	/**
+	 * The authserv-id the receiving mail server writes into the {@code Authentication-Results}
+	 * header it adds (RFC 8601), usually its host name (HIN-181). Only a header carrying it says
+	 * whether a sender was verified; without it no sender of this connection is offered to readers
+	 * as a domain to trust with images. Lower case, a host name, at most 255 characters; null for
+	 * none.
+	 */
+	private String authservId;
+
 	/** Derived, read-only: whether a password is stored for this connection. */
 	@Transient
 	@JsonProperty(access = JsonProperty.Access.READ_ONLY)
