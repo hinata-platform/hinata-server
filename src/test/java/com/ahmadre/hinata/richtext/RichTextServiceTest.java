@@ -281,4 +281,16 @@ class RichTextServiceTest {
 		assertThat(LayoutDocs.read(text.doc()).path("root").path("children").get(0).path("$").path("style").asText())
 				.isEqualTo("--stack-below:480px;background-color:#fff");
 	}
+
+	@Test
+	void aClientDocumentIsStoredInItsCanonicalFormWithItsImageAddressesNormalised() {
+		String sent = LayoutDocs.doc(LayoutDocs.imageParagraph("  HTTPS://Mail.Example.com/Logo.PNG "))
+				.replace("{\"root\"", "{ \"root\" ");
+
+		RichText text = service.fromLexical(sent, ExternalImages.KEEP);
+
+		assertThat(text.doc()).isEqualTo(LayoutDocs.write(LayoutDocs.read(text.doc())));
+		assertThat(LayoutDocs.nodes(text.doc(), "image").getFirst().path("src").asText())
+				.isEqualTo("https://Mail.Example.com/Logo.PNG");
+	}
 }

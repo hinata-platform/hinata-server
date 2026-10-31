@@ -141,4 +141,16 @@ class LegacyDocsTest {
 
 		assertThat(LegacyDocs.isRoundTripOf(stored, stored, LABEL)).isFalse();
 	}
+
+	@Test
+	void project_findsAnExternalImageHoweverItsAddressIsSpelled() {
+		String upper = doc(imageParagraph("HTTPS://tracker.example/pixel.png"));
+		String escaped = upper.replace("HTTPS://", "\\u0068ttps://");
+
+		for (String stored : new String[] { upper, escaped }) {
+			String legacy = LegacyDocs.project(stored, () -> LABEL);
+			assertThat(nodes(legacy, "image")).as(stored).isEmpty();
+			assertThat(nodes(legacy, "link")).as(stored).hasSize(1);
+		}
+	}
 }

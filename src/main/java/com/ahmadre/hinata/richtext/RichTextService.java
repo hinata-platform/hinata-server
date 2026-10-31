@@ -112,15 +112,16 @@ public class RichTextService {
 		if (json == null || json.isBlank()) return RichText.EMPTY;
 		JsonNode document = LexicalJson.parse(MAPPER, json);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
-		boolean linksChanged = LinkTargets.unwrapUnsafe(document);
+		LinkTargets.unwrapUnsafe(document);
 		// A block style is CSS a client chose; only the allow-listed part of it is kept.
-		boolean stylesChanged = NodeStates.sanitize(document);
-		boolean imagesChanged = images != null && images.settle(document, external);
-		if (imagesChanged || linksChanged || stylesChanged) {
-			json = write(document);
-			// A link is a little longer than the image it stands for; the read bound still holds.
-			if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
-		}
+		NodeStates.sanitize(document);
+		ImagesInText.normalizeSources(document);
+		if (images != null) images.settle(document, external);
+		// Always the canonical form, never the client's spelling: what is stored reads the same to
+		// every check after it, such as the legacy projection's look for external images.
+		json = write(document);
+		// A link is a little longer than the image it stands for; the read bound still holds.
+		if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
 		return new RichText(json, LexicalJson.writtenText(document), issueKeys(document));
 	}
 
