@@ -111,7 +111,8 @@ class HtmlToLexicalTest {
 		JsonNode button = nodes(document, "paragraph").stream()
 				.filter(p -> style(p).contains("background-color:#e60000")).findFirst().orElseThrow();
 		assertThat(button.path("format").asText()).isEqualTo("center");
-		assertThat(style(button)).contains("border-radius:6px", "padding:12px 28px", "margin-left:auto");
+		assertThat(style(button)).contains("border-radius:6px", "padding:12px 28px", "width:fit-content",
+				"margin-left:auto", "margin-right:auto");
 		assertThat(button.path("children").get(0).path("type").asText()).isEqualTo("link");
 		assertThat(button.path("children").get(0).path("url").asText()).isEqualTo("https://example.com/hilfe?utm_source=mail");
 		JsonNode code = nodes(document, "paragraph").stream()
@@ -171,7 +172,9 @@ class HtmlToLexicalTest {
 				.contains("background-color:#333333", "max-width:640px"));
 		JsonNode button = nodes(document, "paragraph").stream()
 				.filter(p -> style(p).contains("background-color:#e60000")).findFirst().orElseThrow();
-		assertThat(style(button)).contains("padding:10px 25px").doesNotContain("padding:26px");
+		assertThat(style(button)).contains("padding:10px 25px", "width:fit-content").doesNotContain("padding:26px")
+				.doesNotContain("margin-left:auto");
+		assertThat(button.path("format").asText()).as("placed as its cell's surroundings, left").isEqualTo("left");
 		assertThat(LexicalJson.plainText(MAPPER.createObjectNode().set("root", button))).isEqualTo("Hilfe & FAQ");
 	}
 

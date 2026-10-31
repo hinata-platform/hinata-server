@@ -59,7 +59,8 @@ public final class CssStyles {
 	 * The block style of an element, sanitised: {@code background-color}, {@code color},
 	 * {@code padding} and its sides, {@code margin-top}, {@code margin-bottom}, centering
 	 * ({@code margin-left:auto;margin-right:auto}, also from {@code margin:0 auto}),
-	 * {@code width}, {@code max-width}, {@code border-radius}, {@code border},
+	 * {@code width} (also {@code fit-content}: a block as wide as its content, such as a button),
+	 * {@code max-width}, {@code border-radius}, {@code border},
 	 * {@code border-top}, {@code border-bottom}. Empty when nothing is left.
 	 */
 	public static String block(String css) {
@@ -77,7 +78,8 @@ public final class CssStyles {
 				case "margin-left", "margin-right" -> {
 					if ("auto".equals(value)) put(out, property, "auto");
 				}
-				case "width", "max-width" -> put(out, property, length(value, true));
+				case "width" -> put(out, property, "fit-content".equals(value) ? value : length(value, true));
+				case "max-width" -> put(out, property, length(value, true));
 				case "border-radius" -> put(out, property, lengths(value, 1, 4, false));
 				case "border", "border-top", "border-bottom" -> put(out, property, border(value));
 				default -> {
