@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -70,7 +71,8 @@ public class AttachmentController {
 				.uploaderId(userId)
 				.uploadedAt(Instant.now())
 				.blurHash(blurHash)
-				.passwordProtected(blurHash == null && needsPassword(file) ? Boolean.TRUE : null)
+				.passwordProtected(blurHash == null && isPdf(stored.contentType()) && needsPassword(file)
+						? Boolean.TRUE : null)
 				.build();
 		// Atomic $push so parallel uploads to the same issue can't lose each other.
 		Issue saved = store.add(issue.getId(), attachment);
@@ -111,12 +113,19 @@ public class AttachmentController {
 	 */
 	private static boolean needsPassword(MultipartFile file) {
 		try {
-			byte[] bytes = file.getBytes();
-			return FileSignature.isPdf(bytes) && PdfPageRenderer.needsPassword(bytes);
+			return needsPassword(file.getBytes());
 		}
 		catch (IOException ex) {
 			return false;
 		}
+	}
+
+	private static boolean needsPassword(byte[] bytes) {
+		return FileSignature.isPdf(bytes) && PdfPageRenderer.needsPassword(bytes);
+	}
+
+	private static boolean isPdf(String contentType) {
+		return contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("application/pdf");
 	}
 
 	/**
@@ -168,7 +177,10 @@ public class AttachmentController {
 	 */
 	private StorageService.StoredObject generateMissingPreview(Issue issue,
 			Issue.Attachment attachment) {
-		if (!ImagePreviewService.isPreviewable(attachment.getContentType())) {
+		// Known to need a password: there is no page to render, and finding that out again
+		// would cost the whole file and a parse on every tile that asks.
+		if (!ImagePreviewService.isPreviewable(attachment.getContentType())
+				|| Boolean.TRUE.equals(attachment.getPasswordProtected())) {
 			return null;
 		}
 		StorageService.StoredObject original = storage.getObject(attachment.getObjectKey())
@@ -184,8 +196,7 @@ public class AttachmentController {
 			// A PDF that renders no page is no picture either: handing it out as one only
 			// sent the whole document to every tile that asked. A file uploaded before
 			// HIN-180 learns here that it needs a password, for the next one to load it.
-			if (attachment.getPasswordProtected() == null
-					&& PdfPageRenderer.needsPassword(original.data())) {
+			if (needsPassword(original.data())) {
 				store.setPasswordProtected(issue.getId(), attachment.getId());
 			}
 			return null;
