@@ -62,6 +62,11 @@ val bouncyCastleVersion = "1.84"
 // compile classpath. Pin the well-behaved single-jar 4.12.0 release, which exposes
 // the same stable OkHttp API MinIO uses.
 val okhttpVersion = "4.12.0"
+
+// Public suffix list for trusted mail senders (HIN-181): a sender may be trusted by
+// its domain, never by "co.uk". MinIO brings it anyway; declared because the code
+// uses it directly.
+val guavaVersion = "33.4.8-jre"
 // iCalendar (RFC 5545) for the shared ics package: holiday imports and calendar
 // subscriptions read external calendars through it. Only its recurrence engine
 // (Recur) is used; the package documentation of com.ahmadre.hinata.ics says why
@@ -139,6 +144,7 @@ dependencies {
     // lets a request connect to exactly the address that was checked, which the
     // JDK client cannot do.
     implementation("com.squareup.okhttp3:okhttp:$okhttpVersion")
+    implementation("com.google.guava:guava:$guavaVersion")
 
     // Security & SSO
     implementation("org.springframework.boot:spring-boot-starter-security")
