@@ -19,6 +19,14 @@ public final class CssStyles {
 	private CssStyles() {
 	}
 
+	/**
+	 * The width below which a {@code layout-container} lays its items out one under the other
+	 * (HIN-181): a mail's columns on a phone. Pixels only, at most {@value #MAX_STACK_BELOW}.
+	 */
+	public static final String STACK_BELOW = "--stack-below";
+
+	private static final int MAX_STACK_BELOW = 2000;
+
 	/** Longest style string kept, in either list. */
 	public static final int MAX_CHARS = 512;
 
@@ -61,7 +69,8 @@ public final class CssStyles {
 	 * ({@code margin-left:auto;margin-right:auto}, also from {@code margin:0 auto}),
 	 * {@code width} (also {@code fit-content}: a block as wide as its content, such as a button),
 	 * {@code max-width}, {@code border-radius}, {@code border},
-	 * {@code border-top}, {@code border-bottom}. Empty when nothing is left.
+	 * {@code border-top}, {@code border-bottom}, and on a column container
+	 * {@code --stack-below:Npx}. Empty when nothing is left.
 	 */
 	public static String block(String css) {
 		Map<String, String> out = new LinkedHashMap<>();
@@ -81,6 +90,7 @@ public final class CssStyles {
 				case "width" -> put(out, property, "fit-content".equals(value) ? value : length(value, true));
 				case "max-width" -> put(out, property, length(value, true));
 				case "border-radius" -> put(out, property, lengths(value, 1, 4, false));
+				case STACK_BELOW -> put(out, property, stackBelow(value));
 				case "border", "border-top", "border-bottom" -> put(out, property, border(value));
 				default -> {
 					// Not on the list: dropped.
@@ -169,6 +179,12 @@ public final class CssStyles {
 					: "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
 		}
 		return NAMED_COLORS.contains(value) ? value : null;
+	}
+
+	private static String stackBelow(String value) {
+		if (!value.matches("\\d{1,4}(\\.\\d+)?px")) return null;
+		String length = length(value, false);
+		return length != null && Double.parseDouble(length.replace("px", "")) <= MAX_STACK_BELOW ? length : null;
 	}
 
 	/**

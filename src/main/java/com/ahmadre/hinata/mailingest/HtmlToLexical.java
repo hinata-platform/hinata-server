@@ -54,6 +54,18 @@ final class HtmlToLexical {
 	/** Rules of a mail's style sheets taken into account. */
 	private static final int MAX_CSS_RULES = 500;
 
+	/** Where a mail's columns stack when it names no breakpoint of its own: MJML's default. */
+	private static final int DEFAULT_BREAKPOINT = 480;
+
+	/** A column that takes at least this share of its row holds content, not an icon. */
+	private static final double CONTENT_SHARE = 0.4;
+
+	/** A table's width when it names none: the usual mail canvas. */
+	private static final int DEFAULT_TABLE_WIDTH = 600;
+
+	private static final Pattern MIN_WIDTH =
+			Pattern.compile("@media[^{]*min-width\\s*:\\s*(\\d{1,4})px", Pattern.CASE_INSENSITIVE);
+
 	/** Text of a data-table cell is short; a layout cell holds paragraphs. */
 	private static final int DATA_CELL_CHARS = 60;
 
@@ -100,6 +112,7 @@ final class HtmlToLexical {
 		if (html == null || html.isBlank()) throw new IllegalArgumentException("empty body");
 		if (html.length() > MAX_HTML_CHARS) throw new IllegalArgumentException("body too large");
 		Document document = Jsoup.parse(html);
+		int breakpoint = breakpoint(document);
 		Map<Element, String> sheet = styleSheet(document);
 		document.select(String.join(",", DROPPED)).remove();
 		applySheet(sheet);
@@ -108,7 +121,7 @@ final class HtmlToLexical {
 		removeNoiseImages(document);
 		Element body = document.body();
 		Builder out = new Builder();
-		block(body, out, Ctx.ROOT.with(body, declarations(body)));
+		block(body, out, Ctx.root(breakpoint).with(body, declarations(body)));
 		out.flush();
 		if (out.blocks.isEmpty()) throw new IllegalArgumentException("nothing to show");
 		ArrayNode blocks = nodes.array();
@@ -442,9 +455,13 @@ final class HtmlToLexical {
 	 * What an element hands down to its content: alignment, text style, format bits, the link it
 	 * is inside of, the heading it is part of, and how deep it sits.
 	 */
-	private record Ctx(String align, Map<String, String> text, int format, Element link, int heading, int depth) {
+	private record Ctx(String align, Map<String, String> text, int format, Element link, int heading, int depth,
+			int breakpoint) {
 
-		static final Ctx ROOT = new Ctx(null, Map.of(), 0, null, 0, 0);
+		/** The context of a mail's body; [breakpoint] is where its columns stack. */
+		static Ctx root(int breakpoint) {
+			return new Ctx(null, Map.of(), 0, null, 0, 0, breakpoint);
+		}
 
 		Ctx with(Element element, Map<String, String> css) {
 			String tag = element.normalName();
@@ -492,7 +509,7 @@ final class HtmlToLexical {
 			if (tag.length() == 2 && tag.charAt(0) == 'h' && tag.charAt(1) >= '1' && tag.charAt(1) <= '6') {
 				heading = tag.charAt(1) - '0';
 			}
-			return new Ctx(align, text, format, link, heading, depth + 1);
+			return new Ctx(align, text, format, link, heading, depth + 1, breakpoint);
 		}
 
 		private static boolean isBold(String weight) {
@@ -665,7 +682,46 @@ final class HtmlToLexical {
 			LexicalNodes.setBlockStyle(item, blockStyle(css, false, false));
 			items.add(item);
 		}
-		return nodes.layoutContainer(template.toString(), items);
+		ObjectNode container = nodes.layoutContainer(template.toString(), items);
+		if (!inGroup(columns.getFirst())) {
+			LexicalNodes.setBlockStyle(container, stackBelow(ctx));
+		}
+		return container;
+	}
+
+	/**
+	 * Whether MJML columns sit in an {@code mj-group}, which keeps them side by side on a phone
+	 * too: a class {@code mj-group…} on an element between them and their section.
+	 */
+	private static boolean inGroup(Element column) {
+		int levels = 0;
+		for (Element parent = column.parent(); parent != null && levels < 8; parent = parent.parent(), levels++) {
+			for (String name : parent.classNames()) {
+				if (name.toLowerCase(Locale.ROOT).startsWith("mj-group")) return true;
+			}
+			if (parent.attr("style").contains("max-width")) return false;
+		}
+		return false;
+	}
+
+	/** The style that stacks a row's columns below the mail's breakpoint. */
+	private static String stackBelow(Ctx ctx) {
+		return CssStyles.block(CssStyles.STACK_BELOW + ":" + ctx.breakpoint() + "px");
+	}
+
+	/**
+	 * The breakpoint of a mail: MJML's {@code @media only screen and (min-width:NNNpx)} in its
+	 * style sheet, {@value #DEFAULT_BREAKPOINT} px (MJML's default) without one.
+	 */
+	private static int breakpoint(Document document) {
+		for (Element style : document.select("style")) {
+			Matcher matcher = MIN_WIDTH.matcher(style.data());
+			if (matcher.find()) {
+				int width = Integer.parseInt(matcher.group(1));
+				if (width > 0 && width <= 2000) return width;
+			}
+		}
+		return DEFAULT_BREAKPOINT;
 	}
 
 	/**
@@ -792,7 +848,7 @@ final class HtmlToLexical {
 					.filter(HtmlToLexical::hasContent)
 					.toList();
 			if (cells.size() >= 2) {
-				blocks.add(columns(cells, rowCss, rowCtx, cellPadding));
+				blocks.add(columns(cells, rowCss, rowCtx, cellPadding, pixels(null, css.get("width"))));
 			}
 			else if (cells.size() == 1) {
 				blocks.addAll(cell(cells.getFirst(), rowCss, rowCtx, cellPadding, true));
@@ -882,7 +938,8 @@ final class HtmlToLexical {
 	}
 
 	/** A row of two or more cells: columns as wide as the cells say. */
-	private ObjectNode columns(List<Element> cells, Map<String, String> rowCss, Ctx ctx, int cellPadding) {
+	private ObjectNode columns(List<Element> cells, Map<String, String> rowCss, Ctx ctx, int cellPadding,
+			int tableWidth) {
 		StringBuilder template = new StringBuilder();
 		ArrayNode items = nodes.array();
 		for (Element cell : cells) {
@@ -896,7 +953,37 @@ final class HtmlToLexical {
 			LexicalNodes.setBlockStyle(item, cellStyle(cell, rowCss, cellPadding));
 			items.add(item);
 		}
-		return nodes.layoutContainer(template.toString(), items);
+		ObjectNode container = nodes.layoutContainer(template.toString(), items);
+		if (contentColumns(template.toString(), tableWidth > 0 ? tableWidth : DEFAULT_TABLE_WIDTH) >= 2) {
+			LexicalNodes.setBlockStyle(container, stackBelow(ctx));
+		}
+		return container;
+	}
+
+	/**
+	 * How many tracks of [template] take at least {@link #CONTENT_SHARE} of a row [width] px
+	 * wide: pixel tracks by their width, percent tracks by their share, {@code 1fr} tracks share
+	 * what the others leave. Two of them make a row that stacks on a phone; a row of small icon
+	 * cells does not.
+	 */
+	static int contentColumns(String template, int width) {
+		String[] tracks = template.split(" ");
+		double fixed = 0;
+		int flexible = 0;
+		for (String track : tracks) {
+			if (track.endsWith("px")) fixed += Double.parseDouble(track.substring(0, track.length() - 2));
+			else if (track.endsWith("%")) fixed += width * Double.parseDouble(track.substring(0, track.length() - 1)) / 100;
+			else flexible++;
+		}
+		double share = flexible == 0 ? 0 : Math.max(0, width - fixed) / flexible;
+		int content = 0;
+		for (String track : tracks) {
+			double size = track.endsWith("px") ? Double.parseDouble(track.substring(0, track.length() - 2))
+					: track.endsWith("%") ? width * Double.parseDouble(track.substring(0, track.length() - 1)) / 100
+					: share;
+			if (size >= CONTENT_SHARE * width) content++;
+		}
+		return content;
 	}
 
 	/** The column track of a cell: its pixel or percent width, or a share of what is left. */

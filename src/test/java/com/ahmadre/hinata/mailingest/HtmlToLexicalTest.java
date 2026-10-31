@@ -229,6 +229,66 @@ class HtmlToLexicalTest {
 		assertThat(style(paragraph)).contains("background-color:#eeeeee", "padding:5px", "margin-top:10px");
 	}
 
+	// --- columns that stack on a phone -----------------------------------------
+
+	private static final String MJML_ROW = "<div style=\"margin:0 auto;max-width:640px\"><table><tr><td>"
+			+ "<div class=\"mj-column-per-50\" style=\"display:inline-block\">Links</div>"
+			+ "<div class=\"mj-column-per-50\" style=\"display:inline-block\">Rechts</div></td></tr></table></div>";
+
+	private JsonNode onlyContainer(JsonNode document, String template) {
+		return nodes(document, "layout-container").stream()
+				.filter(c -> c.path("templateColumns").asText().equals(template)).findFirst().orElseThrow();
+	}
+
+	@Test
+	void mjmlColumnsStackBelowMjmlsDefaultBreakpoint() {
+		assertThat(style(onlyContainer(document(MJML_ROW), "50% 50%"))).contains("--stack-below:480px");
+	}
+
+	@Test
+	void mjmlColumnsStackBelowTheBreakpointTheMailNames() {
+		String html = "<style>@media only screen and (min-width:520px) { .mj-column-per-50 { width:50% !important } }"
+				+ "</style>" + MJML_ROW;
+
+		assertThat(style(onlyContainer(document(html), "50% 50%"))).contains("--stack-below:520px");
+	}
+
+	@Test
+	void mjmlColumnsInAGroupStaySideBySide() {
+		String grouped = "<div style=\"margin:0 auto;max-width:640px\"><table><tr><td>"
+				+ "<div class=\"mj-column-per-100 mj-group-full-width\"><div class=\"mj-column-per-50\""
+				+ " style=\"display:inline-block\">Links</div><div class=\"mj-column-per-50\" style=\"display:"
+				+ "inline-block\">Rechts</div></div></td></tr></table></div>";
+
+		assertThat(style(onlyContainer(document(grouped), "50% 50%"))).doesNotContain("--stack-below");
+	}
+
+	@Test
+	void theRealMjmlMailsStepRowsStack() throws Exception {
+		JsonNode document = document(fixture("vodafone-mjml-forward.html"));
+
+		assertThat(nodes(document, "layout-container").stream()
+				.filter(c -> c.path("templateColumns").asText().equals("51% 49%")))
+				.allSatisfy(c -> assertThat(style(c)).contains("--stack-below:480px"));
+	}
+
+	@Test
+	void tableRowsOfContentStackButIconRowsDoNot() throws Exception {
+		JsonNode document = document(fixture("vodafone-style-table.html"));
+
+		assertThat(style(onlyContainer(document, "280px 1fr"))).contains("--stack-below:480px");
+		assertThat(style(onlyContainer(document, "48px 48px 48px"))).doesNotContain("--stack-below");
+	}
+
+	@Test
+	void contentColumnsCountWhatTakesTwoFifthsOfTheRow() {
+		assertThat(HtmlToLexical.contentColumns("280px 1fr", 600)).isEqualTo(2);
+		assertThat(HtmlToLexical.contentColumns("50% 50%", 600)).isEqualTo(2);
+		assertThat(HtmlToLexical.contentColumns("1fr 1fr 1fr", 600)).isZero();
+		assertThat(HtmlToLexical.contentColumns("48px 48px 48px", 600)).isZero();
+		assertThat(HtmlToLexical.contentColumns("120px 1fr", 600)).isEqualTo(1);
+	}
+
 	@Test
 	void anEmptyBodyIsNoDocument() {
 		assertThatThrownBy(() -> converter.convert("<html><head><style>p{}</style></head><body> </body></html>"))
