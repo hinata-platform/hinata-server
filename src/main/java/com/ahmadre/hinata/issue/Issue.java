@@ -428,8 +428,9 @@ public class Issue {
 
 	/**
 	 * Whether the person this issue is written out for loads its external images without being
-	 * asked (HIN-181): they trust its sender's domain. Not persisted; set per request by
-	 * {@link IssueService#withImageTrust}, false wherever it is not.
+	 * asked (HIN-181): they trust its sender's domain. State of one reader, so never persisted
+	 * ({@code @Transient}) and never read back; set per response by
+	 * {@link IssueService#withImageTrust}, null wherever it was not worked out.
 	 */
 	@Transient
 	@JsonIgnore
@@ -481,10 +482,15 @@ public class Issue {
 		return com.ahmadre.hinata.user.SenderDomains.ofAddress(reporterEmail);
 	}
 
-	/** Whether the reader loads this issue's external images without being asked (HIN-181). */
+	/**
+	 * Whether the reader loads this issue's external images without being asked (HIN-181). Left
+	 * out of a response that did not work it out for its reader, such as a list: a client keeps
+	 * the value it had rather than reading a "no" that was never decided.
+	 */
 	@JsonProperty("externalImagesTrusted")
-	public boolean externalImagesTrusted() {
-		return Boolean.TRUE.equals(imagesTrustedByViewer);
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	public Boolean externalImagesTrusted() {
+		return imagesTrustedByViewer;
 	}
 
 	private com.ahmadre.hinata.richtext.LegacyDocs.Memo forms() {
