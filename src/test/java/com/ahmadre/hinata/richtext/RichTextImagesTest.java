@@ -19,9 +19,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Every image somebody sees in a text went through the upload gate (HIN-177). An external image is
- * a link: showing it would tell a foreign server who reads the page. A {@code data:} image becomes
- * media. What cannot be kept leaves a line that says so.
+ * No image somebody sees in a text is loaded from where its author pointed (HIN-177). A
+ * {@code data:} image becomes media; what cannot be kept leaves a line that says so. An external
+ * image is a link in every text but an issue's (HIN-181): there it stays an image, which readers
+ * only ever load through the issue's image proxy.
  */
 class RichTextImagesTest {
 
@@ -215,5 +216,39 @@ class RichTextImagesTest {
 		assertThat(nodes(service.fromMarkdown("![Logo](https://cdn.example/logo.png)").doc(), "link")).hasSize(1);
 		assertThat(nodes(service.fromStoredMarkdown("![Logo](https://cdn.example/logo.png)").doc(), "image"))
 				.hasSize(1);
+	}
+
+	@Test
+	void anIssueTextKeepsAnExternalImageAsAnImage() throws Exception {
+		String doc = withImage("https://mail.example.com/logo.png");
+
+		RichText text = service.fromLexical(doc, ExternalImages.KEEP);
+
+		assertThat(text.doc()).as("nothing to settle, nothing rewritten").isEqualTo(doc);
+		assertThat(nodes(text.doc(), "image")).extracting(i -> i.path("src").asText())
+				.containsExactly("https://mail.example.com/logo.png");
+		assertThat(images.labelsAsked).isZero();
+	}
+
+	@Test
+	void anIssueTextStillTakesItsOwnMediaByPathAndDataImagesAsMedia() throws Exception {
+		RichText absolute = service.fromLexical(withImage("https://hinata.example.org" + MEDIA), ExternalImages.KEEP);
+		assertThat(nodes(absolute.doc(), "image").getFirst().path("src").asText()).isEqualTo(MEDIA);
+
+		RichText data = service.fromLexical(withImage(dataUri(TestImages.png(4, 4))), ExternalImages.KEEP);
+		assertThat(nodes(data.doc(), "image").getFirst().path("src").asText()).startsWith("/api/v1/media/");
+
+		RichText other = service.fromLexical(withImage("javascript:alert(1)"), ExternalImages.KEEP);
+		assertThat(nodes(other.doc(), "image")).isEmpty();
+	}
+
+	@Test
+	void anIssueTextKeepingExternalImagesIsStillBoundInHowManyItShows() {
+		String many = String.join(" ", java.util.Collections.nCopies(ImagesInText.MAX_IMAGES + 1,
+				"![x](https://mail.example.com/p.png)"));
+
+		assertThatThrownBy(() -> service.fromMarkdown(many, ExternalImages.KEEP))
+				.isInstanceOfSatisfying(ApiException.class,
+						ex -> assertThat(ex.getMessageKey()).isEqualTo("error.richtext.tooManyImages"));
 	}
 }

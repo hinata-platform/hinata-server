@@ -90,26 +90,50 @@ public class RichTextService {
 	@Autowired
 	public RichTextService(EmbeddedImages images) {
 		this.images = new ImagesInText(MARKDOWN, images);
+		// The projection for published apps is drawn while a response is written, far from any
+		// bean; it asks this instance's label from there (HIN-181).
+		LegacyDocs.labelFrom(images::externalImageLabel);
 	}
 
 	/**
 	 * Accepts a Lexical document from a client: validates it against the bounds in
-	 * {@link LexicalJson} and derives its plain text.
+	 * {@link LexicalJson} and derives its plain text. External images become links
+	 * ({@link ExternalImages#LINK}).
 	 *
 	 * @throws com.ahmadre.hinata.common.ApiException 400 when the document is
 	 *         unreadable or exceeds the structural limits
 	 */
 	public RichText fromLexical(String json) {
+		return fromLexical(json, ExternalImages.LINK);
+	}
+
+	/** As {@link #fromLexical(String)}, with external images settled as [external] says. */
+	public RichText fromLexical(String json, ExternalImages external) {
 		if (json == null || json.isBlank()) return RichText.EMPTY;
 		JsonNode document = LexicalJson.parse(MAPPER, json);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
 		boolean linksChanged = LinkTargets.unwrapUnsafe(document);
-		if (images != null && images.settle(document) || linksChanged) {
+		// A block style is CSS a client chose; only the allow-listed part of it is kept.
+		boolean stylesChanged = NodeStates.sanitize(document);
+		boolean imagesChanged = images != null && images.settle(document, external);
+		if (imagesChanged || linksChanged || stylesChanged) {
 			json = write(document);
 			// A link is a little longer than the image it stands for; the read bound still holds.
 			if (json.length() > LexicalJson.MAX_JSON_CHARS) throw tooLarge();
 		}
 		return new RichText(json, LexicalJson.writtenText(document), issueKeys(document));
+	}
+
+	/**
+	 * A document this server built itself, such as an HTML mail converted by the ingest
+	 * (HIN-181): checked against the same bounds as one from a client, its links, styles and
+	 * images settled the same way.
+	 *
+	 * @throws com.ahmadre.hinata.common.ApiException 400 {@code error.richtext.tooLarge} when it
+	 *         exceeds the bounds a stored document must keep
+	 */
+	public RichText fromDocument(JsonNode document, ExternalImages external) {
+		return fromLexical(write(document), external);
 	}
 
 	/**
@@ -120,7 +144,12 @@ public class RichTextService {
 	 * @throws com.ahmadre.hinata.common.ApiException 400 {@code error.richtext.tooLarge}
 	 */
 	public RichText fromMarkdown(String source) {
-		return convert(source, MAX_MARKDOWN_CHARS, true);
+		return fromMarkdown(source, ExternalImages.LINK);
+	}
+
+	/** As {@link #fromMarkdown(String)}, with external images settled as [external] says. */
+	public RichText fromMarkdown(String source, ExternalImages external) {
+		return convert(source, MAX_MARKDOWN_CHARS, external);
 	}
 
 	/**
@@ -131,18 +160,18 @@ public class RichTextService {
 	 * is reported rather than written.
 	 */
 	public RichText fromStoredMarkdown(String source) {
-		return convert(source, LexicalJson.MAX_JSON_CHARS, false);
+		return convert(source, LexicalJson.MAX_JSON_CHARS, null);
 	}
 
-	/** [settle] says whether the images are settled: only for text that arrives now. */
-	private RichText convert(String source, int maxSourceChars, boolean settle) {
+	/** [external] null leaves the images unsettled: only text that arrives now is settled. */
+	private RichText convert(String source, int maxSourceChars, ExternalImages external) {
 		if (source == null || source.isBlank()) return RichText.EMPTY;
 		if (source.length() > maxSourceChars) throw tooLarge();
 		ObjectNode document = MARKDOWN.convert(source);
 		if (LexicalJson.isBlank(document)) return RichText.EMPTY;
 		LinkTargets.unwrapUnsafe(document);
-		if (settle && images != null) {
-			images.settle(document);
+		if (external != null && images != null) {
+			images.settle(document, external);
 		}
 		String json = write(document);
 		// The read side refuses a document past this bound. Storing one anyway
@@ -174,18 +203,49 @@ public class RichTextService {
 	 *         "leave it as it is"
 	 */
 	public RichText fromRequest(String doc, String markdown, String storedDoc, String storedText) {
-		if (doc != null) return fromLexical(doc);
+		return fromRequest(doc, markdown, storedDoc, storedText, ExternalImages.LINK);
+	}
+
+	/**
+	 * As {@link #fromRequest(String, String, String, String)}, with external images settled as
+	 * [external] says, for a text whose document may carry a mail's layout (HIN-181).
+	 *
+	 * <p>Such a text goes out to an app published before HIN-181 as its legacy projection
+	 * ({@link LegacyDocs}): layout flattened, external images as links. That app sends the
+	 * projection back on its next save. A document that is the projection of the stored one
+	 * ({@link LegacyDocs#isRoundTripOf}) is therefore "no change", and the stored layout stays.
+	 * The price: an edit in such an old app to a text with a layout replaces the layout with the
+	 * flat text it saw, as it always did; an app that knows layouts sends the document as is.
+	 */
+	public RichText fromRequest(String doc, String markdown, String storedDoc, String storedText,
+			ExternalImages external) {
+		if (doc != null) {
+			if (storedDoc != null && LegacyDocs.isRoundTripOf(doc, storedDoc, externalImageLabel())) {
+				return null;
+			}
+			return fromLexical(doc, external);
+		}
 		if (markdown == null) return null;
 		if (storedDoc != null && !storedDoc.isBlank()
 				&& markdown.strip().equals(storedText == null ? "" : storedText.strip())) {
 			return null;
 		}
-		return fromMarkdown(markdown);
+		return fromMarkdown(markdown, external);
 	}
 
 	/** As {@link #fromRequest(String, String, String, String)}, for a new entity. */
 	public RichText fromRequest(String doc, String markdown) {
 		return fromRequest(doc, markdown, null, null);
+	}
+
+	/** As {@link #fromRequest(String, String)}, with external images settled as [external] says. */
+	public RichText fromRequest(String doc, String markdown, ExternalImages external) {
+		return fromRequest(doc, markdown, null, null, external);
+	}
+
+	/** What a legacy projection calls an external image, in the instance's language. */
+	private String externalImageLabel() {
+		return images == null ? LegacyDocs.DEFAULT_LABEL : images.externalImageLabel();
 	}
 
 	/**

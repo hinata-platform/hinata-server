@@ -229,4 +229,44 @@ class RichTextServiceTest {
 			}
 		}
 	}
+
+	// --- HIN-181: layout, block styles, the projection coming back -------------
+
+	@Test
+	void aDocumentWithColumnsIsAcceptedWithItsWords() {
+		String layout = LayoutDocs.doc(LayoutDocs.columns("1fr 1fr",
+				LayoutDocs.item(LayoutDocs.paragraph("links")), LayoutDocs.item(LayoutDocs.paragraph("rechts"))));
+
+		RichText text = service.fromLexical(layout);
+
+		assertThat(text.doc()).isEqualTo(layout);
+		assertThat(text.text()).isEqualTo("links\nrechts");
+	}
+
+	@Test
+	void aBlockStyleFromAClientKeepsOnlyTheAllowListedCss() {
+		var paragraph = LayoutDocs.paragraph("Hallo");
+		paragraph.putObject("$").put("style", "background-color:#E60000;position:fixed;"
+				+ "background-image:url(https://tracker.example/p.gif)").put("other", 1);
+		var hostile = LayoutDocs.paragraph("Welt");
+		hostile.putObject("$").put("style", "position:absolute");
+
+		RichText text = service.fromLexical(LayoutDocs.doc(paragraph, hostile));
+
+		var blocks = LayoutDocs.read(text.doc()).path("root").path("children");
+		assertThat(blocks.get(0).path("$").path("style").asText()).isEqualTo("background-color:#e60000");
+		assertThat(blocks.get(0).path("$").path("other").asInt()).isEqualTo(1);
+		assertThat(blocks.get(1).has("$")).isFalse();
+	}
+
+	@Test
+	void theLegacyProjectionComingBackFromAnOldAppIsNoChange() {
+		String stored = LayoutDocs.doc(LayoutDocs.columns("1fr",
+				LayoutDocs.item(LayoutDocs.imageParagraph("https://mail.example.com/a.png"))));
+		String legacy = LegacyDocs.project(stored, () -> LegacyDocs.DEFAULT_LABEL);
+
+		assertThat(service.fromRequest(legacy, null, stored, "External image", ExternalImages.KEEP)).isNull();
+		assertThat(service.fromRequest(LayoutDocs.doc(LayoutDocs.paragraph("neu")), null, stored, "",
+				ExternalImages.KEEP).text()).isEqualTo("neu");
+	}
 }
