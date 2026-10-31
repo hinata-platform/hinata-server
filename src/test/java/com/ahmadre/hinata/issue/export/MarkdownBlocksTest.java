@@ -45,6 +45,15 @@ class MarkdownBlocksTest {
 	}
 
 	@Test
+	void rawHtmlIsExportedAsTyped() {
+		List<ExportBlock> blocks = MarkdownBlocks.of("Link <a href=\"?a=1&amp;b=2\">hier</a>");
+
+		assertThat(blocks).singleElement().isInstanceOfSatisfying(ExportBlock.Paragraph.class,
+				paragraph -> assertThat(ExportBlock.Span.plain(paragraph.spans()))
+						.isEqualTo("Link <a href=\"?a=1&amp;b=2\">hier</a>"));
+	}
+
+	@Test
 	void headingsKeepTheirLevel() {
 		List<ExportBlock> blocks = throughStorage("# One\n\n## Two\n\n### Three");
 
