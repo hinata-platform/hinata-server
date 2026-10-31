@@ -67,8 +67,8 @@ public final class CssStyles {
 	 * The block style of an element, sanitised: {@code background-color}, {@code color},
 	 * {@code padding} and its sides, {@code margin-top}, {@code margin-bottom}, centering
 	 * ({@code margin-left:auto;margin-right:auto}, also from {@code margin:0 auto}),
-	 * {@code width} (also {@code fit-content}: a block as wide as its content, such as a button),
-	 * {@code max-width}, {@code border-radius}, {@code border},
+	 * {@code width} (px, %, or {@code fit-content}: a block as wide as its content, such as a
+	 * button), {@code max-width} (px), {@code border-radius} (one to four radii), {@code border},
 	 * {@code border-top}, {@code border-bottom}, and on a column container
 	 * {@code --stack-below:Npx}. Empty when nothing is left.
 	 */
@@ -88,7 +88,7 @@ public final class CssStyles {
 					if ("auto".equals(value)) put(out, property, "auto");
 				}
 				case "width" -> put(out, property, "fit-content".equals(value) ? value : length(value, true));
-				case "max-width" -> put(out, property, length(value, true));
+				case "max-width" -> put(out, property, length(value, false));
 				case "border-radius" -> put(out, property, lengths(value, 1, 4, false));
 				case STACK_BELOW -> put(out, property, stackBelow(value));
 				case "border", "border-top", "border-bottom" -> put(out, property, border(value));

@@ -42,6 +42,18 @@ class CssStylesTest {
 	}
 
 	@Test
+	void block_takesAMaxWidthInPixelsOnly() {
+		assertThat(CssStyles.block("max-width:640px")).isEqualTo("max-width:640px");
+		assertThat(CssStyles.block("max-width:50%")).isEmpty();
+	}
+
+	@Test
+	void block_takesOneToFourRadii() {
+		assertThat(CssStyles.block("border-radius:4px 8px 0 2px")).isEqualTo("border-radius:4px 8px 0px 2px");
+		assertThat(CssStyles.block("border-radius:1px 2px 3px 4px 5px")).isEmpty();
+	}
+
+	@Test
 	void block_takesPercentForWidthOnly() {
 		assertThat(CssStyles.block("width:100%;padding:10%")).isEqualTo("width:100%");
 	}

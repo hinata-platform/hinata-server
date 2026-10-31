@@ -446,7 +446,10 @@ final class HtmlToLexical {
 		if (background != null && b.containsKey("background-color") && !background.equals(b.get("background-color"))) {
 			return false;
 		}
-		return !(painted && b.containsKey("max-width") && !b.get("max-width").equals(a.get("max-width")));
+		for (String narrowing : List.of("max-width", "width")) {
+			if (painted && b.containsKey(narrowing) && !b.get(narrowing).equals(a.get(narrowing))) return false;
+		}
+		return true;
 	}
 
 	private static Map<String, String> parse(String style) {
@@ -793,7 +796,9 @@ final class HtmlToLexical {
 	private static String columnShare(Element element) {
 		String track = columnTrack(element);
 		if (track == null || track.equals("100%") || track.equals("1fr")) return "";
-		return CssStyles.block("max-width:" + track + ";margin-left:auto;margin-right:auto");
+		// A share of the row is a width in percent; max-width takes pixels only.
+		String width = track.endsWith("%") ? "width:" + track : "max-width:" + track;
+		return CssStyles.block(width + ";margin-left:auto;margin-right:auto");
 	}
 
 	/** Whether a fixed-width [element] sits centred: by its own margins or its container's alignment. */

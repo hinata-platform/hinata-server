@@ -166,6 +166,14 @@ class HtmlToLexicalTest {
 	}
 
 	@Test
+	void mjmlForward_keepsALoneNarrowColumnsShareAsItsWidth() throws Exception {
+		JsonNode icons = onlyContainer(document(fixture("vodafone-mjml-forward.html")), "25% 25% 25% 25%");
+
+		assertThat(style(icons)).contains("width:50%", "margin-left:auto").doesNotContain("max-width:50%");
+		assertThat(style(icons)).as("the dark band stays as wide as its section").doesNotContain("background-color");
+	}
+
+	@Test
 	void mjmlForward_keepsTheDarkFooterAndTheRedButton() throws Exception {
 		JsonNode document = document(fixture("vodafone-mjml-forward.html"));
 
