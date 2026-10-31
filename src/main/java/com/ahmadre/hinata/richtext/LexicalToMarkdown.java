@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Renders a Lexical document back to hinata-dialect Markdown — the inverse of
@@ -27,12 +28,13 @@ import java.util.List;
  * this code:
  *
  * <ul>
- *   <li><b>No backslash escaping.</b> flexmark keeps the backslash in the text it
- *       produces ({@code a\*b} parses to the literal text {@code a\*b}), so
- *       escaping would corrupt content on the very first round trip instead of
- *       protecting it. Text that came from markdown therefore round-trips
- *       exactly; a document authored in the editor whose text happens to contain
- *       markdown syntax may be re-read as that syntax.</li>
+ *   <li><b>Only delimiters are escaped.</b> A {@code *}, {@code _}, {@code `},
+ *       {@code ~} or backslash in text is written with a backslash, which
+ *       {@link MarkdownToLexical} reads back as the character, and so is the
+ *       {@code &} of anything that reads as an entity ({@code &amp;}), which
+ *       CommonMark would otherwise decode. Other syntax is written as it stands,
+ *       as upstream Lexical does, so text in a document that starts with
+ *       {@code # } may be re-read as a heading.</li>
  *   <li><b>Table cells.</b> A row is one line, so a newline inside a cell becomes
  *       a space. A literal {@code |} has no spelling that survives — flexmark
  *       splits on {@code \|} as readily as on {@code |} — so it is emitted
@@ -50,6 +52,13 @@ public final class LexicalToMarkdown {
 
 	private LexicalToMarkdown() {
 	}
+
+	/**
+	 * What text has to escape to come back as itself: the delimiters and the backslash
+	 * upstream Lexical escapes, and an {@code &} that would start an entity reference.
+	 */
+	private static final Pattern MARKUP = Pattern.compile(
+			"[*_`~\\\\]|&(?=#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[A-Za-z][A-Za-z0-9]{1,31};)");
 
 	/** Text format bits, matching {@link MarkdownToLexical}'s and lexical_core's. */
 	private static final int BOLD = 1;
@@ -251,7 +260,7 @@ public final class LexicalToMarkdown {
 	 * {@code \|} exactly as it splits on {@code |} and does not decode
 	 * {@code &#124;} either, so there is no spelling of a pipe that survives a
 	 * cell. Emitting the character unchanged at least keeps every character of the
-	 * content; escaping would add a stray backslash and split the cell anyway.
+	 * content; escaping it would split the cell all the same.
 	 */
 	private static String cell(JsonNode node, int depth, Out budget) {
 		StringBuilder content = new StringBuilder();
@@ -363,6 +372,9 @@ public final class LexicalToMarkdown {
 
 		private void text(String value, int format) {
 			if (value.isEmpty()) return;
+			// Inside backticks every character is itself; everywhere else a delimiter
+			// has to be escaped or the text comes back as formatting.
+			if ((format & CODE) == 0) value = MARKUP.matcher(value).replaceAll("\\\\$0");
 			closeTo(format);
 			if (open == format) {
 				out.append(value);

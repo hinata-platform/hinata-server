@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -229,5 +230,21 @@ class LexicalToMarkdownTest {
 				"direction":null,"format":"","indent":0,"type":"root","version":1}}""";
 
 		assertThat(LexicalToMarkdown.convert(mapper.readTree(json))).isEqualTo("drin");
+	}
+
+	@Test
+	void textThatLooksLikeMarkupComesBackAsTheSameText() {
+		// Text typed in the editor, not markdown: escaped on the way out, resolved on the way
+		// in, so it survives as characters instead of turning into formatting (HIN-181).
+		String typed = "2*3 snake_case C:\\Temp &amp; a&b";
+		ObjectNode document = converter.convert("platzhalter");
+		((ObjectNode) document.path("root").path("children").path(0).path("children").path(0))
+				.put("text", typed);
+
+		String markdown = LexicalToMarkdown.convert(document);
+
+		assertThat(markdown).isEqualTo("2\\*3 snake\\_case C:\\\\Temp \\&amp; a&b");
+		assertThat(converter.convert(markdown).path("root").path("children").path(0)
+				.path("children").path(0).path("text").asText()).isEqualTo(typed);
 	}
 }

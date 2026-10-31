@@ -13,6 +13,7 @@ import com.vladsch.flexmark.ast.FencedCodeBlock;
 import com.vladsch.flexmark.ast.HardLineBreak;
 import com.vladsch.flexmark.ast.Heading;
 import com.vladsch.flexmark.ast.HtmlBlock;
+import com.vladsch.flexmark.ast.HtmlEntity;
 import com.vladsch.flexmark.ast.HtmlInline;
 import com.vladsch.flexmark.ast.Image;
 import com.vladsch.flexmark.ast.IndentedCodeBlock;
@@ -36,6 +37,7 @@ import com.vladsch.flexmark.ext.tables.TableSeparator;
 import com.vladsch.flexmark.ext.tables.TablesExtension;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.ast.Node;
+import com.vladsch.flexmark.util.sequence.BasedSequence;
 import com.vladsch.flexmark.util.data.MutableDataSet;
 
 import java.util.ArrayList;
@@ -108,6 +110,9 @@ public final class MarkdownToLexical {
 	 */
 	private static final Pattern SMART_LINK =
 			Pattern.compile("\\{\\{(issue|doc|user):([^}]{1,100})}}");
+
+	private static final Pattern LONE_SURROGATE =
+			Pattern.compile("[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]");
 
 	private static final Parser PARSER = buildParser();
 
@@ -420,11 +425,14 @@ public final class MarkdownToLexical {
 
 	private void inline(Node node, Inline out, int format, int depth) {
 		if (depth > MAX_INLINE_DEPTH) {
-			out.text(node.getChars().toString(), format);
+			out.text(textOf(node.getChars()), format);
 			return;
 		}
 		switch (node) {
-			case com.vladsch.flexmark.ast.Text text -> smartText(text.getChars().toString(), out, format);
+			// flexmark leaves escapes and entities in the source characters; the text
+			// is what they stand for ({@code \*} is an asterisk, {@code &amp;} an ampersand).
+			case com.vladsch.flexmark.ast.Text text -> smartText(textOf(text.getChars()), out, format);
+			case HtmlEntity entity -> out.text(textOf(entity.getChars()), format);
 			case StrongEmphasis emphasis -> inlines(emphasis, out, format | BOLD, depth + 1);
 			case Emphasis emphasis -> inlines(emphasis, out, format | ITALIC, depth + 1);
 			case Strikethrough strike -> inlines(strike, out, format | STRIKETHROUGH, depth + 1);
@@ -444,9 +452,27 @@ public final class MarkdownToLexical {
 			}
 			default -> {
 				if (node.getFirstChild() != null) inlines(node, out, format, depth + 1);
-				else out.text(node.getChars().toString(), format);
+				else out.text(textOf(node.getChars()), format);
 			}
 		}
+	}
+
+	/**
+	 * The text [source] stands for: backslash escapes and entity references resolved, as
+	 * CommonMark reads them. A reference to a lone surrogate ({@code &#xD800;}) becomes
+	 * U+FFFD, as CommonMark asks and as flexmark does only for 0 and out-of-range points;
+	 * a lone surrogate is not text and does not survive UTF-8.
+	 *
+	 * <p>Named references ({@code &amp;}) are decoded too, as CommonMark has it. The
+	 * app's importer (lexical_markdown) follows upstream Lexical and decodes only numeric
+	 * ones, so a draft holding {@code &amp;} previews in the app as those characters and is
+	 * stored as {@code &}.
+	 */
+	public static String textOf(BasedSequence source) {
+		String text = source.unescape();
+		return text.chars().anyMatch(c -> Character.isSurrogate((char) c))
+				? LONE_SURROGATE.matcher(text).replaceAll("\uFFFD")
+				: text;
 	}
 
 	/**
@@ -471,15 +497,16 @@ public final class MarkdownToLexical {
 		Inline inline = new Inline(children);
 		inlines(link, inline, format, depth + 1);
 		inline.flush();
-		if (children.isEmpty()) children.add(text(link.getUrl().toString(), format));
+		String url = textOf(link.getUrl());
+		if (children.isEmpty()) children.add(text(url, format));
 
 		ObjectNode element = element("link", children, 0);
 		element.putNull("rel");
 		element.putNull("target");
-		String title = link.getTitle().toString();
+		String title = textOf(link.getTitle());
 		if (title.isEmpty()) element.putNull("title");
 		else element.put("title", title);
-		element.put("url", link.getUrl().toString());
+		element.put("url", url);
 		return element;
 	}
 
@@ -500,14 +527,14 @@ public final class MarkdownToLexical {
 
 	private ObjectNode image(Image image) {
 		ObjectNode node = mapper.createObjectNode();
-		node.put("altText", image.getText().toString());
+		node.put("altText", textOf(image.getText()));
 		ObjectNode caption = mapper.createObjectNode();
 		caption.set("editorState", emptyCaptionState());
 		node.set("caption", caption);
 		node.put("height", 0);
 		node.put("maxWidth", IMAGE_MAX_WIDTH);
 		node.put("showCaption", false);
-		node.put("src", image.getUrl().toString());
+		node.put("src", textOf(image.getUrl()));
 		node.put("type", "image");
 		node.put("version", 1);
 		node.put("width", 0);
