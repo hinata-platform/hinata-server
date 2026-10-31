@@ -4,6 +4,7 @@ import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.RelativeDate;
 import com.ahmadre.hinata.richtext.LexicalJson;
+import com.ahmadre.hinata.richtext.ExternalImages;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.user.User;
@@ -261,7 +262,8 @@ public class IssueController {
 			assigneeIds = (request.assigneeId() != null && !request.assigneeId().isBlank())
 					? List.of(request.assigneeId()) : List.of();
 		}
-		RichText description = richText.fromRequest(request.descriptionDoc(), request.description());
+		RichText description = richText.fromRequest(request.descriptionDoc(), request.description(),
+				ExternalImages.KEEP);
 		if (description == null) description = RichText.EMPTY;
 		Issue issue = Issue.builder()
 				.projectId(request.projectId())
@@ -306,13 +308,16 @@ public class IssueController {
 
 	@PatchMapping("/{id}")
 	public Issue update(@PathVariable String id, @RequestBody @Valid UpdateIssueRequest request) {
-		return issueService.update(id, issue -> {
+		User user = currentUser.require();
+		return IssueService.withImageTrust(issueService.update(id, issue -> {
 			if (request.title() != null) issue.setTitle(request.title());
 			// Resolved against the stored issue: a client old enough to send only the
 			// legacy field is sending back the derived plain text it was given, and
 			// converting that would flatten the document it came from.
+			// An issue's description keeps its external images and, coming back from an app
+			// published before HIN-181, the layout that app could not show (HIN-181).
 			RichText description = richText.fromRequest(request.descriptionDoc(), request.description(),
-					issue.getDescriptionDoc(), issue.getDescription());
+					issue.getDescriptionDoc(), issue.getDescription(), ExternalImages.KEEP);
 			if (description != null) {
 				issue.setDescription(description.text());
 				issue.setDescriptionDoc(description.doc());
@@ -343,7 +348,7 @@ public class IssueController {
 				issue.setStoryPoints(request.storyPoints());
 			}
 			if (request.rank() != null) issue.setRank(request.rank());
-		}, currentUser.require());
+		}, user), user);
 	}
 
 	/** The deadline part of an update, shared by the single and the bulk route. */
@@ -655,7 +660,7 @@ public class IssueController {
 			throw ApiException.badRequest("error.comment.empty");
 		}
 		RichText content = richText.fromRequest(request.textDoc(), request.text(),
-				storedDoc, storedText);
+				storedDoc, storedText, ExternalImages.KEEP);
 		if (content == null) return null;
 		if (content.isBlank()) throw ApiException.badRequest("error.comment.empty");
 		return content;

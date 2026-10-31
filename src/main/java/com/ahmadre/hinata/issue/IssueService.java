@@ -1155,7 +1155,7 @@ public class IssueService {
 		if (participantOnly) {
 			// Somebody the issue is shared with reads the issue, not the project: none of its
 			// people, sprints or logged hours (who worked how long is the members' business).
-			return new IssueDetail(participantView(issue, user.getId()), project.publicView(),
+			return new IssueDetail(withImageTrust(participantView(issue, user.getId()), user), project.publicView(),
 					IssueDetail.PageSlice.of(commentPage), pinned,
 					IssueDetail.PageSlice.of(activityPage), List.of(), 0, hierarchy, List.of(), dirUsers, false,
 					Participation.PARTICIPANT);
@@ -1164,7 +1164,7 @@ public class IssueService {
 				PageRequest.of(0, DETAIL_WORK_ITEMS, WorkItemRepository.NEWEST_FIRST));
 		List<Sprint> sprintList = sprintsForProject(project.getId());
 		boolean canDelete = projects.canDeleteIssues(project, user);
-		return new IssueDetail(issue, project, IssueDetail.PageSlice.of(commentPage), pinned,
+		return new IssueDetail(withImageTrust(issue, user), project, IssueDetail.PageSlice.of(commentPage), pinned,
 				IssueDetail.PageSlice.of(activityPage), items.getContent(), items.getTotalElements(),
 				hierarchy, sprintList, dirUsers, canDelete, Participation.MEMBER);
 	}
@@ -1606,9 +1606,23 @@ public class IssueService {
 				.build();
 	}
 
-	/** {@code issue} as {@code user} may read it; see {@link #participantView}. */
+	/** {@code issue} as {@code user} may read it; see {@link #participantView} and {@link #withImageTrust}. */
 	public Issue viewFor(Issue issue, User user) {
-		return reach.isParticipantOnly(issue, user) ? participantView(issue, user.getId()) : issue;
+		Issue view = reach.isParticipantOnly(issue, user) ? participantView(issue, user.getId()) : issue;
+		return withImageTrust(view, user);
+	}
+
+	/**
+	 * [issue] marked with whether [user] loads its external images without being asked
+	 * (HIN-181): they trust the domain of the mail it came from, or a parent domain of it.
+	 */
+	public static Issue withImageTrust(Issue issue, User user) {
+		String sender = issue.externalImageSender();
+		boolean trusted = sender != null && user != null && com.ahmadre.hinata.user.SenderDomains.covers(
+				user.getTrustedImageSenders().stream().map(com.ahmadre.hinata.user.TrustedImageSender::domain).toList(),
+				sender);
+		issue.setImagesTrustedByViewer(trusted);
+		return issue;
 	}
 
 	/**

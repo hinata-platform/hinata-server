@@ -107,6 +107,39 @@ public final class LegacyDocs {
 		return json.contains("layout-") || json.contains("\"image\"") && json.contains("http");
 	}
 
+	/**
+	 * The addresses of the external images [doc] shows, in document order, captions included;
+	 * empty for a document without any and for an unreadable one. What the image proxy may fetch
+	 * for an issue is exactly this set over its texts.
+	 */
+	public static Set<String> externalImageSources(String doc) {
+		Set<String> sources = new java.util.LinkedHashSet<>();
+		if (doc == null || !doc.contains("\"image\"") || !doc.contains("http")) return sources;
+		JsonNode document;
+		try {
+			document = MAPPER.readTree(doc);
+		}
+		catch (JsonProcessingException unreadable) {
+			return sources;
+		}
+		List<JsonNode> work = new ArrayList<>();
+		work.add(document.path("root"));
+		int nodes = 0;
+		while (!work.isEmpty() && ++nodes <= LexicalJson.MAX_NODES) {
+			JsonNode node = work.removeLast();
+			if ("image".equals(node.path("type").asText("")) && isExternal(node)) {
+				sources.add(node.path("src").asText("").strip());
+			}
+			JsonNode caption = node.path("caption").path("editorState").path("root");
+			if (caption.isObject()) work.add(caption);
+			JsonNode children = node.get("children");
+			if (children != null && children.isArray()) {
+				for (int i = children.size() - 1; i >= 0; i--) work.add(children.get(i));
+			}
+		}
+		return sources;
+	}
+
 	private static boolean hasLayoutOrExternalImage(JsonNode document) {
 		List<JsonNode> work = new ArrayList<>();
 		work.add(document.path("root"));
@@ -207,10 +240,23 @@ public final class LegacyDocs {
 
 		private String source;
 		private String projection;
+		private String imagesOf;
+		private boolean hasExternalImages;
+
+		/** Whether [stored] shows an external image. */
+		public boolean hasExternalImages(String stored) {
+			if (stored == null) return false;
+			if (stored != imagesOf) {
+				hasExternalImages = !externalImageSources(stored).isEmpty();
+				imagesOf = stored;
+			}
+			return hasExternalImages;
+		}
 
 		/** The legacy projection of [stored]. */
 		public String legacy(String stored) {
 			if (stored == null) return null;
+			// The same instance is the same document: an entity's field only changes by assignment.
 			if (stored != source) {
 				projection = project(stored);
 				source = stored;

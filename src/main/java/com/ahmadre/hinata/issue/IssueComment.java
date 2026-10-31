@@ -101,8 +101,45 @@ public class IssueComment {
 	 */
 	private String text;
 
-	/** The Lexical document — the source of truth for a text comment. */
+	/**
+	 * The Lexical document — the source of truth for a text comment. Clients get it in two forms
+	 * (HIN-181), as an issue's description: {@code textDoc} the legacy projection, and
+	 * {@code textLayoutDoc} the full document when it differs.
+	 */
+	@lombok.Getter(lombok.AccessLevel.NONE)
 	private String textDoc;
+
+	/** Both client forms of {@link #textDoc}, drawn once per response. Not persisted. */
+	@Transient
+	@JsonIgnore
+	@lombok.Getter(lombok.AccessLevel.NONE)
+	@lombok.Setter(lombok.AccessLevel.NONE)
+	@lombok.EqualsAndHashCode.Exclude
+	@lombok.ToString.Exclude
+	private com.ahmadre.hinata.richtext.LegacyDocs.Memo textForms;
+
+	/** The stored document; see {@link #textDocForClients()} for what clients get. */
+	@JsonIgnore
+	public String getTextDoc() {
+		return textDoc;
+	}
+
+	/** The comment as {@code textDoc} goes out: readable by an app published before HIN-181. */
+	@com.fasterxml.jackson.annotation.JsonProperty("textDoc")
+	public String textDocForClients() {
+		return forms().legacy(textDoc);
+	}
+
+	/** The full document when it differs from {@code textDoc}, else null (HIN-181). */
+	@com.fasterxml.jackson.annotation.JsonProperty("textLayoutDoc")
+	public String textLayoutDoc() {
+		return forms().layout(textDoc);
+	}
+
+	private com.ahmadre.hinata.richtext.LegacyDocs.Memo forms() {
+		if (textForms == null) textForms = new com.ahmadre.hinata.richtext.LegacyDocs.Memo();
+		return textForms;
+	}
 
 	/** Present only for {@link Type#VOICE}. */
 	private Voice voice;
