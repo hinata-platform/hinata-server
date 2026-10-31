@@ -127,13 +127,14 @@ public class IssueComment {
 	/** The comment as {@code textDoc} goes out: readable by an app published before HIN-181. */
 	@com.fasterxml.jackson.annotation.JsonProperty("textDoc")
 	public String textDocForClients() {
-		return forms().legacy(textDoc);
+		return forms().forClient(textDoc);
 	}
 
 	/** The full document when it differs from {@code textDoc}, else null (HIN-181). */
 	@com.fasterxml.jackson.annotation.JsonProperty("textLayoutDoc")
+	@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
 	public String textLayoutDoc() {
-		return forms().layout(textDoc);
+		return forms().layoutForClient(textDoc);
 	}
 
 	private com.ahmadre.hinata.richtext.LegacyDocs.Memo forms() {
