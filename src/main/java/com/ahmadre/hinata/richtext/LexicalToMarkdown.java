@@ -139,6 +139,9 @@ public final class LexicalToMarkdown {
 			case "table" -> table(node, depth, budget);
 			case "callout" -> callout(node, depth, budget);
 			case "image" -> image(node);
+			// A mail's columns (HIN-181) read one after the other: a container is its items,
+			// an item is its blocks.
+			case "layout-container", "layout-item" -> blocks(node, depth + 1, budget);
 			default -> unknownBlock(node, depth, budget);
 		};
 	}
