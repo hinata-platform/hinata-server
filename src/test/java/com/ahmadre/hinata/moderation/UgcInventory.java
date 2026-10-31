@@ -826,6 +826,8 @@ final class UgcInventory {
 			entry("users.title", content(ContentKind.PERSON)),
 			entry("users.totpPendingSecret", system()),
 			entry("users.totpSecret", system()),
+			// A domain a person trusts with images (HIN-181): theirs alone, shown to nobody else.
+			entry("users.trustedImageSenders.domain", system()),
 			entry("users.username", content(ContentKind.PERSON)),
 			entry("work_items.activityType", reportedAsOther("time tracking and absences: seen by the person and those responsible for them")),
 			entry("work_items.calendarRef.recurrenceId", system()),
