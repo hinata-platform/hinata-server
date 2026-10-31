@@ -133,6 +133,28 @@ class ExternalImageServiceTest {
 	}
 
 	@Test
+	void waitingForAnotherReadersFetchCountsAgainstTheWaitersOwnLimit() throws Exception {
+		async(sources.getFirst(), user("starter"));
+		awaitCalls(1);
+		User waiter = user("waiter");
+		for (int i = 0; i < 4; i++) async(sources.getFirst(), waiter);
+		Thread.sleep(200);
+
+		assertThatThrownBy(() -> service.load("i1", sources.getFirst(), waiter))
+				.isInstanceOfSatisfying(ApiException.class, ex -> assertThat(ex.getStatus().value()).isEqualTo(429));
+	}
+
+	@Test
+	void aWaiterGivesUpAfterItsTime() throws Exception {
+		service.waitTimeout(java.time.Duration.ofMillis(200));
+		async(sources.getFirst(), user("starter"));
+		awaitCalls(1);
+
+		assertThatThrownBy(() -> service.load("i1", sources.getFirst(), user("waiter")))
+				.isInstanceOfSatisfying(ApiException.class, ex -> assertThat(ex.getStatus().value()).isEqualTo(504));
+	}
+
+	@Test
 	void aFailedFetchIsRememberedAndNotRepeated() {
 		fetcher.release.countDown();
 		fetcher.failure = ApiException.badRequest("error.media.notAnImage");

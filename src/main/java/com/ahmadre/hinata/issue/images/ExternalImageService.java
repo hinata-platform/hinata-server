@@ -21,7 +21,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -57,6 +59,9 @@ public class ExternalImageService {
 	/** How long a failed fetch answers for its address without asking again. */
 	static final Duration FAILURE_TTL = Duration.ofMinutes(5);
 
+	/** How long a request waits for the fetch another one runs for the same address. */
+	static final Duration WAIT_TIMEOUT = Duration.ofSeconds(10);
+
 	/** Failures and issue versions remembered. */
 	private static final int REMEMBERED = 1024;
 
@@ -80,6 +85,7 @@ public class ExternalImageService {
 	private final Map<String, CompletableFuture<ExternalImage>> inFlight = new ConcurrentHashMap<>();
 	private final Map<String, Failure> failures = lru();
 	private final Map<String, Set<String>> allowed = lru();
+	private volatile Duration waitTimeout = WAIT_TIMEOUT;
 
 	/** An image as it goes out. */
 	public record ExternalImage(byte[] data, String contentType) {
@@ -108,7 +114,7 @@ public class ExternalImageService {
 		if (failure != null && failure.until() - System.nanoTime() > 0) throw failure.error();
 		CompletableFuture<ExternalImage> mine = new CompletableFuture<>();
 		CompletableFuture<ExternalImage> other = inFlight.putIfAbsent(address, mine);
-		if (other != null) return await(other);
+		if (other != null) return await(other, user);
 		try {
 			ExternalImage image = fetch(address, user);
 			cache.put(address, image);
@@ -127,11 +133,7 @@ public class ExternalImageService {
 	/** The fetch of [address] for [user], within their budget and the server's. */
 	private ExternalImage fetch(String address, User user) {
 		consume(user);
-		AtomicInteger own = running.computeIfAbsent(user.getId(), id -> new AtomicInteger());
-		if (own.incrementAndGet() > FETCHES_PER_PERSON) {
-			release(user, own);
-			throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "error.rateLimited");
-		}
+		AtomicInteger own = takeSlot(user);
 		try {
 			if (!fetching.tryAcquire()) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "error.externalImage.busy");
 			try {
@@ -152,19 +154,54 @@ public class ExternalImageService {
 		}
 	}
 
+	/**
+	 * One of [user]'s {@value #FETCHES_PER_PERSON} places: a fetch of their own or a wait for one
+	 * another reader started, each holds a request thread alike.
+	 *
+	 * @throws ApiException 429 when they hold all of them
+	 */
+	private AtomicInteger takeSlot(User user) {
+		AtomicInteger own = running.computeIfAbsent(user.getId(), id -> new AtomicInteger());
+		if (own.incrementAndGet() > FETCHES_PER_PERSON) {
+			release(user, own);
+			throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "error.rateLimited");
+		}
+		return own;
+	}
+
 	private void release(User user, AtomicInteger own) {
 		if (own.decrementAndGet() <= 0) running.remove(user.getId(), own);
 	}
 
-	/** The outcome of a fetch another request is running for the same address. */
-	private static ExternalImage await(CompletableFuture<ExternalImage> other) {
+	/**
+	 * The outcome of a fetch another request is running for the same address, waited for in one
+	 * of [user]'s places and for at most {@link #waitTimeout}: 504 past it. The other fetch goes
+	 * on for whoever else waits.
+	 */
+	private ExternalImage await(CompletableFuture<ExternalImage> other, User user) {
+		AtomicInteger own = takeSlot(user);
 		try {
-			return other.join();
+			return other.get(waitTimeout.toNanos(), TimeUnit.NANOSECONDS);
 		}
-		catch (CompletionException ex) {
-			if (ex.getCause() instanceof RuntimeException cause) throw cause;
-			throw ex;
+		catch (TimeoutException slow) {
+			throw new ApiException(HttpStatus.GATEWAY_TIMEOUT, "error.media.fetchFailed");
 		}
+		catch (InterruptedException interrupted) {
+			Thread.currentThread().interrupt();
+			throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "error.externalImage.busy");
+		}
+		catch (ExecutionException failed) {
+			if (failed.getCause() instanceof RuntimeException cause) throw cause;
+			throw new ApiException(HttpStatus.BAD_GATEWAY, "error.media.fetchFailed");
+		}
+		finally {
+			release(user, own);
+		}
+	}
+
+	/** For tests: how long a request waits for a fetch another one runs. */
+	void waitTimeout(Duration timeout) {
+		this.waitTimeout = timeout;
 	}
 
 	/**
