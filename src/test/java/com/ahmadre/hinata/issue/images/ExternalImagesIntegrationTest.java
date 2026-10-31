@@ -218,6 +218,22 @@ class ExternalImagesIntegrationTest {
 	}
 
 	@Test
+	void trustGoesOutWhereverOneIssueGoesBackAndIsLeftOutWhereItWasNotWorkedOut() throws Exception {
+		send("PUT", "/api/v1/me/trusted-image-senders/vodafone.com", member);
+
+		JsonNode archived = JSON.readTree(send("POST", "/api/v1/issues/" + issue.getId() + "/archive", member).body());
+		JsonNode unarchived = JSON.readTree(send("POST", "/api/v1/issues/" + issue.getId() + "/unarchive", member).body());
+		HttpResponse<String> cloned = send("POST", "/api/v1/issues/" + issue.getId() + "/clone", member, "{\"title\":\"Kopie\"}");
+		JsonNode list = JSON.readTree(get("/api/v1/issues?projectId=" + issue.getProjectId(), member).body());
+
+		assertThat(archived.path("externalImagesTrusted").asBoolean()).isTrue();
+		assertThat(unarchived.path("externalImagesTrusted").asBoolean()).isTrue();
+		assertThat(cloned.statusCode()).as(cloned.body()).isEqualTo(201);
+		assertThat(JSON.readTree(cloned.body()).has("externalImagesTrusted")).as("worked out for the clone").isTrue();
+		assertThat(list.path("content").get(0).has("externalImagesTrusted")).as("not worked out for a list").isFalse();
+	}
+
+	@Test
 	void anOldAppSendingBackTheProjectionLeavesTheLayoutAlone() throws Exception {
 		String legacy = LegacyDocs.project(layoutDoc);
 		String update = JSON.createObjectNode().put("descriptionDoc", legacy).put("title", "Deine eSIM (gelesen)").toString();

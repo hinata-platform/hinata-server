@@ -286,7 +286,8 @@ public class IssueController {
 				.estimateMinutes(request.estimateMinutes())
 				.storyPoints(request.storyPoints())
 				.build();
-		return issueService.create(issue, currentUser.require());
+		User user = currentUser.require();
+		return IssueService.withImageTrust(issueService.create(issue, user), user);
 	}
 
 	/**
@@ -303,7 +304,8 @@ public class IssueController {
 				Boolean.TRUE.equals(request.includeAttachments()),
 				Boolean.TRUE.equals(request.includeLinks()),
 				Boolean.TRUE.equals(request.includeSprint()));
-		return issueCloneService.clone(id, options, currentUser.require());
+		User user = currentUser.require();
+		return IssueService.withImageTrust(issueCloneService.clone(id, options, user), user);
 	}
 
 	@PatchMapping("/{id}")
@@ -563,13 +565,15 @@ public class IssueController {
 	/** Soft delete — any project member may archive an issue. */
 	@PostMapping("/{id}/archive")
 	public Issue archive(@PathVariable String id) {
-		return issueService.setArchived(id, true, currentUser.require());
+		User user = currentUser.require();
+		return IssueService.withImageTrust(issueService.setArchived(id, true, user), user);
 	}
 
 	/** Restores an archived issue (and its archived sub-tasks). */
 	@PostMapping("/{id}/unarchive")
 	public Issue unarchive(@PathVariable String id) {
-		return issueService.setArchived(id, false, currentUser.require());
+		User user = currentUser.require();
+		return IssueService.withImageTrust(issueService.setArchived(id, false, user), user);
 	}
 
 	/**
