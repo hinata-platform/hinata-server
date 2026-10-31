@@ -8,6 +8,9 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.notification.NotificationService;
 import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectService;
+import com.ahmadre.hinata.richtext.ExternalImages;
+import com.ahmadre.hinata.richtext.LexicalNodes;
+import com.ahmadre.hinata.richtext.MarkdownToLexical;
 import com.ahmadre.hinata.richtext.RichText;
 import com.ahmadre.hinata.richtext.RichTextService;
 import com.ahmadre.hinata.richtext.TextCheck;
@@ -31,6 +34,9 @@ import jakarta.mail.Store;
 import jakarta.mail.internet.ContentType;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeUtility;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.MessageSource;
@@ -148,9 +154,8 @@ public class EmailIngestService {
 			log.info("Skipping already-ingested message {}", messageId);
 			return; // caller still sets SEEN
 		}
-		String body = bodyOf(message);
-		// An e-mail body arrives as markdown (HtmlToMarkdown); storage is Lexical.
-		RichText ingested = richText.fromMarkdown(buildDescription(from, body, List.of()));
+		MailBody body = bodyOf(message);
+		RichText ingested = description(from, body, List.of());
 		String reporterId = resolveReporterId(from);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
@@ -191,8 +196,7 @@ public class EmailIngestService {
 				reporterId != null ? " (author resolved to user " + reporterId + ")" : "");
 		List<Issue.RefusedAttachment> refused = attachFiles(message, created.getId());
 		if (!refused.isEmpty()) {
-			issues.noteRefusedAttachments(created.getId(), refused,
-					richText.fromMarkdown(buildDescription(from, body, refused)));
+			issues.noteRefusedAttachments(created.getId(), refused, description(from, body, refused));
 		}
 		notifyMembers(created, projectId, from, reporterId);
 	}
@@ -215,25 +219,98 @@ public class EmailIngestService {
 		return users.findActiveByEmail(from).map(User::getId).orElse(null);
 	}
 
-	/** The parsed (plain or HTML→Markdown) body of [message], as much of it as a description keeps. */
-	private String bodyOf(Message message) throws Exception {
-		return truncate(textOf(message), 20000);
+	/** Most characters of a plain-text or markdown body a description keeps. */
+	private static final int MAX_TEXT_BODY = 20000;
+
+	/** A converter's own mapper, for the same reason {@code RichTextService} has one. */
+	private static final ObjectMapper MAPPER = new ObjectMapper();
+	private static final LexicalNodes NODES = new LexicalNodes(MAPPER);
+	private static final HtmlToLexical HTML = new HtmlToLexical(MAPPER);
+	private static final MarkdownToLexical MARKDOWN = new MarkdownToLexical(MAPPER);
+
+	/**
+	 * The body of a message: its {@code text/plain} and its {@code text/html} part, each null
+	 * when the mail has none.
+	 */
+	record MailBody(String plain, String html) {
 	}
 
-	/** The description body written for an ingested message: an attribution header,
-	 * the mail's [body], and a line for every attachment the upload gate refused. */
-	private String buildDescription(String from, String body, List<Issue.RefusedAttachment> refused) {
+	private MailBody bodyOf(Message message) throws Exception {
+		BodyParts parts = new BodyParts();
+		collectBody(message, parts);
+		String plain = parts.plain == null || parts.plain.isBlank() ? null : parts.plain;
+		String html = parts.html == null || parts.html.isBlank() ? null : parts.html;
+		return new MailBody(plain, html);
+	}
+
+	/**
+	 * The description of an ingested message: an attribution header, the mail's body, and a line
+	 * for every attachment the upload gate refused.
+	 *
+	 * <p>An HTML mail keeps its layout (HIN-181, {@link HtmlToLexical}), preferred over a plain
+	 * part the same mail carries, since that is the mail as its sender designed it. When the
+	 * layout cannot be kept, the conversion failing or the document past the bounds a stored text
+	 * keeps, the mail goes the markdown way as before: its plain part, or its HTML as markdown.
+	 * External images stay images either way; readers load them through the issue's proxy.
+	 */
+	RichText description(String from, MailBody body, List<Issue.RefusedAttachment> refused) {
+		if (body.html() != null) {
+			try {
+				ArrayNode blocks = header(from);
+				HTML.convert(body.html()).forEach(blocks::add);
+				refusedLines(refused).forEach(blocks::add);
+				return richText.fromDocument(NODES.document(blocks), ExternalImages.KEEP);
+			}
+			catch (IllegalArgumentException | ApiException notKept) {
+				log.info("Mail body from {} kept without its layout: {}", from, notKept.getMessage());
+			}
+		}
+		String text = body.plain() != null ? body.plain()
+				: body.html() != null ? HtmlToMarkdown.convert(body.html()) : "";
+		return richText.fromMarkdown(markdownDescription(from, truncate(text, MAX_TEXT_BODY), refused),
+				ExternalImages.KEEP);
+	}
+
+	/** "Created from e-mail by <b>sender</b>" and a rule under it, as the markdown spells them. */
+	private static ArrayNode header(String from) {
+		ArrayNode line = NODES.array();
+		line.add(NODES.text(DESCRIPTION_HEADER, 0));
+		line.add(NODES.text(from, LexicalNodes.BOLD));
+		ArrayNode blocks = NODES.array();
+		blocks.add(NODES.paragraph(line, 0));
+		blocks.add(NODES.simple("horizontalrule"));
+		return blocks;
+	}
+
+	/** One paragraph for every refused attachment, from the same markdown line as before. */
+	private ArrayNode refusedLines(List<Issue.RefusedAttachment> refused) {
+		ArrayNode blocks = NODES.array();
+		for (String line : refusedMarkdown(refused)) {
+			MARKDOWN.convert(line).path("root").path("children").forEach(blocks::add);
+		}
+		return blocks;
+	}
+
+	private String markdownDescription(String from, String body, List<Issue.RefusedAttachment> refused) {
 		StringBuilder description = new StringBuilder(DESCRIPTION_HEADER).append("**").append(from)
 				.append("**\n\n---\n\n").append(body);
+		for (String line : refusedMarkdown(refused)) {
+			description.append("\n\n").append(line);
+		}
+		return description.toString();
+	}
+
+	private List<String> refusedMarkdown(List<Issue.RefusedAttachment> refused) {
 		Locale locale = settings.instanceLocale();
+		List<String> lines = new ArrayList<>();
 		for (Issue.RefusedAttachment file : refused) {
 			UploadRefusal refusal = UploadRefusal.of(file.reason());
 			String reason = messages.getMessage(refusal.messageKey(),
 					gate.argumentsOf(refusal, UploadKind.MAIL_ATTACHMENT), locale);
-			description.append("\n\n").append(messages.getMessage("ingest.attachmentRefused",
+			lines.add(messages.getMessage("ingest.attachmentRefused",
 					new Object[] { codeSpan(file.fileName()), reason }, locale));
 		}
-		return description.toString();
+		return lines;
 	}
 
 	/**
@@ -345,12 +422,12 @@ public class EmailIngestService {
 					return Outcome.SKIPPED; // foreign project or a manually edited body
 				}
 				// The refused attachments as they were noted at ingest: none of their bytes is read again.
-				RichText rebuilt = richText.fromMarkdown(buildDescription(senderOf(message), bodyOf(message),
-						issue.getRefusedAttachments() == null ? List.of() : issue.getRefusedAttachments()));
-				// Compare the derived plain text, not the document: re-converting the
-				// same body must read as "already current" even if the converter's
-				// output shifts between releases.
-				if (rebuilt.text().equals(issue.getDescription())) {
+				RichText rebuilt = description(senderOf(message), bodyOf(message),
+						issue.getRefusedAttachments() == null ? List.of() : issue.getRefusedAttachments());
+				// Compare the documents: a reprocess exists to rebuild a description with the
+				// current converter (HIN-181 gives an HTML mail its layout), and the words of a
+				// mail with and without its layout may well be the same.
+				if (sameDocument(rebuilt.doc(), issue.getDescriptionDoc())) {
 					return Outcome.SKIPPED; // already current
 				}
 				issues.replaceIngestedDescription(issue.getId(), rebuilt);
@@ -368,6 +445,18 @@ public class EmailIngestService {
 			log.warn("Reprocessing a message in folder {} failed: {}",
 					config.getFolder(), ex.getMessage());
 			return Outcome.SKIPPED;
+		}
+	}
+
+	private static boolean sameDocument(String a, String b) {
+		if (a == null || b == null) return a == b;
+		try {
+			JsonNode left = MAPPER.readTree(a);
+			JsonNode right = MAPPER.readTree(b);
+			return left.equals(right);
+		}
+		catch (Exception unreadable) {
+			return false;
 		}
 	}
 
@@ -552,25 +641,6 @@ public class EmailIngestService {
 		catch (Exception ex) {
 			return "application/octet-stream";
 		}
-	}
-
-	/**
-	 * Extracts a message body suitable for a Markdown description. Prefers the
-	 * {@code text/plain} alternative; when a mail carries only {@code text/html}
-	 * (single-part or multipart) the HTML is converted to clean Markdown rather than
-	 * dumped raw or naively de-tagged. Walks the full MIME tree so a body nested in
-	 * {@code multipart/mixed > multipart/alternative} is still found.
-	 */
-	private String textOf(Message message) throws Exception {
-		BodyParts body = new BodyParts();
-		collectBody(message, body);
-		if (body.plain != null && !body.plain.isBlank()) {
-			return body.plain;
-		}
-		if (body.html != null && !body.html.isBlank()) {
-			return HtmlToMarkdown.convert(body.html);
-		}
-		return "";
 	}
 
 	/**

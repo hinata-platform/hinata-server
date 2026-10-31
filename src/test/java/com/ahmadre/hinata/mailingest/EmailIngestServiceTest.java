@@ -174,4 +174,86 @@ class EmailIngestServiceTest {
 		verify(notifications).notifyIssueIngested(any(), recipients.capture(), anyString());
 		assertThat(recipients.getValue()).containsExactlyInAnyOrder("u-author", "u-lead");
 	}
+
+	// --- HIN-181: an HTML mail keeps its layout ---------------------------------
+
+	/** A mail with a plain and an HTML part, as most senders send one. */
+	private MimeMessage alternative(String plain, String html) throws Exception {
+		String raw = "From: shop@kundenservice.example.com\r\n"
+				+ "Subject: Deine eSIM\r\n"
+				+ "Message-ID: <m2@example.org>\r\n"
+				+ "MIME-Version: 1.0\r\n"
+				+ "Content-Type: multipart/alternative; boundary=b1\r\n\r\n"
+				+ "--b1\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + plain + "\r\n"
+				+ "--b1\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + html + "\r\n"
+				+ "--b1--\r\n";
+		return new MimeMessage(Session.getInstance(new Properties()),
+				new ByteArrayInputStream(raw.getBytes(StandardCharsets.UTF_8)));
+	}
+
+	private Issue ingested(MimeMessage message) throws Exception {
+		service.createIssueFrom(message, connection());
+		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
+		verify(issues).create(created.capture(), isNull());
+		return created.getValue();
+	}
+
+	@Test
+	void anHtmlMailKeepsItsLayoutUnderTheHeader() throws Exception {
+		String html = "<table width=\"600\" align=\"center\" bgcolor=\"#ffffff\"><tr>"
+				+ "<td width=\"280\"><img src=\"https://mail.example.com/step.png\" width=\"280\" height=\"180\"></td>"
+				+ "<td>Schritt eins</td></tr></table>";
+
+		Issue issue = ingested(alternative("Schritt eins (Textfassung)", html));
+
+		assertThat(issue.getDescription()).startsWith("Created from e-mail by shop@kundenservice.example.com\n")
+				.contains("Schritt eins").doesNotContain("Textfassung");
+		var document = new com.fasterxml.jackson.databind.ObjectMapper().readTree(issue.getDescriptionDoc());
+		var blocks = document.path("root").path("children");
+		assertThat(blocks.get(0).path("children").get(1).path("format").asInt()).as("sender in bold").isEqualTo(1);
+		assertThat(blocks.get(1).path("type").asText()).isEqualTo("horizontalrule");
+		assertThat(issue.getDescriptionDoc()).contains("\"templateColumns\":\"280px 1fr\"")
+				.contains("https://mail.example.com/step.png");
+	}
+
+	@Test
+	void anHtmlMailPastTheBoundsGoesTheMarkdownWay() throws Exception {
+		String html = "<p>" + "Zeile<br>".repeat(25_000) + "</p>";
+
+		Issue issue = ingested(alternative("Die Textfassung", html));
+
+		assertThat(issue.getDescription()).contains("Die Textfassung");
+		assertThat(issue.getDescriptionDoc()).doesNotContain("layout-container");
+	}
+
+	@Test
+	void reprocessGivesAnOldDescriptionItsLayout() throws Exception {
+		String html = "<table><tr><td>Links</td><td>Rechts</td></tr></table>";
+		RichTextService markdownOnly = new RichTextService();
+		var old = markdownOnly.fromMarkdown("Created from e-mail by **shop@kundenservice.example.com**\n\n---\n\nLinks\n\nRechts");
+		Issue stored = Issue.builder().id("i1").projectId("p1").description(old.text()).descriptionDoc(old.doc()).build();
+		when(issues.findByInboundMessageId("<m2@example.org>")).thenReturn(Optional.of(stored));
+
+		EmailIngestService.Outcome outcome = service.reprocessOne(alternative("Links Rechts", html), connection(), false);
+
+		assertThat(outcome).isEqualTo(EmailIngestService.Outcome.UPDATED);
+		ArgumentCaptor<com.ahmadre.hinata.richtext.RichText> rebuilt =
+				ArgumentCaptor.forClass(com.ahmadre.hinata.richtext.RichText.class);
+		verify(issues).replaceIngestedDescription(eq("i1"), rebuilt.capture());
+		assertThat(rebuilt.getValue().doc()).contains("layout-container");
+	}
+
+	@Test
+	void reprocessLeavesADescriptionAloneThatIsAlreadyCurrent() throws Exception {
+		String html = "<table><tr><td>Links</td><td>Rechts</td></tr></table>";
+		MimeMessage message = alternative("Links Rechts", html);
+		var current = service.description("shop@kundenservice.example.com",
+				new EmailIngestService.MailBody("Links Rechts", html), List.of());
+		Issue stored = Issue.builder().id("i1").projectId("p1").description(current.text())
+				.descriptionDoc(current.doc()).build();
+		when(issues.findByInboundMessageId("<m2@example.org>")).thenReturn(Optional.of(stored));
+
+		assertThat(service.reprocessOne(message, connection(), false)).isEqualTo(EmailIngestService.Outcome.SKIPPED);
+		verify(issues, never()).replaceIngestedDescription(anyString(), any());
+	}
 }
