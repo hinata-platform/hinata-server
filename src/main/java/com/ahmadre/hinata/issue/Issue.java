@@ -472,6 +472,14 @@ public class Issue {
 		 */
 		private String blurHash;
 
+		/**
+		 * True for a PDF that only opens with a password (HIN-180), so a client can mark it in
+		 * the file list before anyone tries to open it. Absent for everything else, including a
+		 * PDF that only carries an owner password: that one opens like any other.
+		 */
+		@JsonInclude(JsonInclude.Include.NON_NULL)
+		private Boolean passwordProtected;
+
 		/** The file moderation removed, under {@code file} (HIN-169); absent otherwise. */
 		@JsonInclude(JsonInclude.Include.NON_NULL)
 		private Map<String, ContentMark> moderation;

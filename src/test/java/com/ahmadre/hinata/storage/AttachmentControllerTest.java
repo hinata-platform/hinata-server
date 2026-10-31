@@ -203,6 +203,77 @@ class AttachmentControllerTest {
 		verify(store).setBlurHash(eq("i1"), eq("a1"), anyString());
 	}
 
+	private static Issue.Attachment pdf(String id, String objectKey) {
+		Issue.Attachment attachment = attachment(id, "report.pdf", objectKey);
+		attachment.setContentType("application/pdf");
+		return attachment;
+	}
+
+	private void storedPdf(String objectKey, String fixture) throws Exception {
+		when(storage.getObject(ImagePreviewService.attachmentThumbnailKey("a1")))
+				.thenReturn(Optional.empty());
+		when(storage.getObject(objectKey)).thenReturn(Optional.of(new StorageService.StoredObject(
+				PdfPageRendererTest.fixture(fixture), "application/pdf")));
+	}
+
+	@Test
+	void uploadOfAPdfThatNeedsAPasswordMarksIt() throws Exception {
+		byte[] bytes = PdfPageRendererTest.fixture("aes_256");
+		issueWith();
+		when(storage.upload(any(), anyString())).thenReturn(
+				new StorageService.Stored("k1", "application/pdf", bytes.length, bytes));
+		when(store.add(anyString(), any())).thenAnswer(call -> Issue.builder().id("i1").build());
+		var captor = org.mockito.ArgumentCaptor.forClass(Issue.Attachment.class);
+
+		controller.upload("i1", new org.springframework.mock.web.MockMultipartFile(
+				"file", "secret.pdf", "application/pdf", bytes));
+
+		verify(store).add(eq("i1"), captor.capture());
+		assertThat(captor.getValue().getPasswordProtected()).isTrue();
+		assertThat(captor.getValue().getBlurHash()).isNull();
+	}
+
+	@Test
+	void uploadOfAPdfWithOnlyAnOwnerPasswordIsNotMarked() throws Exception {
+		byte[] bytes = PdfPageRendererTest.fixture("owner_only");
+		issueWith();
+		when(storage.upload(any(), anyString())).thenReturn(
+				new StorageService.Stored("k1", "application/pdf", bytes.length, bytes));
+		when(store.add(anyString(), any())).thenAnswer(call -> Issue.builder().id("i1").build());
+		var captor = org.mockito.ArgumentCaptor.forClass(Issue.Attachment.class);
+
+		controller.upload("i1", new org.springframework.mock.web.MockMultipartFile(
+				"file", "form.pdf", "application/pdf", bytes));
+
+		verify(store).add(eq("i1"), captor.capture());
+		assertThat(captor.getValue().getPasswordProtected()).isNull();
+		assertThat(captor.getValue().getBlurHash()).isNotNull();
+	}
+
+	@Test
+	void thumbnailOfAPdfThatNeedsAPasswordIsNotTheWholeFile() throws Exception {
+		// Before HIN-180 the original went out as the "thumbnail": a whole document, to every
+		// tile, that no image decoder could read. Now it is a 404, and an older attachment
+		// learns on the way that it needs a password.
+		issueWith(pdf("a1", "k1"));
+		storedPdf("k1", "aes_256");
+
+		assertThatThrownBy(() -> controller.thumbnail("i1", "a1"))
+				.isInstanceOf(ApiException.class);
+		verify(store).setPasswordProtected("i1", "a1");
+	}
+
+	@Test
+	void thumbnailOfAnOpenPdfIsItsFirstPage() throws Exception {
+		issueWith(pdf("a1", "k1"));
+		storedPdf("k1", "owner_only");
+
+		ResponseEntity<byte[]> response = controller.thumbnail("i1", "a1");
+
+		assertThat(response.getHeaders().getContentType()).hasToString("image/jpeg");
+		verify(store, never()).setPasswordProtected(anyString(), anyString());
+	}
+
 	@Test
 	void thumbnailOfANonImageIsNotFound() {
 		issueWith(attachment("a1", "report.pdf", "k1"));
