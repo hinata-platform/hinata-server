@@ -476,4 +476,14 @@ class MarkdownToLexicalTest {
 
 		assertThat(code.path("text").asText()).isEqualTo("a \\* b");
 	}
+
+	@Test
+	void aReferenceToALoneSurrogateIsTheReplacementCharacter() {
+		// A lone surrogate is not text: stored, it turns into an invalid string in BSON and JSON.
+		JsonNode text = block("a &#xD800; b").path("children");
+
+		StringBuilder joined = new StringBuilder();
+		for (JsonNode child : text) joined.append(child.path("text").asText());
+		assertThat(joined.toString()).isEqualTo("a \uFFFD b");
+	}
 }
