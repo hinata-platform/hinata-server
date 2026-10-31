@@ -93,7 +93,7 @@ public final class IssueChangeDiff {
 	 */
 	public static final List<String> EXCLUDED = List.of(
 			"id", "numberInProject", "readableId", "formerReadableIds", "descriptionDoc",
-			"assigneeId", "reporterId", "reporterEmail", "inboundMessageId", "inboundSubject",
+			"assigneeId", "reporterId", "reporterEmail", "senderVerified", "inboundMessageId", "inboundSubject",
 			"ingestConnectionId", "watcherIds", "participantIds", "participantMeta", "spentMinutes",
 			"dueReminderFor", "attachments",
 			"rank", "resolvedAt", "archivedAt", "createdAt", "updatedAt",

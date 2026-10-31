@@ -179,7 +179,11 @@ class EmailIngestServiceTest {
 
 	/** A mail with a plain and an HTML part, as most senders send one. */
 	private MimeMessage alternative(String plain, String html) throws Exception {
-		String raw = "From: shop@kundenservice.example.com\r\n"
+		return alternative(plain, html, "");
+	}
+
+	private MimeMessage alternative(String plain, String html, String extraHeaders) throws Exception {
+		String raw = extraHeaders + "From: shop@kundenservice.example.com\r\n"
 				+ "Subject: Deine eSIM\r\n"
 				+ "Message-ID: <m2@example.org>\r\n"
 				+ "MIME-Version: 1.0\r\n"
@@ -255,5 +259,17 @@ class EmailIngestServiceTest {
 
 		assertThat(service.reprocessOne(message, connection(), false)).isEqualTo(EmailIngestService.Outcome.SKIPPED);
 		verify(issues, never()).replaceIngestedDescription(anyString(), any());
+	}
+
+	@Test
+	void anIngestedIssueRecordsWhetherTheReceivingServerVouchedForItsSender() throws Exception {
+		Issue verified = ingested(alternative("x", "<p>x</p>",
+				"Authentication-Results: mx.example.org; dkim=pass header.d=example.com; dmarc=pass\r\n"));
+		assertThat(verified.getSenderVerified()).isTrue();
+	}
+
+	@Test
+	void anIngestedIssueWithoutAVouchIsUnverified() throws Exception {
+		assertThat(ingested(alternative("x", "<p>x</p>")).getSenderVerified()).isFalse();
 	}
 }

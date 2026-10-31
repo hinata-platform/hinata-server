@@ -549,6 +549,12 @@ public class IssueService {
 	 * [description], which says so, unless the text check refuses that (see
 	 * {@link #replaceIngestedDescription}).
 	 */
+	/** Records whether the receiving server vouched for the sender of ingested issue [id] (HIN-181). */
+	public void noteSenderVerified(String id, boolean verified) {
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), Update.update("senderVerified", verified),
+				Issue.class);
+	}
+
 	public void noteRefusedAttachments(String id, List<Issue.RefusedAttachment> refused, RichText description) {
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), Update.update("refusedAttachments", refused),
 				Issue.class);

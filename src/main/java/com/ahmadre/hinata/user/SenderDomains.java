@@ -44,6 +44,16 @@ public final class SenderDomains {
 		return ascii;
 	}
 
+	/**
+	 * Whether [domain], normalised, is a public suffix such as {@code com}, {@code co.uk} or
+	 * {@code github.io}: a name under which anybody registers, so trusting it would trust everyone
+	 * below it. A freemail domain such as {@code gmail.com} is not one.
+	 */
+	public static boolean isPublicSuffix(String domain) {
+		if (domain == null || !com.google.common.net.InternetDomainName.isValid(domain)) return false;
+		return com.google.common.net.InternetDomainName.from(domain).isPublicSuffix();
+	}
+
 	/** The domain of a mail address, normalised, or null. */
 	public static String ofAddress(String address) {
 		if (address == null) return null;

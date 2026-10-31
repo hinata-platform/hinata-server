@@ -244,6 +244,15 @@ public class Issue {
 	private String ingestConnectionId;
 
 	/**
+	 * Whether the server that received the mail this issue came from vouched for its sender
+	 * (HIN-181): DMARC passed, or a DKIM signature aligned with the {@code From} domain. Only then
+	 * is that domain offered to readers to trust with images. Null for issues ingested before,
+	 * and for every other issue: not verified.
+	 */
+	@JsonIgnore
+	private Boolean senderVerified;
+
+	/**
 	 * The attachments of the mail this issue came from that the upload gate refused (HIN-177), by
 	 * the sender's name and the gate's reason. The description's lines about them are rebuilt from
 	 * here, so reading the mailbox again needs none of the attachments' bytes.
@@ -473,12 +482,16 @@ public class Issue {
 	}
 
 	/**
-	 * The domain of the mail this issue came from, when its description shows external images
-	 * (HIN-181): what a reader is offered to trust. Null for any other issue.
+	 * The domain of the mail this issue came from, when its description shows external images and
+	 * the receiving server vouched for its sender (HIN-181): what a reader is offered to trust.
+	 * Null for any other issue; a reader may then still load the images once.
 	 */
 	@JsonProperty("externalImageSender")
 	public String externalImageSender() {
-		if (reporterEmail == null || !forms().hasExternalImages(descriptionDoc)) return null;
+		if (reporterEmail == null || !Boolean.TRUE.equals(senderVerified)
+				|| !forms().hasExternalImages(descriptionDoc)) {
+			return null;
+		}
 		return com.ahmadre.hinata.user.SenderDomains.ofAddress(reporterEmail);
 	}
 

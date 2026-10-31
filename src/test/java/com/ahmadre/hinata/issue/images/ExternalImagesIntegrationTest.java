@@ -106,7 +106,7 @@ class ExternalImagesIntegrationTest {
 						LayoutDocs.item(LayoutDocs.paragraph("Schritt eins"))));
 		issue = mongo.insert(Issue.builder().projectId(project.getId()).numberInProject(1).readableId("MAIL-1")
 				.title("Deine eSIM").description("Schritt eins").descriptionDoc(layoutDoc)
-				.reporterEmail("shop@kundenservice.vodafone.com")
+				.reporterEmail("shop@kundenservice.vodafone.com").senderVerified(true)
 				.state(Project.defaultWorkflow().getFirst().getName()).build());
 		mongo.insert(IssueComment.builder().issueId(issue.getId()).authorId(reader.getId())
 				.type(IssueComment.Type.TEXT).text("Antwort").textDoc(LayoutDocs.doc(LayoutDocs.imageParagraph(IN_COMMENT)))
@@ -161,6 +161,26 @@ class ExternalImagesIntegrationTest {
 		assertThat(preflight.statusCode()).isEqualTo(200);
 		assertThat(preflight.headers().firstValue("Access-Control-Allow-Headers").orElse("").toLowerCase())
 				.contains("x-hinata-doc");
+	}
+
+	@Test
+	void anUnverifiedSenderIsNotOfferedForTrust() throws Exception {
+		mongo.updateFirst(org.springframework.data.mongodb.core.query.Query.query(
+				org.springframework.data.mongodb.core.query.Criteria.where("_id").is(issue.getId())),
+				new org.springframework.data.mongodb.core.query.Update().unset("senderVerified"), Issue.class);
+
+		JsonNode body = JSON.readTree(get("/api/v1/issues/" + issue.getId(), member).body());
+
+		assertThat(body.path("externalImageSender").isNull()).isTrue();
+		assertThat(body.path("descriptionLayoutDoc").asText()).contains(HEADER);
+	}
+
+	@Test
+	void aPublicSuffixCannotBeTrustedButAFreemailDomainCan() throws Exception {
+		assertThat(send("PUT", "/api/v1/me/trusted-image-senders/co.uk", member).statusCode()).isEqualTo(400);
+		assertThat(send("PUT", "/api/v1/me/trusted-image-senders/com", member).statusCode()).isEqualTo(400);
+		assertThat(send("PUT", "/api/v1/me/trusted-image-senders/github.io", member).statusCode()).isEqualTo(400);
+		assertThat(send("PUT", "/api/v1/me/trusted-image-senders/gmail.com", member).statusCode()).isEqualTo(204);
 	}
 
 	@Test

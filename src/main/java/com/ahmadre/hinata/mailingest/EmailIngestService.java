@@ -165,6 +165,7 @@ public class EmailIngestService {
 				.type(Issue.Type.TASK)
 				.reporterId(reporterId)
 				.reporterEmail(from)
+				.senderVerified(SenderVerification.verified(message.getHeader("Authentication-Results"), from))
 				.inboundMessageId(messageId)
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
@@ -427,6 +428,13 @@ public class EmailIngestService {
 				// Compare the documents: a reprocess exists to rebuild a description with the
 				// current converter (HIN-181 gives an HTML mail its layout), and the words of a
 				// mail with and without its layout may well be the same.
+				// Whether its sender was vouched for, as the mail says; issues ingested before
+				// HIN-181 learn it here.
+				boolean verified = SenderVerification.verified(message.getHeader("Authentication-Results"),
+						senderOf(message));
+				if (!Boolean.valueOf(verified).equals(issue.getSenderVerified())) {
+					issues.noteSenderVerified(issue.getId(), verified);
+				}
 				if (sameDocument(rebuilt.doc(), issue.getDescriptionDoc())) {
 					return Outcome.SKIPPED; // already current
 				}
