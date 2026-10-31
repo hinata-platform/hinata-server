@@ -146,17 +146,18 @@ class ExternalImageServiceTest {
 	}
 
 	@Test
-	void anIssuesImagesAreAuthorisedOncePerVersion() {
+	void aDescriptionsImagesAreAuthorisedOncePerVersionAndACommentsOnEveryRequest() {
 		fetcher.release.countDown();
 		String inComment = "https://mail.example.com/img/reply.png";
 		when(mongo.find(any(Query.class), eq(IssueComment.class))).thenReturn(List.of(IssueComment.builder()
 				.issueId("i1").textDoc(LayoutDocs.doc(LayoutDocs.imageParagraph(inComment))).build()));
 
-		for (int i = 0; i < 3; i++) service.load("i1", inComment, user("u" + i));
 		service.load("i1", sources.getFirst(), user("u1"));
 		service.load("i1", sources.get(1), user("u1"));
+		verify(mongo, times(0)).find(any(Query.class), eq(IssueComment.class));
 
-		verify(mongo, times(1)).find(any(Query.class), eq(IssueComment.class));
+		for (int i = 0; i < 3; i++) service.load("i1", inComment, user("u" + i));
+		verify(mongo, times(3)).find(any(Query.class), eq(IssueComment.class));
 	}
 
 	@Test
