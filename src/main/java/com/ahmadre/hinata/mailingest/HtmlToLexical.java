@@ -72,8 +72,10 @@ final class HtmlToLexical {
 	/** A table's width when it names none: the usual mail canvas. */
 	private static final int DEFAULT_TABLE_WIDTH = 600;
 
-	private static final Pattern MIN_WIDTH =
-			Pattern.compile("@media[^{]*min-width\\s*:\\s*(\\d{1,4})px", Pattern.CASE_INSENSITIVE);
+	/** A media query's condition read for its breakpoint: no real one is longer. */
+	private static final int MAX_PRELUDE_CHARS = 200;
+
+	private static final Pattern MIN_WIDTH = Pattern.compile("min-width\\s*:\\s*(\\d{1,4})px", Pattern.CASE_INSENSITIVE);
 
 	/** Text of a data-table cell is short; a layout cell holds paragraphs. */
 	private static final int DATA_CELL_CHARS = 60;
@@ -158,7 +160,7 @@ final class HtmlToLexical {
 			String data = style.data();
 			css.append(data, 0, Math.min(data.length(), MAX_SHEET_CHARS - css.length())).append('\n');
 		}
-		String source = css.toString().replaceAll("(?s)/\\*.*?\\*/", "");
+		String source = withoutComments(css.toString());
 		int rules = 0;
 		int matches = 0;
 		int i = 0;
@@ -744,14 +746,44 @@ final class HtmlToLexical {
 	 * style sheet, {@value #DEFAULT_BREAKPOINT} px (MJML's default) without one.
 	 */
 	private static int breakpoint(Document document) {
+		StringBuilder css = new StringBuilder();
 		for (Element style : document.select("style")) {
-			Matcher matcher = MIN_WIDTH.matcher(style.data());
+			if (css.length() >= MAX_SHEET_CHARS) break;
+			String data = style.data();
+			css.append(data, 0, Math.min(data.length(), MAX_SHEET_CHARS - css.length())).append('\n');
+		}
+		String source = withoutComments(css.toString());
+		String lower = source.toLowerCase(Locale.ROOT);
+		for (int at = lower.indexOf("@media"); at >= 0; at = lower.indexOf("@media", at + 6)) {
+			// The condition up to its brace, read only so far: no regex runs over the rest of the sheet.
+			int end = Math.min(lower.length(), at + MAX_PRELUDE_CHARS);
+			int brace = lower.indexOf('{', at);
+			if (brace >= 0 && brace < end) end = brace;
+			Matcher matcher = MIN_WIDTH.matcher(lower.substring(at, end));
 			if (matcher.find()) {
 				int width = Integer.parseInt(matcher.group(1));
 				if (width > 0 && width <= 2000) return width;
 			}
 		}
 		return DEFAULT_BREAKPOINT;
+	}
+
+	/** [css] without its comments, in one pass; an unclosed comment runs to the end, as in CSS. */
+	static String withoutComments(String css) {
+		StringBuilder out = new StringBuilder(css.length());
+		int i = 0;
+		while (i < css.length()) {
+			int open = css.indexOf("/*", i);
+			if (open < 0) {
+				out.append(css, i, css.length());
+				break;
+			}
+			out.append(css, i, open);
+			int close = css.indexOf("*/", open + 2);
+			if (close < 0) break;
+			i = close + 2;
+		}
+		return out.toString();
 	}
 
 	/**
