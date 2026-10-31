@@ -266,8 +266,10 @@ class AttachmentControllerTest {
 	}
 
 	@Test
-	void uploadOfANonPdfIsNeverCheckedForAPassword() {
-		byte[] bytes = "PK\u0003\u0004 not a pdf".getBytes(StandardCharsets.UTF_8);
+	void uploadOfANonPdfIsNeverCheckedForAPassword() throws Exception {
+		// Encrypted PDF bytes stored as a zip: only the declared type keeps them from being read
+		// and parsed, so a missing gate would flag this one.
+		byte[] bytes = PdfPageRendererTest.fixture("aes_256");
 		issueWith();
 		when(storage.upload(any(), anyString())).thenReturn(
 				new StorageService.Stored("k1", "application/zip", bytes.length, null));

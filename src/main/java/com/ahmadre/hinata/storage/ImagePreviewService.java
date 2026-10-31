@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.awt.image.BufferedImage;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -51,8 +52,12 @@ public class ImagePreviewService {
 		if (contentType == null) {
 			return false;
 		}
-		String type = contentType.toLowerCase();
-		return type.startsWith("image/") || type.startsWith("application/pdf");
+		return contentType.toLowerCase(Locale.ROOT).startsWith("image/") || isPdf(contentType);
+	}
+
+	/** Whether the declared type is a PDF, whatever its case and parameters. */
+	public static boolean isPdf(String contentType) {
+		return contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("application/pdf");
 	}
 
 	/**
