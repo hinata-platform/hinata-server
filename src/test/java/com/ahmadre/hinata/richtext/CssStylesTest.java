@@ -54,6 +54,16 @@ class CssStylesTest {
 	}
 
 	@Test
+	void block_takesAStackBreakpointInPixelsUpToTwoThousand() {
+		assertThat(CssStyles.block("--stack-below:480px")).isEqualTo("--stack-below:480px");
+		assertThat(CssStyles.block("--stack-below:0px")).isEqualTo("--stack-below:0px");
+		for (String refused : new String[] { "--stack-below:2001px", "--stack-below:50%", "--stack-below:30em",
+				"--stack-below:-1px", "--stack-below:480", "--stack-below:var(--x)", "--other:1px" }) {
+			assertThat(CssStyles.block(refused)).as(refused).isEmpty();
+		}
+	}
+
+	@Test
 	void block_staysWithinItsBound() {
 		StringBuilder css = new StringBuilder();
 		for (int i = 0; i < 200; i++) css.append("padding:").append(i).append("px;");

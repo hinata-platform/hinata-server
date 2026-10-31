@@ -269,4 +269,16 @@ class RichTextServiceTest {
 		assertThat(service.fromRequest(LayoutDocs.doc(LayoutDocs.paragraph("neu")), null, stored, "",
 				ExternalImages.KEEP).text()).isEqualTo("neu");
 	}
+
+	@Test
+	void aClientKeepsTheStackBreakpointOfItsColumnsAndNothingLikeIt() {
+		var columns = LayoutDocs.columns("1fr 1fr", LayoutDocs.item(LayoutDocs.paragraph("a")),
+				LayoutDocs.item(LayoutDocs.paragraph("b")));
+		columns.putObject("$").put("style", "--stack-below:480px;--evil:url(x);background-color:#fff");
+
+		RichText text = service.fromLexical(LayoutDocs.doc(columns));
+
+		assertThat(LayoutDocs.read(text.doc()).path("root").path("children").get(0).path("$").path("style").asText())
+				.isEqualTo("--stack-below:480px;background-color:#fff");
+	}
 }
