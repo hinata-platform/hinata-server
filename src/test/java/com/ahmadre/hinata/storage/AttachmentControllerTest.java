@@ -9,9 +9,11 @@ import com.ahmadre.hinata.issue.IssueService;
 import com.ahmadre.hinata.user.User;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -223,9 +225,9 @@ class AttachmentControllerTest {
 		when(storage.upload(any(), anyString())).thenReturn(
 				new StorageService.Stored("k1", "application/pdf", bytes.length, bytes));
 		when(store.add(anyString(), any())).thenAnswer(call -> Issue.builder().id("i1").build());
-		var captor = org.mockito.ArgumentCaptor.forClass(Issue.Attachment.class);
+		var captor = ArgumentCaptor.forClass(Issue.Attachment.class);
 
-		controller.upload("i1", new org.springframework.mock.web.MockMultipartFile(
+		controller.upload("i1", new MockMultipartFile(
 				"file", "secret.pdf", "application/pdf", bytes));
 
 		verify(store).add(eq("i1"), captor.capture());
@@ -240,9 +242,9 @@ class AttachmentControllerTest {
 		when(storage.upload(any(), anyString())).thenReturn(
 				new StorageService.Stored("k1", "application/pdf", bytes.length, bytes));
 		when(store.add(anyString(), any())).thenAnswer(call -> Issue.builder().id("i1").build());
-		var captor = org.mockito.ArgumentCaptor.forClass(Issue.Attachment.class);
+		var captor = ArgumentCaptor.forClass(Issue.Attachment.class);
 
-		controller.upload("i1", new org.springframework.mock.web.MockMultipartFile(
+		controller.upload("i1", new MockMultipartFile(
 				"file", "form.pdf", "application/pdf", bytes));
 
 		verify(store).add(eq("i1"), captor.capture());
@@ -261,6 +263,36 @@ class AttachmentControllerTest {
 		assertThatThrownBy(() -> controller.thumbnail("i1", "a1"))
 				.isInstanceOf(ApiException.class);
 		verify(store).setPasswordProtected("i1", "a1");
+	}
+
+	@Test
+	void uploadOfANonPdfIsNeverCheckedForAPassword() {
+		byte[] bytes = "PK\u0003\u0004 not a pdf".getBytes(StandardCharsets.UTF_8);
+		issueWith();
+		when(storage.upload(any(), anyString())).thenReturn(
+				new StorageService.Stored("k1", "application/zip", bytes.length, null));
+		when(store.add(anyString(), any())).thenAnswer(call -> Issue.builder().id("i1").build());
+		var captor = ArgumentCaptor.forClass(Issue.Attachment.class);
+
+		controller.upload("i1", new MockMultipartFile("file", "bundle.zip", "application/zip", bytes));
+
+		verify(store).add(eq("i1"), captor.capture());
+		assertThat(captor.getValue().getPasswordProtected()).isNull();
+	}
+
+	@Test
+	void thumbnailOfAPdfAlreadyKnownToNeedAPasswordReadsNothing() {
+		Issue.Attachment flagged = pdf("a1", "k1");
+		flagged.setPasswordProtected(true);
+		issueWith(flagged);
+		when(storage.getObject(ImagePreviewService.attachmentThumbnailKey("a1")))
+				.thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> controller.thumbnail("i1", "a1"))
+				.isInstanceOf(ApiException.class);
+		// Neither the document nor a second write: the flag already says there is no page.
+		verify(storage, never()).getObject("k1");
+		verify(store, never()).setPasswordProtected(anyString(), anyString());
 	}
 
 	@Test
