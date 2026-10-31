@@ -317,4 +317,16 @@ class LexicalJsonTest {
 		assertThat(LexicalJson.parse(mapper, LexicalJson.EMPTY_DOC).path("root").path("children"))
 				.hasSize(1);
 	}
+
+	@Test
+	void columnsAreBlocksAndTheirNodeStateIsNoText() {
+		var styled = LayoutDocs.paragraph("rechts");
+		styled.putObject("$").put("style", "color:#e60000");
+		var document = LayoutDocs.read(LayoutDocs.doc(LayoutDocs.columns("1fr 1fr",
+				LayoutDocs.item(LayoutDocs.paragraph("links")), LayoutDocs.item(styled))));
+
+		assertThat(LexicalJson.plainText(document)).isEqualTo("links\nrechts");
+		assertThat(LexicalJson.writtenText(document)).isEqualTo("links\nrechts");
+		assertThat(LexicalJson.isBlank(document)).isFalse();
+	}
 }

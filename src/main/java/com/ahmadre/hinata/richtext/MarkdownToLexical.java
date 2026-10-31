@@ -91,9 +91,6 @@ public final class MarkdownToLexical {
 	private static final int STRIKETHROUGH = 4;
 	private static final int CODE = 16;
 
-	/** Lexical's default image max-width, so a converted image needs no repair. */
-	private static final int IMAGE_MAX_WIDTH = 500;
-
 	/** Guards against pathological inline nesting; real documents sit in single digits. */
 	private static final int MAX_INLINE_DEPTH = 32;
 
@@ -117,9 +114,11 @@ public final class MarkdownToLexical {
 	private static final Parser PARSER = buildParser();
 
 	private final ObjectMapper mapper;
+	private final LexicalNodes nodes;
 
 	public MarkdownToLexical(ObjectMapper mapper) {
 		this.mapper = mapper;
+		this.nodes = new LexicalNodes(mapper);
 	}
 
 	private static Parser buildParser() {
@@ -233,9 +232,7 @@ public final class MarkdownToLexical {
 		}
 		switch (node) {
 			case Heading heading -> {
-				ObjectNode element = element("heading", inlineChildren(heading), 0);
-				element.put("tag", "h" + Math.clamp(heading.getLevel(), 1, 6));
-				out.add(element);
+				out.add(nodes.heading(heading.getLevel(), inlineChildren(heading)));
 			}
 			case Paragraph paragraph -> out.add(paragraph(inlineChildren(paragraph), 0));
 			case BlockQuote quote -> out.add(element("quote", quoteChildren(quote), 0));
@@ -517,35 +514,11 @@ public final class MarkdownToLexical {
 
 	/** A link to [url] showing [label], shaped as every link this package writes. */
 	ObjectNode linkTo(String url, String label, int format) {
-		ObjectNode element = element("link", textOnly(label, format), 0);
-		element.putNull("rel");
-		element.putNull("target");
-		element.putNull("title");
-		element.put("url", url);
-		return element;
+		return nodes.linkTo(url, label, format);
 	}
 
 	private ObjectNode image(Image image) {
-		ObjectNode node = mapper.createObjectNode();
-		node.put("altText", textOf(image.getText()));
-		ObjectNode caption = mapper.createObjectNode();
-		caption.set("editorState", emptyCaptionState());
-		node.set("caption", caption);
-		node.put("height", 0);
-		node.put("maxWidth", IMAGE_MAX_WIDTH);
-		node.put("showCaption", false);
-		node.put("src", textOf(image.getUrl()));
-		node.put("type", "image");
-		node.put("version", 1);
-		node.put("width", 0);
-		return node;
-	}
-
-	/** A nested editor state holding an empty paragraph, as the image node expects. */
-	private ObjectNode emptyCaptionState() {
-		ArrayNode blocks = mapper.createArrayNode();
-		blocks.add(paragraph(mapper.createArrayNode(), 0));
-		return LexicalJson.document(mapper, blocks);
+		return nodes.image(textOf(image.getUrl()), textOf(image.getText()), 0, 0, LexicalNodes.IMAGE_MAX_WIDTH);
 	}
 
 	/**
@@ -566,42 +539,14 @@ public final class MarkdownToLexical {
 	}
 
 	// --- node builders --------------------------------------------------------
+	// The shapes live in LexicalNodes, shared with every other converter.
 
-	/** An element node in canonical field order. */
 	private ObjectNode element(String type, ArrayNode children, int indent) {
-		ObjectNode node = mapper.createObjectNode();
-		node.set("children", children);
-		node.putNull("direction");
-		node.put("format", "");
-		node.put("indent", indent);
-		node.put("type", type);
-		node.put("version", 1);
-		return node;
+		return nodes.element(type, children, indent);
 	}
 
-	/**
-	 * A paragraph, with its two <em>derived</em> fields.
-	 *
-	 * <p>{@code textFormat} and {@code textStyle} are not free-standing values:
-	 * Lexical recomputes them from the first text child on every export, so a
-	 * paragraph that starts in bold carries {@code textFormat: 1}. Writing a
-	 * constant 0 here produced documents the editor rewrote the moment it opened
-	 * them — which is exactly the silent, invisible edit this whole format change
-	 * exists to eliminate.
-	 */
 	private ObjectNode paragraph(ArrayNode children, int indent) {
-		ObjectNode node = element("paragraph", children, indent);
-		int textFormat = 0;
-		String textStyle = "";
-		for (JsonNode child : children) {
-			if (!"text".equals(child.path("type").asText(""))) continue;
-			textFormat = child.path("format").asInt(0);
-			textStyle = child.path("style").asText("");
-			break;
-		}
-		node.put("textFormat", textFormat);
-		node.put("textStyle", textStyle);
-		return node;
+		return nodes.paragraph(children, indent);
 	}
 
 	private ObjectNode code(String content, String language) {
@@ -616,28 +561,15 @@ public final class MarkdownToLexical {
 	}
 
 	ObjectNode text(String value, int format) {
-		ObjectNode node = mapper.createObjectNode();
-		node.put("detail", 0);
-		node.put("format", format);
-		node.put("mode", "normal");
-		node.put("style", "");
-		node.put("text", value);
-		node.put("type", "text");
-		node.put("version", 1);
-		return node;
+		return nodes.text(value, format);
 	}
 
 	private ArrayNode textOnly(String value, int format) {
-		ArrayNode children = mapper.createArrayNode();
-		children.add(text(value, format));
-		return children;
+		return nodes.textOnly(value, format);
 	}
 
 	private ObjectNode simple(String type) {
-		ObjectNode node = mapper.createObjectNode();
-		node.put("type", type);
-		node.put("version", 1);
-		return node;
+		return nodes.simple(type);
 	}
 
 	/** The node's own source text, for constructs this converter does not model. */

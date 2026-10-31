@@ -247,4 +247,12 @@ class LexicalToMarkdownTest {
 		assertThat(converter.convert(markdown).path("root").path("children").path(0)
 				.path("children").path(0).path("text").asText()).isEqualTo(typed);
 	}
+
+	@Test
+	void columnsOfAMailReadOneAfterTheOther() {
+		String layout = LayoutDocs.doc(LayoutDocs.paragraph("Kopf"), LayoutDocs.columns("280px 1fr",
+				LayoutDocs.item(LayoutDocs.paragraph("Bild")), LayoutDocs.item(LayoutDocs.paragraph("Text"))));
+
+		assertThat(LexicalToMarkdown.convert(LayoutDocs.read(layout))).isEqualTo("Kopf\n\nBild\n\nText");
+	}
 }
