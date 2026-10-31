@@ -47,6 +47,13 @@ class CssStylesTest {
 	}
 
 	@Test
+	void block_takesFitContentAsAWidthOnly() {
+		assertThat(CssStyles.block("width:fit-content;margin:0 auto")).isEqualTo(
+				"width:fit-content;margin-top:0px;margin-bottom:0px;margin-left:auto;margin-right:auto");
+		assertThat(CssStyles.block("max-width:fit-content;padding:fit-content")).isEmpty();
+	}
+
+	@Test
 	void block_staysWithinItsBound() {
 		StringBuilder css = new StringBuilder();
 		for (int i = 0; i < 200; i++) css.append("padding:").append(i).append("px;");

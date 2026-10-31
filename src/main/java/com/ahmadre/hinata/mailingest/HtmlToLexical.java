@@ -714,8 +714,9 @@ final class HtmlToLexical {
 	}
 
 	/**
-	 * The button a block with a background makes of the single link it holds: one centred
-	 * paragraph with the background, padding and radius of the block and of the link.
+	 * The button a block with a background makes of the single link it holds: one paragraph as
+	 * wide as its label ({@code width:fit-content}), with the background, padding, border and
+	 * radius of the block and of the link, placed as the content around it is aligned.
 	 */
 	private ObjectNode button(Element element, Map<String, String> css, List<ObjectNode> blocks, Ctx ctx) {
 		if (blocks.size() != 1 || !"paragraph".equals(blocks.getFirst().path("type").asText())) return null;
@@ -728,29 +729,32 @@ final class HtmlToLexical {
 				|| css.containsKey("background") || own.containsKey("background");
 		if (!background) return null;
 		ObjectNode paragraph = blocks.getFirst();
-		String format = ctx.align() == null ? "center" : ctx.align();
+		String placement = alignmentAround(element);
 		String style = merge(blockStyle(css, false, false), blockStyle(own, false, false));
-		LexicalNodes.setBlockStyle(paragraph, merge(style, hug(anchor, own, style, format)));
-		paragraph.put("format", format);
+		String fit = CssStyles.block("width:fit-content" + switch (placement) {
+			case "center" -> ";margin-left:auto;margin-right:auto";
+			case "right" -> ";margin-left:auto";
+			default -> "";
+		});
+		LexicalNodes.setBlockStyle(paragraph, merge(style, fit));
+		paragraph.put("format", placement);
 		return paragraph;
 	}
 
 	/**
-	 * The width that makes a button hug its label as the mail draws it, estimated from the label
-	 * and its font size: a paragraph is as wide as its column otherwise, a red bar instead of a
-	 * button. Centred or right-aligned like the label.
+	 * How the content around [element] is aligned: the nearest {@code align}, {@code text-align}
+	 * or {@code <center>} above it, "" for none. A button cell's own {@code align} centres its
+	 * label; where the button sits is said by what holds it.
 	 */
-	private static String hug(Element anchor, Map<String, String> own, String style, String format) {
-		int fontSize = pixels(null, own.get("font-size"));
-		if (fontSize <= 0) fontSize = 16;
-		double[] padding = sides(parse(style));
-		long width = Math.round(anchor.text().strip().length() * fontSize * 0.56 + padding[1] + padding[3] + 4);
-		String margins = switch (format) {
-			case "center" -> ";margin-left:auto;margin-right:auto";
-			case "right" -> ";margin-left:auto";
-			default -> "";
-		};
-		return CssStyles.block("max-width:" + width + "px" + margins);
+	private static String alignmentAround(Element element) {
+		int levels = 0;
+		for (Element parent = element.parent(); parent != null && levels < MAX_DEPTH; parent = parent.parent(), levels++) {
+			if ("center".equals(parent.normalName())) return "center";
+			if ("table".equals(parent.normalName())) continue;
+			String align = inline(parent).getOrDefault("text-align", parent.attr("align").strip().toLowerCase(Locale.ROOT));
+			if (ALIGNMENTS.contains(align)) return "justify".equals(align) ? "" : align;
+		}
+		return "";
 	}
 
 	// --- tables ---------------------------------------------------------------
