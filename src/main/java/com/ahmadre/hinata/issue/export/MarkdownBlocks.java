@@ -7,6 +7,7 @@ import com.vladsch.flexmark.ast.Code;
 import com.vladsch.flexmark.ast.Emphasis;
 import com.vladsch.flexmark.ast.FencedCodeBlock;
 import com.vladsch.flexmark.ast.Heading;
+import com.vladsch.flexmark.ast.HtmlInline;
 import com.vladsch.flexmark.ast.IndentedCodeBlock;
 import com.vladsch.flexmark.ast.ListItem;
 import com.vladsch.flexmark.ast.OrderedList;
@@ -281,6 +282,8 @@ final class MarkdownBlocks {
 				case Strikethrough ignored -> collectSpans(node, spans, bold, italic, code, true);
 				case Code inline ->
 						add(spans, inline.getText().toString(), bold, italic, true, strike);
+				// Raw HTML is kept as typed, as MarkdownToLexical keeps it: its & is no escape.
+				case HtmlInline html -> add(spans, html.getChars().toString(), bold, italic, code, strike);
 				default -> {
 					if (node.getFirstChild() != null) {
 						collectSpans(node, spans, bold, italic, code, strike);

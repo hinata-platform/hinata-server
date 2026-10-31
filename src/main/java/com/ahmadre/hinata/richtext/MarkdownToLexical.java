@@ -465,7 +465,8 @@ public final class MarkdownToLexical {
 	 *
 	 * <p>Named references ({@code &amp;}) are decoded too, as CommonMark has it. The
 	 * app's importer (lexical_markdown) follows upstream Lexical and decodes only numeric
-	 * ones. It reads only what a person types into the app, never what this class stores.
+	 * ones, so a draft holding {@code &amp;} previews in the app as those characters and is
+	 * stored as {@code &}.
 	 */
 	public static String textOf(BasedSequence source) {
 		String text = source.unescape();
