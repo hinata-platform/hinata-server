@@ -186,7 +186,7 @@ public class EmailIngestService {
 				// Not known yet (DNS did not answer) stays null, so a reprocess checks again.
 				.senderVerified(sender == SenderVerification.Verdict.UNKNOWN ? null
 						: sender == SenderVerification.Verdict.VERIFIED)
-				.senderUnverified(unverifiedReason(sender))
+				.senderUnverifiedReason(unverifiedReason(sender))
 				.inboundMessageId(messageId)
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
@@ -365,7 +365,7 @@ public class EmailIngestService {
 	static final int MAX_VERIFIED_BYTES = 10 * 1024 * 1024;
 
 	/**
-	 * Whether [from], the address [message] is attributed to, is its verified sender. A
+	 * The verdict on [from], the address [message] is attributed to, as its sender. A
 	 * {@code From} with several addresses is never verified: whose would it be.
 	 */
 	private SenderVerification.Verdict senderVerdict(Message message, String from, IngestConnection config)
@@ -539,7 +539,7 @@ public class EmailIngestService {
 		if (sender == SenderVerification.Verdict.UNKNOWN) return;
 		boolean verified = sender == SenderVerification.Verdict.VERIFIED;
 		Issue.SenderUnverified reason = unverifiedReason(sender);
-		if (!Boolean.valueOf(verified).equals(issue.getSenderVerified()) || reason != issue.getSenderUnverified()) {
+		if (!Boolean.valueOf(verified).equals(issue.getSenderVerified()) || reason != issue.getSenderUnverifiedReason()) {
 			issues.noteSenderVerified(issue.getId(), verified, reason);
 		}
 	}

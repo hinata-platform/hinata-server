@@ -116,7 +116,7 @@ public class IssueCloneService {
 	 */
 	static final List<String> LEFT_BEHIND = List.of(
 			"id", "numberInProject", "readableId", "formerReadableIds", "state", "reporterId",
-			"reporterEmail", "senderVerified", "senderUnverified", "inboundMessageId", "inboundSubject", "ingestConnectionId", "refusedAttachments",
+			"reporterEmail", "senderVerified", "senderUnverifiedReason", "inboundMessageId", "inboundSubject", "ingestConnectionId", "refusedAttachments",
 			"watcherIds", "participantIds", "participantMeta", "spentMinutes", "rank", "resolvedAt", "archived",
 			"archivedAt", "dueReminderFor", "createdAt", "updatedAt",
 			"subtaskCount", "subtaskDoneCount", "imagesTrustedByViewer", "descriptionForms", "searchText",

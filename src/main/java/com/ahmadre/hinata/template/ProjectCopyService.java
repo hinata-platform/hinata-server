@@ -141,7 +141,7 @@ public class ProjectCopyService {
 			// --- Project ---
 			"git", "extraRepos", "archived", "issueCounter",
 			// --- Issue ---
-			"formerReadableIds", "reporterId", "reporterEmail", "senderVerified", "senderUnverified", "inboundMessageId",
+			"formerReadableIds", "reporterId", "reporterEmail", "senderVerified", "senderUnverifiedReason", "inboundMessageId",
 			"inboundSubject", "ingestConnectionId", "refusedAttachments", "watcherIds", "participantIds",
 			"participantMeta",
 			"sprintId", "spentMinutes",

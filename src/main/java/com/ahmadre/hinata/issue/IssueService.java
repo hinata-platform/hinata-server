@@ -551,10 +551,10 @@ public class IssueService {
 	public void noteSenderVerified(String id, boolean verified, Issue.SenderUnverified unverified) {
 		Update update = Update.update("senderVerified", verified);
 		if (verified || unverified == null) {
-			update.unset("senderUnverified");
+			update.unset("senderUnverifiedReason");
 		}
 		else {
-			update.set("senderUnverified", unverified);
+			update.set("senderUnverifiedReason", unverified);
 		}
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), update, Issue.class);
 	}
