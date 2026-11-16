@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
@@ -39,6 +40,20 @@ public class TimeEntryWrites {
 		Set<String> issues = new LinkedHashSet<>();
 		if (projectId != null) projects.add(projectId);
 		if (issueId != null) issues.add(issueId);
+		publish(projects, issues);
+	}
+
+	/**
+	 * One entry was edited: the place it is in now, and the place it left if it moved, as one
+	 * notice, so a move is measured once and not once per side.
+	 */
+	public void touched(WorkItem before, WorkItem after) {
+		Set<String> projects = new LinkedHashSet<>();
+		Set<String> issues = new LinkedHashSet<>();
+		for (WorkItem side : List.of(after, before)) {
+			if (side.getProjectId() != null) projects.add(side.getProjectId());
+			if (side.getIssueId() != null) issues.add(side.getIssueId());
+		}
 		publish(projects, issues);
 	}
 

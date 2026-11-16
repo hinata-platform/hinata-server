@@ -30,6 +30,7 @@ import org.springframework.data.mongodb.core.aggregation.Fields;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -206,6 +207,14 @@ public class TimeTrackingService {
 					endedAtSet, endedAt, tags, billable, false, null, false, null);
 		}
 
+		/** The same edit, now also saying where the entry sits. */
+		public WorkItemPatch withPlacement(boolean projectIdSet, String projectId, boolean issueIdSet,
+				String issueId) {
+			return new WorkItemPatch(durationMinutes, date, activityType, description, startedAtSet,
+					startedAt, endedAtSet, endedAt, tags, billable, projectIdSet, projectId, issueIdSet,
+					issueId);
+		}
+
 		/** Whether the body says anything about where the entry sits. */
 		boolean touchesPlacement() {
 			return projectIdSet || issueIdSet;
@@ -231,7 +240,30 @@ public class TimeTrackingService {
 	 * Somebody the issue is only shared with neither logs time on it nor reads who did.
 	 */
 	public Issue resolveIssue(String issueIdOrKey, User user) {
-		Issue issue = issues.getForUser(issueIdOrKey, user);
+		return resolveIssue(issueIdOrKey, user, false);
+	}
+
+	/**
+	 * {@link #resolveIssue(String, User)}, optionally answering an issue the caller cannot see
+	 * like one that does not exist (404 instead of 403).
+	 *
+	 * <p>The 1.x routes keep their 403 — the published app is entitled to the answer it has
+	 * always had. A new route has no such debt, and a 404 there does not tell anybody which
+	 * issue ids exist.
+	 */
+	private Issue resolveIssue(String issueIdOrKey, User user, boolean hideInvisible) {
+		Issue issue;
+		try {
+			// A missing issue is a 404 here already; only the refusal for one that exists
+			// is turned into the same answer.
+			issue = issues.getForUser(issueIdOrKey, user);
+		}
+		catch (ApiException refused) {
+			if (hideInvisible && refused.getStatus() == HttpStatus.FORBIDDEN) {
+				throw ApiException.notFound("issue");
+			}
+			throw refused;
+		}
 		issues.assertCanEdit(issue, user);
 		return issue;
 	}
@@ -290,11 +322,24 @@ public class TimeTrackingService {
 		assertMine(before, before, user);
 		boolean moved = false;
 		if (patch.touchesPlacement()) {
-			Placement placement = placementAfter(before, patch, user);
-			moved = !Objects.equals(placement.projectId(), before.getProjectId())
-					|| !Objects.equals(placement.issueId(), before.getIssueId());
-			item.setProjectId(placement.projectId());
-			item.setIssueId(placement.issueId());
+			Target target = placementAfter(before, patch, user);
+			moved = !Objects.equals(target.projectId(), before.getProjectId())
+					|| !Objects.equals(target.issueId(), before.getIssueId());
+			if (moved && !own) {
+				// Before anything else is read about the new place. Somebody else's entry is
+				// moved only where the actor may manage it as well — otherwise a lead could
+				// push a member's hours out of the project they lead into one where they have
+				// no say, and no way back — and asking the freeze first would tell that
+				// person which approval holds the other project, which is not theirs to know.
+				WorkItem landed = before.toBuilder().projectId(target.projectId())
+						.issueId(target.issueId()).build();
+				if (!canManageForeign(landed, user)) {
+					throw ApiException.forbidden("error.time.editOwnOnly");
+				}
+				assertOwnerReaches(before.getUserId(), target);
+			}
+			item.setProjectId(target.projectId());
+			item.setIssueId(target.issueId());
 		}
 		if (patch.startedAtSet()) {
 			item.setStartedAt(patch.startedAt());
@@ -327,7 +372,7 @@ public class TimeTrackingService {
 		if (patch.billable() != null) {
 			item.setBillable(patch.billable());
 		}
-		else if (moved && !Objects.equals(before.getProjectId(), item.getProjectId())
+		else if (!Objects.equals(before.getProjectId(), item.getProjectId())
 				&& before.isBillable() == billableOf(before.getProjectId(), null)) {
 			// The flag it had was the old project's default, so it follows the entry to
 			// the new one, the way a timer's inherited flag follows a project change
@@ -339,12 +384,6 @@ public class TimeTrackingService {
 		item.setUpdatedAt(clock.instant());
 		item.setUpdatedBy(user.getId());
 		assertWritable(before, item, user);
-		if (moved && !own && !canManageForeign(item, user)) {
-			// Somebody else's entry is moved only into a place where the actor may manage
-			// it too. Otherwise a lead could push a member's hours out of the project they
-			// lead into one where they have no say — and no way back.
-			throw ApiException.forbidden("error.time.editOwnOnly");
-		}
 		// The placement is held to the operator's rule only when this edit moves it: an
 		// entry filed before "every entry needs a project" stays editable in its other
 		// fields, but taking the project off one is refused like a create without it.
@@ -354,7 +393,7 @@ public class TimeTrackingService {
 			// catalogue on behalf of a request that is refused.
 			item.setTags(resolveTags(patch.tags(), user));
 		}
-		WorkItem saved = workItems.save(item);
+		WorkItem saved = replaceIfUnchanged(before, item);
 		if (Objects.equals(before.getIssueId(), saved.getIssueId())) {
 			shiftSpentTime(saved.getIssueId(),
 					saved.getDurationMinutes() - before.getDurationMinutes());
@@ -365,16 +404,42 @@ public class TimeTrackingService {
 			shiftSpentTime(before.getIssueId(), -before.getDurationMinutes());
 			shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
 		}
-		writes.touched(saved.getProjectId(), saved.getIssueId());
-		if (!Objects.equals(before.getProjectId(), saved.getProjectId())
-				|| !Objects.equals(before.getIssueId(), saved.getIssueId())) {
-			// Moved: the place it left lost time as well.
-			writes.touched(before.getProjectId(), before.getIssueId());
-		}
+		// Both places at once when it moved, so the budget is measured once per edit.
+		writes.touched(before, saved);
 		if (!own) {
-			audit(AuditAction.TIME_ENTRY_UPDATED, saved, user);
+			audit(AuditAction.TIME_ENTRY_UPDATED, saved, user, moved ? before : null);
 		}
 		return saved;
+	}
+
+	/**
+	 * Stores the edited entry if nobody changed what the derived counters read from it since
+	 * it was loaded: its project, its issue and its length.
+	 *
+	 * <p>A compare-and-set rather than {@code @Version}, which old documents do not carry and
+	 * would therefore be taken for new ones. Without it two edits of one entry — moving it
+	 * from A to B and from A to C at the same moment — would both pass, both give A its
+	 * minutes back and both add them on their side, and the entry's time would be counted
+	 * twice. The loser is told the entry changed (409) and nothing of its edit is written; the
+	 * counters move only after the write succeeded.
+	 */
+	private WorkItem replaceIfUnchanged(WorkItem before, WorkItem after) {
+		Query unchanged = Query.query(Criteria.where("_id").is(before.getId())
+				.and("projectId").is(before.getProjectId())
+				.and("issueId").is(before.getIssueId())
+				.and("durationMinutes").is(before.getDurationMinutes()));
+		if (mongo.replace(unchanged, after).getMatchedCount() == 0) {
+			throw ApiException.conflict("error.time.entryChanged");
+		}
+		return after;
+	}
+
+	/** Where an edit will put an entry, and the issue that decided it, if one did. */
+	private record Target(String projectId, String issueId, Issue issue) {
+
+		static Target of(Placement placement, Issue issue) {
+			return new Target(placement.projectId(), placement.issueId(), issue);
+		}
 	}
 
 	/**
@@ -385,12 +450,12 @@ public class TimeTrackingService {
 	 * the project can still correct the duration of an entry filed there while they
 	 * were in it.
 	 *
-	 * <p>Against the actor's reach — an issue they cannot see is a 404, a project they
-	 * are not in a 403, exactly as on a create — and, for somebody else's entry, against
-	 * the owner's as well: the entry is the owner's record of their day, and filing it
-	 * where they cannot see it would take it out of their own reports.
+	 * <p>Against the actor's reach: a project they are not in is a 403, as on a create; an
+	 * issue they cannot see is a 404, the same answer as for one that does not exist, so the
+	 * route cannot be used to find out which issue ids exist. Whether somebody else's entry
+	 * may land there is the caller's question (see {@link #assertOwnerReaches}).
 	 */
-	private Placement placementAfter(WorkItem before, WorkItemPatch patch, User actor) {
+	private Target placementAfter(WorkItem before, WorkItemPatch patch, User actor) {
 		String projectId = patch.projectIdSet() ? patch.projectId() : before.getProjectId();
 		String issueId = patch.issueIdSet() ? patch.issueId() : before.getIssueId();
 		if (patch.issueIdSet() && !patch.projectIdSet() && issueId != null) {
@@ -402,7 +467,7 @@ public class TimeTrackingService {
 			issueId = null;
 		}
 		if (issueId == null && projectId == null) {
-			return new Placement(null, null);
+			return new Target(null, null, null);
 		}
 		// With an issue the project is the issue's, so only a project that is named and
 		// differs makes the same issue a change — one that is then resolved, and refused.
@@ -410,15 +475,31 @@ public class TimeTrackingService {
 				? projectId == null || projectId.equals(before.getProjectId())
 				: Objects.equals(projectId, before.getProjectId());
 		if (sameProject && Objects.equals(issueId, before.getIssueId())) {
-			return new Placement(before.getProjectId(), before.getIssueId());
+			return new Target(before.getProjectId(), before.getIssueId(), null);
 		}
-		Placement placement = resolvePlacement(projectId, issueId, actor);
-		if (!isOwner(before, actor) && before.getUserId() != null) {
-			User owner = users.findById(before.getUserId())
-					.orElseThrow(() -> ApiException.forbidden("error.time.editOwnOnly"));
-			resolvePlacement(placement.projectId(), placement.issueId(), owner);
+		if (issueId == null) {
+			return Target.of(resolvePlacement(projectId, null, actor), null);
 		}
-		return placement;
+		Issue issue = resolveIssue(issueId, actor, true);
+		return Target.of(placementOf(projectId, issue), issue);
+	}
+
+	/**
+	 * Refuses to file somebody else's entry where its owner cannot see it: the entry is the
+	 * owner's record of their day, and moving it there would take it out of their own lists
+	 * and reports. Read off what the actor's check already loaded, not resolved again.
+	 */
+	private void assertOwnerReaches(String ownerId, Target target) {
+		if (ownerId == null || target.projectId() == null) {
+			// The pre-2.0 remainder belongs to nobody, and unfiled is the owner's own.
+			return;
+		}
+		User owner = users.findById(ownerId).orElse(null);
+		boolean reaches = owner != null && projectReach.canSee(target.projectId(), owner)
+				&& (target.issue() == null || !issues.isParticipantOnly(target.issue(), owner));
+		if (!reaches) {
+			throw ApiException.forbidden("error.time.ownerOutOfReach");
+		}
 	}
 
 	/** Deletes an entry: the owner, a lead of its project, or an admin (audited when foreign). */
@@ -549,8 +630,8 @@ public class TimeTrackingService {
 	 */
 	public enum PlacementRule {
 		/**
-		 * The request settles where the entry sits — a create, and a timer stop.
-		 * The whole rule applies.
+		 * The request settles where the entry sits — a create, a timer stop, and an
+		 * edit that moves the entry. The whole rule applies.
 		 */
 		ENFORCED,
 		/**
@@ -712,6 +793,14 @@ public class TimeTrackingService {
 	}
 
 	private void audit(AuditAction action, WorkItem item, User actor) {
+		audit(action, item, actor, null);
+	}
+
+	/**
+	 * @param movedFrom the entry before this edit when it moved it, so the record says where it
+	 *                  came from as well as where it went; null otherwise
+	 */
+	private void audit(AuditAction action, WorkItem item, User actor, WorkItem movedFrom) {
 		User owner = item.getUserId() == null ? null : users.findById(item.getUserId()).orElse(null);
 		AuditService.Entry entry = audit.event(action).actor(actor)
 				.meta("workItem", item.getId())
@@ -720,6 +809,10 @@ public class TimeTrackingService {
 				.meta("owner", item.getUserId())
 				.meta("minutes", String.valueOf(item.getDurationMinutes()))
 				.meta("date", String.valueOf(item.getDate()));
+		if (movedFrom != null) {
+			entry.meta("fromProject", movedFrom.getProjectId())
+					.meta("fromIssue", movedFrom.getIssueId());
+		}
 		if (owner != null) {
 			entry.target(owner);
 		}
@@ -777,10 +870,18 @@ public class TimeTrackingService {
 		Query query = Query.query(Criteria.where("metadata.workItem").is(item.getId()));
 		List<AuditLog> rows = mongo.find(query.with(pageable), AuditLog.class);
 		Set<String> departed = departedAmong(rows, item.getUserId());
+		// Which of the projects these rows were written about the reader leads. Not the entry's
+		// project as it stands: an entry that moved carries the conversations of its old project,
+		// and the lead of the new one has no business reading those.
+		Set<String> ledProjects = new HashSet<>();
+		rows.stream().map(row -> row.getMetadata() == null ? null : row.getMetadata().get("project"))
+				.filter(Objects::nonNull).distinct()
+				.filter(projectId -> approvers.leads(projectId, user))
+				.forEach(ledProjects::add);
 		return new EntryHistory(PageableExecutionUtils.getPage(rows, pageable,
 						() -> mongo.count(Query.of(query).limit(-1).skip(-1), AuditLog.class)),
 				isOwner(item, user) || user.isOrgAdmin(),
-				approvers.leads(item.getProjectId(), user),
+				ledProjects,
 				item.getUserId() != null && departed.contains(item.getUserId()),
 				departed);
 	}
@@ -815,7 +916,7 @@ public class TimeTrackingService {
 	 * the audit log keeps both for as long as the operator keeps it, and this screen is
 	 * not the audit log.
 	 */
-	public record EntryHistory(Page<AuditLog> rows, boolean ownerOrAdmin, boolean leadsProject,
+	public record EntryHistory(Page<AuditLog> rows, boolean ownerOrAdmin, Set<String> ledProjects,
 			boolean ownerDeparted, Set<String> departedActors) {
 
 		public boolean readsConversation(AuditLog log) {
@@ -825,8 +926,15 @@ public class TimeTrackingService {
 			if (ownerOrAdmin) {
 				return true;
 			}
-			String reason = log.getMetadata() == null ? null : log.getMetadata().get("reason");
-			return leadsProject && TimePolicy.LockReason.APPROVAL.name().equals(reason);
+			Map<String, String> meta = log.getMetadata();
+			if (meta == null) {
+				return false;
+			}
+			// An approval conversation is read by a lead of the project it was about — the
+			// project the record names, which is not necessarily where the entry is now.
+			String project = meta.get("project");
+			return TimePolicy.LockReason.APPROVAL.name().equals(meta.get("reason"))
+					&& project != null && ledProjects.contains(project);
 		}
 
 		/** The actor's name as recorded, or none for an account deleted since. */
@@ -951,6 +1059,14 @@ public class TimeTrackingService {
 		return saved;
 	}
 
+	/** An issue's placement; a project named beside it has to be the issue's own. */
+	private static Placement placementOf(String projectId, Issue issue) {
+		if (projectId != null && !projectId.equals(issue.getProjectId())) {
+			throw ApiException.badRequest("error.time.issueProjectMismatch");
+		}
+		return new Placement(issue.getProjectId(), issue.getId());
+	}
+
 	/** Where an entry sits, after the caller's reach has been checked. */
 	public record Placement(String projectId, String issueId) {
 	}
@@ -1047,11 +1163,7 @@ public class TimeTrackingService {
 	 */
 	public Placement resolvePlacement(String projectId, String issueId, User user) {
 		if (issueId != null) {
-			Issue issue = resolveIssue(issueId, user);
-			if (projectId != null && !projectId.equals(issue.getProjectId())) {
-				throw ApiException.badRequest("error.time.issueProjectMismatch");
-			}
-			return new Placement(issue.getProjectId(), issue.getId());
+			return placementOf(projectId, resolveIssue(issueId, user));
 		}
 		if (projectId != null && !projectReach.canSee(projectId, user)) {
 			throw ApiException.forbidden("error.project.notMember");

@@ -329,6 +329,7 @@ public class TimeCorrectionService {
 				.meta("workItem", request.getWorkItemId())
 				.meta("request", request.getId())
 				.meta("grant", grant.getId())
+				.meta("project", request.getProjectId())
 				.meta("from", String.valueOf(grant.getFrom()))
 				.meta("to", String.valueOf(grant.getTo()))
 				.meta("expiresAt", String.valueOf(grant.getExpiresAt()))

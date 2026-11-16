@@ -78,6 +78,12 @@ class TimeEntryPlacementIntegrationTest {
 	private UserRepository users;
 	@Autowired
 	private SettingsService settings;
+	@Autowired
+	private TimeLocks locks;
+	@Autowired
+	private com.ahmadre.hinata.issue.IssueService issueService;
+	@Autowired
+	private com.ahmadre.hinata.audit.AuditLogRepository auditLog;
 
 	/** Member of both projects, owner of the entries. */
 	private User member;
@@ -97,7 +103,8 @@ class TimeEntryPlacementIntegrationTest {
 	@BeforeEach
 	void seed() {
 		for (String collection : List.of("issues", "projects", "teams", "users", "work_items",
-				"project_time_settings", "audit_log", "server_settings", "time_tags")) {
+				"project_time_settings", "audit_log", "server_settings", "time_tags",
+				"timesheet_approvals")) {
 			mongo.getCollection(collection).deleteMany(new Document());
 		}
 		ServerSettings fresh = new ServerSettings();
@@ -119,6 +126,7 @@ class TimeEntryPlacementIntegrationTest {
 		foreignIssue = issue(foreign, "OTH-1");
 		// The project the hours are worth something in.
 		mongo.save(ProjectTimeSettings.builder().projectId(billing.getId()).defaultBillable(true).build());
+		locks.forgetProjectLocks();
 	}
 
 	private User user(String name, Role role) {
@@ -138,7 +146,7 @@ class TimeEntryPlacementIntegrationTest {
 
 	private Issue issue(Project in, String key) {
 		return issues.save(Issue.builder().projectId(in.getId()).readableId(key)
-				.numberInProject(1).title(key).state("Open").spentMinutes(0)
+				.numberInProject(Integer.parseInt(key.substring(key.indexOf('-') + 1))).title(key).state("Open").spentMinutes(0)
 				.watcherIds(new ArrayList<>()).assigneeIds(new ArrayList<>())
 				.tags(new ArrayList<>()).dependsOnIds(new ArrayList<>()).build());
 	}
@@ -166,10 +174,16 @@ class TimeEntryPlacementIntegrationTest {
 		return workItems.findById(item.getId()).orElseThrow();
 	}
 
-	private static void assertRefused(ThrowingCallable call, HttpStatus... statuses) {
+	private static void assertRefused(ThrowingCallable call, HttpStatus status) {
 		assertThatThrownBy(call).isInstanceOf(ApiException.class)
 				.extracting(thrown -> ((ApiException) thrown).getStatus())
-				.isIn((Object[]) statuses);
+				.isEqualTo(status);
+	}
+
+	private static void assertRefused(ThrowingCallable call, HttpStatus status, String messageKey) {
+		assertThatThrownBy(call).isInstanceOf(ApiException.class).hasMessage(messageKey)
+				.extracting(thrown -> ((ApiException) thrown).getStatus())
+				.isEqualTo(status);
 	}
 
 	// --- assigning --------------------------------------------------------------
@@ -283,11 +297,14 @@ class TimeEntryPlacementIntegrationTest {
 		WorkItem entry = logged(null, login.getId(), 30, member);
 
 		assertRefused(() -> timeTracking.update(entry.getId(), place(true, foreign.getId(), false, null),
-				member), HttpStatus.FORBIDDEN, HttpStatus.NOT_FOUND);
+				member), HttpStatus.FORBIDDEN);
+		// An issue the caller cannot see answers like one that does not exist.
 		assertRefused(() -> timeTracking.update(entry.getId(), toIssue(foreignIssue.getId()), member),
-				HttpStatus.FORBIDDEN, HttpStatus.NOT_FOUND);
+				HttpStatus.NOT_FOUND, "error.notFound");
+		assertRefused(() -> timeTracking.update(entry.getId(), toIssue("OTH-1"), member),
+				HttpStatus.NOT_FOUND, "error.notFound");
 		assertRefused(() -> timeTracking.update(entry.getId(), toIssue("does-not-exist"), member),
-				HttpStatus.FORBIDDEN, HttpStatus.NOT_FOUND);
+				HttpStatus.NOT_FOUND, "error.notFound");
 
 		WorkItem stored = reread(entry);
 		assertThat(stored.getIssueId()).isEqualTo(login.getId());
@@ -312,7 +329,7 @@ class TimeEntryPlacementIntegrationTest {
 		projects.save(billing);
 
 		assertRefused(() -> timeTracking.update(entry.getId(), toIssue(invoice.getId()), lead),
-				HttpStatus.FORBIDDEN);
+				HttpStatus.FORBIDDEN, "error.time.editOwnOnly");
 		assertThat(reread(entry).getIssueId()).isEqualTo(login.getId());
 		assertThat(spentOn(login)).isEqualTo(30);
 	}
@@ -327,7 +344,7 @@ class TimeEntryPlacementIntegrationTest {
 		}
 
 		assertRefused(() -> timeTracking.update(entry.getId(), toIssue(foreignIssue.getId()), admin),
-				HttpStatus.FORBIDDEN, HttpStatus.NOT_FOUND);
+				HttpStatus.FORBIDDEN, "error.time.ownerOutOfReach");
 		WorkItem moved = timeTracking.update(entry.getId(), toIssue(invoice.getId()), admin);
 		assertThat(moved.getIssueId()).isEqualTo(invoice.getId());
 	}
@@ -403,7 +420,7 @@ class TimeEntryPlacementIntegrationTest {
 	// --- the derived counter under concurrency ----------------------------------------
 
 	@Test
-	void entriesMovedAtTheSameTimeLoseNoMinutes() throws Exception {
+	void differentEntriesMovedAtTheSameTimeLoseNoMinutes() throws Exception {
 		List<WorkItem> entries = new ArrayList<>();
 		for (int i = 0; i < 12; i++) {
 			entries.add(logged(null, login.getId(), 10, member));
@@ -424,5 +441,136 @@ class TimeEntryPlacementIntegrationTest {
 
 		assertThat(spentOn(login)).isZero();
 		assertThat(spentOn(invoice)).isEqualTo(120);
+	}
+	@Test
+	void oneEntryMovedTwoWaysAtOnceIsCountedOnce() throws Exception {
+		Issue third = issue(billing, "BIL-2");
+		int rounds = 20;
+		List<WorkItem> entries = new ArrayList<>();
+		for (int i = 0; i < rounds; i++) {
+			entries.add(logged(null, login.getId(), 10, member));
+		}
+		ExecutorService pool = Executors.newFixedThreadPool(2);
+		int refused = 0;
+		try {
+			for (WorkItem entry : entries) {
+				java.util.concurrent.CyclicBarrier start = new java.util.concurrent.CyclicBarrier(2);
+				List<Callable<WorkItem>> both = List.of(
+						() -> { start.await(); return timeTracking.update(entry.getId(), toIssue(invoice.getId()), member); },
+						() -> { start.await(); return timeTracking.update(entry.getId(), toIssue(third.getId()), member); });
+				for (Future<WorkItem> done : pool.invokeAll(both)) {
+					try {
+						done.get();
+					}
+					catch (java.util.concurrent.ExecutionException failed) {
+						assertThat(failed.getCause()).isInstanceOf(ApiException.class)
+								.hasMessage("error.time.entryChanged");
+						assertThat(((ApiException) failed.getCause()).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+						refused++;
+					}
+				}
+			}
+		}
+		finally {
+			pool.shutdown();
+		}
+
+		// Every entry is counted exactly once, wherever it ended up: a lost race is a 409 and
+		// gives nobody minutes, never a second copy of them.
+		assertThat(spentOn(login)).isZero();
+		assertThat(spentOn(invoice) + spentOn(third)).isEqualTo(rounds * 10);
+		int onInvoice = (int) entries.stream().filter(e -> invoice.getId().equals(reread(e).getIssueId())).count();
+		assertThat(spentOn(invoice)).isEqualTo(onInvoice * 10);
+		assertThat(refused).isBetween(0, rounds);
+	}
+
+	@Test
+	void anAdministratorsMoveOfSomebodyElsesEntrySaysWhereItCameFrom() {
+		billing.getMemberIds().add(admin.getId());
+		projects.save(billing);
+		WorkItem entry = logged(null, login.getId(), 30, member);
+
+		timeTracking.update(entry.getId(), toIssue(invoice.getId()), admin);
+
+		assertThat(auditLog.findAll())
+				.filteredOn(row -> row.getAction() == com.ahmadre.hinata.audit.AuditAction.TIME_ENTRY_UPDATED)
+				.singleElement()
+				.satisfies(row -> {
+					assertThat(row.getMetadata()).containsEntry("fromProject", hinata.getId())
+							.containsEntry("fromIssue", login.getId())
+							.containsEntry("project", billing.getId())
+							.containsEntry("issue", invoice.getId());
+					// And the owner's history shows both sides.
+					assertThat(TimeEntryController.HistoryEntryResponse.from(row, false).metadata())
+							.containsKeys("fromProject", "fromIssue", "project", "issue");
+				});
+	}
+
+	@Test
+	void anEntryIsNotMovedIntoALockedProject() {
+		WorkItem entry = logged(null, login.getId(), 30, member);
+		mongo.updateFirst(Query.query(Criteria.where("projectId").is(billing.getId())),
+				new Update().set("lockBefore", LocalDate.now()), ProjectTimeSettings.class);
+		locks.forgetProjectLocks();
+
+		assertRefused(() -> timeTracking.update(entry.getId(), toIssue(invoice.getId()), member),
+				HttpStatus.FORBIDDEN);
+		WorkItem stored = reread(entry);
+		assertThat(stored.getIssueId()).isEqualTo(login.getId());
+		assertThat(spentOn(login)).isEqualTo(30);
+		assertThat(spentOn(invoice)).isZero();
+	}
+
+	@Test
+	void anEntryIsNotMovedIntoNorOutOfAnApprovedPeriod() {
+		ServerSettings current = settings.get();
+		current.getTimeTracking().setApprovalsEnabled(true);
+		settings.save(current);
+		WorkItem outside = logged(null, login.getId(), 30, member);
+		approved(member, billing);
+
+		assertRefused(() -> timeTracking.update(outside.getId(), toIssue(invoice.getId()), member),
+				HttpStatus.FORBIDDEN);
+		assertThat(reread(outside).getIssueId()).isEqualTo(login.getId());
+
+		WorkItem inside = logged(null, null, 20, member);
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(inside.getId())),
+				new Update().set("projectId", billing.getId()), WorkItem.class);
+		assertRefused(() -> timeTracking.update(inside.getId(), toIssue(login.getId()), member),
+				HttpStatus.FORBIDDEN);
+		assertThat(reread(inside).getProjectId()).isEqualTo(billing.getId());
+		assertThat(spentOn(login)).isEqualTo(30);
+	}
+
+	@Test
+	void aLeadIsToldTheEntryIsNotTheirsBeforeAnythingAboutTheOtherProjectsFreeze() {
+		ServerSettings current = settings.get();
+		current.getTimeTracking().setApprovalsEnabled(true);
+		settings.save(current);
+		billing.getMemberIds().add(lead.getId());
+		projects.save(billing);
+		approved(member, billing);
+		WorkItem entry = logged(null, login.getId(), 30, member);
+
+		// Not the approval's refusal: which period of the member's the billing project froze
+		// is nothing a lead of another project gets to read.
+		assertRefused(() -> timeTracking.update(entry.getId(), toIssue(invoice.getId()), lead),
+				HttpStatus.FORBIDDEN, "error.time.editOwnOnly");
+	}
+
+	private void approved(User owner, Project in) {
+		mongo.insert(TimesheetApproval.builder().userId(owner.getId()).projectId(in.getId())
+				.periodStart(DAY.minusDays(3)).periodEnd(DAY.plusDays(3))
+				.periodType(com.ahmadre.hinata.common.TimePolicy.ApprovalPeriod.WEEKLY)
+				.status(TimesheetApproval.Status.APPROVED).totalMinutes(0).build());
+	}
+	@Test
+	void theFormNamesAnEntrysIssueByIdWithoutReadingTheWholeIssue() {
+		List<com.ahmadre.hinata.issue.IssueService.IssueRef> refs = issueService.refs(
+				List.of(login.getId(), invoice.getId(), foreignIssue.getId(), "unknown"), member);
+
+		assertThat(refs).extracting(com.ahmadre.hinata.issue.IssueService.IssueRef::readableId)
+				.containsExactlyInAnyOrder("HIN-1", "BIL-1");
+		assertThat(issueService.refs(List.of(), member)).isEmpty();
 	}
 }
