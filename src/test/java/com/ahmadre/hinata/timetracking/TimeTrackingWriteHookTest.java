@@ -95,6 +95,9 @@ class TimeTrackingWriteHookTest {
 				policy, tagCatalog, locks, new TimeApprovers(projects, users, mongo),
 				new TimeEntryWrites(new TimeUsageCache(CLOCK), event -> { }), CLOCK));
 		when(workItems.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+		// An edit is stored by a compare-and-set; here nobody else is writing.
+		when(mongo.replace(any(org.springframework.data.mongodb.core.query.Query.class), any()))
+				.thenReturn(com.mongodb.client.result.UpdateResult.acknowledged(1, 1L, null));
 	}
 
 	private WorkItem entry() {

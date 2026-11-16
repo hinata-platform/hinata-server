@@ -8,7 +8,10 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
+import lombok.AccessLevel;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -102,6 +105,53 @@ public class TimeEntryController {
 	}
 
 	/**
+	 * The edit of {@code PATCH /time/entries/{id}}: everything the 1.x body carries, plus
+	 * where the entry sits.
+	 *
+	 * <p>The project and the issue are read the way the two instants are, and for the same
+	 * reason: an id has no empty value of its own, and taking an entry off its project or
+	 * issue has to be sayable. So all four are hand-written setters that remember they were
+	 * called, and a body that mentions neither placement field leaves the entry where it is,
+	 * which is what every client written before entries could move sends.
+	 */
+	@Getter
+	@Setter
+	public static final class TimeEntryPatchRequest extends TimeTrackingController.WorkItemPatchRequest {
+
+		@Setter(AccessLevel.NONE)
+		private String projectId;
+		@Setter(AccessLevel.NONE)
+		private String issueId;
+		// No accessors, as with the instants' flags: a generated setter would put them in
+		// the request schema.
+		@Getter(AccessLevel.NONE)
+		@Setter(AccessLevel.NONE)
+		private boolean projectIdSet;
+		@Getter(AccessLevel.NONE)
+		@Setter(AccessLevel.NONE)
+		private boolean issueIdSet;
+
+		public void setProjectId(String projectId) {
+			this.projectId = blankToNull(projectId);
+			this.projectIdSet = true;
+		}
+
+		public void setIssueId(String issueId) {
+			this.issueId = blankToNull(issueId);
+			this.issueIdSet = true;
+		}
+
+		private static String blankToNull(String value) {
+			return value == null || value.isBlank() ? null : value;
+		}
+
+		@Override
+		TimeTrackingService.WorkItemPatch toPatch() {
+			return super.toPatch().withPlacement(projectIdSet, projectId, issueIdSet, issueId);
+		}
+	}
+
+	/**
 	 * A window of the caller's own entries, for the calendar to draw.
 	 *
 	 * <p>The window is echoed back so a client can tell an answer apart from the
@@ -167,7 +217,8 @@ public class TimeEntryController {
 		 * deciding — without knowing it — what a colleague with the
 		 * {@code leadsSeeMemberEntries} policy may read about somebody's entry.
 		 */
-		private static final Set<String> VISIBLE = Set.of("minutes", "date", "project", "issue");
+		private static final Set<String> VISIBLE = Set.of("minutes", "date", "project", "issue",
+				"fromProject", "fromIssue");
 
 		/**
 		 * The two records whose sentences are the point of them. A correction request
@@ -262,7 +313,7 @@ public class TimeEntryController {
 
 	@PatchMapping("/entries/{id}")
 	public TimeEntryResponse update(@PathVariable String id,
-			@RequestBody @Valid TimeTrackingController.WorkItemPatchRequest request) {
+			@RequestBody @Valid TimeEntryPatchRequest request) {
 		User user = currentUser.require();
 		return respond(timeTracking.update(id, request.toPatch(), user), user);
 	}

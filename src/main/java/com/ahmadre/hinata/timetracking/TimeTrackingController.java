@@ -116,10 +116,15 @@ public class TimeTrackingController {
 	 * record cannot do: Jackson calls a setter only for a property that is
 	 * present, so the two instants are hand-written setters that remember they
 	 * were called. The rest is Lombok, because the rest does not need to know.
+	 *
+	 * <p>This is the body of the frozen 1.x route {@code PATCH /work-items/{id}}, and it
+	 * never moves an entry: a project or an issue in it is ignored like any other
+	 * property it does not know. Moving is {@code PATCH /time/entries/{id}} only, whose
+	 * body is {@link TimeEntryController.TimeEntryPatchRequest}.
 	 */
 	@Getter
 	@Setter
-	public static final class WorkItemPatchRequest {
+	public static class WorkItemPatchRequest {
 
 		@Min(1) @Max(TimeTrackingService.MAX_MINUTES)
 		private Integer durationMinutes;
@@ -147,35 +152,6 @@ public class TimeTrackingController {
 		@Setter(AccessLevel.NONE)
 		private boolean endedAtSet;
 
-		// Where the entry sits, the same way and for the same reason as the two
-		// instants: an id has no empty value of its own, and taking an entry off its
-		// project or issue has to be sayable. A body that mentions neither leaves the
-		// entry where it is, which is every client written before it could move one.
-		@Setter(AccessLevel.NONE)
-		private String projectId;
-		@Setter(AccessLevel.NONE)
-		private String issueId;
-		@Getter(AccessLevel.NONE)
-		@Setter(AccessLevel.NONE)
-		private boolean projectIdSet;
-		@Getter(AccessLevel.NONE)
-		@Setter(AccessLevel.NONE)
-		private boolean issueIdSet;
-
-		public void setProjectId(String projectId) {
-			this.projectId = blankToNull(projectId);
-			this.projectIdSet = true;
-		}
-
-		public void setIssueId(String issueId) {
-			this.issueId = blankToNull(issueId);
-			this.issueIdSet = true;
-		}
-
-		private static String blankToNull(String value) {
-			return value == null || value.isBlank() ? null : value;
-		}
-
 		public void setStartedAt(Instant startedAt) {
 			this.startedAt = startedAt;
 			this.startedAtSet = true;
@@ -188,8 +164,7 @@ public class TimeTrackingController {
 
 		TimeTrackingService.WorkItemPatch toPatch() {
 			return new TimeTrackingService.WorkItemPatch(durationMinutes, date, activityType,
-					description, startedAtSet, startedAt, endedAtSet, endedAt, tags, billable,
-					projectIdSet, projectId, issueIdSet, issueId);
+					description, startedAtSet, startedAt, endedAtSet, endedAt, tags, billable);
 		}
 	}
 

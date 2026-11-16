@@ -155,17 +155,18 @@ class TimeTrackingRequestTest {
 	@Test
 	void aPatchThatNamesNoPlacementLeavesTheEntryWhereItIs() throws Exception {
 		TimeTrackingService.WorkItemPatch mapped = json.readValue("{\"durationMinutes\":45}",
-				TimeTrackingController.WorkItemPatchRequest.class).toPatch();
+				TimeEntryController.TimeEntryPatchRequest.class).toPatch();
 
 		assertThat(mapped.projectIdSet()).isFalse();
 		assertThat(mapped.issueIdSet()).isFalse();
+		assertThat(mapped.durationMinutes()).isEqualTo(45);
 	}
 
 	@Test
 	void anExplicitNullOrBlankPlacementTakesTheEntryOff() throws Exception {
 		TimeTrackingService.WorkItemPatch mapped = json.readValue(
 				"{\"projectId\":null,\"issueId\":\"  \"}",
-				TimeTrackingController.WorkItemPatchRequest.class).toPatch();
+				TimeEntryController.TimeEntryPatchRequest.class).toPatch();
 
 		assertThat(mapped.projectIdSet()).isTrue();
 		assertThat(mapped.projectId()).isNull();
@@ -175,12 +176,29 @@ class TimeTrackingRequestTest {
 
 	@Test
 	void aNamedIssueIsCarriedThroughOnItsOwn() throws Exception {
-		TimeTrackingService.WorkItemPatch mapped = json.readValue("{\"issueId\":\"i-1\"}",
-				TimeTrackingController.WorkItemPatchRequest.class).toPatch();
+		TimeTrackingService.WorkItemPatch mapped = json.readValue(
+				"{\"issueId\":\"i-1\",\"startedAt\":null}",
+				TimeEntryController.TimeEntryPatchRequest.class).toPatch();
 
 		assertThat(mapped.issueIdSet()).isTrue();
 		assertThat(mapped.issueId()).isEqualTo("i-1");
 		assertThat(mapped.projectIdSet()).isFalse();
+		// What the 1.x part of the body says is still read.
+		assertThat(mapped.startedAtSet()).isTrue();
+	}
+
+	@Test
+	void theFrozenWorkItemRouteNeverMovesAnEntry() throws Exception {
+		// PATCH /work-items/{id} is the published 1.x contract: a placement in its body is a
+		// property it does not know, not an instruction.
+		TimeTrackingService.WorkItemPatch mapped = json.copy()
+				.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+				.readValue("{\"durationMinutes\":45,\"projectId\":\"p-2\",\"issueId\":\"i-2\"}",
+						TimeTrackingController.WorkItemPatchRequest.class).toPatch();
+
+		assertThat(mapped.touchesPlacement()).isFalse();
+		assertThat(mapped.projectId()).isNull();
+		assertThat(mapped.issueId()).isNull();
 	}
 
 	// --- the two pure rules ------------------------------------------------------------
