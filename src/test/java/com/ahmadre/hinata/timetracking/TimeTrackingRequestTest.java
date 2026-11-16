@@ -152,6 +152,37 @@ class TimeTrackingRequestTest {
 		assertThat(patch.toPatch().endedAt()).isEqualTo(Instant.parse("2026-09-07T09:30:00Z"));
 	}
 
+	@Test
+	void aPatchThatNamesNoPlacementLeavesTheEntryWhereItIs() throws Exception {
+		TimeTrackingService.WorkItemPatch mapped = json.readValue("{\"durationMinutes\":45}",
+				TimeTrackingController.WorkItemPatchRequest.class).toPatch();
+
+		assertThat(mapped.projectIdSet()).isFalse();
+		assertThat(mapped.issueIdSet()).isFalse();
+	}
+
+	@Test
+	void anExplicitNullOrBlankPlacementTakesTheEntryOff() throws Exception {
+		TimeTrackingService.WorkItemPatch mapped = json.readValue(
+				"{\"projectId\":null,\"issueId\":\"  \"}",
+				TimeTrackingController.WorkItemPatchRequest.class).toPatch();
+
+		assertThat(mapped.projectIdSet()).isTrue();
+		assertThat(mapped.projectId()).isNull();
+		assertThat(mapped.issueIdSet()).isTrue();
+		assertThat(mapped.issueId()).isNull();
+	}
+
+	@Test
+	void aNamedIssueIsCarriedThroughOnItsOwn() throws Exception {
+		TimeTrackingService.WorkItemPatch mapped = json.readValue("{\"issueId\":\"i-1\"}",
+				TimeTrackingController.WorkItemPatchRequest.class).toPatch();
+
+		assertThat(mapped.issueIdSet()).isTrue();
+		assertThat(mapped.issueId()).isEqualTo("i-1");
+		assertThat(mapped.projectIdSet()).isFalse();
+	}
+
 	// --- the two pure rules ------------------------------------------------------------
 
 	@Test
