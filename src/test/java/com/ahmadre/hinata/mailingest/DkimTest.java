@@ -234,10 +234,8 @@ class DkimTest {
 
 		/** [from] and [subject] signed, then [extra] headers on top, as a relay might add them. */
 		String message(String extra, String from, String subject, String body, String lengthTag) throws Exception {
-			String canonicalBody = Dkim.relaxedBody(body);
 			String bh = java.util.Base64.getEncoder().encodeToString(
-					java.security.MessageDigest.getInstance("SHA-256")
-							.digest(canonicalBody.getBytes(StandardCharsets.ISO_8859_1)));
+					Dkim.canonicalise(body.getBytes(StandardCharsets.ISO_8859_1), 0, true, Long.MAX_VALUE).digest());
 			String tags = "v=1; a=ed25519-sha256; c=relaxed/relaxed; d=example.org; s=sel; h=from:subject;"
 					+ lengthTag + " bh=" + bh + "; b=";
 			String data = "from:" + from + "\r\nsubject:" + subject + "\r\ndkim-signature:" + tags;
@@ -285,12 +283,44 @@ class DkimTest {
 				.isEqualTo("DKIM-Signature: v=1; bh=abc;\r\n b=; d=x");
 	}
 
+	private static String hashOf(String canonical) throws Exception {
+		return java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256")
+				.digest(canonical.getBytes(StandardCharsets.ISO_8859_1)));
+	}
+
+	private static String canonical(String body, boolean relaxed) {
+		byte[] raw = body.getBytes(StandardCharsets.ISO_8859_1);
+		return java.util.Base64.getEncoder().encodeToString(Dkim.canonicalise(raw, 0, relaxed, Long.MAX_VALUE).digest());
+	}
+
 	@Test
-	void bodiesAreCanonicalisedAsRfc6376Says() {
-		assertThat(Dkim.relaxedBody(" C \r\nD \t E\r\n\r\n\r\n")).isEqualTo(" C\r\nD E\r\n");
-		assertThat(Dkim.simpleBody(" C \r\nD \t E\r\n\r\n\r\n")).isEqualTo(" C \r\nD \t E\r\n");
-		assertThat(Dkim.relaxedBody("")).isEmpty();
-		assertThat(Dkim.simpleBody("")).isEqualTo("\r\n");
+	void bodiesAreCanonicalisedAsRfc6376Says() throws Exception {
+		assertThat(canonical(" C \r\nD \t E\r\n\r\n\r\n", true)).isEqualTo(hashOf(" C\r\nD E\r\n"));
+		assertThat(canonical(" C \r\nD \t E\r\n\r\n\r\n", false)).isEqualTo(hashOf(" C \r\nD \t E\r\n"));
+		assertThat(canonical("", true)).isEqualTo(hashOf(""));
+		assertThat(canonical("", false)).isEqualTo(hashOf("\r\n"));
+		assertThat(canonical("\r\n \t\r\n\r\n", true)).as("only blank lines").isEqualTo(hashOf(""));
+		assertThat(canonical("a\r\n\r\nb", false)).as("empty line inside, no break at the end")
+				.isEqualTo(hashOf("a\r\n\r\nb\r\n"));
+		assertThat(canonical("a\n\nb\n", true)).as("bare line feeds").isEqualTo(hashOf("a\r\n\r\nb\r\n"));
+		assertThat(Dkim.canonicalise("ab\r\n".getBytes(StandardCharsets.ISO_8859_1), 0, false, Long.MAX_VALUE).length())
+				.isEqualTo(4);
+	}
+
+	/**
+	 * A poison message: megabytes of empty lines under a signature. Trimming them one at a time
+	 * took quadratic time and held the poll thread for every connection, again after every restart.
+	 */
+	@Test
+	void aBodyOfMegabytesOfEmptyLinesIsHashedQuickly() {
+		String blank = "\r\n".repeat(4 * 1024 * 1024);
+		byte[] message = (RSA_SIGNATURE + ED25519_SIGNATURE + HEADERS + "\r\n" + blank)
+				.getBytes(StandardCharsets.ISO_8859_1);
+
+		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(3), () -> {
+			Dkim.Result result = Dkim.verify(message, DNS);
+			assertThat(result.passed()).isEmpty();
+		});
 	}
 
 	@Test

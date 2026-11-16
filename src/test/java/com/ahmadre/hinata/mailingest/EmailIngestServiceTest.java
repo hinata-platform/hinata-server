@@ -391,4 +391,39 @@ class EmailIngestServiceTest {
 		assertThat(new String(EmailIngestService.rawOf(signed(DkimTest.HEADERS)), StandardCharsets.ISO_8859_1))
 				.isEqualTo(raw);
 	}
+
+	@Test
+	void aMessageLargerThanTheBoundIsNotFetchedForItsSignatures() throws Exception {
+		MimeMessage huge = new MimeMessage(signed(DkimTest.HEADERS)) {
+			@Override
+			public int getSize() {
+				return EmailIngestService.MAX_VERIFIED_BYTES + 1;
+			}
+
+			@Override
+			public void writeTo(java.io.OutputStream out) {
+				throw new AssertionError("fetched although it is too large");
+			}
+		};
+
+		assertThat(EmailIngestService.rawOf(huge)).isNull();
+	}
+
+	@Test
+	void aTooLargeMessageIsUnverified() throws Exception {
+		dnsKeys.putAll(DkimTest.KEYS);
+		MimeMessage huge = new MimeMessage(signed(DkimTest.HEADERS)) {
+			@Override
+			public int getSize() {
+				return EmailIngestService.MAX_VERIFIED_BYTES + 1;
+			}
+		};
+
+		service.createIssueFrom(huge, withoutMailServerName());
+
+		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
+		verify(issues).create(created.capture(), isNull());
+		assertThat(created.getValue().getSenderVerified()).isFalse();
+		assertThat(created.getValue().getSenderUnverified()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
+	}
 }
