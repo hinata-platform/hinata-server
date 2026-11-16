@@ -368,20 +368,81 @@ class EmailIngestServiceTest {
 		verify(issues).noteSenderVerified("i1", true, null);
 	}
 
-	@Test
-	void reprocessKeepsAVerdictWhileDnsCannotAnswer() throws Exception {
-		EmailIngestService offline = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
+	private EmailIngestService offline() {
+		return new EmailIngestService(mock(IngestConnectionRepository.class), issues,
 				new RichTextService(), projects, notifications, mock(StorageService.class), mock(AttachmentStore.class),
 				users, TestUploadGates.open(), mock(SettingsService.class), new StaticMessageSource(),
 				com.ahmadre.hinata.richtext.TestTextChecks.allowAll(), mock(IngestConnectionService.class), name -> {
 					throw new java.io.IOException("timeout");
 				});
-		MimeMessage message = signed(DkimTest.HEADERS);
-		storedFrom(message, true);
+	}
 
-		offline.reprocessOne(message, withoutMailServerName(), false);
+	@Test
+	void reprocessKeepsAVerdictWhileDnsCannotAnswer() throws Exception {
+		MimeMessage message = signed(DkimTest.HEADERS);
+		Issue stored = storedFrom(message, false);
+		stored.setSenderUnverified(Issue.SenderUnverified.UNVERIFIED);
+
+		offline().reprocessOne(message, withoutMailServerName(), false);
 
 		verify(issues, never()).noteSenderVerified(anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+	}
+
+	@Test
+	void reprocessLeavesAnUncheckedIssueUncheckedWhileDnsCannotAnswer() throws Exception {
+		MimeMessage message = signed(DkimTest.HEADERS);
+		storedFrom(message, null);
+
+		offline().reprocessOne(message, withoutMailServerName(), false);
+
+		verify(issues, never()).noteSenderVerified(anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+	}
+
+	@Test
+	void reprocessDoesNotCheckAVerifiedSenderAgain() throws Exception {
+		MimeMessage message = new MimeMessage(signed(DkimTest.HEADERS)) {
+			@Override
+			public void writeTo(java.io.OutputStream out) {
+				throw new AssertionError("read for a sender that is already verified");
+			}
+		};
+		storedFrom(message, true);
+
+		service.reprocessOne(message, withoutMailServerName(), false);
+
+		verify(issues, never()).noteSenderVerified(anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+	}
+
+	@Test
+	void reprocessRecordsAChangedReasonAlone() throws Exception {
+		// Stored as unsigned; read again, the mail is signed, but not by its sender's domain.
+		dnsKeys.putAll(DkimTest.KEYS);
+		MimeMessage message = signed(DkimTest.HEADERS.replace("Subject: Is dinner ready?", "Subject: Dinner?"));
+		Issue stored = storedFrom(message, false);
+		stored.setSenderUnverified(Issue.SenderUnverified.UNSIGNED);
+
+		service.reprocessOne(message, withoutMailServerName(), false);
+
+		verify(issues).noteSenderVerified("i1", false, Issue.SenderUnverified.UNVERIFIED);
+	}
+
+	@Test
+	void aSenderNotKnownYetAtIngestStaysUnchecked() throws Exception {
+		MimeMessage message = signed(DkimTest.HEADERS);
+
+		offline().createIssueFrom(message, withoutMailServerName());
+
+		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
+		verify(issues).create(created.capture(), isNull());
+		assertThat(created.getValue().getSenderVerified()).as("so a reprocess checks it again").isNull();
+		assertThat(created.getValue().getSenderUnverified()).isNull();
+	}
+
+	@Test
+	void theMailboxIsReadInPiecesOfAMegabyte() {
+		IngestConnection imaps = IngestConnection.builder().host("imap.example.org").port(993).ssl(true).build();
+
+		assertThat(EmailIngestService.imapProperties(imaps).getProperty("mail.imaps.fetchsize")).isEqualTo("1048576");
 	}
 
 	@Test

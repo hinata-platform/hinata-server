@@ -107,16 +107,30 @@ public class EmailIngestService {
 		}
 	}
 
-	private void ingest(IngestConnection config) throws Exception {
+	private static String protocolOf(IngestConnection config) {
+		return config.isSsl() ? "imaps" : "imap";
+	}
+
+	/**
+	 * The session settings for [config]'s mailbox. A message is fetched in pieces of a megabyte,
+	 * not the default 16 KB: the whole message is read for its signatures, and at 16 KB a 10 MB
+	 * mail would be hundreds of round trips.
+	 */
+	static Properties imapProperties(IngestConnection config) {
 		Properties props = new Properties();
-		String protocol = config.isSsl() ? "imaps" : "imap";
+		String protocol = protocolOf(config);
 		props.put("mail.store.protocol", protocol);
 		props.put("mail." + protocol + ".host", config.getHost());
 		props.put("mail." + protocol + ".port", String.valueOf(config.getPort()));
 		props.put("mail." + protocol + ".connectiontimeout", "10000");
 		props.put("mail." + protocol + ".timeout", "15000");
+		props.put("mail." + protocol + ".fetchsize", String.valueOf(1024 * 1024));
+		return props;
+	}
 
-		Session session = Session.getInstance(props);
+	private void ingest(IngestConnection config) throws Exception {
+		String protocol = protocolOf(config);
+		Session session = Session.getInstance(imapProperties(config));
 		try (Store store = session.getStore(protocol)) {
 			store.connect(config.getHost(), config.getPort(), config.getUsername(), config.getPassword());
 			Folder folder = store.getFolder(config.getFolder());
@@ -169,7 +183,9 @@ public class EmailIngestService {
 				.type(Issue.Type.TASK)
 				.reporterId(reporterId)
 				.reporterEmail(from)
-				.senderVerified(sender == SenderVerification.Verdict.VERIFIED)
+				// Not known yet (DNS did not answer) stays null, so a reprocess checks again.
+				.senderVerified(sender == SenderVerification.Verdict.UNKNOWN ? null
+						: sender == SenderVerification.Verdict.VERIFIED)
 				.senderUnverified(unverifiedReason(sender))
 				.inboundMessageId(messageId)
 				.inboundSubject(truncate(subject, 300))
@@ -365,7 +381,8 @@ public class EmailIngestService {
 		return switch (verdict) {
 			case VERIFIED -> null;
 			case UNSIGNED -> Issue.SenderUnverified.UNSIGNED;
-			case UNVERIFIED, UNKNOWN -> Issue.SenderUnverified.UNVERIFIED;
+			case UNVERIFIED -> Issue.SenderUnverified.UNVERIFIED;
+			case UNKNOWN -> null;
 		};
 	}
 
@@ -428,14 +445,8 @@ public class EmailIngestService {
 	 * @return how many messages were scanned, rebuilt, and newly created
 	 */
 	public ReprocessResult reprocess(IngestConnection config, boolean createMissing) {
-		Properties props = new Properties();
-		String protocol = config.isSsl() ? "imaps" : "imap";
-		props.put("mail.store.protocol", protocol);
-		props.put("mail." + protocol + ".host", config.getHost());
-		props.put("mail." + protocol + ".port", String.valueOf(config.getPort()));
-		props.put("mail." + protocol + ".connectiontimeout", "10000");
-		props.put("mail." + protocol + ".timeout", "15000");
-		Session session = Session.getInstance(props);
+		String protocol = protocolOf(config);
+		Session session = Session.getInstance(imapProperties(config));
 		int scanned = 0;
 		int updated = 0;
 		int created = 0;
@@ -491,21 +502,10 @@ public class EmailIngestService {
 				// The refused attachments as they were noted at ingest: none of their bytes is read again.
 				RichText rebuilt = description(senderOf(message), bodyOf(message),
 						issue.getRefusedAttachments() == null ? List.of() : issue.getRefusedAttachments());
+				refreshSenderVerdict(issue, message, config);
 				// Compare the documents: a reprocess exists to rebuild a description with the
 				// current converter (HIN-181 gives an HTML mail its layout), and the words of a
 				// mail with and without its layout may well be the same.
-				// Whether its sender is verified; issues ingested before HIN-181, or before the
-				// server checked signatures itself, learn it here. A key DNS could not hand over
-				// right now changes nothing: the next run asks again.
-				SenderVerification.Verdict sender = senderVerdict(message, senderOf(message), config);
-				if (sender != SenderVerification.Verdict.UNKNOWN || issue.getSenderVerified() == null) {
-					boolean verified = sender == SenderVerification.Verdict.VERIFIED;
-					Issue.SenderUnverified reason = unverifiedReason(sender);
-					if (!Boolean.valueOf(verified).equals(issue.getSenderVerified())
-							|| reason != issue.getSenderUnverified()) {
-						issues.noteSenderVerified(issue.getId(), verified, reason);
-					}
-				}
 				if (sameDocument(rebuilt.doc(), issue.getDescriptionDoc())) {
 					return Outcome.SKIPPED; // already current
 				}
@@ -524,6 +524,23 @@ public class EmailIngestService {
 			log.warn("Reprocessing a message in folder {} failed: {}",
 					config.getFolder(), ex.getMessage());
 			return Outcome.SKIPPED;
+		}
+	}
+
+	/**
+	 * Checks the sender of [issue]'s mail again and records the verdict when it changed (HIN-181):
+	 * issues ingested before HIN-181, or before the server checked signatures itself, learn it
+	 * here. A verified sender stays verified without reading the message for it, and a verdict
+	 * that is not known yet (DNS did not answer) changes nothing, so the next run asks again.
+	 */
+	private void refreshSenderVerdict(Issue issue, Message message, IngestConnection config) throws Exception {
+		if (Boolean.TRUE.equals(issue.getSenderVerified())) return;
+		SenderVerification.Verdict sender = senderVerdict(message, senderOf(message), config);
+		if (sender == SenderVerification.Verdict.UNKNOWN) return;
+		boolean verified = sender == SenderVerification.Verdict.VERIFIED;
+		Issue.SenderUnverified reason = unverifiedReason(sender);
+		if (!Boolean.valueOf(verified).equals(issue.getSenderVerified()) || reason != issue.getSenderUnverified()) {
+			issues.noteSenderVerified(issue.getId(), verified, reason);
 		}
 	}
 
