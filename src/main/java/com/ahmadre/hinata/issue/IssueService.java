@@ -1728,6 +1728,28 @@ public class IssueService {
 		return viewedFrom(mongo.find(query, Issue.class), scope, user);
 	}
 
+	/**
+	 * Names a batch of issues by their ids — the key and the title, nothing else — for a form
+	 * that holds only ids and has to label them (a time entry being edited). Scoped and capped
+	 * like {@link #resolveIssues}; an id the caller cannot see is simply absent.
+	 */
+	public List<IssueRef> refs(List<String> ids, User user) {
+		if (ids == null || ids.isEmpty()) {
+			return List.of();
+		}
+		List<String> capped = ids.stream().filter(java.util.Objects::nonNull).distinct()
+				.limit(MENTION_LIMIT).toList();
+		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
+		Query query = Query.query(inScope(List.of(Criteria.where("_id").in(capped)), scope, user));
+		query.fields().include("readableId", "title", "type");
+		// Read as plain documents: Issue has primitive fields, and a projection that leaves
+		// them out cannot be turned back into one.
+		return mongo.find(query, org.bson.Document.class, "issues").stream()
+				.map(doc -> new IssueRef(String.valueOf(doc.get("_id")), doc.getString("readableId"),
+						doc.getString("title"), doc.get("type") == null ? null : String.valueOf(doc.get("type"))))
+				.toList();
+	}
+
 	public IssueComment addComment(String issueId, RichText content, User author) {
 		return addComment(issueId, content, null, author);
 	}
