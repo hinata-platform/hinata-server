@@ -373,8 +373,9 @@ public class EmailIngestService {
 		if (message.getFrom() == null || message.getFrom().length != 1) {
 			return SenderVerification.Verdict.UNVERIFIED;
 		}
-		return SenderVerification.check(rawOf(message), from, message.getHeader("Authentication-Results"),
-				config.getAuthservId(), dkimKeys);
+		String[] signatures = message.getHeader("DKIM-Signature");
+		return SenderVerification.check(() -> rawOf(message), signatures == null ? new String[0] : signatures, from,
+				message.getHeader("Authentication-Results"), config.getAuthservId(), dkimKeys);
 	}
 
 	private static Issue.SenderUnverified unverifiedReason(SenderVerification.Verdict verdict) {
@@ -530,11 +531,18 @@ public class EmailIngestService {
 	/**
 	 * Checks the sender of [issue]'s mail again and records the verdict when it changed (HIN-181):
 	 * issues ingested before HIN-181, or before the server checked signatures itself, learn it
-	 * here. A verified sender stays verified without reading the message for it, and a verdict
-	 * that is not known yet (DNS did not answer) changes nothing, so the next run asks again.
+	 * here. A verified sender stays verified without reading the message for it: signers rotate
+	 * their keys, and checking an old mail against today's key would take the trust from mails
+	 * that were genuine. An unsigned mail stays unsigned unless a receiving server is named that
+	 * could vouch for it, and a verdict that is not known yet (DNS did not answer) changes nothing,
+	 * so the next run asks again.
 	 */
 	private void refreshSenderVerdict(Issue issue, Message message, IngestConnection config) throws Exception {
 		if (Boolean.TRUE.equals(issue.getSenderVerified())) return;
+		if (issue.getSenderUnverifiedReason() == Issue.SenderUnverified.UNSIGNED
+				&& (config.getAuthservId() == null || config.getAuthservId().isBlank())) {
+			return;
+		}
 		SenderVerification.Verdict sender = senderVerdict(message, senderOf(message), config);
 		if (sender == SenderVerification.Verdict.UNKNOWN) return;
 		boolean verified = sender == SenderVerification.Verdict.VERIFIED;

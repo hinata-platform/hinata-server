@@ -31,8 +31,9 @@ class DnsDkimKeys implements Dkim.KeyLookup {
 			.build();
 
 	/**
-	 * Names DNS failed to answer for, kept a few minutes: a mailbox full of mails from one signer
-	 * whose DNS is down would otherwise wait out the timeout once per mail.
+	 * Names, and the signing domains in them, DNS failed to answer for, kept a few minutes: a
+	 * mailbox full of mails from one signer whose DNS is down would otherwise wait out the timeout
+	 * once per mail, and once more for every other selector of that domain.
 	 */
 	private final Cache<String, IOException> failures = CacheBuilder.newBuilder()
 			.maximumSize(1000)
@@ -43,7 +44,17 @@ class DnsDkimKeys implements Dkim.KeyLookup {
 	private final Dkim.KeyLookup resolver;
 
 	DnsDkimKeys() {
-		this(DnsDkimKeys::lookup);
+		this(new Dkim.KeyLookup() {
+			@Override
+			public List<String> txt(String name) throws IOException {
+				return lookup(name, Duration.ofSeconds(3));
+			}
+
+			@Override
+			public List<String> txt(String name, Duration remaining) throws IOException {
+				return lookup(name, remaining);
+			}
+		});
 	}
 
 	/** Over [resolver] instead of DNS, for tests. */
@@ -53,27 +64,52 @@ class DnsDkimKeys implements Dkim.KeyLookup {
 
 	@Override
 	public List<String> txt(String name) throws IOException {
+		return txt(name, Duration.ofSeconds(3));
+	}
+
+	@Override
+	public List<String> txt(String name, Duration remaining) throws IOException {
 		List<String> known = answers.getIfPresent(name);
 		if (known != null) return known;
+		String domain = domainOf(name);
 		IOException failed = failures.getIfPresent(name);
+		if (failed == null && domain != null) failed = failures.getIfPresent(domain);
 		if (failed != null) throw new IOException(failed.getMessage());
 		try {
-			List<String> records = resolver.txt(name);
+			List<String> records = resolver.txt(name, remaining);
 			answers.put(name, records);
 			return records;
 		}
 		catch (IOException noAnswer) {
 			failures.put(name, noAnswer);
+			if (domain != null) failures.put(domain, noAnswer);
 			throw noAnswer;
 		}
 	}
 
-	private static List<String> lookup(String name) throws IOException {
+	/** The signing domain in a key's name, {@code selector._domainkey.domain}; null for another name. */
+	static String domainOf(String name) {
+		int at = name.indexOf("._domainkey.");
+		return at < 0 ? null : name.substring(at + "._domainkey.".length());
+	}
+
+	/**
+	 * How long JNDI waits for one answer and how often it asks again, so a lookup ends within
+	 * [remaining]: one second at most, and no second try when less than three seconds are left
+	 * (a retry doubles the wait).
+	 */
+	static int[] timeouts(Duration remaining) {
+		long millis = Math.max(1, remaining.toMillis());
+		return new int[] { (int) Math.min(1000, millis), millis < 3000 ? 0 : 1 };
+	}
+
+	private static List<String> lookup(String name, Duration remaining) throws IOException {
+		int[] timeouts = timeouts(remaining);
 		Hashtable<String, String> env = new Hashtable<>();
 		env.put("java.naming.factory.initial", "com.sun.jndi.dns.DnsContextFactory");
 		env.put("java.naming.provider.url", "dns:");
-		env.put("com.sun.jndi.dns.timeout.initial", "1000");
-		env.put("com.sun.jndi.dns.timeout.retries", "1");
+		env.put("com.sun.jndi.dns.timeout.initial", String.valueOf(timeouts[0]));
+		env.put("com.sun.jndi.dns.timeout.retries", String.valueOf(timeouts[1]));
 		InitialDirContext context = null;
 		try {
 			context = new InitialDirContext(env);

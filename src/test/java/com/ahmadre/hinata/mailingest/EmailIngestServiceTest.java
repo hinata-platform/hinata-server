@@ -344,7 +344,8 @@ class EmailIngestServiceTest {
 
 		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
 		verify(issues).create(created.capture(), isNull());
-		assertThat(created.getValue().getSenderVerified()).isFalse();		assertThat(created.getValue().getSenderUnverifiedReason()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
+		assertThat(created.getValue().getSenderVerified()).isFalse();
+		assertThat(created.getValue().getSenderUnverifiedReason()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
 	}
 
 	private Issue storedFrom(MimeMessage message, Boolean verified) throws Exception {
@@ -421,9 +422,40 @@ class EmailIngestServiceTest {
 		Issue stored = storedFrom(message, false);
 		stored.setSenderUnverifiedReason(Issue.SenderUnverified.UNSIGNED);
 
-		service.reprocessOne(message, withoutMailServerName(), false);
+		// A named receiving server could still vouch, so an unsigned issue is looked at again.
+		service.reprocessOne(message, connection(), false);
 
 		verify(issues).noteSenderVerified("i1", false, Issue.SenderUnverified.UNVERIFIED);
+	}
+
+	@Test
+	void reprocessLeavesAnUnsignedMailAloneWhenNoServerCouldVouch() throws Exception {
+		MimeMessage message = new MimeMessage(signed(DkimTest.HEADERS)) {
+			@Override
+			public void writeTo(java.io.OutputStream out) {
+				throw new AssertionError("read although nothing could change its verdict");
+			}
+		};
+		Issue stored = storedFrom(message, false);
+		stored.setSenderUnverifiedReason(Issue.SenderUnverified.UNSIGNED);
+
+		service.reprocessOne(message, withoutMailServerName(), false);
+
+		verify(issues, never()).noteSenderVerified(anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+	}
+
+	@Test
+	void aMailWithoutSignatureIsUnsignedWithoutBeingDownloaded() throws Exception {
+		MimeMessage unsigned = new MimeMessage(alternative("x", "<p>x</p>")) {
+			@Override
+			public void writeTo(java.io.OutputStream out) {
+				throw new AssertionError("downloaded although it carries no signature");
+			}
+		};
+
+		Issue issue = ingested(unsigned);
+
+		assertThat(issue.getSenderUnverifiedReason()).isEqualTo(Issue.SenderUnverified.UNSIGNED);
 	}
 
 	@Test

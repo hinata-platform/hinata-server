@@ -146,4 +146,17 @@ class SenderVerificationTest {
 		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), "boss@football.example.com", null, null,
 				DkimTest.DNS)).isEqualTo(SenderVerification.Verdict.UNVERIFIED);
 	}
+
+	@Test
+	void theMessageIsFetchedOnlyWhenASignatureHasToBeChecked() {
+		java.util.function.Supplier<byte[]> never = () -> {
+			throw new AssertionError("fetched");
+		};
+
+		assertThat(SenderVerification.check(never, new String[0], FROM, null, null, DkimTest.DNS))
+				.as("no DKIM-Signature header").isEqualTo(SenderVerification.Verdict.UNSIGNED);
+		assertThat(SenderVerification.check(never, new String[] { "v=1" }, FROM,
+				new String[] { "mx.asta.hn; dmarc=pass header.from=kundenservice.vodafone.com" }, OURS, DkimTest.DNS))
+				.as("the receiving server vouched").isEqualTo(SenderVerification.Verdict.VERIFIED);
+	}
 }

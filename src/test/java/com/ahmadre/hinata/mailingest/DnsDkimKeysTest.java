@@ -40,4 +40,25 @@ class DnsDkimKeysTest {
 
 		assertThat(asked).hasValue(1);
 	}
+
+	@Test
+	void aSignerWhoseDnsFailedIsNotAskedForAnotherSelectorEither() {
+		AtomicInteger asked = new AtomicInteger();
+		DnsDkimKeys keys = new DnsDkimKeys(name -> {
+			asked.incrementAndGet();
+			throw new IOException("timeout");
+		});
+
+		assertThatThrownBy(() -> keys.txt("s1._domainkey.example.org")).isInstanceOf(IOException.class);
+		assertThatThrownBy(() -> keys.txt("s2._domainkey.example.org")).isInstanceOf(IOException.class);
+
+		assertThat(asked).hasValue(1);
+	}
+
+	@Test
+	void jndiWaitsNoLongerThanTheBudgetLeft() {
+		assertThat(DnsDkimKeys.timeouts(java.time.Duration.ofSeconds(5))).containsExactly(1000, 1);
+		assertThat(DnsDkimKeys.timeouts(java.time.Duration.ofMillis(2500))).containsExactly(1000, 0);
+		assertThat(DnsDkimKeys.timeouts(java.time.Duration.ofMillis(400))).containsExactly(400, 0);
+	}
 }
