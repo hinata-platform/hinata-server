@@ -232,6 +232,15 @@ public class IssueController {
 		return issueService.resolveIssues(keys, currentUser.require());
 	}
 
+	/**
+	 * The key and title of each named issue the caller may see, by id — for a form that holds
+	 * only ids. Additive; capped like {@code /resolve}.
+	 */
+	@GetMapping("/refs")
+	public List<IssueService.IssueRef> refs(@RequestParam List<String> ids) {
+		return issueService.refs(ids, currentUser.require());
+	}
+
 	@GetMapping("/{id}")
 	public Issue get(@PathVariable String id) {
 		User user = currentUser.require();
