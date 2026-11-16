@@ -13,13 +13,14 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
 
 /**
@@ -64,17 +65,22 @@ final class Dkim {
 	}
 
 	/**
-	 * What the signatures of a message say.
+	 * What the signatures of a message say about its {@code From} domain.
 	 *
 	 * @param signed         whether it carries any DKIM signature at all
-	 * @param passed         the signing domains ({@code d=}) whose signature holds
-	 * @param keyUnavailable whether some signature could not be checked because DNS did not answer
+	 * @param passed         the signing domain ({@code d=}) of the first signature that is aligned
+	 *                       with the {@code From} domain and holds; empty when none does
+	 * @param keyUnavailable whether an aligned signature could not be checked because DNS did not
+	 *                       answer in time
 	 */
 	record Result(boolean signed, Set<String> passed, boolean keyUnavailable) {
 	}
 
-	/** Signatures of one message checked at most: each one costs a DNS lookup. */
+	/** Signatures of one message checked at most: each one may cost a DNS lookup. */
 	static final int MAX_SIGNATURES = 5;
+
+	/** Time one message may spend waiting for DNS, all its signatures together. */
+	static final Duration DNS_BUDGET = Duration.ofSeconds(5);
 
 	/** Headers in a message read at most; a real one has fewer than two hundred. */
 	private static final int MAX_HEADERS = 1000;
@@ -92,8 +98,17 @@ final class Dkim {
 	private static final byte[] ED25519_SPKI = { 0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21,
 			0x00 };
 
-	/** Checks every DKIM signature of [raw], the message exactly as it was received. */
-	static Result verify(byte[] raw, KeyLookup keys) {
+	/**
+	 * Checks the DKIM signatures of [raw], the message exactly as it was received, for one that is
+	 * aligned with [fromDomain] and holds. Signatures of other domains are skipped before their
+	 * body is hashed or their key looked up, and the first one that holds ends the check.
+	 */
+	static Result verify(byte[] raw, String fromDomain, KeyLookup keys) {
+		return verify(raw, fromDomain, keys, System::nanoTime);
+	}
+
+	/** {@link #verify(byte[], String, KeyLookup)} on the clock [nanoTime], for the DNS budget. */
+	static Result verify(byte[] raw, String fromDomain, KeyLookup keys, LongSupplier nanoTime) {
 		// The head ends at the first empty line; a line ends at LF, with or without CR before it.
 		int headEnd = raw.length;
 		int bodyStart = raw.length;
@@ -115,19 +130,23 @@ final class Dkim {
 		if (headers.stream().filter(h -> h.name.equals("from")).count() != 1) {
 			return new Result(true, Set.of(), false);
 		}
-		Set<String> passed = new LinkedHashSet<>();
 		boolean unavailable = false;
 		Body body = new Body(raw, bodyStart);
+		long deadline = nanoTime.getAsLong() + DNS_BUDGET.toNanos();
+		KeyLookup budgeted = name -> {
+			if (nanoTime.getAsLong() - deadline > 0) throw new IOException("DNS budget of the message spent");
+			return keys.txt(name);
+		};
 		for (Header signature : signatures.subList(0, Math.min(signatures.size(), MAX_SIGNATURES))) {
 			try {
-				String domain = check(signature, headers, body, keys);
-				if (domain != null) passed.add(domain);
+				String domain = check(signature, headers, body, fromDomain, budgeted);
+				if (domain != null) return new Result(true, Set.of(domain), false);
 			}
 			catch (IOException noAnswer) {
 				unavailable = true;
 			}
 		}
-		return new Result(true, passed, unavailable);
+		return new Result(true, Set.of(), unavailable);
 	}
 
 	/** One header field: its name in lower case and the field exactly as it stood, folds and all. */
@@ -164,12 +183,13 @@ final class Dkim {
 	}
 
 	/**
-	 * The signing domain of [signature] when it holds for [headers] and [body], else null.
+	 * The signing domain of [signature] when it is aligned with [fromDomain] and holds for
+	 * [headers] and [body], else null.
 	 *
 	 * @throws IOException when its key could not be looked up
 	 */
-	private static String check(Header signature, List<Header> headers, Body body, KeyLookup keys)
-			throws IOException {
+	private static String check(Header signature, List<Header> headers, Body body, String fromDomain,
+			KeyLookup keys) throws IOException {
 		Map<String, String> tags = tags(signature.value());
 		if (tags == null || !"1".equals(tags.get("v"))) return null;
 		String algorithm = tags.getOrDefault("a", "").toLowerCase(Locale.ROOT);
@@ -177,6 +197,9 @@ final class Dkim {
 		String domain = SenderDomains.normalize(tags.get("d"));
 		String selector = tags.getOrDefault("s", "").toLowerCase(Locale.ROOT);
 		if (domain == null || !SELECTOR.matcher(selector).matches()) return null;
+		// Only a signature of the From domain's organisation can verify the sender; no other is worth
+		// a hash or a lookup.
+		if (!SenderVerification.aligned(domain, fromDomain)) return null;
 		String identity = tags.get("i");
 		if (identity != null && !identityWithin(identity, domain)) return null;
 		String query = tags.get("q");

@@ -30,21 +30,50 @@ class DnsDkimKeys implements Dkim.KeyLookup {
 			.expireAfterWrite(Duration.ofMinutes(15))
 			.build();
 
+	/**
+	 * Names DNS failed to answer for, kept a few minutes: a mailbox full of mails from one signer
+	 * whose DNS is down would otherwise wait out the timeout once per mail.
+	 */
+	private final Cache<String, IOException> failures = CacheBuilder.newBuilder()
+			.maximumSize(1000)
+			.expireAfterWrite(Duration.ofMinutes(5))
+			.build();
+
+	/** Asks DNS itself, past both caches. */
+	private final Dkim.KeyLookup resolver;
+
+	DnsDkimKeys() {
+		this(DnsDkimKeys::lookup);
+	}
+
+	/** Over [resolver] instead of DNS, for tests. */
+	DnsDkimKeys(Dkim.KeyLookup resolver) {
+		this.resolver = resolver;
+	}
+
 	@Override
 	public List<String> txt(String name) throws IOException {
 		List<String> known = answers.getIfPresent(name);
 		if (known != null) return known;
-		List<String> records = lookup(name);
-		answers.put(name, records);
-		return records;
+		IOException failed = failures.getIfPresent(name);
+		if (failed != null) throw new IOException(failed.getMessage());
+		try {
+			List<String> records = resolver.txt(name);
+			answers.put(name, records);
+			return records;
+		}
+		catch (IOException noAnswer) {
+			failures.put(name, noAnswer);
+			throw noAnswer;
+		}
 	}
 
 	private static List<String> lookup(String name) throws IOException {
 		Hashtable<String, String> env = new Hashtable<>();
 		env.put("java.naming.factory.initial", "com.sun.jndi.dns.DnsContextFactory");
 		env.put("java.naming.provider.url", "dns:");
-		env.put("com.sun.jndi.dns.timeout.initial", "2000");
-		env.put("com.sun.jndi.dns.timeout.retries", "2");
+		env.put("com.sun.jndi.dns.timeout.initial", "1000");
+		env.put("com.sun.jndi.dns.timeout.retries", "1");
 		InitialDirContext context = null;
 		try {
 			context = new InitialDirContext(env);

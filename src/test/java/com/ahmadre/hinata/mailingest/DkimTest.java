@@ -67,7 +67,7 @@ class DkimTest {
 	static final Dkim.KeyLookup DNS = name -> KEYS.getOrDefault(name, List.of());
 
 	private static Dkim.Result verify(String message) {
-		return Dkim.verify(message.getBytes(StandardCharsets.ISO_8859_1), DNS);
+		return Dkim.verify(message.getBytes(StandardCharsets.ISO_8859_1), "football.example.com", DNS);
 	}
 
 	@Test
@@ -153,9 +153,9 @@ class DkimTest {
 		Dkim.KeyLookup none = name -> List.of();
 		byte[] message = (RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1);
 
-		assertThat(Dkim.verify(message, revoked).passed()).isEmpty();
-		assertThat(Dkim.verify(message, none).passed()).isEmpty();
-		assertThat(Dkim.verify(message, none).keyUnavailable()).isFalse();
+		assertThat(Dkim.verify(message, "football.example.com", revoked).passed()).isEmpty();
+		assertThat(Dkim.verify(message, "football.example.com", none).passed()).isEmpty();
+		assertThat(Dkim.verify(message, "football.example.com", none).keyUnavailable()).isFalse();
 	}
 
 	@Test
@@ -164,7 +164,7 @@ class DkimTest {
 			throw new IOException("timeout");
 		};
 
-		Dkim.Result result = Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1), down);
+		Dkim.Result result = Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1), "football.example.com", down);
 
 		assertThat(result.passed()).isEmpty();
 		assertThat(result.keyUnavailable()).isTrue();
@@ -174,7 +174,7 @@ class DkimTest {
 	void theKeyOfAnotherTypeDoesNotVerify() {
 		Dkim.KeyLookup swapped = name -> KEYS.get("brisbane._domainkey.football.example.com");
 
-		assertThat(Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1), swapped)
+		assertThat(Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1), "football.example.com", swapped)
 				.passed()).isEmpty();
 	}
 
@@ -211,9 +211,76 @@ class DkimTest {
 		};
 
 		Dkim.verify((RSA_SIGNATURE.replace("s=test;", "s=te st/../x;") + HEADERS + BODY)
-				.getBytes(StandardCharsets.ISO_8859_1), recording);
+				.getBytes(StandardCharsets.ISO_8859_1), "football.example.com", recording);
 
 		assertThat(asked).isEmpty();
+	}
+
+	/** A key lookup that answers from {@link #KEYS} and counts how often it was asked. */
+	static class CountingDns implements Dkim.KeyLookup {
+
+		final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+
+		@Override
+		public List<String> txt(String name) {
+			calls.incrementAndGet();
+			return KEYS.getOrDefault(name, List.of());
+		}
+	}
+
+	@Test
+	void aSignatureOfAnotherOrganisationIsNeitherHashedNorLookedUp() {
+		CountingDns dns = new CountingDns();
+
+		Dkim.Result result = Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
+				"vodafone.com", dns);
+
+		assertThat(result.signed()).isTrue();
+		assertThat(result.passed()).isEmpty();
+		assertThat(dns.calls).hasValue(0);
+	}
+
+	@Test
+	void theFirstAlignedSignatureThatHoldsEndsTheCheck() {
+		CountingDns dns = new CountingDns();
+
+		Dkim.Result result = Dkim.verify((ED25519_SIGNATURE + RSA_SIGNATURE + HEADERS + BODY)
+				.getBytes(StandardCharsets.ISO_8859_1), "football.example.com", dns);
+
+		assertThat(result.passed()).containsExactly("football.example.com");
+		assertThat(dns.calls).hasValue(1);
+	}
+
+	@Test
+	void noMoreThanFiveSignaturesAreLookedUp() {
+		CountingDns dns = new CountingDns();
+		// Seven aligned signatures whose body hash matches but whose signature does not.
+		String broken = RSA_SIGNATURE.replace("b=F45dVWDf", "b=G45dVWDf");
+
+		Dkim.Result result = Dkim.verify((broken.repeat(7) + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
+				"football.example.com", dns);
+
+		assertThat(result.passed()).isEmpty();
+		assertThat(dns.calls).hasValue(Dkim.MAX_SIGNATURES);
+	}
+
+	@Test
+	void aMessageSpendsAtMostItsDnsBudgetAndIsThenNotKnownYet() {
+		long[] now = { 0 };
+		CountingDns slow = new CountingDns() {
+			@Override
+			public List<String> txt(String name) {
+				now[0] += java.time.Duration.ofSeconds(3).toNanos(); // each answer takes three seconds
+				return super.txt(name);
+			}
+		};
+		String broken = RSA_SIGNATURE.replace("b=F45dVWDf", "b=G45dVWDf");
+
+		Dkim.Result result = Dkim.verify((broken.repeat(5) + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
+				"football.example.com", slow, () -> now[0]);
+
+		assertThat(slow.calls).as("the third lookup would start past five seconds").hasValue(2);
+		assertThat(result.keyUnavailable()).isTrue();
 	}
 
 	/** A signer of our own, for the rules the RFC example cannot show: it signs From and Subject once. */
@@ -258,9 +325,9 @@ class DkimTest {
 		String doubled = signer.message("Subject: Pay this invoice now\r\n", "shop@example.org", "Order shipped",
 				body, "");
 
-		assertThat(Dkim.verify(genuine.getBytes(StandardCharsets.ISO_8859_1), signer.dns()).passed())
+		assertThat(Dkim.verify(genuine.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed())
 				.containsExactly("example.org");
-		assertThat(Dkim.verify(doubled.getBytes(StandardCharsets.ISO_8859_1), signer.dns()).passed()).isEmpty();
+		assertThat(Dkim.verify(doubled.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed()).isEmpty();
 	}
 
 	@Test
@@ -272,9 +339,9 @@ class DkimTest {
 		String appended = signer.message("", "shop@example.org", "Hi", body, " l=" + body.length() + ";")
 				+ "<img src=https://evil.example/pixel.png>\r\n";
 
-		assertThat(Dkim.verify(whole.getBytes(StandardCharsets.ISO_8859_1), signer.dns()).passed())
+		assertThat(Dkim.verify(whole.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed())
 				.containsExactly("example.org");
-		assertThat(Dkim.verify(appended.getBytes(StandardCharsets.ISO_8859_1), signer.dns()).passed()).isEmpty();
+		assertThat(Dkim.verify(appended.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed()).isEmpty();
 	}
 
 	@Test
@@ -318,7 +385,7 @@ class DkimTest {
 				.getBytes(StandardCharsets.ISO_8859_1);
 
 		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(3), () -> {
-			Dkim.Result result = Dkim.verify(message, DNS);
+			Dkim.Result result = Dkim.verify(message, "football.example.com", DNS);
 			assertThat(result.passed()).isEmpty();
 		});
 	}
