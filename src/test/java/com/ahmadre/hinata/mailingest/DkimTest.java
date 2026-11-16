@@ -401,4 +401,50 @@ class DkimTest {
 		assertThat(DnsDkimKeys.joined("\"v=DKIM1; p=MIIB\" \"IjAN\"")).isEqualTo("v=DKIM1; p=MIIBIjAN");
 		assertThat(DnsDkimKeys.joined("v=DKIM1;k=rsa;p=MIIB IjAN")).isEqualTo("v=DKIM1;k=rsa;p=MIIB IjAN");
 	}
+
+	@Test
+	void theResultNamesTheAddressInTheSignedFrom() {
+		assertThat(verify(RSA_SIGNATURE + HEADERS + BODY).from()).isEqualTo("joe@football.example.com");
+	}
+
+	@Test
+	void aHeadWithABareCarriageReturnIsNotChecked() {
+		String split = HEADERS.replace("Subject: Is dinner ready?", "Subject: Is dinner ready?\rBcc: x@evil.example");
+
+		Dkim.Result result = verify(RSA_SIGNATURE + split + BODY);
+
+		assertThat(result.signed()).isTrue();
+		assertThat(result.passed()).isEmpty();
+	}
+
+	@Test
+	void aHeadWithANulIsNotChecked() {
+		assertThat(verify(RSA_SIGNATURE + HEADERS.replace("Is dinner", "Is\0dinner") + BODY).passed()).isEmpty();
+	}
+
+	@Test
+	void aFieldNameAParserMightReadLenientlyIsNotChecked() {
+		// "From :" may read as From to a lenient parser; the signature knows no such header.
+		String spaced = HEADERS.replace("From: Joe", "From : Joe");
+		String garbage = "this line is no header\r\n" + HEADERS;
+
+		assertThat(verify(RSA_SIGNATURE + spaced + BODY).passed()).isEmpty();
+		assertThat(verify(RSA_SIGNATURE + garbage + BODY).passed()).isEmpty();
+	}
+
+	@Test
+	void relaxedHeadersTrimSpacesAndTabsOnly() {
+		assertThat(Dkim.canonical("Subject: \t Hi  there \t\r\n ", "relaxed")).isEqualTo("subject:Hi there");
+		// A vertical tab is no WSP; String.strip() would drop it and sign a header as something else.
+		assertThat(Dkim.canonical("Subject: Hi\u000B", "relaxed")).isEqualTo("subject:Hi\u000B");
+	}
+
+	@Test
+	void aKeyInTestingModeIsNoKey() {
+		Dkim.KeyLookup testing = name -> KEYS.getOrDefault(name, List.of()).stream()
+				.map(record -> record.replace("v=DKIM1;", "v=DKIM1; t=y;")).toList();
+
+		assertThat(Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
+				"football.example.com", testing).passed()).isEmpty();
+	}
 }

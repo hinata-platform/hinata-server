@@ -63,7 +63,10 @@ final class SenderVerification {
 		String domain = SenderDomains.ofAddress(from);
 		Dkim.Result signatures = Dkim.verify(raw, domain, keys);
 		if (!signatures.signed()) return Verdict.UNSIGNED;
-		if (!signatures.passed().isEmpty()) return Verdict.VERIFIED;
+		// The address the issue is attributed to has to be the one the signature signs.
+		if (!signatures.passed().isEmpty() && from != null && from.equalsIgnoreCase(signatures.from())) {
+			return Verdict.VERIFIED;
+		}
 		return signatures.keyUnavailable() ? Verdict.UNKNOWN : Verdict.UNVERIFIED;
 	}
 
