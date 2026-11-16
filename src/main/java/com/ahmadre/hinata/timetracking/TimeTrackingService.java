@@ -184,13 +184,32 @@ public class TimeTrackingService {
 	}
 
 	/**
-	 * A partial edit. A null field means "leave it"; the two {@code *Set} flags
-	 * carry the difference between an absent {@code startedAt} and an explicit
-	 * null, which clears it.
+	 * A partial edit. A null field means "leave it"; the {@code *Set} flags carry the
+	 * difference between an absent field and an explicit null, which clears it — for the
+	 * two instants, and for the project and the issue an entry is filed under.
+	 *
+	 * <p>The placement reads the way a person changes it. Naming only an issue files the
+	 * entry on it and takes its project along; taking only the issue away leaves the
+	 * project. Naming only a project moves the entry there and lets go of an issue that
+	 * belonged to the project it left; taking the project away unfiles it entirely.
 	 */
 	public record WorkItemPatch(Integer durationMinutes, LocalDate date, String activityType,
 			String description, boolean startedAtSet, Instant startedAt, boolean endedAtSet,
-			Instant endedAt, List<String> tags, Boolean billable) {
+			Instant endedAt, List<String> tags, Boolean billable, boolean projectIdSet,
+			String projectId, boolean issueIdSet, String issueId) {
+
+		/** An edit that leaves the entry where it is — every caller from before it could move one. */
+		public WorkItemPatch(Integer durationMinutes, LocalDate date, String activityType,
+				String description, boolean startedAtSet, Instant startedAt, boolean endedAtSet,
+				Instant endedAt, List<String> tags, Boolean billable) {
+			this(durationMinutes, date, activityType, description, startedAtSet, startedAt,
+					endedAtSet, endedAt, tags, billable, false, null, false, null);
+		}
+
+		/** Whether the body says anything about where the entry sits. */
+		boolean touchesPlacement() {
+			return projectIdSet || issueIdSet;
+		}
 	}
 
 	public record TimesheetRow(String userId, String projectId, Map<LocalDate, Integer> minutesPerDay,
@@ -269,6 +288,14 @@ public class TimeTrackingService {
 		// as well would resolve the same day twice against the database on every
 		// single edit.
 		assertMine(before, before, user);
+		boolean moved = false;
+		if (patch.touchesPlacement()) {
+			Placement placement = placementAfter(before, patch, user);
+			moved = !Objects.equals(placement.projectId(), before.getProjectId())
+					|| !Objects.equals(placement.issueId(), before.getIssueId());
+			item.setProjectId(placement.projectId());
+			item.setIssueId(placement.issueId());
+		}
 		if (patch.startedAtSet()) {
 			item.setStartedAt(patch.startedAt());
 		}
@@ -300,18 +327,44 @@ public class TimeTrackingService {
 		if (patch.billable() != null) {
 			item.setBillable(patch.billable());
 		}
+		else if (moved && !Objects.equals(before.getProjectId(), item.getProjectId())
+				&& before.isBillable() == billableOf(before.getProjectId(), null)) {
+			// The flag it had was the old project's default, so it follows the entry to
+			// the new one, the way a timer's inherited flag follows a project change
+			// (HIN-158). A flag that differs from that default was somebody's choice and
+			// stays. Without this, a timer entry filed unfiled at the instance default and
+			// assigned afterwards would never be valued at the project's rate.
+			item.setBillable(billableOf(item.getProjectId(), null));
+		}
 		item.setUpdatedAt(clock.instant());
 		item.setUpdatedBy(user.getId());
 		assertWritable(before, item, user);
-		assertRequiredFields(contentOf(item), PlacementRule.SKIPPED);
+		if (moved && !own && !canManageForeign(item, user)) {
+			// Somebody else's entry is moved only into a place where the actor may manage
+			// it too. Otherwise a lead could push a member's hours out of the project they
+			// lead into one where they have no say — and no way back.
+			throw ApiException.forbidden("error.time.editOwnOnly");
+		}
+		// The placement is held to the operator's rule only when this edit moves it: an
+		// entry filed before "every entry needs a project" stays editable in its other
+		// fields, but taking the project off one is refused like a create without it.
+		assertRequiredFields(contentOf(item), moved ? PlacementRule.ENFORCED : PlacementRule.SKIPPED);
 		if (patch.tags() != null) {
 			// Same order as a create, for the same reason: nothing reaches the
 			// catalogue on behalf of a request that is refused.
 			item.setTags(resolveTags(patch.tags(), user));
 		}
 		WorkItem saved = workItems.save(item);
-		shiftSpentTime(saved.getIssueId(),
-				saved.getDurationMinutes() - before.getDurationMinutes());
+		if (Objects.equals(before.getIssueId(), saved.getIssueId())) {
+			shiftSpentTime(saved.getIssueId(),
+					saved.getDurationMinutes() - before.getDurationMinutes());
+		}
+		else {
+			// Each issue by its own delta, as every other write does: the one it left
+			// gives back what it had, the one it joined gains what it has now.
+			shiftSpentTime(before.getIssueId(), -before.getDurationMinutes());
+			shiftSpentTime(saved.getIssueId(), saved.getDurationMinutes());
+		}
 		writes.touched(saved.getProjectId(), saved.getIssueId());
 		if (!Objects.equals(before.getProjectId(), saved.getProjectId())
 				|| !Objects.equals(before.getIssueId(), saved.getIssueId())) {
@@ -322,6 +375,50 @@ public class TimeTrackingService {
 			audit(AuditAction.TIME_ENTRY_UPDATED, saved, user);
 		}
 		return saved;
+	}
+
+	/**
+	 * Where an edited entry will sit, checked like the placement of a new one.
+	 *
+	 * <p>See {@link WorkItemPatch} for how an absent field reads. A placement that
+	 * comes out where the entry already is resolves nothing: somebody who has since left
+	 * the project can still correct the duration of an entry filed there while they
+	 * were in it.
+	 *
+	 * <p>Against the actor's reach — an issue they cannot see is a 404, a project they
+	 * are not in a 403, exactly as on a create — and, for somebody else's entry, against
+	 * the owner's as well: the entry is the owner's record of their day, and filing it
+	 * where they cannot see it would take it out of their own reports.
+	 */
+	private Placement placementAfter(WorkItem before, WorkItemPatch patch, User actor) {
+		String projectId = patch.projectIdSet() ? patch.projectId() : before.getProjectId();
+		String issueId = patch.issueIdSet() ? patch.issueId() : before.getIssueId();
+		if (patch.issueIdSet() && !patch.projectIdSet() && issueId != null) {
+			// The issue brings its project; the one the entry had says nothing about it.
+			projectId = null;
+		}
+		else if (!patch.issueIdSet() && !Objects.equals(projectId, before.getProjectId())) {
+			// The issue belonged to the project the entry is leaving.
+			issueId = null;
+		}
+		if (issueId == null && projectId == null) {
+			return new Placement(null, null);
+		}
+		// With an issue the project is the issue's, so only a project that is named and
+		// differs makes the same issue a change — one that is then resolved, and refused.
+		boolean sameProject = issueId != null
+				? projectId == null || projectId.equals(before.getProjectId())
+				: Objects.equals(projectId, before.getProjectId());
+		if (sameProject && Objects.equals(issueId, before.getIssueId())) {
+			return new Placement(before.getProjectId(), before.getIssueId());
+		}
+		Placement placement = resolvePlacement(projectId, issueId, actor);
+		if (!isOwner(before, actor) && before.getUserId() != null) {
+			User owner = users.findById(before.getUserId())
+					.orElseThrow(() -> ApiException.forbidden("error.time.editOwnOnly"));
+			resolvePlacement(placement.projectId(), placement.issueId(), owner);
+		}
+		return placement;
 	}
 
 	/** Deletes an entry: the owner, a lead of its project, or an admin (audited when foreign). */
@@ -457,14 +554,14 @@ public class TimeTrackingService {
 		 */
 		ENFORCED,
 		/**
-		 * The request cannot touch the placement. {@link WorkItemPatch} carries
-		 * neither a project nor an issue, so holding a patch to them refuses a
-		 * request that had no way to satisfy them: an entry that predates the
-		 * rule would answer 400 on every edit for ever, and its owner's only
-		 * remedy would be to delete their own record of worked time. The
-		 * description and the tags are still checked, because a patch changes
-		 * both. The client's copy of this rule draws the same line, and the two
-		 * have to agree or the app offers a save the server refuses.
+		 * The request leaves the placement as it is — an edit that does not move
+		 * the entry. Holding it to the project and the issue would refuse a request
+		 * that never touched them: an entry that predates the rule would answer 400
+		 * on every edit for ever, and its owner's only remedy would be to delete
+		 * their own record of worked time. The description and the tags are still
+		 * checked, because a patch changes both. An edit that does move the entry
+		 * is {@link #ENFORCED}. The client's copy of this rule draws the same line,
+		 * and the two have to agree or the app offers a save the server refuses.
 		 */
 		SKIPPED
 	}
