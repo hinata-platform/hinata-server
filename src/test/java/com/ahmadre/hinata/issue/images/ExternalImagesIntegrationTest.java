@@ -174,7 +174,7 @@ class ExternalImagesIntegrationTest {
 		assertThat(body.path("externalImageSender").isNull()).isTrue();
 		assertThat(body.path("descriptionLayoutDoc").asText()).contains(HEADER);
 		// Said why, so the app does not leave readers looking for a button that is not there.
-		assertThat(body.path("externalImageTrustUnavailable").asText()).isEqualTo("unverified");
+		assertThat(body.path("externalImageTrustUnavailable").asText()).isEqualTo("UNVERIFIED");
 	}
 
 	@Test
@@ -182,12 +182,12 @@ class ExternalImagesIntegrationTest {
 		mongo.updateFirst(org.springframework.data.mongodb.core.query.Query.query(
 				org.springframework.data.mongodb.core.query.Criteria.where("_id").is(issue.getId())),
 				new org.springframework.data.mongodb.core.query.Update().set("senderVerified", false)
-						.set("senderUnverified", "UNSIGNED"), Issue.class);
+						.set("senderUnverifiedReason", "UNSIGNED"), Issue.class);
 
 		JsonNode body = JSON.readTree(get("/api/v1/issues/" + issue.getId(), member).body());
 
 		assertThat(body.path("externalImageSender").isNull()).isTrue();
-		assertThat(body.path("externalImageTrustUnavailable").asText()).isEqualTo("unsigned");
+		assertThat(body.path("externalImageTrustUnavailable").asText()).isEqualTo("UNSIGNED");
 	}
 
 	@Test

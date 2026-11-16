@@ -310,7 +310,7 @@ class EmailIngestServiceTest {
 		verify(issues).create(created.capture(), isNull());
 		assertThat(created.getValue().getReporterEmail()).isEqualTo("joe@football.example.com");
 		assertThat(created.getValue().getSenderVerified()).isTrue();
-		assertThat(created.getValue().getSenderUnverified()).isNull();
+		assertThat(created.getValue().getSenderUnverifiedReason()).isNull();
 	}
 
 	@Test
@@ -323,7 +323,7 @@ class EmailIngestServiceTest {
 		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
 		verify(issues).create(created.capture(), isNull());
 		assertThat(created.getValue().getSenderVerified()).isFalse();
-		assertThat(created.getValue().getSenderUnverified()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
+		assertThat(created.getValue().getSenderUnverifiedReason()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
 	}
 
 	@Test
@@ -331,7 +331,7 @@ class EmailIngestServiceTest {
 		Issue issue = ingested(alternative("x", "<p>x</p>"));
 
 		assertThat(issue.getSenderVerified()).isFalse();
-		assertThat(issue.getSenderUnverified()).isEqualTo(Issue.SenderUnverified.UNSIGNED);
+		assertThat(issue.getSenderUnverifiedReason()).isEqualTo(Issue.SenderUnverified.UNSIGNED);
 	}
 
 	@Test
@@ -344,7 +344,7 @@ class EmailIngestServiceTest {
 
 		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
 		verify(issues).create(created.capture(), isNull());
-		assertThat(created.getValue().getSenderVerified()).isFalse();
+		assertThat(created.getValue().getSenderVerified()).isFalse();		assertThat(created.getValue().getSenderUnverifiedReason()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
 	}
 
 	private Issue storedFrom(MimeMessage message, Boolean verified) throws Exception {
@@ -381,7 +381,7 @@ class EmailIngestServiceTest {
 	void reprocessKeepsAVerdictWhileDnsCannotAnswer() throws Exception {
 		MimeMessage message = signed(DkimTest.HEADERS);
 		Issue stored = storedFrom(message, false);
-		stored.setSenderUnverified(Issue.SenderUnverified.UNVERIFIED);
+		stored.setSenderUnverifiedReason(Issue.SenderUnverified.UNVERIFIED);
 
 		offline().reprocessOne(message, withoutMailServerName(), false);
 
@@ -419,7 +419,7 @@ class EmailIngestServiceTest {
 		dnsKeys.putAll(DkimTest.KEYS);
 		MimeMessage message = signed(DkimTest.HEADERS.replace("Subject: Is dinner ready?", "Subject: Dinner?"));
 		Issue stored = storedFrom(message, false);
-		stored.setSenderUnverified(Issue.SenderUnverified.UNSIGNED);
+		stored.setSenderUnverifiedReason(Issue.SenderUnverified.UNSIGNED);
 
 		service.reprocessOne(message, withoutMailServerName(), false);
 
@@ -435,7 +435,7 @@ class EmailIngestServiceTest {
 		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
 		verify(issues).create(created.capture(), isNull());
 		assertThat(created.getValue().getSenderVerified()).as("so a reprocess checks it again").isNull();
-		assertThat(created.getValue().getSenderUnverified()).isNull();
+		assertThat(created.getValue().getSenderUnverifiedReason()).isNull();
 	}
 
 	@Test
@@ -485,6 +485,6 @@ class EmailIngestServiceTest {
 		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
 		verify(issues).create(created.capture(), isNull());
 		assertThat(created.getValue().getSenderVerified()).isFalse();
-		assertThat(created.getValue().getSenderUnverified()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
+		assertThat(created.getValue().getSenderUnverifiedReason()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
 	}
 }

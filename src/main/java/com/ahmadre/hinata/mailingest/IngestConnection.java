@@ -59,9 +59,9 @@ public class IngestConnection {
 
 	/**
 	 * The authserv-id the receiving mail server writes into the {@code Authentication-Results}
-	 * header it adds (RFC 8601), usually its host name (HIN-181). Only a header carrying it says
-	 * whether a sender was verified; without it no sender of this connection is offered to readers
-	 * as a domain to trust with images. Lower case, a host name, at most 255 characters; null for
+	 * header it adds (RFC 8601), usually its host name (HIN-181). Optional: the server verifies a
+	 * sender itself when an aligned DKIM signature holds; a header carrying this name that vouches
+	 * for the sender verifies it as well. Lower case, a host name, at most 255 characters; null for
 	 * none.
 	 */
 	private String authservId;

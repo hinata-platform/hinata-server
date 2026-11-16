@@ -244,26 +244,31 @@ public class Issue {
 	private String ingestConnectionId;
 
 	/**
-	 * Whether the server that received the mail this issue came from vouched for its sender
-	 * (HIN-181): DMARC passed, or a DKIM signature aligned with the {@code From} domain. Only then
-	 * is that domain offered to readers to trust with images. Null for issues ingested before,
-	 * and for every other issue: not verified.
+	 * Whether the sender of the mail this issue came from is verified (HIN-181): a DKIM signature
+	 * aligned with its {@code From} domain holds, or the receiving server the ingest connection
+	 * names vouched for it. Only then is that domain offered to readers to trust with images. Null
+	 * for issues not checked yet (ingested before, or DNS did not answer) and for every other
+	 * issue: not verified.
 	 */
 	@JsonIgnore
 	private Boolean senderVerified;
 
 	/**
 	 * Why the sender of the mail this issue came from is not verified (HIN-181), when it is not;
-	 * null when it is, for issues ingested before the reason was kept, and for every other issue.
+	 * null when it is, when it was not checked yet, and for every other issue.
 	 */
 	@JsonIgnore
-	private SenderUnverified senderUnverified;
+	private SenderUnverified senderUnverifiedReason;
 
 	/** Why an ingested mail's sender is not verified, so a reader cannot trust it with images. */
 	public enum SenderUnverified {
 		/** The mail carries no DKIM signature. */
 		UNSIGNED,
-		/** It is signed, but no signature holds that is aligned with the {@code From} domain. */
+		/**
+		 * Anything else that leaves the sender unconfirmed: a signature that fails or is not aligned
+		 * with the {@code From} domain, a {@code From} with several addresses, a message that cannot
+		 * be read or is too large to check, or a key that could not be fetched.
+		 */
 		UNVERIFIED
 	}
 
@@ -498,8 +503,8 @@ public class Issue {
 
 	/**
 	 * The domain of the mail this issue came from, when its description shows external images and
-	 * the receiving server vouched for its sender (HIN-181): what a reader is offered to trust.
-	 * Null for any other issue; a reader may then still load the images once.
+	 * its sender is verified (HIN-181, see {@link #senderVerified}): what a reader is offered to
+	 * trust. Null for any other issue; a reader may then still load the images once.
 	 */
 	@JsonProperty("externalImageSender")
 	public String externalImageSender() {
@@ -512,18 +517,18 @@ public class Issue {
 
 	/**
 	 * Why a reader of this issue is offered no "always load" for its external images, when it came
-	 * from a mail and shows some (HIN-181): {@code unsigned} when the mail carries no signature,
-	 * {@code unverified} when no signature confirms its sender, or the sender was not checked yet.
-	 * Null for any other issue. Additive: older apps ignore it.
+	 * from a mail and shows some (HIN-181): {@code UNSIGNED} when the mail carries no signature,
+	 * {@code UNVERIFIED} otherwise, also while the sender was not checked yet. Null for any other
+	 * issue. Additive: older apps ignore it.
 	 */
 	@JsonProperty("externalImageTrustUnavailable")
 	@JsonInclude(JsonInclude.Include.NON_NULL)
-	public String externalImageTrustUnavailable() {
+	public SenderUnverified externalImageTrustUnavailable() {
 		if (reporterEmail == null || externalImageSender() != null || !forms().hasExternalImages(descriptionDoc)) {
 			return null;
 		}
-		boolean unsigned = !Boolean.TRUE.equals(senderVerified) && senderUnverified == SenderUnverified.UNSIGNED;
-		return unsigned ? "unsigned" : "unverified";
+		return senderUnverifiedReason == SenderUnverified.UNSIGNED ? SenderUnverified.UNSIGNED
+				: SenderUnverified.UNVERIFIED;
 	}
 
 	/**
