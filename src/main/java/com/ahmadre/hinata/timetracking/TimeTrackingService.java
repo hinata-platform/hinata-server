@@ -247,9 +247,10 @@ public class TimeTrackingService {
 	 * {@link #resolveIssue(String, User)}, optionally answering an issue the caller cannot see
 	 * like one that does not exist (404 instead of 403).
 	 *
-	 * <p>The 1.x routes keep their 403 — the published app is entitled to the answer it has
-	 * always had. A new route has no such debt, and a 404 there does not tell anybody which
-	 * issue ids exist.
+	 * <p>Only the frozen 1.x route {@code POST /issues/{id}/work-items} keeps its 403 — the
+	 * published app is entitled to the answer it has always had. Every other write (a new
+	 * entry, an edit, the timer, an import, a takeover) answers 404, which does not tell
+	 * anybody which issue ids exist.
 	 */
 	private Issue resolveIssue(String issueIdOrKey, User user, boolean hideInvisible) {
 		Issue issue;
@@ -296,9 +297,11 @@ public class TimeTrackingService {
 		// the next field the epic adds (stage 6's lock date, stage 7's approval
 		// state) has to be added twice, and the one that gets missed is a route
 		// that silently drops it.
+		// The one write that keeps the 1.x answer: an issue the caller cannot see is a 403
+		// here, because the published app reads it that way.
 		return create(new NewEntry(null, issueIdOrKey, draft.durationMinutes(), draft.date(),
 				draft.activityType(), draft.description(), draft.startedAt(), draft.endedAt(),
-				draft.tags(), draft.billable()), source, user);
+				draft.tags(), draft.billable()), source, null, null, false, user);
 	}
 
 	/**
@@ -389,8 +392,11 @@ public class TimeTrackingService {
 		// fields, but taking the project off one is refused like a create without it.
 		assertRequiredFields(contentOf(item), moved ? PlacementRule.ENFORCED : PlacementRule.SKIPPED);
 		if (patch.tags() != null) {
-			// Same order as a create, for the same reason: nothing reaches the
-			// catalogue on behalf of a request that is refused.
+			// Same order as a create: nothing reaches the catalogue on behalf of a request the
+			// rules refuse. The one exception is a lost race below (409): a word typed into
+			// this edit may then already be in the catalogue. It is the word the person meant
+			// and will send again, and the stored entry has to carry the canonical spelling,
+			// so the catalogue cannot wait for the write.
 			item.setTags(resolveTags(patch.tags(), user));
 		}
 		WorkItem saved = replaceIfUnchanged(before, item);
@@ -413,21 +419,27 @@ public class TimeTrackingService {
 	}
 
 	/**
-	 * Stores the edited entry if nobody changed what the derived counters read from it since
-	 * it was loaded: its project, its issue and its length.
+	 * Stores the edited entry if nobody changed it since it was loaded: what the derived
+	 * counters read from it (its project, its issue, its length), whether it was invoiced in
+	 * the meantime, and when it was last written.
 	 *
 	 * <p>A compare-and-set rather than {@code @Version}, which old documents do not carry and
 	 * would therefore be taken for new ones. Without it two edits of one entry — moving it
 	 * from A to B and from A to C at the same moment — would both pass, both give A its
 	 * minutes back and both add them on their side, and the entry's time would be counted
-	 * twice. The loser is told the entry changed (409) and nothing of its edit is written; the
-	 * counters move only after the write succeeded.
+	 * twice. The loser is told the entry changed (409) and nothing of its edit is written to the
+	 * entry; the counters move only after the write succeeded.
 	 */
 	private WorkItem replaceIfUnchanged(WorkItem before, WorkItem after) {
 		Query unchanged = Query.query(Criteria.where("_id").is(before.getId())
 				.and("projectId").is(before.getProjectId())
 				.and("issueId").is(before.getIssueId())
-				.and("durationMinutes").is(before.getDurationMinutes()));
+				.and("durationMinutes").is(before.getDurationMinutes())
+				// An invoice marked in the meantime freezes the entry; null also matches an entry
+				// that never had the field.
+				.and("invoiceId").is(before.getInvoiceId())
+				// Any other edit since: the later write would silently undo it otherwise.
+				.and("updatedAt").is(before.getUpdatedAt()));
 		if (mongo.replace(unchanged, after).getMatchedCount() == 0) {
 			throw ApiException.conflict("error.time.entryChanged");
 		}
@@ -873,15 +885,18 @@ public class TimeTrackingService {
 		// Which of the projects these rows were written about the reader leads. Not the entry's
 		// project as it stands: an entry that moved carries the conversations of its old project,
 		// and the lead of the new one has no business reading those.
+		// A record written before records named their project (an old backfill grant) is read
+		// against the project the entry sits in now.
 		Set<String> ledProjects = new HashSet<>();
 		rows.stream().map(row -> row.getMetadata() == null ? null : row.getMetadata().get("project"))
+				.map(projectId -> projectId != null ? projectId : item.getProjectId())
 				.filter(Objects::nonNull).distinct()
 				.filter(projectId -> approvers.leads(projectId, user))
 				.forEach(ledProjects::add);
 		return new EntryHistory(PageableExecutionUtils.getPage(rows, pageable,
 						() -> mongo.count(Query.of(query).limit(-1).skip(-1), AuditLog.class)),
 				isOwner(item, user) || user.isOrgAdmin(),
-				ledProjects,
+				ledProjects, item.getProjectId(),
 				item.getUserId() != null && departed.contains(item.getUserId()),
 				departed);
 	}
@@ -917,7 +932,7 @@ public class TimeTrackingService {
 	 * not the audit log.
 	 */
 	public record EntryHistory(Page<AuditLog> rows, boolean ownerOrAdmin, Set<String> ledProjects,
-			boolean ownerDeparted, Set<String> departedActors) {
+			String entryProjectId, boolean ownerDeparted, Set<String> departedActors) {
 
 		public boolean readsConversation(AuditLog log) {
 			if (ownerDeparted) {
@@ -931,8 +946,10 @@ public class TimeTrackingService {
 				return false;
 			}
 			// An approval conversation is read by a lead of the project it was about — the
-			// project the record names, which is not necessarily where the entry is now.
-			String project = meta.get("project");
+			// project the record names, which is not necessarily where the entry is now. A
+			// record from before records named one falls back to the entry's project, so it
+			// does not vanish for the lead who could read it until then.
+			String project = meta.get("project") != null ? meta.get("project") : entryProjectId;
 			return TimePolicy.LockReason.APPROVAL.name().equals(meta.get("reason"))
 					&& project != null && ledProjects.contains(project);
 		}
@@ -979,7 +996,7 @@ public class TimeTrackingService {
 	 * page.
 	 */
 	public WorkItem create(NewEntry draft, WorkItem.Source source, User user) {
-		return create(draft, source, null, null, user);
+		return create(draft, source, null, null, true, user);
 	}
 
 	/**
@@ -989,7 +1006,7 @@ public class TimeTrackingService {
 	 * anything else is written; the caller answers with the entry that is there.
 	 */
 	WorkItem createFromCalendar(NewEntry draft, WorkItem.CalendarRef ref, User user) {
-		return create(draft, WorkItem.Source.CALENDAR, ref, null, user);
+		return create(draft, WorkItem.Source.CALENDAR, ref, null, true, user);
 	}
 
 	/**
@@ -1000,7 +1017,7 @@ public class TimeTrackingService {
 	 * is there.
 	 */
 	WorkItem createFromShare(NewEntry draft, String sharedFromId, User user) {
-		return create(draft, WorkItem.Source.SHARED, null, sharedFromId, user);
+		return create(draft, WorkItem.Source.SHARED, null, sharedFromId, true, user);
 	}
 
 	/** The copy {@code user} filed of a shared entry, if there is one. */
@@ -1009,8 +1026,12 @@ public class TimeTrackingService {
 				WorkItem.class);
 	}
 
+	/**
+	 * @param hideInvisible whether an issue the caller cannot see answers 404 like a missing one;
+	 *                      false only for the frozen 1.x route, see {@link #resolveIssue(String, User, boolean)}
+	 */
 	private WorkItem create(NewEntry draft, WorkItem.Source source, WorkItem.CalendarRef ref,
-			String sharedFromId, User user) {
+			String sharedFromId, boolean hideInvisible, User user) {
 		// Placement first, then the body. The order is load-bearing on the 1.x
 		// route this now also serves: `POST /issues/{id}/work-items` has always
 		// answered 403 for an issue the caller cannot see, whatever else was
@@ -1018,7 +1039,7 @@ public class TimeTrackingService {
 		// that answer. Checking the duration first would tell an unauthorised
 		// caller less — the better property in the abstract, and not one worth
 		// changing a frozen route's behaviour to acquire.
-		Placement placement = resolvePlacement(draft.projectId(), draft.issueId(), user);
+		Placement placement = resolvePlacement(draft.projectId(), draft.issueId(), user, hideInvisible);
 		ZoneId zone = zoneOf(user);
 		Instant start = stored(draft.startedAt());
 		Instant end = stored(draft.endedAt());
@@ -1162,8 +1183,17 @@ public class TimeTrackingService {
 	 * has to have answered the same question at start time.
 	 */
 	public Placement resolvePlacement(String projectId, String issueId, User user) {
+		return resolvePlacement(projectId, issueId, user, true);
+	}
+
+	/**
+	 * @param hideInvisible whether an issue the caller cannot see answers 404 like a missing
+	 *                      one — everywhere except the frozen 1.x {@code POST /issues/{id}/work-items}
+	 */
+	private Placement resolvePlacement(String projectId, String issueId, User user,
+			boolean hideInvisible) {
 		if (issueId != null) {
-			return placementOf(projectId, resolveIssue(issueId, user));
+			return placementOf(projectId, resolveIssue(issueId, user, hideInvisible));
 		}
 		if (projectId != null && !projectReach.canSee(projectId, user)) {
 			throw ApiException.forbidden("error.project.notMember");
