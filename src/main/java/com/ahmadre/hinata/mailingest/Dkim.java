@@ -40,8 +40,10 @@ import java.util.regex.Pattern;
  *       {@code Content-Type}, ...) that the signature covers may not appear more often than the
  *       signature lists it: the parser reads the topmost one, a signature the bottom ones, so an
  *       extra copy on top would be shown without being signed.</li>
- *   <li>A head with a NUL, a carriage return that does not end a line, or a field name outside
- *       {@code [!-9;-~]+} is not checked: a mail parser could read it differently than a signer.</li>
+ *   <li>A head with a NUL, a carriage return that does not end a line, a line of nothing but
+ *       blanks, or a field name outside {@code [!-9;-~]+} is not checked: a mail parser could read
+ *       it differently than a signer.</li>
+ *   <li>A signature that lists more than {@link #MAX_SIGNED_HEADERS} header names is invalid.</li>
  *   <li>A key flagged as testing ({@code t=y}) is no key.</li>
  *   <li>The expiry ({@code x=}) is not enforced: a mailbox is read again long after the mail
  *       arrived, and what matters is who wrote it, not whether it is fresh.</li>
@@ -65,6 +67,11 @@ final class Dkim {
 		 * @throws IOException when DNS could not be asked, so the answer is not known yet
 		 */
 		List<String> txt(String name) throws IOException;
+
+		/** {@link #txt(String)}, waiting no longer than [remaining]. */
+		default List<String> txt(String name, Duration remaining) throws IOException {
+			return txt(name);
+		}
 	}
 
 	/**
@@ -75,16 +82,22 @@ final class Dkim {
 	 *                       but unverified
 	 * @param from           the address in the one {@code From} header the signatures sign, or
 	 *                       null when there is not exactly one address in exactly one such header
-	 * @param passed         the signing domain ({@code d=}) of the first signature that is aligned
-	 *                       with the {@code From} domain and holds; empty when none does
+	 * @param signer         the signing domain ({@code d=}) of the first signature that is aligned
+	 *                       with the {@code From} domain and holds; null when none does
 	 * @param keyUnavailable whether an aligned signature could not be checked because DNS did not
 	 *                       answer in time
 	 */
-	record Result(boolean signed, String from, Set<String> passed, boolean keyUnavailable) {
+	record Result(boolean signed, String from, String signer, boolean keyUnavailable) {
 	}
 
-	/** Signatures of one message checked at most: each one may cost a DNS lookup. */
+	/**
+	 * Signatures aligned with the {@code From} domain checked at most, each a DNS lookup. Others
+	 * cost no lookup and are skipped, however many there are.
+	 */
 	static final int MAX_SIGNATURES = 5;
+
+	/** Header names one signature may list ({@code h=}); a real one lists fewer than thirty. */
+	static final int MAX_SIGNED_HEADERS = 64;
 
 	/** Time one message may spend waiting for DNS, all its signatures together. */
 	static final Duration DNS_BUDGET = Duration.ofSeconds(5);
@@ -131,7 +144,7 @@ final class Dkim {
 			lineStart = i + 1;
 		}
 		// A head the parser and the signature might read differently is not checked at all.
-		Result unreadable = new Result(true, null, Set.of(), false);
+		Result unreadable = new Result(true, null, null, false);
 		if (!plainHead(raw, headEnd)) return unreadable;
 		// ISO-8859-1 maps every byte to one char and back, so canonical forms keep the bytes.
 		List<Header> headers = headers(new String(raw, 0, headEnd, StandardCharsets.ISO_8859_1));
@@ -139,25 +152,33 @@ final class Dkim {
 		List<Header> signatures = headers.stream().filter(h -> h.name.equals("dkim-signature")).toList();
 		List<Header> froms = headers.stream().filter(h -> h.name.equals("from")).toList();
 		String from = froms.size() == 1 ? addressOf(froms.getFirst()) : null;
-		if (signatures.isEmpty()) return new Result(false, from, Set.of(), false);
-		if (from == null) return new Result(true, null, Set.of(), false);
+		if (signatures.isEmpty()) return new Result(false, from, null, false);
+		if (from == null) return new Result(true, null, null, false);
 		boolean unavailable = false;
 		Body body = new Body(raw, bodyStart);
 		long deadline = nanoTime.getAsLong() + DNS_BUDGET.toNanos();
+		// Each lookup gets what is left of the budget, so the budget holds for the message as a whole.
 		KeyLookup budgeted = name -> {
-			if (nanoTime.getAsLong() - deadline > 0) throw new IOException("DNS budget of the message spent");
-			return keys.txt(name);
+			long remaining = deadline - nanoTime.getAsLong();
+			if (remaining <= 0) throw new IOException("DNS budget of the message spent");
+			return keys.txt(name, Duration.ofNanos(remaining));
 		};
-		for (Header signature : signatures.subList(0, Math.min(signatures.size(), MAX_SIGNATURES))) {
+		int aligned = 0;
+		for (Header signature : signatures) {
+			Map<String, String> tags = tags(signature.value());
+			if (tags == null || !SenderVerification.aligned(SenderDomains.normalize(tags.get("d")), fromDomain)) {
+				continue; // no hash, no lookup: it cannot verify this sender
+			}
+			if (++aligned > MAX_SIGNATURES) break;
 			try {
 				String domain = check(signature, headers, body, fromDomain, budgeted);
-				if (domain != null) return new Result(true, from, Set.of(domain), false);
+				if (domain != null) return new Result(true, from, domain, false);
 			}
 			catch (IOException noAnswer) {
 				unavailable = true;
 			}
 		}
-		return new Result(true, from, Set.of(), unavailable);
+		return new Result(true, from, null, unavailable);
 	}
 
 	/**
@@ -206,7 +227,9 @@ final class Dkim {
 			if (line.endsWith("\r")) line = line.substring(0, line.length() - 1);
 			if (line.isEmpty()) continue;
 			if (line.charAt(0) == ' ' || line.charAt(0) == '\t') {
-				if (current == null) return null;
+				// A line of nothing but blanks ends the head for some parsers and continues a field for
+				// others; such a head is not read at all.
+				if (current == null || line.chars().allMatch(c -> c == ' ' || c == '\t')) return null;
 				current.append("\r\n").append(line);
 				continue;
 			}
@@ -255,8 +278,10 @@ final class Dkim {
 		String headerCanon = canon[0];
 		String bodyCanon = canon.length > 1 ? canon[1] : "simple";
 		if (canon.length > 2 || !isCanon(headerCanon) || !isCanon(bodyCanon)) return null;
+		String[] listed = tags.getOrDefault("h", "").split(":");
+		if (listed.length > MAX_SIGNED_HEADERS) return null;
 		List<String> signed = new ArrayList<>();
-		for (String name : tags.getOrDefault("h", "").split(":")) {
+		for (String name : listed) {
 			String trimmed = name.strip().toLowerCase(Locale.ROOT);
 			if (!trimmed.isEmpty()) signed.add(trimmed);
 		}

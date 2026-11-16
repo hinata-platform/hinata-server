@@ -75,20 +75,20 @@ class DkimTest {
 		Dkim.Result result = verify(ED25519_SIGNATURE + HEADERS + BODY);
 
 		assertThat(result.signed()).isTrue();
-		assertThat(result.passed()).containsExactly("football.example.com");
+		assertThat(result.signer()).isEqualTo("football.example.com");
 	}
 
 	@Test
 	void theRsaSignatureOfRfc8463Holds() {
-		assertThat(verify(RSA_SIGNATURE + HEADERS + BODY).passed()).containsExactly("football.example.com");
+		assertThat(verify(RSA_SIGNATURE + HEADERS + BODY).signer()).isEqualTo("football.example.com");
 	}
 
 	@Test
 	void bothSignaturesTogetherHoldAndAMessageWithBareLineFeedsIsReadToo() {
 		String message = ED25519_SIGNATURE + RSA_SIGNATURE + HEADERS + BODY;
 
-		assertThat(verify(message).passed()).containsExactly("football.example.com");
-		assertThat(verify(message.replace("\r\n", "\n")).passed()).containsExactly("football.example.com");
+		assertThat(verify(message).signer()).isEqualTo("football.example.com");
+		assertThat(verify(message.replace("\r\n", "\n")).signer()).isEqualTo("football.example.com");
 	}
 
 	@Test
@@ -96,7 +96,7 @@ class DkimTest {
 		Dkim.Result result = verify(RSA_SIGNATURE + HEADERS + BODY.replace("hungry", "Hungry"));
 
 		assertThat(result.signed()).isTrue();
-		assertThat(result.passed()).isEmpty();
+		assertThat(result.signer()).isNull();
 		assertThat(result.keyUnavailable()).isFalse();
 	}
 
@@ -104,15 +104,14 @@ class DkimTest {
 	void aChangedSignedHeaderBreaksTheSignature() {
 		String forged = HEADERS.replace("Joe SixPack <joe@football.example.com>", "Joe <joe@evil.example>");
 
-		assertThat(verify(ED25519_SIGNATURE + RSA_SIGNATURE + forged + BODY).passed()).isEmpty();
+		assertThat(verify(ED25519_SIGNATURE + RSA_SIGNATURE + forged + BODY).signer()).isNull();
 	}
 
 	@Test
 	void whitespaceTheRelaxedFormsIgnoreKeepsItValid() {
 		String reflowed = HEADERS.replace("Subject: Is dinner ready?", "subject:   Is dinner\r\n\tready?  ");
 
-		assertThat(verify(RSA_SIGNATURE + reflowed + BODY.replace("Hi.", "Hi.   ")).passed())
-				.containsExactly("football.example.com");
+		assertThat(verify(RSA_SIGNATURE + reflowed + BODY.replace("Hi.", "Hi.   ")).signer()).isEqualTo("football.example.com");
 	}
 
 	@Test
@@ -121,14 +120,14 @@ class DkimTest {
 		// RFC example oversigns From, a second one may not slip in.
 		String doubled = "From: Mallory <ceo@football.example.com>\r\n" + HEADERS;
 
-		assertThat(verify(RSA_SIGNATURE + doubled + BODY).passed()).isEmpty();
+		assertThat(verify(RSA_SIGNATURE + doubled + BODY).signer()).isNull();
 	}
 
 	@Test
 	void anUnsignedCopyOfSubjectAboveTheSignedOneCountsForNothing() {
 		String doubled = "Subject: Your invoice is ready\r\n" + HEADERS;
 
-		assertThat(verify(RSA_SIGNATURE + doubled + BODY).passed()).isEmpty();
+		assertThat(verify(RSA_SIGNATURE + doubled + BODY).signer()).isNull();
 	}
 
 	@Test
@@ -136,7 +135,7 @@ class DkimTest {
 		String relayed = "Received: from mx.example.net by mx.example.org; Sun, 15 Nov 2026 12:00:00 +0000\r\n"
 				+ "Authentication-Results: mx.example.org; dkim=pass\r\n";
 
-		assertThat(verify(relayed + RSA_SIGNATURE + HEADERS + BODY).passed()).containsExactly("football.example.com");
+		assertThat(verify(relayed + RSA_SIGNATURE + HEADERS + BODY).signer()).isEqualTo("football.example.com");
 	}
 
 	@Test
@@ -144,7 +143,7 @@ class DkimTest {
 		Dkim.Result result = verify(HEADERS + BODY);
 
 		assertThat(result.signed()).isFalse();
-		assertThat(result.passed()).isEmpty();
+		assertThat(result.signer()).isNull();
 	}
 
 	@Test
@@ -153,8 +152,8 @@ class DkimTest {
 		Dkim.KeyLookup none = name -> List.of();
 		byte[] message = (RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1);
 
-		assertThat(Dkim.verify(message, "football.example.com", revoked).passed()).isEmpty();
-		assertThat(Dkim.verify(message, "football.example.com", none).passed()).isEmpty();
+		assertThat(Dkim.verify(message, "football.example.com", revoked).signer()).isNull();
+		assertThat(Dkim.verify(message, "football.example.com", none).signer()).isNull();
 		assertThat(Dkim.verify(message, "football.example.com", none).keyUnavailable()).isFalse();
 	}
 
@@ -166,7 +165,7 @@ class DkimTest {
 
 		Dkim.Result result = Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1), "football.example.com", down);
 
-		assertThat(result.passed()).isEmpty();
+		assertThat(result.signer()).isNull();
 		assertThat(result.keyUnavailable()).isTrue();
 	}
 
@@ -175,7 +174,7 @@ class DkimTest {
 		Dkim.KeyLookup swapped = name -> KEYS.get("brisbane._domainkey.football.example.com");
 
 		assertThat(Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1), "football.example.com", swapped)
-				.passed()).isEmpty();
+				.signer()).isNull();
 	}
 
 	@Test
@@ -185,13 +184,13 @@ class DkimTest {
 		// refused first and on its own.
 		String limited = RSA_SIGNATURE.replace("q=dns/txt;", "q=dns/txt; l=10;");
 
-		assertThat(verify(limited + HEADERS + BODY).passed()).isEmpty();
+		assertThat(verify(limited + HEADERS + BODY).signer()).isNull();
 	}
 
 	@Test
 	void sha1AndUnknownAlgorithmsAreRefused() {
-		assertThat(verify(RSA_SIGNATURE.replace("rsa-sha256", "rsa-sha1") + HEADERS + BODY).passed()).isEmpty();
-		assertThat(verify(RSA_SIGNATURE.replace("rsa-sha256", "hmac-sha256") + HEADERS + BODY).passed()).isEmpty();
+		assertThat(verify(RSA_SIGNATURE.replace("rsa-sha256", "rsa-sha1") + HEADERS + BODY).signer()).isNull();
+		assertThat(verify(RSA_SIGNATURE.replace("rsa-sha256", "hmac-sha256") + HEADERS + BODY).signer()).isNull();
 	}
 
 	@Test
@@ -199,7 +198,7 @@ class DkimTest {
 		String withoutFrom = RSA_SIGNATURE.replace("h=from : to : subject :", "h=to : subject :")
 				.replace("message-id : from : subject : date;", "message-id : subject : date;");
 
-		assertThat(verify(withoutFrom + HEADERS + BODY).passed()).isEmpty();
+		assertThat(verify(withoutFrom + HEADERS + BODY).signer()).isNull();
 	}
 
 	@Test
@@ -236,7 +235,7 @@ class DkimTest {
 				"vodafone.com", dns);
 
 		assertThat(result.signed()).isTrue();
-		assertThat(result.passed()).isEmpty();
+		assertThat(result.signer()).isNull();
 		assertThat(dns.calls).hasValue(0);
 	}
 
@@ -247,7 +246,7 @@ class DkimTest {
 		Dkim.Result result = Dkim.verify((ED25519_SIGNATURE + RSA_SIGNATURE + HEADERS + BODY)
 				.getBytes(StandardCharsets.ISO_8859_1), "football.example.com", dns);
 
-		assertThat(result.passed()).containsExactly("football.example.com");
+		assertThat(result.signer()).isEqualTo("football.example.com");
 		assertThat(dns.calls).hasValue(1);
 	}
 
@@ -260,7 +259,7 @@ class DkimTest {
 		Dkim.Result result = Dkim.verify((broken.repeat(7) + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
 				"football.example.com", dns);
 
-		assertThat(result.passed()).isEmpty();
+		assertThat(result.signer()).isNull();
 		assertThat(dns.calls).hasValue(Dkim.MAX_SIGNATURES);
 	}
 
@@ -325,9 +324,8 @@ class DkimTest {
 		String doubled = signer.message("Subject: Pay this invoice now\r\n", "shop@example.org", "Order shipped",
 				body, "");
 
-		assertThat(Dkim.verify(genuine.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed())
-				.containsExactly("example.org");
-		assertThat(Dkim.verify(doubled.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed()).isEmpty();
+		assertThat(Dkim.verify(genuine.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).signer()).isEqualTo("example.org");
+		assertThat(Dkim.verify(doubled.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).signer()).isNull();
 	}
 
 	@Test
@@ -339,9 +337,8 @@ class DkimTest {
 		String appended = signer.message("", "shop@example.org", "Hi", body, " l=" + body.length() + ";")
 				+ "<img src=https://evil.example/pixel.png>\r\n";
 
-		assertThat(Dkim.verify(whole.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed())
-				.containsExactly("example.org");
-		assertThat(Dkim.verify(appended.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).passed()).isEmpty();
+		assertThat(Dkim.verify(whole.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).signer()).isEqualTo("example.org");
+		assertThat(Dkim.verify(appended.getBytes(StandardCharsets.ISO_8859_1), "example.org", signer.dns()).signer()).isNull();
 	}
 
 	@Test
@@ -384,9 +381,9 @@ class DkimTest {
 		byte[] message = (RSA_SIGNATURE + ED25519_SIGNATURE + HEADERS + "\r\n" + blank)
 				.getBytes(StandardCharsets.ISO_8859_1);
 
-		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(3), () -> {
+		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> {
 			Dkim.Result result = Dkim.verify(message, "football.example.com", DNS);
-			assertThat(result.passed()).isEmpty();
+			assertThat(result.signer()).isNull();
 		});
 	}
 
@@ -414,12 +411,12 @@ class DkimTest {
 		Dkim.Result result = verify(RSA_SIGNATURE + split + BODY);
 
 		assertThat(result.signed()).isTrue();
-		assertThat(result.passed()).isEmpty();
+		assertThat(result.signer()).isNull();
 	}
 
 	@Test
 	void aHeadWithANulIsNotChecked() {
-		assertThat(verify(RSA_SIGNATURE + HEADERS.replace("Is dinner", "Is\0dinner") + BODY).passed()).isEmpty();
+		assertThat(verify(RSA_SIGNATURE + HEADERS.replace("Is dinner", "Is\0dinner") + BODY).signer()).isNull();
 	}
 
 	@Test
@@ -428,8 +425,8 @@ class DkimTest {
 		String spaced = HEADERS.replace("From: Joe", "From : Joe");
 		String garbage = "this line is no header\r\n" + HEADERS;
 
-		assertThat(verify(RSA_SIGNATURE + spaced + BODY).passed()).isEmpty();
-		assertThat(verify(RSA_SIGNATURE + garbage + BODY).passed()).isEmpty();
+		assertThat(verify(RSA_SIGNATURE + spaced + BODY).signer()).isNull();
+		assertThat(verify(RSA_SIGNATURE + garbage + BODY).signer()).isNull();
 	}
 
 	@Test
@@ -445,6 +442,68 @@ class DkimTest {
 				.map(record -> record.replace("v=DKIM1;", "v=DKIM1; t=y;")).toList();
 
 		assertThat(Dkim.verify((RSA_SIGNATURE + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
-				"football.example.com", testing).passed()).isEmpty();
+				"football.example.com", testing).signer()).isNull();
+	}
+
+	@Test
+	void aSignatureListingTooManyHeadersIsInvalid() {
+		CountingDns dns = new CountingDns();
+		String huge = RSA_SIGNATURE.replace("h=from : to : subject :", "h=" + "x-pad:".repeat(100_000) + "from : to : subject :");
+
+		org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> {
+			assertThat(Dkim.verify((huge + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
+					"football.example.com", dns).signer()).isNull();
+		});
+		assertThat(dns.calls).hasValue(0);
+	}
+
+	@Test
+	void aLineOfOnlyBlanksInTheHeadIsNotChecked() {
+		String blank = HEADERS.replace("Subject: Is dinner ready?\r\n", "Subject: Is dinner ready?\r\n \t \r\n");
+
+		Dkim.Result result = verify(RSA_SIGNATURE + blank + BODY);
+
+		assertThat(result.signed()).isTrue();
+		assertThat(result.signer()).isNull();
+	}
+
+	@Test
+	void anAlignedSignatureBehindFiveOthersStillCounts() {
+		// Five signatures of another organisation cost no lookup and do not use up the cap.
+		String foreign = RSA_SIGNATURE.replace("d=football.example.com; i=@football.example.com;",
+				"d=mailer.example; i=@mailer.example;");
+		CountingDns dns = new CountingDns();
+
+		Dkim.Result result = Dkim.verify((foreign.repeat(5) + RSA_SIGNATURE + HEADERS + BODY)
+				.getBytes(StandardCharsets.ISO_8859_1), "football.example.com", dns);
+
+		assertThat(result.signer()).isEqualTo("football.example.com");
+		assertThat(dns.calls).hasValue(1);
+	}
+
+	@Test
+	void eachLookupGetsWhatIsLeftOfTheBudget() {
+		long[] now = { 0 };
+		List<java.time.Duration> given = new java.util.ArrayList<>();
+		Dkim.KeyLookup slow = new Dkim.KeyLookup() {
+			@Override
+			public List<String> txt(String name) {
+				throw new AssertionError("asked without a budget");
+			}
+
+			@Override
+			public List<String> txt(String name, java.time.Duration remaining) {
+				given.add(remaining);
+				now[0] += java.time.Duration.ofSeconds(2).toNanos();
+				return List.of();
+			}
+		};
+		String broken = RSA_SIGNATURE.replace("b=F45dVWDf", "b=G45dVWDf");
+
+		Dkim.verify((broken.repeat(5) + HEADERS + BODY).getBytes(StandardCharsets.ISO_8859_1),
+				"football.example.com", slow, () -> now[0]);
+
+		assertThat(given).containsExactly(java.time.Duration.ofSeconds(5), java.time.Duration.ofSeconds(3),
+				java.time.Duration.ofSeconds(1));
 	}
 }

@@ -4,6 +4,7 @@ import com.ahmadre.hinata.user.SenderDomains;
 import com.google.common.net.InternetDomainName;
 
 import java.util.Locale;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -15,7 +16,9 @@ import java.util.regex.Pattern;
  * <p>The server checks for itself: a DKIM signature of the whole message ({@link Dkim}) whose
  * signing domain is aligned with the {@code From} domain, as DMARC defines alignment (the same
  * organisational domain, RFC 7489 3.1.1). That is what DMARC accepts as a pass, and it needs
- * neither a receiving mail server that checks nor anything configured.
+ * neither a receiving mail server that checks nor anything configured. The signature has to sign
+ * the very address the issue is attributed to: the address in the one signed {@code From} header
+ * must be the one the mail parser reads.
  *
  * <p>A receiving server's word counts as well, when the ingest connection names it: the topmost
  * {@code Authentication-Results} header (RFC 8601), and only when its authserv-id is that name.
@@ -37,7 +40,11 @@ final class SenderVerification {
 		VERIFIED,
 		/** The mail carries no DKIM signature, so who sent it cannot be told. */
 		UNSIGNED,
-		/** It is signed, but no signature holds that is aligned with the {@code From} domain. */
+		/**
+		 * Anything else that leaves the sender unconfirmed: a signature that fails or is not aligned
+		 * with the {@code From} domain, a {@code From} with several addresses, a message that cannot
+		 * be read or is too large to check, or a key that could not be fetched.
+		 */
 		UNVERIFIED,
 		/** A signer's key could not be looked up right now; the answer is not known. */
 		UNKNOWN
@@ -52,22 +59,32 @@ final class SenderVerification {
 	private static final Pattern SIGNING_IDENTITY = Pattern.compile("header\\.i\\s*=\\s*[^@\\s;]*@([a-z0-9.-]{1,253})");
 	private static final Pattern FROM_DOMAIN = Pattern.compile("header\\.from\\s*=\\s*([a-z0-9.-]{1,253})");
 
-	/**
-	 * The verdict on [from], the address the issue is attributed to, for a message whose bytes as
-	 * received are [raw] (null when they could not be read) and whose
-	 * {@code Authentication-Results} headers, top first, are [authResults].
-	 */
+	/** {@link #check(Supplier, String[], String, String[], String, Dkim.KeyLookup)} on bytes at hand. */
 	static Verdict check(byte[] raw, String from, String[] authResults, String authservId, Dkim.KeyLookup keys) {
+		return check(() -> raw, null, from, authResults, authservId, keys);
+	}
+
+	/**
+	 * The verdict on [from], the address the issue is attributed to, for a message whose
+	 * {@code Authentication-Results} headers, top first, are [authResults] and whose
+	 * {@code DKIM-Signature} headers are [signatures] (null when not known). The bytes of the
+	 * message as received, from [raw] (null when they could not be read), are fetched only when a
+	 * signature has to be checked: not when the receiving server vouched, nor for a mail that
+	 * carries no signature.
+	 */
+	static Verdict check(Supplier<byte[]> raw, String[] signatures, String from, String[] authResults,
+			String authservId, Dkim.KeyLookup keys) {
 		if (verified(authResults, from, authservId)) return Verdict.VERIFIED;
-		if (raw == null) return Verdict.UNVERIFIED;
-		String domain = SenderDomains.ofAddress(from);
-		Dkim.Result signatures = Dkim.verify(raw, domain, keys);
-		if (!signatures.signed()) return Verdict.UNSIGNED;
+		if (signatures != null && signatures.length == 0) return Verdict.UNSIGNED;
+		byte[] bytes = raw.get();
+		if (bytes == null) return Verdict.UNVERIFIED;
+		Dkim.Result result = Dkim.verify(bytes, SenderDomains.ofAddress(from), keys);
+		if (!result.signed()) return Verdict.UNSIGNED;
 		// The address the issue is attributed to has to be the one the signature signs.
-		if (!signatures.passed().isEmpty() && from != null && from.equalsIgnoreCase(signatures.from())) {
+		if (result.signer() != null && from != null && from.equalsIgnoreCase(result.from())) {
 			return Verdict.VERIFIED;
 		}
-		return signatures.keyUnavailable() ? Verdict.UNKNOWN : Verdict.UNVERIFIED;
+		return result.keyUnavailable() ? Verdict.UNKNOWN : Verdict.UNVERIFIED;
 	}
 
 	/**
