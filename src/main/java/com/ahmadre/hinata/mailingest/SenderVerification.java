@@ -61,11 +61,9 @@ final class SenderVerification {
 		if (verified(authResults, from, authservId)) return Verdict.VERIFIED;
 		if (raw == null) return Verdict.UNVERIFIED;
 		String domain = SenderDomains.ofAddress(from);
-		Dkim.Result signatures = Dkim.verify(raw, keys);
+		Dkim.Result signatures = Dkim.verify(raw, domain, keys);
 		if (!signatures.signed()) return Verdict.UNSIGNED;
-		if (domain != null && signatures.passed().stream().anyMatch(signer -> aligned(signer, domain))) {
-			return Verdict.VERIFIED;
-		}
+		if (!signatures.passed().isEmpty()) return Verdict.VERIFIED;
 		return signatures.keyUnavailable() ? Verdict.UNKNOWN : Verdict.UNVERIFIED;
 	}
 
