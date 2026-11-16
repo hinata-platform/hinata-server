@@ -11,10 +11,14 @@ import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
+import com.mongodb.client.result.UpdateResult;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 
 import java.time.Clock;
@@ -31,6 +35,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
@@ -96,8 +101,8 @@ class TimeTrackingWriteHookTest {
 				new TimeEntryWrites(new TimeUsageCache(CLOCK), event -> { }), CLOCK));
 		when(workItems.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 		// An edit is stored by a compare-and-set; here nobody else is writing.
-		when(mongo.replace(any(org.springframework.data.mongodb.core.query.Query.class), any()))
-				.thenReturn(com.mongodb.client.result.UpdateResult.acknowledged(1, 1L, null));
+		when(mongo.replace(any(Query.class), any()))
+				.thenReturn(UpdateResult.acknowledged(1, 1L, null));
 	}
 
 	private WorkItem entry() {
@@ -152,6 +157,40 @@ class TimeTrackingWriteHookTest {
 				assertThat(entry.getDurationMinutes()).isEqualTo(60));
 		assertThat(after.getAllValues()).anySatisfy(entry ->
 				assertThat(entry.getDurationMinutes()).isEqualTo(45));
+	}
+
+	@Test
+	void anEditIsStoredOnlyIfNobodyChangedTheEntrySinceItWasRead() {
+		Instant lastWritten = Instant.parse("2026-11-01T10:00:00Z");
+		when(workItems.findById("w-1")).thenReturn(Optional.of(entry().toBuilder()
+				.updatedAt(lastWritten).build()));
+
+		service.update("w-1", new TimeTrackingService.WorkItemPatch(45, null, null, null,
+				false, null, false, null, null, null), owner);
+
+		// A concurrent move, a concurrent invoice mark or any other edit since the read makes
+		// the condition miss, and the write with it.
+		ArgumentCaptor<Query> condition = ArgumentCaptor.forClass(Query.class);
+		verify(mongo).replace(condition.capture(), any());
+		Document matched = condition.getValue().getQueryObject();
+		assertThat(matched).containsEntry("_id", "w-1").containsEntry("projectId", "p-1")
+				.containsEntry("issueId", "i-1").containsEntry("durationMinutes", 60)
+				.containsEntry("updatedAt", lastWritten);
+		// Null matches an entry that never had an invoice field as well.
+		assertThat(matched).containsKey("invoiceId");
+		assertThat(matched.get("invoiceId")).isNull();
+	}
+
+	@Test
+	void anEntryChangedMeanwhileAnswersConflictAndMovesNoCounter() {
+		when(workItems.findById("w-1")).thenReturn(Optional.of(entry()));
+		when(mongo.replace(any(Query.class), any())).thenReturn(UpdateResult.acknowledged(0, 0L, null));
+
+		assertThatThrownBy(() -> service.update("w-1", new TimeTrackingService.WorkItemPatch(45, null,
+				null, null, false, null, false, null, null, null), owner))
+				.isInstanceOf(ApiException.class).hasMessage("error.time.entryChanged")
+				.extracting(thrown -> ((ApiException) thrown).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+		verify(mongo, never()).updateFirst(any(Query.class), any(Update.class), eq(Issue.class));
 	}
 
 	@Test

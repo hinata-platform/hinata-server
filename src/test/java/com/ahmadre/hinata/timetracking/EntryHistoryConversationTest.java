@@ -25,8 +25,14 @@ class EntryHistoryConversationTest {
 				.build();
 	}
 
+	/** A lead's view of the history of an entry that now sits in [entryProject]. */
+	private static TimeTrackingService.EntryHistory readBy(Set<String> ledProjects, String entryProject) {
+		return new TimeTrackingService.EntryHistory(Page.empty(), false, ledProjects, entryProject, false,
+				Set.of());
+	}
+
 	private static TimeTrackingService.EntryHistory readBy(Set<String> ledProjects) {
-		return new TimeTrackingService.EntryHistory(Page.empty(), false, ledProjects, false, Set.of());
+		return readBy(ledProjects, "new");
 	}
 
 	@Test
@@ -40,17 +46,21 @@ class EntryHistoryConversationTest {
 	}
 
 	@Test
-	void aRecordThatNamesNoProjectIsReadByNoLead() {
+	void aRecordThatNamesNoProjectIsReadAgainstTheEntrysProject() {
+		// Records from before they named their project (an old backfill grant) do not vanish
+		// for the lead who could read them until then.
 		AuditLog unnamed = AuditLog.builder().action(AuditAction.TIME_BACKFILL_GRANTED)
 				.metadata(Map.of("reason", TimePolicy.LockReason.APPROVAL.name())).build();
 
-		assertThat(readBy(Set.of("old")).readsConversation(unnamed)).isFalse();
+		assertThat(readBy(Set.of("old"), "old").readsConversation(unnamed)).isTrue();
+		assertThat(readBy(Set.of("other"), "old").readsConversation(unnamed)).isFalse();
+		assertThat(readBy(Set.of("old"), null).readsConversation(unnamed)).isFalse();
 	}
 
 	@Test
 	void theOwnerAndAnAdministratorReadEveryConversation() {
 		TimeTrackingService.EntryHistory owner =
-				new TimeTrackingService.EntryHistory(Page.empty(), true, Set.of(), false, Set.of());
+				new TimeTrackingService.EntryHistory(Page.empty(), true, Set.of(), "old", false, Set.of());
 
 		assertThat(owner.readsConversation(approvalRecord("old"))).isTrue();
 	}

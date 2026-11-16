@@ -1,7 +1,10 @@
 package com.ahmadre.hinata.timetracking;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditLogRepository;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.common.TestMongo;
+import com.ahmadre.hinata.common.TimePolicy;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
@@ -33,6 +36,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -81,9 +86,7 @@ class TimeEntryPlacementIntegrationTest {
 	@Autowired
 	private TimeLocks locks;
 	@Autowired
-	private com.ahmadre.hinata.issue.IssueService issueService;
-	@Autowired
-	private com.ahmadre.hinata.audit.AuditLogRepository auditLog;
+	private AuditLogRepository auditLog;
 
 	/** Member of both projects, owner of the entries. */
 	private User member;
@@ -451,22 +454,22 @@ class TimeEntryPlacementIntegrationTest {
 			entries.add(logged(null, login.getId(), 10, member));
 		}
 		ExecutorService pool = Executors.newFixedThreadPool(2);
-		int refused = 0;
 		try {
 			for (WorkItem entry : entries) {
-				java.util.concurrent.CyclicBarrier start = new java.util.concurrent.CyclicBarrier(2);
+				CyclicBarrier start = new CyclicBarrier(2);
 				List<Callable<WorkItem>> both = List.of(
-						() -> { start.await(); return timeTracking.update(entry.getId(), toIssue(invoice.getId()), member); },
-						() -> { start.await(); return timeTracking.update(entry.getId(), toIssue(third.getId()), member); });
+						() -> movedTogether(start, entry, invoice),
+						() -> movedTogether(start, entry, third));
 				for (Future<WorkItem> done : pool.invokeAll(both)) {
 					try {
 						done.get();
 					}
-					catch (java.util.concurrent.ExecutionException failed) {
+					catch (ExecutionException failed) {
+						// The loser of a race is told the entry changed; nothing else may go wrong.
 						assertThat(failed.getCause()).isInstanceOf(ApiException.class)
 								.hasMessage("error.time.entryChanged");
-						assertThat(((ApiException) failed.getCause()).getStatus()).isEqualTo(HttpStatus.CONFLICT);
-						refused++;
+						assertThat(((ApiException) failed.getCause()).getStatus())
+								.isEqualTo(HttpStatus.CONFLICT);
 					}
 				}
 			}
@@ -479,9 +482,15 @@ class TimeEntryPlacementIntegrationTest {
 		// gives nobody minutes, never a second copy of them.
 		assertThat(spentOn(login)).isZero();
 		assertThat(spentOn(invoice) + spentOn(third)).isEqualTo(rounds * 10);
-		int onInvoice = (int) entries.stream().filter(e -> invoice.getId().equals(reread(e).getIssueId())).count();
-		assertThat(spentOn(invoice)).isEqualTo(onInvoice * 10);
-		assertThat(refused).isBetween(0, rounds);
+		long onInvoice = entries.stream()
+				.filter(entry -> invoice.getId().equals(reread(entry).getIssueId()))
+				.count();
+		assertThat(spentOn(invoice)).isEqualTo((int) onInvoice * 10);
+	}
+
+	private WorkItem movedTogether(CyclicBarrier start, WorkItem entry, Issue to) throws Exception {
+		start.await();
+		return timeTracking.update(entry.getId(), toIssue(to.getId()), member);
 	}
 
 	@Test
@@ -493,7 +502,7 @@ class TimeEntryPlacementIntegrationTest {
 		timeTracking.update(entry.getId(), toIssue(invoice.getId()), admin);
 
 		assertThat(auditLog.findAll())
-				.filteredOn(row -> row.getAction() == com.ahmadre.hinata.audit.AuditAction.TIME_ENTRY_UPDATED)
+				.filteredOn(row -> row.getAction() == AuditAction.TIME_ENTRY_UPDATED)
 				.singleElement()
 				.satisfies(row -> {
 					assertThat(row.getMetadata()).containsEntry("fromProject", hinata.getId())
@@ -561,16 +570,18 @@ class TimeEntryPlacementIntegrationTest {
 	private void approved(User owner, Project in) {
 		mongo.insert(TimesheetApproval.builder().userId(owner.getId()).projectId(in.getId())
 				.periodStart(DAY.minusDays(3)).periodEnd(DAY.plusDays(3))
-				.periodType(com.ahmadre.hinata.common.TimePolicy.ApprovalPeriod.WEEKLY)
+				.periodType(TimePolicy.ApprovalPeriod.WEEKLY)
 				.status(TimesheetApproval.Status.APPROVED).totalMinutes(0).build());
 	}
-	@Test
-	void theFormNamesAnEntrysIssueByIdWithoutReadingTheWholeIssue() {
-		List<com.ahmadre.hinata.issue.IssueService.IssueRef> refs = issueService.refs(
-				List.of(login.getId(), invoice.getId(), foreignIssue.getId(), "unknown"), member);
 
-		assertThat(refs).extracting(com.ahmadre.hinata.issue.IssueService.IssueRef::readableId)
-				.containsExactlyInAnyOrder("HIN-1", "BIL-1");
-		assertThat(issueService.refs(List.of(), member)).isEmpty();
+	@Test
+	void anInvisibleIssueIsNotFoundOnEveryWriteButTheFrozenOne() {
+		assertRefused(() -> logged(null, foreignIssue.getId(), 30, member), HttpStatus.NOT_FOUND,
+				"error.notFound");
+		// POST /issues/{id}/work-items keeps the answer the published app has always had.
+		TimeTrackingService.NewWorkItem draft = new TimeTrackingService.NewWorkItem(30, DAY, null,
+				"work", null, null, null, null);
+		assertRefused(() -> timeTracking.add(foreignIssue.getId(), draft, WorkItem.Source.APP, member),
+				HttpStatus.FORBIDDEN);
 	}
 }

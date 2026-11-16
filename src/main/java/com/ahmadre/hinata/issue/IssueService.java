@@ -1730,8 +1730,12 @@ public class IssueService {
 
 	/**
 	 * Names a batch of issues by their ids — the key and the title, nothing else — for a form
-	 * that holds only ids and has to label them (a time entry being edited). Scoped and capped
-	 * like {@link #resolveIssues}; an id the caller cannot see is simply absent.
+	 * that holds only ids and has to label them (a time entry being edited). Capped like
+	 * {@link #resolveIssues}; an id the caller cannot see is simply absent.
+	 *
+	 * <p>Reads the named issues first and decides visibility on them: once per distinct
+	 * project, or by the issue's participant list for one shared with the caller. Listing
+	 * every project the caller may see would cost more than the handful of ids asked about.
 	 */
 	public List<IssueRef> refs(List<String> ids, User user) {
 		if (ids == null || ids.isEmpty()) {
@@ -1739,12 +1743,23 @@ public class IssueService {
 		}
 		List<String> capped = ids.stream().filter(java.util.Objects::nonNull).distinct()
 				.limit(MENTION_LIMIT).toList();
-		List<String> scope = projects.visibleTo(user).stream().map(Project::getId).toList();
-		Query query = Query.query(inScope(List.of(Criteria.where("_id").in(capped)), scope, user));
-		query.fields().include("readableId", "title", "type");
-		// Read as plain documents: Issue has primitive fields, and a projection that leaves
-		// them out cannot be turned back into one.
-		return mongo.find(query, org.bson.Document.class, "issues").stream()
+		Query query = Query.query(Criteria.where("_id").in(capped));
+		query.fields().include("readableId", "title", "type", "projectId", "participantIds");
+		// Plain documents: Issue has primitive fields, and a projection that leaves them out
+		// cannot be turned back into one.
+		List<org.bson.Document> found = mongo.find(query, org.bson.Document.class, "issues");
+		Map<String, Boolean> projectVisible = new HashMap<>();
+		return found.stream()
+				.filter(doc -> {
+					Object participants = doc.get("participantIds");
+					if (participants instanceof Collection<?> list && list.contains(user.getId())) {
+						return true;
+					}
+					String projectId = doc.getString("projectId");
+					// The project rule of IssueReach, asked once per project.
+					return projectId != null && projectVisible.computeIfAbsent(projectId,
+							id -> reach.canSee(Issue.builder().projectId(id).build(), user));
+				})
 				.map(doc -> new IssueRef(String.valueOf(doc.get("_id")), doc.getString("readableId"),
 						doc.getString("title"), doc.get("type") == null ? null : String.valueOf(doc.get("type"))))
 				.toList();
