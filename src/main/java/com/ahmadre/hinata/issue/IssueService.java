@@ -545,16 +545,25 @@ public class IssueService {
 	}
 
 	/**
+	 * Records whether the sender of ingested issue [id] is verified (HIN-181), and when it is not,
+	 * [unverified] says why.
+	 */
+	public void noteSenderVerified(String id, boolean verified, Issue.SenderUnverified unverified) {
+		Update update = Update.update("senderVerified", verified);
+		if (verified || unverified == null) {
+			update.unset("senderUnverified");
+		}
+		else {
+			update.set("senderUnverified", unverified);
+		}
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), update, Issue.class);
+	}
+
+	/**
 	 * Notes the attachments of an ingested mail that the gate refused on issue [id], and gives it
 	 * [description], which says so, unless the text check refuses that (see
 	 * {@link #replaceIngestedDescription}).
 	 */
-	/** Records whether the receiving server vouched for the sender of ingested issue [id] (HIN-181). */
-	public void noteSenderVerified(String id, boolean verified) {
-		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), Update.update("senderVerified", verified),
-				Issue.class);
-	}
-
 	public void noteRefusedAttachments(String id, List<Issue.RefusedAttachment> refused, RichText description) {
 		mongo.updateFirst(Query.query(Criteria.where("_id").is(id)), Update.update("refusedAttachments", refused),
 				Issue.class);

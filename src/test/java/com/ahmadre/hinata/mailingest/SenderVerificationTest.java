@@ -76,4 +76,69 @@ class SenderVerificationTest {
 		assertThat(verified("mx.asta.hn; " + "x".repeat(100_000) + "; dmarc=pass header.from=kundenservice.vodafone.com"))
 				.isFalse();
 	}
+
+	@Test
+	void theIdentityOfASignatureCountsWhenTheServerNamesNoSigningDomain() {
+		// How IONOS (kundenserver.de) writes it: header.i, no header.d.
+		assertThat(SenderVerification.verified(new String[] { "kundenserver.de; dkim=pass"
+				+ " header.i=@kundenservice.vodafone.com header.s=vfdetimo-p17-20apr; dkim=pass"
+				+ " header.i=@amazonses.com header.s=x; spf=pass" }, FROM, "kundenserver.de")).isTrue();
+		assertThat(SenderVerification.verified(new String[] { "kundenserver.de; dkim=pass header.i=@amazonses.com" },
+				FROM, "kundenserver.de")).isFalse();
+	}
+
+	@Test
+	void alignmentIsByOrganisationalDomain() {
+		assertThat(SenderVerification.aligned("vodafone.com", "kundenservice.vodafone.com")).isTrue();
+		assertThat(SenderVerification.aligned("mail.vodafone.com", "kundenservice.vodafone.com")).isTrue();
+		assertThat(SenderVerification.aligned("evilvodafone.com", "vodafone.com")).isFalse();
+		assertThat(SenderVerification.aligned("vodafone.com.evil.example", "vodafone.com")).isFalse();
+		// Two customers below one public suffix are two organisations.
+		assertThat(SenderVerification.aligned("mallory.github.io", "alice.github.io")).isFalse();
+		assertThat(SenderVerification.aligned("example.co.uk", "shop.example.co.uk")).isTrue();
+		assertThat(SenderVerification.aligned("co.uk", "example.co.uk")).isFalse();
+	}
+
+	private static byte[] rfc8463(String headers) {
+		return (DkimTest.RSA_SIGNATURE + headers + DkimTest.BODY).getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+	}
+
+	@Test
+	void anAlignedSignatureVerifiesWithoutAnyMailServer() {
+		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), "joe@football.example.com", null, null,
+				DkimTest.DNS)).isEqualTo(SenderVerification.Verdict.VERIFIED);
+		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), "joe@sub.football.example.com", null, null,
+				DkimTest.DNS)).as("a subdomain of the signer").isEqualTo(SenderVerification.Verdict.VERIFIED);
+	}
+
+	@Test
+	void aValidSignatureOfAnotherDomainDoesNotVerifyTheFromDomain() {
+		// The mail is genuinely signed by football.example.com; that says nothing about vodafone.
+		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), FROM, null, null, DkimTest.DNS))
+				.isEqualTo(SenderVerification.Verdict.UNVERIFIED);
+	}
+
+	@Test
+	void theVerdictTellsUnsignedFromUnverifiedFromUnknown() {
+		byte[] unsigned = (DkimTest.HEADERS + DkimTest.BODY).getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+		Dkim.KeyLookup down = name -> {
+			throw new java.io.IOException("timeout");
+		};
+
+		assertThat(SenderVerification.check(unsigned, "joe@football.example.com", null, null, DkimTest.DNS))
+				.isEqualTo(SenderVerification.Verdict.UNSIGNED);
+		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), "joe@football.example.com", null, null, down))
+				.isEqualTo(SenderVerification.Verdict.UNKNOWN);
+		assertThat(SenderVerification.check(null, "joe@football.example.com", null, null, DkimTest.DNS))
+				.isEqualTo(SenderVerification.Verdict.UNVERIFIED);
+	}
+
+	@Test
+	void theNamedMailServerStillCountsForAnUnsignedMail() {
+		byte[] unsigned = (DkimTest.HEADERS + DkimTest.BODY).getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+
+		assertThat(SenderVerification.check(unsigned, FROM,
+				new String[] { "mx.asta.hn; dmarc=pass header.from=kundenservice.vodafone.com" }, OURS, DkimTest.DNS))
+				.isEqualTo(SenderVerification.Verdict.VERIFIED);
+	}
 }

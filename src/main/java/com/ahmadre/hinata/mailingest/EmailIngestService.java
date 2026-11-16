@@ -79,6 +79,9 @@ public class EmailIngestService {
 	private final TextCheck textCheck;
 	private final IngestConnectionService ingestConnections;
 
+	/** The DKIM keys senders publish, to verify a sender without a receiving server's word (HIN-181). */
+	private final Dkim.KeyLookup dkimKeys;
+
 	/** Per-connection epoch seconds of the last poll (the 15s tick is the beat). */
 	private final Map<String, Long> lastRun = new ConcurrentHashMap<>();
 
@@ -157,6 +160,7 @@ public class EmailIngestService {
 		MailBody body = bodyOf(message);
 		RichText ingested = description(from, body, List.of());
 		String reporterId = resolveReporterId(from);
+		SenderVerification.Verdict sender = senderVerdict(message, from, config);
 		Issue issue = Issue.builder()
 				.projectId(projectId)
 				.title(truncate(subject, 300))
@@ -165,8 +169,8 @@ public class EmailIngestService {
 				.type(Issue.Type.TASK)
 				.reporterId(reporterId)
 				.reporterEmail(from)
-				.senderVerified(SenderVerification.verified(message.getHeader("Authentication-Results"), from,
-						config.getAuthservId()))
+				.senderVerified(sender == SenderVerification.Verdict.VERIFIED)
+				.senderUnverified(unverifiedReason(sender))
 				.inboundMessageId(messageId)
 				.inboundSubject(truncate(subject, 300))
 				.ingestConnectionId(config.getId())
@@ -341,6 +345,60 @@ public class EmailIngestService {
 				: UNKNOWN_SENDER;
 	}
 
+	/** Largest message whose signatures are checked; the whole message is read for it. */
+	static final int MAX_VERIFIED_BYTES = 40 * 1024 * 1024;
+
+	/**
+	 * Whether [from], the address [message] is attributed to, is its verified sender. A
+	 * {@code From} with several addresses is never verified: whose would it be.
+	 */
+	private SenderVerification.Verdict senderVerdict(Message message, String from, IngestConnection config)
+			throws Exception {
+		if (message.getFrom() == null || message.getFrom().length != 1) {
+			return SenderVerification.Verdict.UNVERIFIED;
+		}
+		return SenderVerification.check(rawOf(message), from, message.getHeader("Authentication-Results"),
+				config.getAuthservId(), dkimKeys);
+	}
+
+	private static Issue.SenderUnverified unverifiedReason(SenderVerification.Verdict verdict) {
+		return switch (verdict) {
+			case VERIFIED -> null;
+			case UNSIGNED -> Issue.SenderUnverified.UNSIGNED;
+			case UNVERIFIED, UNKNOWN -> Issue.SenderUnverified.UNVERIFIED;
+		};
+	}
+
+	/**
+	 * [message] as it was received, headers and body byte for byte, as its signatures sign it;
+	 * null when it is larger than {@link #MAX_VERIFIED_BYTES} or cannot be read.
+	 */
+	static byte[] rawOf(Message message) {
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream() {
+			@Override
+			public synchronized void write(byte[] bytes, int offset, int length) {
+				if (count + length > MAX_VERIFIED_BYTES) throw new java.io.UncheckedIOException(
+						new java.io.IOException("message too large to verify"));
+				super.write(bytes, offset, length);
+			}
+
+			@Override
+			public synchronized void write(int b) {
+				if (count + 1 > MAX_VERIFIED_BYTES) throw new java.io.UncheckedIOException(
+						new java.io.IOException("message too large to verify"));
+				super.write(b);
+			}
+		};
+		try {
+			message.writeTo(out);
+			return out.toByteArray();
+		}
+		catch (Exception unreadable) {
+			log.info("Message not read for its signatures: {}", unreadable.getMessage());
+			return null;
+		}
+	}
+
 	private String messageIdOf(Message message) throws Exception {
 		String[] ids = message.getHeader("Message-ID");
 		return ids != null && ids.length > 0 ? ids[0] : null;
@@ -429,12 +487,17 @@ public class EmailIngestService {
 				// Compare the documents: a reprocess exists to rebuild a description with the
 				// current converter (HIN-181 gives an HTML mail its layout), and the words of a
 				// mail with and without its layout may well be the same.
-				// Whether its sender was vouched for, as the mail says; issues ingested before
-				// HIN-181 learn it here.
-				boolean verified = SenderVerification.verified(message.getHeader("Authentication-Results"),
-						senderOf(message), config.getAuthservId());
-				if (!Boolean.valueOf(verified).equals(issue.getSenderVerified())) {
-					issues.noteSenderVerified(issue.getId(), verified);
+				// Whether its sender is verified; issues ingested before HIN-181, or before the
+				// server checked signatures itself, learn it here. A key DNS could not hand over
+				// right now changes nothing: the next run asks again.
+				SenderVerification.Verdict sender = senderVerdict(message, senderOf(message), config);
+				if (sender != SenderVerification.Verdict.UNKNOWN || issue.getSenderVerified() == null) {
+					boolean verified = sender == SenderVerification.Verdict.VERIFIED;
+					Issue.SenderUnverified reason = unverifiedReason(sender);
+					if (!Boolean.valueOf(verified).equals(issue.getSenderVerified())
+							|| reason != issue.getSenderUnverified()) {
+						issues.noteSenderVerified(issue.getId(), verified, reason);
+					}
 				}
 				if (sameDocument(rebuilt.doc(), issue.getDescriptionDoc())) {
 					return Outcome.SKIPPED; // already current

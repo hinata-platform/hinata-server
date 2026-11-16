@@ -253,6 +253,21 @@ public class Issue {
 	private Boolean senderVerified;
 
 	/**
+	 * Why the sender of the mail this issue came from is not verified (HIN-181), when it is not;
+	 * null when it is, for issues ingested before the reason was kept, and for every other issue.
+	 */
+	@JsonIgnore
+	private SenderUnverified senderUnverified;
+
+	/** Why an ingested mail's sender is not verified, so a reader cannot trust it with images. */
+	public enum SenderUnverified {
+		/** The mail carries no DKIM signature. */
+		UNSIGNED,
+		/** It is signed, but no signature holds that is aligned with the {@code From} domain. */
+		UNVERIFIED
+	}
+
+	/**
 	 * The attachments of the mail this issue came from that the upload gate refused (HIN-177), by
 	 * the sender's name and the gate's reason. The description's lines about them are rebuilt from
 	 * here, so reading the mailbox again needs none of the attachments' bytes.
@@ -493,6 +508,22 @@ public class Issue {
 			return null;
 		}
 		return com.ahmadre.hinata.user.SenderDomains.ofAddress(reporterEmail);
+	}
+
+	/**
+	 * Why a reader of this issue is offered no "always load" for its external images, when it came
+	 * from a mail and shows some (HIN-181): {@code unsigned} when the mail carries no signature,
+	 * {@code unverified} when no signature confirms its sender, or the sender was not checked yet.
+	 * Null for any other issue. Additive: older apps ignore it.
+	 */
+	@JsonProperty("externalImageTrustUnavailable")
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	public String externalImageTrustUnavailable() {
+		if (reporterEmail == null || externalImageSender() != null || !forms().hasExternalImages(descriptionDoc)) {
+			return null;
+		}
+		boolean unsigned = !Boolean.TRUE.equals(senderVerified) && senderUnverified == SenderUnverified.UNSIGNED;
+		return unsigned ? "unsigned" : "unverified";
 	}
 
 	/**
