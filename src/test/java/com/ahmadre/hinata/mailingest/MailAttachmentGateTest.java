@@ -100,7 +100,8 @@ class MailAttachmentGateTest {
 		return new EmailIngestService(mock(IngestConnectionRepository.class), issues, new RichTextService(),
 				projects, mock(NotificationService.class),
 				TestStorage.inMemory(TestUploadGates.counting(refused), objects), attachments, users,
-				TestUploadGates.counting(refused), settings, messages, textCheck, mock(IngestConnectionService.class));
+				TestUploadGates.counting(refused), settings, messages, textCheck, mock(IngestConnectionService.class),
+				name -> List.of());
 	}
 
 	private static IngestConnection connection() {

@@ -54,6 +54,9 @@ class EmailIngestServiceTest {
 	private UserService users;
 	private EmailIngestService service;
 
+	/** The DKIM keys "DNS" answers with, by name. */
+	private final java.util.Map<String, List<String>> dnsKeys = new java.util.HashMap<>();
+
 	@BeforeEach
 	void setUp() {
 		issues = mock(IssueService.class);
@@ -73,7 +76,7 @@ class EmailIngestServiceTest {
 				new RichTextService(), projects, notifications, storage,
 				mock(AttachmentStore.class), users, TestUploadGates.open(), settings,
 				new StaticMessageSource(), com.ahmadre.hinata.richtext.TestTextChecks.allowAll(),
-				mock(IngestConnectionService.class));
+				mock(IngestConnectionService.class), name -> dnsKeys.getOrDefault(name, List.of()));
 	}
 
 	/** Refused by the text check (HIN-176): no issue, no reply, one more on the connection's count. */
@@ -83,7 +86,7 @@ class EmailIngestServiceTest {
 		EmailIngestService refusing = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
 				new RichTextService(), projects, notifications, mock(StorageService.class), mock(AttachmentStore.class),
 				users, TestUploadGates.open(), mock(SettingsService.class), new StaticMessageSource(),
-				com.ahmadre.hinata.richtext.TestTextChecks.refusing("fire"), connections);
+				com.ahmadre.hinata.richtext.TestTextChecks.refusing("fire"), connections, name -> List.of());
 
 		refusing.createIssueFrom(message("kim@example.org"), connection());
 
@@ -279,5 +282,113 @@ class EmailIngestServiceTest {
 	@Test
 	void anIngestedIssueWithoutAVouchIsUnverified() throws Exception {
 		assertThat(ingested(alternative("x", "<p>x</p>")).getSenderVerified()).isFalse();
+	}
+
+	/** The signed example of RFC 8463, as the IMAP folder would hand it over. */
+	private MimeMessage signed(String headers) throws Exception {
+		String raw = DkimTest.RSA_SIGNATURE + headers + DkimTest.BODY;
+		return new MimeMessage(Session.getInstance(new Properties()),
+				new ByteArrayInputStream(raw.getBytes(StandardCharsets.ISO_8859_1)));
+	}
+
+	private IngestConnection withoutMailServerName() {
+		return IngestConnection.builder().id("conn-1").projectId("p1").build();
+	}
+
+	/**
+	 * The bug this exists for: with no receiving mail server named on the connection, as in
+	 * production, no sender was ever verified, and "always load" never showed. The server now
+	 * checks the signature itself.
+	 */
+	@Test
+	void aSignedMailIsVerifiedWithoutAMailServerNamed() throws Exception {
+		dnsKeys.putAll(DkimTest.KEYS);
+
+		service.createIssueFrom(signed(DkimTest.HEADERS), withoutMailServerName());
+
+		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
+		verify(issues).create(created.capture(), isNull());
+		assertThat(created.getValue().getReporterEmail()).isEqualTo("joe@football.example.com");
+		assertThat(created.getValue().getSenderVerified()).isTrue();
+		assertThat(created.getValue().getSenderUnverified()).isNull();
+	}
+
+	@Test
+	void aSignedMailWithAForgedFromIsNotVerified() throws Exception {
+		dnsKeys.putAll(DkimTest.KEYS);
+		String forged = DkimTest.HEADERS.replace("joe@football.example.com>", "joe@vodafone.com>");
+
+		service.createIssueFrom(signed(forged), withoutMailServerName());
+
+		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
+		verify(issues).create(created.capture(), isNull());
+		assertThat(created.getValue().getSenderVerified()).isFalse();
+		assertThat(created.getValue().getSenderUnverified()).isEqualTo(Issue.SenderUnverified.UNVERIFIED);
+	}
+
+	@Test
+	void anUnsignedMailIsMarkedUnsigned() throws Exception {
+		Issue issue = ingested(alternative("x", "<p>x</p>"));
+
+		assertThat(issue.getSenderVerified()).isFalse();
+		assertThat(issue.getSenderUnverified()).isEqualTo(Issue.SenderUnverified.UNSIGNED);
+	}
+
+	@Test
+	void aFromWithTwoAddressesIsNeverVerified() throws Exception {
+		dnsKeys.putAll(DkimTest.KEYS);
+		String two = DkimTest.HEADERS.replace("From: Joe SixPack <joe@football.example.com>",
+				"From: joe@football.example.com, eve@evil.example");
+
+		service.createIssueFrom(signed(two), withoutMailServerName());
+
+		ArgumentCaptor<Issue> created = ArgumentCaptor.forClass(Issue.class);
+		verify(issues).create(created.capture(), isNull());
+		assertThat(created.getValue().getSenderVerified()).isFalse();
+	}
+
+	private Issue storedFrom(MimeMessage message, Boolean verified) throws Exception {
+		var current = service.description("joe@football.example.com",
+				new EmailIngestService.MailBody(message.getContent().toString(), null), List.of());
+		Issue stored = Issue.builder().id("i1").projectId("p1").description(current.text())
+				.descriptionDoc(current.doc()).senderVerified(verified).build();
+		when(issues.findByInboundMessageId("<20030712040037.46341.5F8J@football.example.com>"))
+				.thenReturn(Optional.of(stored));
+		return stored;
+	}
+
+	@Test
+	void reprocessVerifiesAnIssueIngestedBefore() throws Exception {
+		dnsKeys.putAll(DkimTest.KEYS);
+		MimeMessage message = signed(DkimTest.HEADERS);
+		storedFrom(message, false);
+
+		service.reprocessOne(message, withoutMailServerName(), false);
+
+		verify(issues).noteSenderVerified("i1", true, null);
+	}
+
+	@Test
+	void reprocessKeepsAVerdictWhileDnsCannotAnswer() throws Exception {
+		EmailIngestService offline = new EmailIngestService(mock(IngestConnectionRepository.class), issues,
+				new RichTextService(), projects, notifications, mock(StorageService.class), mock(AttachmentStore.class),
+				users, TestUploadGates.open(), mock(SettingsService.class), new StaticMessageSource(),
+				com.ahmadre.hinata.richtext.TestTextChecks.allowAll(), mock(IngestConnectionService.class), name -> {
+					throw new java.io.IOException("timeout");
+				});
+		MimeMessage message = signed(DkimTest.HEADERS);
+		storedFrom(message, true);
+
+		offline.reprocessOne(message, withoutMailServerName(), false);
+
+		verify(issues, never()).noteSenderVerified(anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+	}
+
+	@Test
+	void theRawMessageIsHandedOverByteForByte() throws Exception {
+		String raw = DkimTest.RSA_SIGNATURE + DkimTest.HEADERS + DkimTest.BODY;
+
+		assertThat(new String(EmailIngestService.rawOf(signed(DkimTest.HEADERS)), StandardCharsets.ISO_8859_1))
+				.isEqualTo(raw);
 	}
 }
