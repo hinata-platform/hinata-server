@@ -107,8 +107,6 @@ class SenderVerificationTest {
 	void anAlignedSignatureVerifiesWithoutAnyMailServer() {
 		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), "joe@football.example.com", null, null,
 				DkimTest.DNS)).isEqualTo(SenderVerification.Verdict.VERIFIED);
-		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), "joe@sub.football.example.com", null, null,
-				DkimTest.DNS)).as("a subdomain of the signer").isEqualTo(SenderVerification.Verdict.VERIFIED);
 	}
 
 	@Test
@@ -140,5 +138,12 @@ class SenderVerificationTest {
 		assertThat(SenderVerification.check(unsigned, FROM,
 				new String[] { "mx.asta.hn; dmarc=pass header.from=kundenservice.vodafone.com" }, OURS, DkimTest.DNS))
 				.isEqualTo(SenderVerification.Verdict.VERIFIED);
+	}
+
+	@Test
+	void theIssuesAddressHasToBeTheSignedOne() {
+		// Same domain, but not the address the signed From names.
+		assertThat(SenderVerification.check(rfc8463(DkimTest.HEADERS), "boss@football.example.com", null, null,
+				DkimTest.DNS)).isEqualTo(SenderVerification.Verdict.UNVERIFIED);
 	}
 }

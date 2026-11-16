@@ -11,9 +11,9 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.X509EncodedKeySpec;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +40,9 @@ import java.util.regex.Pattern;
  *       {@code Content-Type}, ...) that the signature covers may not appear more often than the
  *       signature lists it: the parser reads the topmost one, a signature the bottom ones, so an
  *       extra copy on top would be shown without being signed.</li>
+ *   <li>A head with a NUL, a carriage return that does not end a line, or a field name outside
+ *       {@code [!-9;-~]+} is not checked: a mail parser could read it differently than a signer.</li>
+ *   <li>A key flagged as testing ({@code t=y}) is no key.</li>
  *   <li>The expiry ({@code x=}) is not enforced: a mailbox is read again long after the mail
  *       arrived, and what matters is who wrote it, not whether it is fresh.</li>
  * </ul>
@@ -67,13 +70,17 @@ final class Dkim {
 	/**
 	 * What the signatures of a message say about its {@code From} domain.
 	 *
-	 * @param signed         whether it carries any DKIM signature at all
+	 * @param signed         whether it carries any DKIM signature at all; a message whose head
+	 *                       cannot be read safely counts as signed, so it is never "unsigned"
+	 *                       but unverified
+	 * @param from           the address in the one {@code From} header the signatures sign, or
+	 *                       null when there is not exactly one address in exactly one such header
 	 * @param passed         the signing domain ({@code d=}) of the first signature that is aligned
 	 *                       with the {@code From} domain and holds; empty when none does
 	 * @param keyUnavailable whether an aligned signature could not be checked because DNS did not
 	 *                       answer in time
 	 */
-	record Result(boolean signed, Set<String> passed, boolean keyUnavailable) {
+	record Result(boolean signed, String from, Set<String> passed, boolean keyUnavailable) {
 	}
 
 	/** Signatures of one message checked at most: each one may cost a DNS lookup. */
@@ -123,13 +130,17 @@ final class Dkim {
 			}
 			lineStart = i + 1;
 		}
+		// A head the parser and the signature might read differently is not checked at all.
+		Result unreadable = new Result(true, null, Set.of(), false);
+		if (!plainHead(raw, headEnd)) return unreadable;
 		// ISO-8859-1 maps every byte to one char and back, so canonical forms keep the bytes.
 		List<Header> headers = headers(new String(raw, 0, headEnd, StandardCharsets.ISO_8859_1));
+		if (headers == null) return unreadable;
 		List<Header> signatures = headers.stream().filter(h -> h.name.equals("dkim-signature")).toList();
-		if (signatures.isEmpty()) return new Result(false, Set.of(), false);
-		if (headers.stream().filter(h -> h.name.equals("from")).count() != 1) {
-			return new Result(true, Set.of(), false);
-		}
+		List<Header> froms = headers.stream().filter(h -> h.name.equals("from")).toList();
+		String from = froms.size() == 1 ? addressOf(froms.getFirst()) : null;
+		if (signatures.isEmpty()) return new Result(false, from, Set.of(), false);
+		if (from == null) return new Result(true, null, Set.of(), false);
 		boolean unavailable = false;
 		Body body = new Body(raw, bodyStart);
 		long deadline = nanoTime.getAsLong() + DNS_BUDGET.toNanos();
@@ -140,13 +151,37 @@ final class Dkim {
 		for (Header signature : signatures.subList(0, Math.min(signatures.size(), MAX_SIGNATURES))) {
 			try {
 				String domain = check(signature, headers, body, fromDomain, budgeted);
-				if (domain != null) return new Result(true, Set.of(domain), false);
+				if (domain != null) return new Result(true, from, Set.of(domain), false);
 			}
 			catch (IOException noAnswer) {
 				unavailable = true;
 			}
 		}
-		return new Result(true, Set.of(), unavailable);
+		return new Result(true, from, Set.of(), unavailable);
+	}
+
+	/**
+	 * Whether the head, the first [end] bytes of [raw], holds neither a NUL nor a carriage return
+	 * that does not end a line: a mail parser may split a line there where a signature does not.
+	 */
+	private static boolean plainHead(byte[] raw, int end) {
+		for (int i = 0; i < end; i++) {
+			if (raw[i] == 0) return false;
+			if (raw[i] == '\r' && (i + 1 >= raw.length || raw[i + 1] != '\n')) return false;
+		}
+		return true;
+	}
+
+	/** The one address in [from], or null for none or several, read the way the mail parser reads it. */
+	private static String addressOf(Header from) {
+		try {
+			jakarta.mail.internet.InternetAddress[] addresses =
+					jakarta.mail.internet.InternetAddress.parseHeader(from.value(), true);
+			return addresses.length == 1 ? addresses[0].getAddress() : null;
+		}
+		catch (jakarta.mail.internet.AddressException unreadable) {
+			return null;
+		}
 	}
 
 	/** One header field: its name in lower case and the field exactly as it stood, folds and all. */
@@ -158,28 +193,40 @@ final class Dkim {
 		}
 	}
 
+	/**
+	 * The header fields of [head], or null when one of them is no field: a line that neither
+	 * continues a field nor starts one with a name of printable characters other than the colon
+	 * ({@code [!-9;-~]+}, RFC 5322 2.2), directly followed by the colon. A name a mail parser might
+	 * read leniently, such as {@code From :}, is refused rather than guessed.
+	 */
 	private static List<Header> headers(String head) {
 		List<Header> headers = new ArrayList<>();
 		StringBuilder current = null;
 		for (String line : head.split("\n", -1)) {
 			if (line.endsWith("\r")) line = line.substring(0, line.length() - 1);
 			if (line.isEmpty()) continue;
-			if ((line.charAt(0) == ' ' || line.charAt(0) == '\t') && current != null) {
+			if (line.charAt(0) == ' ' || line.charAt(0) == '\t') {
+				if (current == null) return null;
 				current.append("\r\n").append(line);
 				continue;
 			}
-			if (current != null) add(headers, current.toString());
+			if (current != null && !add(headers, current.toString())) return null;
 			if (headers.size() >= MAX_HEADERS) return headers;
 			current = new StringBuilder(line);
 		}
-		if (current != null) add(headers, current.toString());
+		if (current != null && !add(headers, current.toString())) return null;
 		return headers;
 	}
 
-	private static void add(List<Header> headers, String raw) {
+	private static final Pattern FIELD_NAME = Pattern.compile("[!-9;-~]+");
+
+	private static boolean add(List<Header> headers, String raw) {
 		int colon = raw.indexOf(':');
-		if (colon <= 0) return;
-		headers.add(new Header(raw.substring(0, colon).strip().toLowerCase(Locale.ROOT), raw));
+		if (colon <= 0) return false;
+		String name = raw.substring(0, colon);
+		if (!FIELD_NAME.matcher(name).matches()) return false;
+		headers.add(new Header(name.toLowerCase(Locale.ROOT), raw));
+		return true;
 	}
 
 	/**
@@ -327,12 +374,21 @@ final class Dkim {
 		return out.toString();
 	}
 
-	private static String canonical(String raw, String canon) {
+	/**
+	 * [raw] in the header canonicalisation [canon]. Relaxed (RFC 6376 3.4.2) unfolds, turns each
+	 * run of spaces and tabs into one space and drops them at both ends of the value: spaces and
+	 * tabs only, no other whitespace, or a header would sign as something it does not say.
+	 */
+	static String canonical(String raw, String canon) {
 		if (canon.equals("simple")) return raw;
 		int colon = raw.indexOf(':');
-		String name = raw.substring(0, colon).strip().toLowerCase(Locale.ROOT);
-		String value = raw.substring(colon + 1).replace("\r\n", "").replaceAll("[ \t]+", " ").strip();
-		return name + ":" + value;
+		String name = raw.substring(0, colon).toLowerCase(Locale.ROOT);
+		String value = raw.substring(colon + 1).replace("\r\n", "").replaceAll("[ \t]+", " ");
+		int from = 0;
+		int to = value.length();
+		while (from < to && value.charAt(from) == ' ') from++;
+		while (to > from && value.charAt(to - 1) == ' ') to--;
+		return name + ":" + value.substring(from, to);
 	}
 
 	/** The hash of a canonical body ({@code bh=}) and how many bytes it has. */
@@ -472,6 +528,8 @@ final class Dkim {
 				continue;
 			}
 			String flags = tags.get("t");
+			// A key in testing mode vouches for nothing yet.
+			if (flags != null && List.of(flags.split(":")).contains("y")) continue;
 			if (flags != null && List.of(flags.split(":")).contains("s") && identity != null) {
 				int at = identity.lastIndexOf('@');
 				if (!domain.equals(SenderDomains.normalize(identity.substring(at + 1)))) continue;
