@@ -346,7 +346,7 @@ public class EmailIngestService {
 	}
 
 	/** Largest message whose signatures are checked; the whole message is read for it. */
-	static final int MAX_VERIFIED_BYTES = 40 * 1024 * 1024;
+	static final int MAX_VERIFIED_BYTES = 10 * 1024 * 1024;
 
 	/**
 	 * Whether [from], the address [message] is attributed to, is its verified sender. A
@@ -371,9 +371,16 @@ public class EmailIngestService {
 
 	/**
 	 * [message] as it was received, headers and body byte for byte, as its signatures sign it;
-	 * null when it is larger than {@link #MAX_VERIFIED_BYTES} or cannot be read.
+	 * null when it is larger than {@link #MAX_VERIFIED_BYTES} or cannot be read. The size the
+	 * server reports is checked first, so a message past the bound is not even fetched.
 	 */
 	static byte[] rawOf(Message message) {
+		try {
+			if (message.getSize() > MAX_VERIFIED_BYTES) return null;
+		}
+		catch (Exception sizeUnknown) {
+			// read it and let the bound below stop it
+		}
 		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream() {
 			@Override
 			public synchronized void write(byte[] bytes, int offset, int length) {

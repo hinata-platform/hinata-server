@@ -94,13 +94,22 @@ final class Dkim {
 
 	/** Checks every DKIM signature of [raw], the message exactly as it was received. */
 	static Result verify(byte[] raw, KeyLookup keys) {
+		// The head ends at the first empty line; a line ends at LF, with or without CR before it.
+		int headEnd = raw.length;
+		int bodyStart = raw.length;
+		int lineStart = 0;
+		for (int i = 0; i < raw.length; i++) {
+			if (raw[i] != '\n') continue;
+			int contentEnd = i > lineStart && raw[i - 1] == '\r' ? i - 1 : i;
+			if (contentEnd == lineStart) {
+				headEnd = lineStart;
+				bodyStart = i + 1;
+				break;
+			}
+			lineStart = i + 1;
+		}
 		// ISO-8859-1 maps every byte to one char and back, so canonical forms keep the bytes.
-		String message = new String(raw, StandardCharsets.ISO_8859_1);
-		message = message.replaceAll("(?<!\r)\n", "\r\n");
-		int split = message.indexOf("\r\n\r\n");
-		String head = split < 0 ? message + "\r\n" : message.substring(0, split + 2);
-		String body = split < 0 ? "" : message.substring(split + 4);
-		List<Header> headers = headers(head);
+		List<Header> headers = headers(new String(raw, 0, headEnd, StandardCharsets.ISO_8859_1));
 		List<Header> signatures = headers.stream().filter(h -> h.name.equals("dkim-signature")).toList();
 		if (signatures.isEmpty()) return new Result(false, Set.of(), false);
 		if (headers.stream().filter(h -> h.name.equals("from")).count() != 1) {
@@ -108,17 +117,17 @@ final class Dkim {
 		}
 		Set<String> passed = new LinkedHashSet<>();
 		boolean unavailable = false;
-		Map<String, String> bodyHashes = new HashMap<>();
+		Body body = new Body(raw, bodyStart);
 		for (Header signature : signatures.subList(0, Math.min(signatures.size(), MAX_SIGNATURES))) {
 			try {
-				String domain = check(signature, headers, body, bodyHashes, keys);
+				String domain = check(signature, headers, body, keys);
 				if (domain != null) passed.add(domain);
 			}
 			catch (IOException noAnswer) {
 				unavailable = true;
 			}
 		}
-		return new Result(true, Set.copyOf(passed), unavailable);
+		return new Result(true, passed, unavailable);
 	}
 
 	/** One header field: its name in lower case and the field exactly as it stood, folds and all. */
@@ -133,7 +142,8 @@ final class Dkim {
 	private static List<Header> headers(String head) {
 		List<Header> headers = new ArrayList<>();
 		StringBuilder current = null;
-		for (String line : head.split("\r\n", -1)) {
+		for (String line : head.split("\n", -1)) {
+			if (line.endsWith("\r")) line = line.substring(0, line.length() - 1);
 			if (line.isEmpty()) continue;
 			if ((line.charAt(0) == ' ' || line.charAt(0) == '\t') && current != null) {
 				current.append("\r\n").append(line);
@@ -158,8 +168,8 @@ final class Dkim {
 	 *
 	 * @throws IOException when its key could not be looked up
 	 */
-	private static String check(Header signature, List<Header> headers, String body, Map<String, String> bodyHashes,
-			KeyLookup keys) throws IOException {
+	private static String check(Header signature, List<Header> headers, Body body, KeyLookup keys)
+			throws IOException {
 		Map<String, String> tags = tags(signature.value());
 		if (tags == null || !"1".equals(tags.get("v"))) return null;
 		String algorithm = tags.getOrDefault("a", "").toLowerCase(Locale.ROOT);
@@ -192,11 +202,16 @@ final class Dkim {
 		}
 		if (signatureBytes.length == 0 || claimedBodyHash.length == 0) return null;
 
-		String canonicalBody = bodyHashes.computeIfAbsent(bodyCanon, c -> c.equals("relaxed") ? relaxedBody(body)
-				: simpleBody(body));
-		String length = tags.get("l");
-		if (length != null && !length.equals(String.valueOf(canonicalBody.length()))) return null;
-		if (!MessageDigest.isEqual(sha256(canonicalBody), claimedBodyHash)) return null;
+		long limit;
+		try {
+			limit = tags.containsKey("l") ? Long.parseLong(tags.get("l")) : -1;
+		}
+		catch (NumberFormatException notALength) {
+			return null;
+		}
+		BodyHash hash = body.hash(bodyCanon.equals("relaxed"), limit);
+		if (limit >= 0 && limit != hash.length()) return null;
+		if (!MessageDigest.isEqual(hash.digest(), claimedBodyHash)) return null;
 
 		PublicKey key = key(keys.txt(selector + "._domainkey." + domain), algorithm, identity, domain);
 		if (key == null) return null;
@@ -297,23 +312,120 @@ final class Dkim {
 		return name + ":" + value;
 	}
 
-	/** RFC 6376 3.4.4: whitespace runs to one space, none at line ends, no empty lines at the end. */
-	static String relaxedBody(String body) {
-		StringBuilder out = new StringBuilder(body.length());
-		for (String line : body.split("\r\n", -1)) {
-			out.append(line.replaceAll("[ \t]+", " ").replaceAll(" $", "")).append("\r\n");
-		}
-		String text = out.toString();
-		while (text.endsWith("\r\n\r\n")) text = text.substring(0, text.length() - 2);
-		return text.equals("\r\n") ? "" : text;
+	/** The hash of a canonical body ({@code bh=}) and how many bytes it has. */
+	record BodyHash(byte[] digest, long length) {
 	}
 
-	/** RFC 6376 3.4.3: the body as it is, with the empty lines at its end reduced to one break. */
-	static String simpleBody(String body) {
-		String text = body;
-		while (text.endsWith("\r\n\r\n")) text = text.substring(0, text.length() - 2);
-		if (text.isEmpty()) return "\r\n";
-		return text.endsWith("\r\n") ? text : text + "\r\n";
+	/**
+	 * The body of a message, canonicalised and hashed straight from the received bytes, once per
+	 * canonicalisation and body length a signature asks for. One pass, no copy: a body of
+	 * megabytes of empty lines costs what any other body of that size costs.
+	 */
+	static final class Body {
+
+		private final byte[] raw;
+		private final int start;
+		private final Map<String, BodyHash> hashes = new HashMap<>();
+
+		Body(byte[] raw, int start) {
+			this.raw = raw;
+			this.start = start;
+		}
+
+		/**
+		 * The hash of the first [limit] canonical bytes (all of them for a negative [limit]), and
+		 * the canonical length of the whole body.
+		 */
+		BodyHash hash(boolean relaxed, long limit) {
+			return hashes.computeIfAbsent((relaxed ? "relaxed/" : "simple/") + limit,
+					key -> canonicalise(raw, start, relaxed, limit < 0 ? Long.MAX_VALUE : limit));
+		}
+	}
+
+	/**
+	 * RFC 6376 3.4.3 and 3.4.4 over [raw] from [start]: simple keeps every line as it is, relaxed
+	 * reduces each run of whitespace to one space and drops it at line ends. Both drop the empty
+	 * lines at the end, which are counted, not trimmed, and written only when a line follows.
+	 */
+	static BodyHash canonicalise(byte[] raw, int start, boolean relaxed, long limit) {
+		Sink out = new Sink(limit);
+		long emptyLines = 0;
+		boolean written = false;
+		int i = start;
+		while (i < raw.length) {
+			int newline = i;
+			while (newline < raw.length && raw[newline] != '\n') newline++;
+			int end = newline < raw.length && newline > i && raw[newline - 1] == '\r' ? newline - 1 : newline;
+			if (relaxed) {
+				while (end > i && (raw[end - 1] == ' ' || raw[end - 1] == '\t')) end--;
+			}
+			if (end == i) {
+				emptyLines++;
+			}
+			else {
+				for (; emptyLines > 0; emptyLines--) out.crlf();
+				if (relaxed) {
+					boolean space = false;
+					for (int at = i; at < end; at++) {
+						byte b = raw[at];
+						if (b == ' ' || b == '\t') {
+							space = true;
+							continue;
+						}
+						if (space) out.write((byte) ' ');
+						space = false;
+						out.write(b);
+					}
+				}
+				else {
+					out.write(raw, i, end - i);
+				}
+				out.crlf();
+				written = true;
+			}
+			i = newline + 1;
+		}
+		if (!relaxed && !written) out.crlf(); // an empty simple body is one line break
+		return new BodyHash(out.digest(), out.length);
+	}
+
+	/** Bytes into SHA-256 through a small buffer, counting them all but hashing only up to a limit. */
+	private static final class Sink {
+
+		private final MessageDigest sha = sha256();
+		private final byte[] buffer = new byte[8192];
+		private final long limit;
+		private int used;
+		long length;
+
+		Sink(long limit) {
+			this.limit = limit;
+		}
+
+		void write(byte b) {
+			if (length++ >= limit) return;
+			if (used == buffer.length) flush();
+			buffer[used++] = b;
+		}
+
+		void write(byte[] bytes, int from, int count) {
+			for (int at = from; at < from + count; at++) write(bytes[at]);
+		}
+
+		void crlf() {
+			write((byte) '\r');
+			write((byte) '\n');
+		}
+
+		private void flush() {
+			sha.update(buffer, 0, used);
+			used = 0;
+		}
+
+		byte[] digest() {
+			flush();
+			return sha.digest();
+		}
 	}
 
 	/**
@@ -382,12 +494,13 @@ final class Dkim {
 		return tags;
 	}
 
-	private static byte[] sha256(String text) {
+	private static MessageDigest sha256() {
 		try {
-			return MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.ISO_8859_1));
+			return MessageDigest.getInstance("SHA-256");
 		}
 		catch (GeneralSecurityException impossible) {
 			throw new IllegalStateException(impossible);
 		}
 	}
+
 }
